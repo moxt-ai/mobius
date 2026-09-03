@@ -1,16 +1,26 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.9/schema.json",
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "defaultBranch": "main",
     "useIgnoreFile": true
   },
+  "files": {
+    "includes": ["**", "!!**/dist", "!!**/coverage"]
+  },
   "linter": {
     "enabled": true,
+    "domains": {
+      "project": "recommended",
+      "types": "recommended",
+      "test": "recommended"
+    },
     "rules": {
       "preset": "recommended",
       "nursery": {
+        "noFloatingPromises": "error",
+        "noMisusedPromises": "error",
         "useExhaustiveSwitchCases": "error"
       }
     }

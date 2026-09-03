@@ -13,7 +13,7 @@
     "build": "tsc",
     "typecheck": "tsc --project tests/tsconfig.json",
     "check:no-chinese": "node scripts/check-no-chinese.ts",
-    "lint": "biome check --error-on-warnings && pnpm check:no-chinese",
+    "lint": "biome ci --error-on-warnings && pnpm check:no-chinese",
     "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
     "format": "biome format --write",
     "test": "vitest run --passWithNoTests",
