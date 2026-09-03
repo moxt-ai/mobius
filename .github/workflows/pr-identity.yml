@@ -1,0 +1,38 @@
+name: PR Identity
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: pr-identity-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  identity:
+    name: identity
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Validate pull request author
+        env:
+          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
+        run: |
+          set -eu
+
+          if [ "$AUTHOR_LOGIN" = "dependabot[bot]" ]; then
+            exit 0
+          fi
+
+          case "$AUTHOR_ASSOCIATION" in
+            MEMBER|OWNER)
+              ;;
+            *)
+              printf '%s\n' \
+                'Only moxt-ai organization members may merge pull requests.' >&2
+              exit 1
+              ;;
+          esac
