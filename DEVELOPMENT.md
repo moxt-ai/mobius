@@ -79,7 +79,7 @@ The code that acquires a resource owns its release unless ownership is explicitl
 
 ## Typed Error Contracts
 
-Errors crossing module, port, or protocol boundaries require a stable machine-readable code and a safe human-readable message. Model outcomes that require different handling separately, including cancellation, timeout, retryable failure, and terminal failure.
+Errors crossing subsystem, port, or protocol boundaries require a stable machine-readable code and a safe human-readable message. Model outcomes that require different handling separately, including cancellation, timeout, retryable failure, and terminal failure.
 
 Consumers must branch on the error type or code, never by matching message text. Human-readable messages may change without breaking behavior. When translating an infrastructure error, preserve it as the cause for diagnostics while mapping it once to the owning boundary's error contract.
 

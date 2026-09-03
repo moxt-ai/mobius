@@ -1,0 +1,5 @@
+engineStrict: true
+minimumReleaseAge: 1440
+
+allowBuilds:
+  simple-git-hooks: true

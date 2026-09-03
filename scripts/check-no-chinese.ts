@@ -55,7 +55,10 @@ export function findChineseTextViolations(
     }
 
     const absolutePath = join(root, path);
-    const file = lstatSync(absolutePath);
+    const file = lstatSync(absolutePath, { throwIfNoEntry: false });
+    if (file === undefined) {
+      continue;
+    }
     if (file.isSymbolicLink()) {
       const targetMatch = findHanCharacter(readlinkSync(absolutePath, "utf8"));
       if (targetMatch !== null) {

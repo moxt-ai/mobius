@@ -3,25 +3,25 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@9.7.0",
+  "packageManager": "pnpm@11.25.0",
   "engines": {
-    "node": ">=24.20.0 <25"
+    "node": ">=24.20.0 <25",
+    "pnpm": ">=11.25.0 <12"
   },
   "scripts": {
     "dev": "node --watch src/index.ts",
     "build": "tsc",
-    "build:emit": "tsc --noCheck",
     "typecheck": "tsc --project tests/tsconfig.json",
     "check:no-chinese": "node scripts/check-no-chinese.ts",
     "lint": "biome check --error-on-warnings && pnpm check:no-chinese",
     "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
     "format": "biome format --write",
-    "test": "vitest run",
-    "test:changed": "vitest run --changed=origin/main",
+    "test": "vitest run --passWithNoTests",
+    "test:changed": "vitest run --changed=origin/main --passWithNoTests",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage",
+    "test:coverage": "vitest run --coverage --passWithNoTests",
     "knip": "knip",
-    "check": "pnpm typecheck && pnpm build && pnpm lint && pnpm test && pnpm knip",
+    "check": "pnpm typecheck && pnpm build && pnpm lint && pnpm test:coverage && pnpm knip",
     "postinstall": "simple-git-hooks"
   },
   "simple-git-hooks": {
@@ -35,10 +35,5 @@
     "simple-git-hooks": "^2.13.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "simple-git-hooks"
-    ]
   }
 }

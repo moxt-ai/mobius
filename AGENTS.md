@@ -35,7 +35,7 @@ Make illegal states unrepresentable.
 
 ## Errors
 
-- Failures that cross a module, port, or protocol boundary must use a typed error contract with a stable machine-readable code.
+- Failures that cross a subsystem, port, or protocol boundary must use a typed error contract with a stable machine-readable code.
 - Branch on error codes or types, never on human-readable message text.
 - Preserve the original cause when translating an error, and expose only sanitized messages across trust boundaries.
 - Keep cancellation, timeout, retryable, and terminal failures distinct.

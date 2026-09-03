@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "module": "nodenext",
+    "target": "es2024",
     "types": ["node"],
     "rewriteRelativeImportExtensions": true,
     "verbatimModuleSyntax": true,
@@ -8,6 +9,7 @@
 
     "outDir": "./dist",
     "rootDir": "./src",
+    "noEmitOnError": true,
 
     "strict": true,
     "noUncheckedIndexedAccess": true,

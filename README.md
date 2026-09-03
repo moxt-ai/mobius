@@ -1,9 +1,9 @@
 # Mobius
 
-## Host & connect with your agents
+## Project direction
 
-Mobius provides a network layer for hosting, reaching, and operating agents across
-your local and cloud machines.
+Mobius is being built as a network layer for hosting, reaching, and operating
+agents across your local and cloud machines. The planned product scope includes:
 
 - **Host and connect** — Proxy network traffic to agents distributed across
   multiple local or cloud machines, manage their lifecycle, and expose them as
@@ -18,9 +18,9 @@ your local and cloud machines.
   providers used by your agents from one place, making it easy to switch a
   coding-plan subscription or change the API server with a single action.
 
-### Supported agent harnesses
+### Planned agent harness integrations
 
-Mobius supports the following agent harness types:
+Initial integration targets include:
 
 - DeepSeek harness
 - Pi coding agent
@@ -30,7 +30,7 @@ Mobius supports the following agent harness types:
 - `cursor-cli`
 - `grok-build`
 
-Cloud-based agent harnesses:
+Cloud-based integration targets:
 
 - `claude-cowork`
 - `chatgpt-work`
@@ -43,5 +43,4 @@ Requires Node.js 24.20.0 and pnpm.
 ```bash
 pnpm install
 pnpm check
-pnpm test:coverage
 ```
