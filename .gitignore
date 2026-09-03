@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+.vitest-reports/
+.env
+.env.*
+*.pem
+.DS_Store
