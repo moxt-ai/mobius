@@ -25,4 +25,6 @@ Place each contract test at the boundary that owns the risk:
 
 Use real temporary filesystems, subprocesses, sockets, and local protocol servers when practical. Use fakes at external harness or provider boundaries to produce deterministic success, failure, timeout, cancellation, and disconnect behavior. Do not add production-only hooks for tests.
 
+For an operation that owns resources, test observable cleanup after success, failure, timeout, and cancellation when those outcomes are reachable. Retry tests must prove the attempt limit, cancellation during backoff, and the rule that unsafe or indeterminate operations are not retried. Error-contract tests assert stable codes and sanitized boundary messages, not incidental infrastructure wording.
+
 Coverage identifies untested code; it does not decide which tests to write. Do not create impossible typed states or duplicate tests merely to increase coverage. If a branch is unreachable under current invariants, remove or simplify it. If it protects a real runtime boundary, give that boundary an explicit behavioral or invariant test.

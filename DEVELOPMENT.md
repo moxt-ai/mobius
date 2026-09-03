@@ -69,6 +69,22 @@ Do not use method syntax for these contracts. TypeScript intentionally excludes 
 
 This rule applies to protocol, domain, and port contracts. It does not require every short-lived local object or mutable implementation detail to be immutable.
 
+## Cancellation, Timeouts, and Resource Ownership
+
+Every asynchronous operation that waits on an external system accepts an `AbortSignal`. A finite operation applies an explicit timeout appropriate to its boundary; a long-lived stream applies connection and liveness deadlines so no individual wait is unbounded. Callers propagate the same cancellation intent through runtime and adapter layers instead of creating disconnected cancellation trees.
+
+Cancellation is a distinct outcome. Do not convert it into a generic network or runtime failure, and do not retry it. A retry policy must be bounded, cancellable, and restricted to failures and operations that are safe to repeat. Never retry an operation after its side effects are known to have occurred or when the outcome is indeterminate unless the operation has an explicit idempotency contract.
+
+The code that acquires a resource owns its release unless ownership is explicitly transferred in the type contract. Connections, streams, subprocesses, locks, timers, subscriptions, and concurrency slots must be released on success, failure, and cancellation. Prefer `try`/`finally` or a scoped helper that makes cleanup structurally unavoidable.
+
+## Typed Error Contracts
+
+Errors crossing module, port, or protocol boundaries require a stable machine-readable code and a safe human-readable message. Model outcomes that require different handling separately, including cancellation, timeout, retryable failure, and terminal failure.
+
+Consumers must branch on the error type or code, never by matching message text. Human-readable messages may change without breaking behavior. When translating an infrastructure error, preserve it as the cause for diagnostics while mapping it once to the owning boundary's error contract.
+
+Do not expose secrets, credentials, raw remote payloads, or unnecessary local paths in protocol error messages. Unexpected exceptions must be normalized at the boundary where they leave the process or subsystem; internal code should not repeatedly wrap the same error.
+
 ## Abstraction Discipline
 
 Start with the simplest direct implementation of the current behavior. Keep control flow local and linear when that makes the operation easier to read.

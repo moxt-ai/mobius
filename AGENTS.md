@@ -26,6 +26,20 @@ Make illegal states unrepresentable.
 - Use `readonly` properties for protocol messages, domain values, and port interfaces.
 - Declare callbacks and port operations as function properties, such as `readonly send: (message: Message) => Promise<void>`, so `strictFunctionTypes` checks their parameter variance.
 
+## Async Operations
+
+- Every asynchronous operation that waits on an external system must accept cancellation. Finite operations need a timeout; long-lived streams need connection and liveness deadlines.
+- Propagate cancellation through every layer. Do not catch, translate, or retry cancellation as an ordinary failure.
+- Make resource ownership explicit. The code that acquires a connection, stream, process, lock, timer, or concurrency slot must release it on success, failure, and cancellation.
+- Keep retries bounded, cancellable, and limited to operations that are safe to repeat.
+
+## Errors
+
+- Failures that cross a module, port, or protocol boundary must use a typed error contract with a stable machine-readable code.
+- Branch on error codes or types, never on human-readable message text.
+- Preserve the original cause when translating an error, and expose only sanitized messages across trust boundaries.
+- Keep cancellation, timeout, retryable, and terminal failures distinct.
+
 ## Delivery
 
 - Deliver behavior as the smallest user-runnable vertical slice through input, logic, and observable output.
