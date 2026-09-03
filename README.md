@@ -14,6 +14,12 @@ agents across your local and cloud machines. The planned product scope includes:
   accounts as an identity service; Mobius provides the equivalent identity
   layer for agents. Third-party services must explicitly support and accept
   this new token type.
+- **Minimal and composable** — Mobius is intentionally small: it can be
+  deployed on a free Cloudflare Workers plan with minimal dependencies and
+  provides only a simple web interface. Dedicated services and apps provide
+  integrations for Slack, Discord, other IM platforms, and mobile devices.
+  Keeping Mobius's scope as small as possible makes it easy to compose with
+  these services into a complete team solution.
 - **Centralized LLM provider management (optional)** — Manage the LLM
   providers used by your agents from one place, making it easy to switch a
   coding-plan subscription or change the API server with a single action.
