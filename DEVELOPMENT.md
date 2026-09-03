@@ -69,6 +69,10 @@ Do not use method syntax for these contracts. TypeScript intentionally excludes 
 
 This rule applies to protocol, domain, and port contracts. It does not require every short-lived local object or mutable implementation detail to be immutable.
 
+## Function Design
+
+Function signatures must express intent precisely. Prefer purpose-specific functions and domain types over boolean mode flags or broad parameter objects. A function must do only what its name promises.
+
 ## Cancellation, Timeouts, and Resource Ownership
 
 Every asynchronous operation that waits on an external system accepts an `AbortSignal`. A finite operation applies an explicit timeout appropriate to its boundary; a long-lived stream applies connection and liveness deadlines so no individual wait is unbounded. Callers propagate the same cancellation intent through runtime and adapter layers instead of creating disconnected cancellation trees.
@@ -81,9 +85,11 @@ The code that acquires a resource owns its release unless ownership is explicitl
 
 Errors crossing subsystem, port, or protocol boundaries require a stable machine-readable code and a safe human-readable message. Model outcomes that require different handling separately, including cancellation, timeout, retryable failure, and terminal failure.
 
-Consumers must branch on the error type or code, never by matching message text. Human-readable messages may change without breaking behavior. When translating an infrastructure error, preserve it as the cause for diagnostics while mapping it once to the owning boundary's error contract.
+Consumers must branch on the error type or code, never by matching message text. Human-readable messages may change without breaking behavior.
 
-Do not expose secrets, credentials, raw remote payloads, or unnecessary local paths in protocol error messages. Unexpected exceptions must be normalized at the boundary where they leave the process or subsystem; internal code should not repeatedly wrap the same error.
+Do not catch, ignore, or replace a failure unless the current boundary can fully handle it. Otherwise, propagate it or translate it once into the owning boundary's error contract, preserving the original failure as the cause.
+
+Do not expose secrets, credentials, raw remote payloads, or unnecessary local paths in protocol error messages. Unexpected exceptions must be normalized at the boundary where they leave the process or subsystem.
 
 ## Abstraction Discipline
 
@@ -96,3 +102,7 @@ Introduce an abstraction only when at least one of these conditions is true:
 - Current duplication has been demonstrated and the abstraction makes the code simpler.
 
 Do not create layers, factories, generic frameworks, configuration switches, or extension points for hypothetical future requirements. Remove unused indirection. Extract details when they obscure the caller's main control flow, but keep them inline when they are the function's primary job.
+
+## Comments
+
+Code should be self-explanatory through names, types, and structure. Implementation comments explain constraints, tradeoffs, compatibility requirements, or why an apparently simpler approach is unsafe; they do not merely restate what the code does. Public contract documentation describes purpose, supported usage, and observable behavior.
