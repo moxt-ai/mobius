@@ -44,10 +44,9 @@ Make illegal states unrepresentable.
 
 - Deliver behavior as the smallest user-runnable vertical slice through input, logic, and observable output.
 - Describe each behavior slice as: "After this, a user can ... and see ..." If that sentence is not concrete, narrow the slice.
-- Test only critical product paths through a supported public entrypoint, end to end. Do not test CI, linting, Git hooks, build tooling, dependency configuration, or other repository scaffolding.
+- Critical user paths must use end-to-end tests. Protocols and external boundaries must use integration or contract tests. Do not test CI, linting, Git hooks, build tooling, dependency configuration, or other repository scaffolding.
 - Mocks, spies, stubs, monkey patching, module replacement, and canned request interceptors are prohibited. If a real external dependency cannot be used safely or deterministically, inject a stateful fake through its production port.
-- Every test must install fake timers with an explicit system time. Never use real sleeps, wall-clock time, polling delays, or timing tolerances.
-- Coverage is reporting-only and must not fail CI or justify low-value tests.
+- Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.
 - Assert externally observable results, not private control flow, collaborator calls, or implementation details.
 - Documentation-only and mechanical refactoring changes do not require new tests when behavior is unchanged.
 
