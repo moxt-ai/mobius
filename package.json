@@ -25,7 +25,7 @@
     "postinstall": "simple-git-hooks"
   },
   "simple-git-hooks": {
-    "pre-commit": "if git status --short | grep --quiet '^MM'; then printf '%s\\n' 'ERROR: Some staged files have unstaged changes' >&2; exit 1; fi; pnpm typecheck && pnpm check:no-chinese && pnpm biome check --write --staged --files-ignore-unknown=true --no-errors-on-unmatched && git update-index --again"
+    "pre-commit": "pnpm typecheck && pnpm check:no-chinese && pnpm biome check --staged --files-ignore-unknown=true --no-errors-on-unmatched"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.9",
