@@ -15,24 +15,30 @@ jobs:
     name: identity
     runs-on: ubuntu-latest
     timeout-minutes: 2
+    permissions:
+      pull-requests: read
     steps:
-      - name: Validate pull request author
-        env:
-          AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
-          AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
-        run: |
-          set -eu
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          retries: 2
+          script: |
+            const {owner, repo} = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const {data: pullRequest} = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number: pullNumber,
+            });
 
-          if [ "$AUTHOR_LOGIN" = "dependabot[bot]" ]; then
-            exit 0
-          fi
+            const authorLogin = pullRequest.user?.login;
+            const allowedAssociations = new Set(["MEMBER", "OWNER"]);
 
-          case "$AUTHOR_ASSOCIATION" in
-            MEMBER|OWNER)
-              ;;
-            *)
-              printf '%s\n' \
-                'Only moxt-ai organization members may merge pull requests.' >&2
-              exit 1
-              ;;
-          esac
+            if (authorLogin === "dependabot[bot]") {
+              return;
+            }
+
+            if (!allowedAssociations.has(pullRequest.author_association)) {
+              core.setFailed(
+                "Only moxt-ai organization members may merge pull requests.",
+              );
+            }
