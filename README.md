@@ -26,6 +26,7 @@ Mobius supports the following agent harness types:
 - Pi coding agent
 - Codex
 - Claude Code
+- `opencode`
 - `cursor-cli`
 - `grok-build`
 
