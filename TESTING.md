@@ -14,6 +14,8 @@ A product change needs a test at the required level below that can prove the pro
 
 Tests exist to protect critical product behavior. Add a test only when it covers a primary user workflow or a high-impact product boundary, such as authorization, destructive side effects, data integrity, protocol compatibility, cancellation, or resource cleanup.
 
+Test each invariant primarily at the public boundary that owns it. Add the same invariant at another test level only when that level proves a distinct failure mode or delivery risk.
+
 Do not test repository tooling or scaffolding. This includes CI workflows, lint and formatter configuration, Git hooks, dependency-management configuration, build scripts, and other development-only automation. Verify those concerns by running the tools themselves. Do not test third-party library behavior or add tests solely to increase coverage.
 
 ## Required Test Levels
