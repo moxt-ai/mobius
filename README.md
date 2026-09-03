@@ -1,4 +1,4 @@
-# Moebius
+# Mobius
 
 Connect securely to local agent harnesses from anywhere.
 
