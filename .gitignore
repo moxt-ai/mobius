@@ -5,6 +5,7 @@ coverage/
 .wrangler/
 .vite/
 .mobius/
+.worktrees/
 .env
 .env.*
 .dev.vars

@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { readWorktreeEnvironment } from "./worktree/environment.ts";
 
 const OUTPUT_LIMIT = 256_000;
 const TEMPORARY_DEPLOYMENT_PROFILE = "mobius_temporary_preview";
@@ -7,6 +8,7 @@ const DIRECTORY_DATABASE_BINDING = "DIRECTORY_DATABASE";
 const CLOUDFLARE_RELAY_PACKAGE = "@moxt-ai/mobius-relay-cloudflare";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const worktreeEnvironment = readWorktreeEnvironment();
 
 class CommandFailedError extends Error {
   readonly exitCode: number;
@@ -63,6 +65,35 @@ function hasArgument(arguments_: readonly string[], name: string): boolean {
   return arguments_.some(
     (argument) => argument === name || argument.startsWith(`${name}=`),
   );
+}
+
+function addLocalDevelopmentPort(
+  arguments_: readonly string[],
+): readonly string[] {
+  if (
+    arguments_[0] !== "dev" ||
+    hasArgument(arguments_, "--remote") ||
+    hasArgument(arguments_, "--port")
+  ) {
+    return arguments_;
+  }
+
+  const rawPort =
+    // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket notation for ProcessEnv.
+    process.env["MOBIUS_RELAY_PORT"] ??
+    // biome-ignore lint/complexity/useLiteralKeys: The readonly environment contract uses an index signature.
+    worktreeEnvironment["MOBIUS_RELAY_PORT"];
+  if (rawPort === undefined) {
+    return arguments_;
+  }
+  if (!/^\d+$/.test(rawPort)) {
+    throw new Error("MOBIUS_RELAY_PORT must be an integer TCP port");
+  }
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("MOBIUS_RELAY_PORT must be between 1 and 65535");
+  }
+  return [...arguments_, "--port", rawPort];
 }
 
 function selectWranglerOptions(
@@ -147,7 +178,9 @@ function printConnectionInstructions(workerUrl: string): void {
 }
 
 async function run(signal: AbortSignal): Promise<void> {
-  const wranglerArguments = isolateTemporaryDeployment(process.argv.slice(2));
+  const wranglerArguments = addLocalDevelopmentPort(
+    isolateTemporaryDeployment(process.argv.slice(2)),
+  );
   const deployRequested = wranglerArguments[0] === "deploy";
 
   if (!deployRequested) {

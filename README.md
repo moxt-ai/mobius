@@ -168,6 +168,43 @@ For Web hot reload, run the relay and Vite together, then open
 pnpm dev:stack
 ```
 
+### Worktree development
+
+Create an isolated development checkout from the latest `origin/main` without
+installing or invoking Quack:
+
+```bash
+pnpm run worktree:new -- pairing-history
+```
+
+The command creates `.worktrees/pairing-history` on branch
+`worktree/pairing-history`, allocates a stable relay/Web port pair that does not
+conflict with registered Mobius worktrees, keeps the main checkout's default
+ports available, and installs the locked workspace dependencies. It prints the
+checkout path and assigned ports when it finishes. If the retained local branch
+already exists, the command reopens it instead of replacing its history.
+
+Inside that checkout, Vite and the local Wrangler command automatically read
+the generated mode-`0600` `.env.worktree` file. Start both hot-reload servers
+with:
+
+```bash
+pnpm dev:stack
+```
+
+Inspect or repair the checkout's port claim with `pnpm worktree:ports` and
+`pnpm worktree:repair-ports`. Stop its development servers before repairing the
+ports. `pnpm worktree:reset` keeps source changes, allocates an available port
+pair, and restores locked dependencies.
+
+To remove a clean, stopped worktree while retaining its local branch, run
+`pnpm run worktree:delete` inside it. From the main checkout, pass the managed
+directory name instead:
+
+```bash
+pnpm run worktree:delete -- pairing-history
+```
+
 ### One-command Cloudflare preview
 
 Run the temporary deployment from the repository root:
