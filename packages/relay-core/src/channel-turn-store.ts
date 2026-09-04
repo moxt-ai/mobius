@@ -290,6 +290,17 @@ export interface ChannelTurnStore {
   readonly appendDelta: (event: AgentMessageDeltaEvent, now: number) => void;
   readonly complete: (event: SessionCompletedEvent, now: number) => void;
   readonly fail: (event: SessionFailedEvent, now: number) => void;
+  readonly failActive: (
+    code: string,
+    message: string,
+    now: number,
+  ) => readonly SessionFailedEvent[];
+  readonly failPendingBefore: (
+    cutoff: number,
+    code: string,
+    message: string,
+    now: number,
+  ) => readonly SessionFailedEvent[];
   readonly markStarted: (event: SessionStartedEvent, now: number) => void;
   readonly readTurns: () => readonly RecordedTurn[];
   readonly recordActivity: (event: AgentActivityEvent, now: number) => void;

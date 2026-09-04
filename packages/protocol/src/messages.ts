@@ -1,6 +1,9 @@
 export const SESSION_PROMPT_KIND = "session.prompt";
 export const SESSION_CANCEL_KIND = "session.cancel";
 export const RUNTIME_STATUS_KIND = "runtime.status";
+export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
+export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
+export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
 export const SESSION_STARTED_KIND = "session.started";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
 export const AGENT_ACTIVITY_KIND = "agent.activity";
@@ -36,6 +39,23 @@ export interface RuntimeStatusEvent {
   readonly online: boolean;
   readonly protocolVersion: number;
   readonly runtimeId: string;
+}
+
+export interface RuntimeLivenessReadyEvent {
+  readonly kind: typeof RUNTIME_LIVENESS_READY_KIND;
+  readonly protocolVersion: number;
+}
+
+export interface RuntimeHeartbeatEvent {
+  readonly heartbeatId: string;
+  readonly kind: typeof RUNTIME_HEARTBEAT_KIND;
+  readonly protocolVersion: number;
+}
+
+export interface RuntimeHeartbeatAckEvent {
+  readonly heartbeatId: string;
+  readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
+  readonly protocolVersion: number;
 }
 
 export interface SessionStartedEvent {

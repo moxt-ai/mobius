@@ -4,18 +4,65 @@ import {
   AGENT_ACTIVITY_KIND,
   type AgentActivityEvent,
   decodeAgentActivityEvent,
+  decodeRuntimeHeartbeatAckEvent,
+  decodeRuntimeHeartbeatEvent,
+  decodeRuntimeLivenessReadyEvent,
   decodeSessionCancelCommand,
   decodeSessionPromptCommand,
   encodeAgentActivityEvent,
+  encodeRuntimeHeartbeatAckEvent,
+  encodeRuntimeHeartbeatEvent,
+  encodeRuntimeLivenessReadyEvent,
   encodeSessionCancelCommand,
   encodeSessionPromptCommand,
   MOBIUS_PROTOCOL_VERSION,
   ProtocolMessageError,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_HEARTBEAT_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
+  type RuntimeHeartbeatAckEvent,
+  type RuntimeHeartbeatEvent,
+  type RuntimeLivenessReadyEvent,
   SESSION_CANCEL_KIND,
   SESSION_PROMPT_KIND,
   type SessionCancelCommand,
   type SessionPromptCommand,
 } from "../src/index.ts";
+
+describe("runtime liveness protocol", () => {
+  it("Given a liveness-capable relay, When its readiness signal crosses the daemon boundary, Then the capability round-trips exactly", () => {
+    const event: RuntimeLivenessReadyEvent = {
+      kind: RUNTIME_LIVENESS_READY_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    };
+
+    expect(
+      decodeRuntimeLivenessReadyEvent(encodeRuntimeLivenessReadyEvent(event)),
+    ).toEqual(event);
+  });
+
+  it("Given a daemon heartbeat identity, When the relay acknowledges it, Then both messages preserve the same identity", () => {
+    const heartbeat: RuntimeHeartbeatEvent = {
+      heartbeatId: "heartbeat-1",
+      kind: RUNTIME_HEARTBEAT_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    };
+    const acknowledgement: RuntimeHeartbeatAckEvent = {
+      heartbeatId: heartbeat.heartbeatId,
+      kind: RUNTIME_HEARTBEAT_ACK_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    };
+
+    expect(
+      decodeRuntimeHeartbeatEvent(encodeRuntimeHeartbeatEvent(heartbeat)),
+    ).toEqual(heartbeat);
+    expect(
+      decodeRuntimeHeartbeatAckEvent(
+        encodeRuntimeHeartbeatAckEvent(acknowledgement),
+      ),
+    ).toEqual(acknowledgement);
+  });
+});
 
 describe("session prompt protocol", () => {
   it("round-trips a valid command", () => {

@@ -18,6 +18,8 @@ import {
   decodeAgentActivityEvent,
   decodeAgentMessageDeltaEvent,
   decodeMessageKind,
+  decodeRuntimeHeartbeatAckEvent,
+  decodeRuntimeLivenessReadyEvent,
   decodeRuntimeStatusEvent,
   decodeSessionCancelCommand,
   decodeSessionCompletedEvent,
@@ -26,11 +28,15 @@ import {
   decodeSessionStartedEvent,
   encodeAgentActivityEvent,
   encodeAgentMessageDeltaEvent,
+  encodeRuntimeHeartbeatEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
   MOBIUS_PROTOCOL_VERSION,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_HEARTBEAT_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
@@ -494,6 +500,263 @@ async function verifyActiveTurnHistory(
 }
 
 describe("pairing and channel chat", () => {
+  it("Given a liveness-capable daemon, When it checks the relay connection, Then the relay acknowledges the exact heartbeat", {
+    timeout: 30_000,
+  }, async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-liveness-e2e-"),
+    );
+    const port = await reservePort();
+    const origin = `http://127.0.0.1:${port.toString()}`;
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    const wrangler = spawn(
+      pnpmCommand,
+      [
+        "wrangler",
+        "dev",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        port.toString(),
+        "--persist-to",
+        join(temporaryDirectory, "wrangler-state"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let daemon: WebSocket | undefined;
+
+    try {
+      await waitForRelay(wrangler);
+      const pairingResponse = await fetch(new URL("/v1/pairings", origin), {
+        method: "POST",
+      });
+      const pairing = decodeBrowserPairing(await pairingResponse.json());
+      const paired = await pairLocalMachine([
+        "--url",
+        origin,
+        "--code",
+        pairing.pairingCode,
+        "--root",
+        repositoryRoot,
+      ]);
+      const daemonUrl = new URL(paired.config.relayUrl);
+      daemonUrl.searchParams.set("liveness", "1");
+      daemon = new WebSocket(daemonUrl);
+      const ready = waitForProtocolKind(daemon, RUNTIME_LIVENESS_READY_KIND);
+      await waitForSocketOpen(daemon);
+      expect(decodeRuntimeLivenessReadyEvent(await ready)).toEqual({
+        kind: RUNTIME_LIVENESS_READY_KIND,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      });
+
+      const heartbeatId = crypto.randomUUID();
+      const acknowledgement = waitForProtocolKind(
+        daemon,
+        RUNTIME_HEARTBEAT_ACK_KIND,
+      );
+      daemon.send(
+        encodeRuntimeHeartbeatEvent({
+          heartbeatId,
+          kind: RUNTIME_HEARTBEAT_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        }),
+      );
+
+      expect(
+        decodeRuntimeHeartbeatAckEvent(await acknowledgement).heartbeatId,
+      ).toBe(heartbeatId);
+    } finally {
+      daemon?.close(1000, "Liveness E2E complete");
+      await stopProcess(wrangler);
+      if (previousStateDirectory === undefined) {
+        delete process.env["MOBIUS_STATE_DIRECTORY"];
+      } else {
+        process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+      }
+      await rm(temporaryDirectory, { recursive: true });
+    }
+  });
+
+  it("Given a turn awaiting daemon acknowledgement, When a replacement daemon connects, Then the stalled conversation fails and accepts another message", {
+    timeout: 30_000,
+  }, async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-recovery-e2e-"),
+    );
+    const port = await reservePort();
+    const origin = `http://127.0.0.1:${port.toString()}`;
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    const wrangler = spawn(
+      pnpmCommand,
+      [
+        "wrangler",
+        "dev",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        port.toString(),
+        "--persist-to",
+        join(temporaryDirectory, "wrangler-state"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let host: WebSocket | undefined;
+    let replacementDaemon: WebSocket | undefined;
+    let staleDaemon: WebSocket | undefined;
+
+    try {
+      await waitForRelay(wrangler);
+      const pairingResponse = await fetch(new URL("/v1/pairings", origin), {
+        method: "POST",
+      });
+      const pairing = decodeBrowserPairing(await pairingResponse.json());
+      const paired = await pairLocalMachine([
+        "--url",
+        origin,
+        "--code",
+        pairing.pairingCode,
+        "--root",
+        repositoryRoot,
+      ]);
+      staleDaemon = new WebSocket(paired.config.relayUrl);
+      await waitForSocketOpen(staleDaemon);
+      const hostUrl = new URL(
+        `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
+        origin,
+      );
+      hostUrl.protocol = "ws:";
+      host = new WebSocket(hostUrl);
+      await waitForRuntimeOnline(host);
+
+      const stalledCommandId = crypto.randomUUID();
+      const sessionId = crypto.randomUUID();
+      const stalledPrompt = waitForProtocolKind(
+        staleDaemon,
+        SESSION_PROMPT_KIND,
+      );
+      host.send(
+        encodeSessionPromptCommand({
+          additionalDirectoryIds: [],
+          agentId: "codex",
+          bindingId: "workspace",
+          commandId: stalledCommandId,
+          directoryId: "root",
+          images: [],
+          kind: SESSION_PROMPT_KIND,
+          prompt: "stalled task",
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          resources: [],
+          sessionId,
+        }),
+      );
+      expect(decodeSessionPromptCommand(await stalledPrompt).commandId).toBe(
+        stalledCommandId,
+      );
+
+      replacementDaemon = new WebSocket(paired.config.relayUrl);
+      await waitForSocketOpen(replacementDaemon);
+
+      const recoveredHistoryResponse = await fetch(
+        new URL(
+          `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
+          origin,
+        ),
+      );
+      expect(recoveredHistoryResponse.status).toBe(200);
+      await expect(recoveredHistoryResponse.json()).resolves.toEqual(
+        expect.objectContaining({
+          turns: expect.arrayContaining([
+            expect.objectContaining({
+              code: "daemon_reconnected",
+              commandId: stalledCommandId,
+              status: "failed",
+            }),
+          ]),
+        }),
+      );
+
+      const nextCommandId = crypto.randomUUID();
+      const nextPrompt = waitForProtocolKind(
+        replacementDaemon,
+        SESSION_PROMPT_KIND,
+      );
+      host.send(
+        encodeSessionPromptCommand({
+          additionalDirectoryIds: [],
+          agentId: "codex",
+          bindingId: "workspace",
+          commandId: nextCommandId,
+          directoryId: "root",
+          images: [],
+          kind: SESSION_PROMPT_KIND,
+          prompt: "continue after recovery",
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          resources: [],
+          sessionId,
+        }),
+      );
+      expect(decodeSessionPromptCommand(await nextPrompt).commandId).toBe(
+        nextCommandId,
+      );
+      replacementDaemon.send(
+        encodeSessionStartedEvent({
+          commandId: nextCommandId,
+          kind: SESSION_STARTED_KIND,
+          processAttemptId: "replacement-attempt",
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId,
+        }),
+      );
+      replacementDaemon.send(
+        encodeSessionCompletedEvent({
+          commandId: nextCommandId,
+          kind: SESSION_COMPLETED_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId,
+          stopReason: "end_turn",
+        }),
+      );
+
+      const completedHistoryResponse = await fetch(
+        new URL(
+          `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
+          origin,
+        ),
+      );
+      await expect(completedHistoryResponse.json()).resolves.toEqual(
+        expect.objectContaining({
+          turns: expect.arrayContaining([
+            expect.objectContaining({
+              commandId: nextCommandId,
+              status: "completed",
+            }),
+          ]),
+        }),
+      );
+    } finally {
+      host?.close(1000, "Recovery E2E complete");
+      replacementDaemon?.close(1000, "Recovery E2E complete");
+      staleDaemon?.close(1000, "Recovery E2E complete");
+      await stopProcess(wrangler);
+      if (previousStateDirectory === undefined) {
+        delete process.env["MOBIUS_STATE_DIRECTORY"];
+      } else {
+        process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+      }
+      await rm(temporaryDirectory, { recursive: true });
+    }
+  });
+
   it("Given paired ACP agents, When browsers run conversations, Then responses and activities persist", {
     timeout: 30_000,
   }, async () => {

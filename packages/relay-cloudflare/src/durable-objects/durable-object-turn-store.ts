@@ -12,6 +12,7 @@ import {
   decodeAgentDisplayContentValue,
   decodePromptImagesValue,
   decodePromptResourcesValue,
+  MOBIUS_PROTOCOL_VERSION,
 } from "@moxt-ai/mobius-protocol";
 import {
   type ChannelTurnStore,
@@ -57,6 +58,11 @@ interface HistoryActivityRow extends Record<string, SqlStorageValue> {
   readonly status: string;
   readonly title: string;
   readonly tool_kind: string;
+}
+
+interface ActiveTurnRow extends Record<string, SqlStorageValue> {
+  readonly command_id: string;
+  readonly session_id: string;
 }
 
 interface TurnPayloadRow extends Record<string, SqlStorageValue> {
@@ -222,6 +228,83 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
       throw new Error("Unknown prompt failure");
     }
   };
+
+  readonly failActive = (
+    code: string,
+    message: string,
+    now: number,
+  ): readonly SessionFailedEvent[] =>
+    this.storage.transactionSync(() => {
+      const rows = this.storage.sql
+        .exec<ActiveTurnRow>(
+          `SELECT command_id, session_id
+           FROM channel_turns
+           WHERE status IN ('pending', 'running')`,
+        )
+        .toArray();
+      if (rows.length === 0) {
+        return [];
+      }
+      const result = this.storage.sql.exec(
+        `UPDATE channel_turns
+         SET status = 'failed', error_code = ?, error_message = ?, updated_at = ?
+         WHERE status IN ('pending', 'running')`,
+        code,
+        message,
+        now,
+      );
+      if (result.rowsWritten !== rows.length) {
+        throw new Error("Active turn recovery was incomplete");
+      }
+      return rows.map((row) => ({
+        code,
+        commandId: row.command_id,
+        kind: "session.failed",
+        message,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: row.session_id,
+      }));
+    });
+
+  readonly failPendingBefore = (
+    cutoff: number,
+    code: string,
+    message: string,
+    now: number,
+  ): readonly SessionFailedEvent[] =>
+    this.storage.transactionSync(() => {
+      const rows = this.storage.sql
+        .exec<ActiveTurnRow>(
+          `SELECT command_id, session_id
+           FROM channel_turns
+           WHERE status = 'pending' AND updated_at <= ?`,
+          cutoff,
+        )
+        .toArray();
+      if (rows.length === 0) {
+        return [];
+      }
+      const result = this.storage.sql.exec(
+        `UPDATE channel_turns
+         SET status = 'failed', error_code = ?, error_message = ?, updated_at = ?
+         WHERE status = 'pending' AND updated_at <= ?`,
+        code,
+        message,
+        now,
+        cutoff,
+      );
+      if (result.rowsWritten !== rows.length) {
+        throw new Error("Pending turn recovery was incomplete");
+      }
+      return rows.map((row) => ({
+        code,
+        commandId: row.command_id,
+        kind: "session.failed",
+        message,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: row.session_id,
+      }));
+    });
 
   readonly markStarted = (event: SessionStartedEvent, now: number): void => {
     const result = this.storage.sql.exec(

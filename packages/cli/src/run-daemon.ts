@@ -6,6 +6,8 @@ import {
   AGENT_MESSAGE_DELTA_KIND,
   type AgentContentEvent,
   decodeMessageKind,
+  decodeRuntimeHeartbeatAckEvent,
+  decodeRuntimeLivenessReadyEvent,
   decodeSessionCancelCommand,
   decodeSessionConfigureCommand,
   decodeSessionElicitationRespondCommand,
@@ -31,6 +33,8 @@ import {
   encodeSessionUsageUpdatedEvent,
   encodeWorkspaceEntriesEvent,
   MOBIUS_PROTOCOL_VERSION,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
   SESSION_CONFIGURE_KIND,
@@ -69,8 +73,78 @@ import { LocalAuthorizationError } from "./authorization/authorize-binding.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, findLocalAgent } from "./config.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
+import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
+import {
+  type DaemonScheduledTask,
+  type DaemonTimer,
+  systemDaemonTimer,
+} from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
+const RELAY_CONNECTION_REFRESH_MILLISECONDS = 20 * 60 * 1_000;
+
+abstract class RelayConnectionRefreshState {}
+
+class ScheduledRelayConnectionRefreshState extends RelayConnectionRefreshState {}
+
+class DueRelayConnectionRefreshState extends RelayConnectionRefreshState {}
+
+class FinishedRelayConnectionRefreshState extends RelayConnectionRefreshState {}
+
+class RelayConnectionRefresh {
+  readonly #isSafe: () => boolean;
+  readonly #refresh: () => void;
+  readonly #scheduledTask: DaemonScheduledTask;
+  #state: RelayConnectionRefreshState =
+    new ScheduledRelayConnectionRefreshState();
+
+  constructor(timer: DaemonTimer, isSafe: () => boolean, refresh: () => void) {
+    this.#isSafe = isSafe;
+    this.#refresh = refresh;
+    this.#scheduledTask = timer.schedule(
+      this.#request,
+      RELAY_CONNECTION_REFRESH_MILLISECONDS,
+    );
+  }
+
+  readonly afterTurnFinished = (): void => {
+    if (this.#state instanceof DueRelayConnectionRefreshState) {
+      this.#request();
+      return;
+    }
+    if (
+      this.#state instanceof ScheduledRelayConnectionRefreshState ||
+      this.#state instanceof FinishedRelayConnectionRefreshState
+    ) {
+      return;
+    }
+    throw new Error("Unknown relay connection refresh state");
+  };
+
+  readonly close = (): void => {
+    this.#scheduledTask.cancel();
+    this.#state = new FinishedRelayConnectionRefreshState();
+  };
+
+  readonly #request = (): void => {
+    if (this.#state instanceof FinishedRelayConnectionRefreshState) {
+      return;
+    }
+    if (
+      !(this.#state instanceof ScheduledRelayConnectionRefreshState) &&
+      !(this.#state instanceof DueRelayConnectionRefreshState)
+    ) {
+      throw new Error("Unknown relay connection refresh state");
+    }
+    if (!this.#isSafe()) {
+      this.#state = new DueRelayConnectionRefreshState();
+      return;
+    }
+    this.#state = new FinishedRelayConnectionRefreshState();
+    this.#scheduledTask.cancel();
+    this.#refresh();
+  };
+}
 
 class DaemonAcpObserver implements AcpSessionObserver {
   readonly #socket: WebSocket;
@@ -552,16 +626,19 @@ async function executePrompt(
   }
 }
 
-function waitForRelayRetry(signal: AbortSignal): Promise<void> {
+function waitForRelayRetry(
+  signal: AbortSignal,
+  timer: DaemonTimer,
+): Promise<void> {
   if (signal.aborted) {
     return Promise.resolve();
   }
 
   return new Promise((resolve) => {
-    const timeout = setTimeout(finish, RELAY_RECONNECT_DELAY_MILLISECONDS);
+    const retry = timer.schedule(finish, RELAY_RECONNECT_DELAY_MILLISECONDS);
 
     function finish(): void {
-      clearTimeout(timeout);
+      retry.cancel();
       signal.removeEventListener("abort", finish);
       resolve();
     }
@@ -576,8 +653,11 @@ async function runRelayConnection(
   audit: AuditStore,
   sessions: AcpSessionManager,
   signal: AbortSignal,
+  timer: DaemonTimer,
 ): Promise<void> {
-  const socket = await connectRelay(config.relayUrl, signal);
+  const relayUrl = new URL(config.relayUrl);
+  relayUrl.searchParams.set("liveness", "1");
+  const socket = await connectRelay(relayUrl, signal);
   const activeTurns = new Map<string, ActiveDaemonTurn>();
   const connectionController = new AbortController();
   sessions.setObserver(new DaemonAcpObserver(socket));
@@ -586,6 +666,8 @@ async function runRelayConnection(
     let finished = false;
 
     const cleanup = (): void => {
+      connectionRefresh.close();
+      connectionLiveness.close();
       signal.removeEventListener("abort", stop);
       socket.removeEventListener("close", handleClose);
       socket.removeEventListener("error", handleError);
@@ -620,6 +702,25 @@ async function runRelayConnection(
       resolveConnection();
     };
 
+    const refreshConnection = (): void => {
+      socket.close(1000, "Refreshing idle relay connection");
+      resolveConnection();
+    };
+
+    const connectionLiveness = new RelayConnectionLiveness(timer, {
+      send: (message) => send(socket, message),
+      unresponsive: () => {
+        socket.close(4001, "Relay liveness check timed out");
+        resolveConnection();
+      },
+    });
+
+    const connectionRefresh = new RelayConnectionRefresh(
+      timer,
+      () => activeTurns.size === 0,
+      refreshConnection,
+    );
+
     signal.addEventListener("abort", stop, { once: true });
     const handleClose = (): void => {
       resolveConnection();
@@ -634,12 +735,24 @@ async function runRelayConnection(
     const handleMessage = (event: MessageEvent<unknown>): void => {
       const encoded: unknown = event.data;
       if (typeof encoded !== "string") {
-        socket.close(1003, "Text message required");
+        socket.close(4003, "Text message required");
+        rejectConnection();
         return;
       }
 
       try {
         const kind = decodeMessageKind(encoded);
+        if (kind === RUNTIME_LIVENESS_READY_KIND) {
+          decodeRuntimeLivenessReadyEvent(encoded);
+          connectionLiveness.start();
+          return;
+        }
+        if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
+          connectionLiveness.acknowledge(
+            decodeRuntimeHeartbeatAckEvent(encoded),
+          );
+          return;
+        }
         if (kind === SESSION_CANCEL_KIND) {
           const cancellation = decodeSessionCancelCommand(encoded);
           const turn = activeTurns.get(cancellation.commandId);
@@ -739,8 +852,7 @@ async function runRelayConnection(
           return;
         }
         if (kind !== SESSION_PROMPT_KIND) {
-          socket.close(1008, "Unsupported protocol message");
-          return;
+          throw new Error("Unsupported protocol message");
         }
         const command = decodeSessionPromptCommand(encoded);
         if (activeTurns.has(command.commandId)) {
@@ -769,10 +881,12 @@ async function runRelayConnection(
           })
           .finally(() => {
             activeTurns.delete(command.commandId);
+            connectionRefresh.afterTurnFinished();
           });
       } catch (error) {
         console.error("Mobius daemon rejected a message", error);
-        socket.close(1008, "Invalid protocol message");
+        socket.close(4008, "Invalid protocol message");
+        rejectConnection();
       }
     };
     socket.addEventListener("close", handleClose);
@@ -789,6 +903,7 @@ export async function runDaemon(
   config: DaemonConfig,
   audit: AuditStore,
   signal: AbortSignal,
+  timer: DaemonTimer = systemDaemonTimer,
 ): Promise<void> {
   const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
   const sessions = new AcpSessionManager(
@@ -804,7 +919,14 @@ export async function runDaemon(
   try {
     while (!signal.aborted) {
       try {
-        await runRelayConnection(config, directories, audit, sessions, signal);
+        await runRelayConnection(
+          config,
+          directories,
+          audit,
+          sessions,
+          signal,
+          timer,
+        );
         retryAnnounced = false;
       } catch {
         if (signal.aborted) {
@@ -816,7 +938,7 @@ export async function runDaemon(
         }
       }
 
-      await waitForRelayRetry(signal);
+      await waitForRelayRetry(signal, timer);
     }
   } finally {
     await sessions.close();

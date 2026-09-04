@@ -107,6 +107,27 @@ export class DurableObjectSessionStore implements ChannelSessionStore {
     )`);
   }
 
+  readonly clearInteractionsForCommands = (
+    commandIds: readonly string[],
+  ): void => {
+    const commandIdSet = new Set(commandIds);
+    for (const session of this.readSessions()) {
+      const pendingPermissions = session.pendingPermissions.filter(
+        (entry) => !commandIdSet.has(entry.commandId),
+      );
+      const pendingElicitations = session.pendingElicitations.filter(
+        (entry) => !commandIdSet.has(entry.commandId),
+      );
+      if (
+        pendingPermissions.length === session.pendingPermissions.length &&
+        pendingElicitations.length === session.pendingElicitations.length
+      ) {
+        continue;
+      }
+      this.write(session.withoutInteractionsForCommands(commandIdSet));
+    }
+  };
+
   readonly readSessions = (): readonly RecordedSession[] =>
     this.#storage.sql
       .exec<SessionSnapshotRow>(

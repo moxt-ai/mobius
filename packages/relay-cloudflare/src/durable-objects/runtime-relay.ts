@@ -1,4 +1,14 @@
 import {
+  decodeMessageKind,
+  decodeRuntimeHeartbeatEvent,
+  encodeRuntimeHeartbeatAckEvent,
+  encodeRuntimeLivenessReadyEvent,
+  MOBIUS_PROTOCOL_VERSION,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_HEARTBEAT_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
+} from "@moxt-ai/mobius-protocol";
+import {
   ChannelActor,
   type ChannelPeers,
   type ChannelSocket,
@@ -121,7 +131,10 @@ export class RuntimeRelay {
     }
 
     if (url.pathname.endsWith("/daemon")) {
-      return this.acceptDaemonSocket(runtimeId);
+      return this.acceptDaemonSocket(
+        runtimeId,
+        url.searchParams.get("liveness") === "1",
+      );
     }
     if (url.pathname.endsWith("/host")) {
       return this.acceptHostSocket(runtimeId);
@@ -133,6 +146,24 @@ export class RuntimeRelay {
     const attachment = decodeAttachment(socket.deserializeAttachment());
     const channelSocket = new CloudflareChannelSocket(socket);
     if (attachment instanceof DaemonSocketAttachment) {
+      if (typeof message === "string") {
+        try {
+          if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
+            const heartbeat = decodeRuntimeHeartbeatEvent(message);
+            socket.send(
+              encodeRuntimeHeartbeatAckEvent({
+                heartbeatId: heartbeat.heartbeatId,
+                kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                protocolVersion: MOBIUS_PROTOCOL_VERSION,
+              }),
+            );
+            return;
+          }
+        } catch {
+          socket.close(1008, "Invalid protocol message");
+          return;
+        }
+      }
       this.actor(attachment.runtimeId).receiveDaemonMessage(
         channelSocket,
         message,
@@ -162,13 +193,28 @@ export class RuntimeRelay {
     socket.close(1011, "WebSocket error");
   }
 
-  private acceptDaemonSocket(runtimeId: string): Response {
+  private acceptDaemonSocket(
+    runtimeId: string,
+    livenessRequested: boolean,
+  ): Response {
+    const previousSockets = this.state.getWebSockets(DAEMON_TAG);
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
     server.serializeAttachment({ role: DAEMON_TAG, runtimeId });
     this.state.acceptWebSocket(server, [DAEMON_TAG]);
     this.actor(runtimeId).attachDaemon();
+    for (const socket of previousSockets) {
+      socket.close(1012, "Daemon connection replaced");
+    }
+    if (livenessRequested) {
+      server.send(
+        encodeRuntimeLivenessReadyEvent({
+          kind: RUNTIME_LIVENESS_READY_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        }),
+      );
+    }
     return new Response(null, { status: 101, webSocket: client });
   }
 

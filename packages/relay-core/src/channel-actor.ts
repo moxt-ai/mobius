@@ -63,6 +63,7 @@ import {
 import { ChannelHistory, type ChannelTurnStore } from "./channel-turn-store.ts";
 
 const MAX_MESSAGE_LENGTH = 8 * 1024 * 1024;
+const DAEMON_START_TIMEOUT_MILLISECONDS = 15_000;
 
 export interface RelayClock {
   readonly now: () => number;
@@ -106,10 +107,15 @@ export class ChannelActor {
   }
 
   readonly attachDaemon = (): void => {
+    this.failActiveTurns(
+      "daemon_reconnected",
+      "The local runtime reconnected before this request finished. Send it again.",
+    );
     this.broadcastRuntimeStatus(true);
   };
 
   readonly attachHost = (socket: ChannelSocket): void => {
+    this.failExpiredPendingTurns();
     socket.send(
       encodeRuntimeStatusEvent({
         kind: RUNTIME_STATUS_KIND,
@@ -125,16 +131,22 @@ export class ChannelActor {
       .daemons()
       .some((candidate) => !candidate.isSame(socket) && candidate.isOpen());
     if (!anotherDaemonOnline) {
+      this.failActiveTurns(
+        "daemon_disconnected",
+        "The local runtime disconnected before this request finished. Send it again.",
+      );
       this.broadcastRuntimeStatus(false);
     }
   };
 
-  readonly readHistory = (): ChannelHistory =>
-    new ChannelHistory(
+  readonly readHistory = (): ChannelHistory => {
+    this.failExpiredPendingTurns();
+    return new ChannelHistory(
       this.runtimeId,
       this.turnStore.readTurns(),
       this.sessionStore.readSessions(),
     );
+  };
 
   readonly receiveDaemonMessage = (
     socket: ChannelSocket,
@@ -206,6 +218,7 @@ export class ChannelActor {
 
   private receivePrompt(message: string): void {
     const command = decodeSessionPromptCommand(message);
+    this.failExpiredPendingTurns();
     this.turnStore.recordPrompt(command, this.clock.now());
     this.broadcast(this.peers.hosts(), message);
 
@@ -218,6 +231,7 @@ export class ChannelActor {
 
   private receiveCancellation(message: string): void {
     const command = decodeSessionCancelCommand(message);
+    this.failExpiredPendingTurns();
     this.broadcast(this.peers.hosts(), message);
 
     if (this.forwardToDaemon(message)) {
@@ -258,6 +272,31 @@ export class ChannelActor {
       }
     }
     return false;
+  }
+
+  private failActiveTurns(code: string, message: string): void {
+    const failures = this.turnStore.failActive(code, message, this.clock.now());
+    this.publishFailures(failures);
+  }
+
+  private failExpiredPendingTurns(): void {
+    const now = this.clock.now();
+    const failures = this.turnStore.failPendingBefore(
+      now - DAEMON_START_TIMEOUT_MILLISECONDS,
+      "daemon_start_timeout",
+      "The local runtime did not acknowledge this request in time. Send it again.",
+      now,
+    );
+    this.publishFailures(failures);
+  }
+
+  private publishFailures(failures: readonly SessionFailedEvent[]): void {
+    this.sessionStore.clearInteractionsForCommands(
+      failures.map((failure) => failure.commandId),
+    );
+    for (const failure of failures) {
+      this.broadcast(this.peers.hosts(), encodeSessionFailedEvent(failure));
+    }
   }
 
   private reportRuntimeOffline(commandId: string, sessionId: string): void {

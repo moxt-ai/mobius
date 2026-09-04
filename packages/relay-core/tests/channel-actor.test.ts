@@ -6,6 +6,7 @@ import {
   type AgentContentEvent,
   type AgentMessageDeltaEvent,
   decodeSessionCancelCommand,
+  decodeSessionFailedEvent,
   encodeAgentActivityEvent,
   encodeAgentContentEvent,
   encodeAgentMessageDeltaEvent,
@@ -51,6 +52,16 @@ import {
 
 class FixedClock implements RelayClock {
   readonly now = (): number => 1_700_000_000_000;
+}
+
+class MutableClock implements RelayClock {
+  #now = 1_700_000_000_000;
+
+  readonly advance = (milliseconds: number): void => {
+    this.#now += milliseconds;
+  };
+
+  readonly now = (): number => this.#now;
 }
 
 class MemorySocket implements ChannelSocket {
@@ -143,6 +154,59 @@ class MemoryTurnStore implements ChannelTurnStore {
         turn.contents,
       ),
     );
+  };
+
+  readonly failActive = (
+    code: string,
+    message: string,
+  ): readonly SessionFailedEvent[] => {
+    const failures: SessionFailedEvent[] = [];
+    for (const turn of this.turns.values()) {
+      if (
+        !(turn instanceof PendingRecordedTurn) &&
+        !(turn instanceof RunningRecordedTurn)
+      ) {
+        continue;
+      }
+      const failure: SessionFailedEvent = {
+        code,
+        commandId: turn.commandId,
+        kind: "session.failed",
+        message,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: turn.sessionId,
+      };
+      this.fail(failure);
+      failures.push(failure);
+    }
+    return failures;
+  };
+
+  readonly failPendingBefore = (
+    cutoff: number,
+    code: string,
+    message: string,
+  ): readonly SessionFailedEvent[] => {
+    const failures: SessionFailedEvent[] = [];
+    for (const turn of this.turns.values()) {
+      if (
+        !(turn instanceof PendingRecordedTurn) ||
+        Date.parse(turn.createdAt) > cutoff
+      ) {
+        continue;
+      }
+      const failure: SessionFailedEvent = {
+        code,
+        commandId: turn.commandId,
+        kind: "session.failed",
+        message,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: turn.sessionId,
+      };
+      this.fail(failure);
+      failures.push(failure);
+    }
+    return failures;
   };
 
   readonly markStarted = (event: SessionStartedEvent): void => {
@@ -266,6 +330,156 @@ class MemoryTurnStore implements ChannelTurnStore {
 }
 
 describe("channel actor", () => {
+  it("Given a running turn is waiting for permission, When its only daemon disconnects, Then the conversation fails without leaving an interaction pending", () => {
+    const peers = new MemoryPeers();
+    const store = new MemoryTurnStore();
+    const actor = new ChannelActor("channel-1", store, peers, new FixedClock());
+    const host = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host);
+    peers.daemonSockets.push(daemon);
+    actor.attachDaemon();
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionReadyEvent({
+        additionalDirectories: [],
+        agentId: "codex",
+        agentName: "Codex",
+        agentVersion: "1.0.0",
+        capabilities: {
+          additionalDirectories: true,
+          audioPrompt: false,
+          closeSession: true,
+          deleteSession: false,
+          embeddedContextPrompt: true,
+          imagePrompt: true,
+          listSessions: false,
+          loadSession: true,
+          resumeSession: true,
+        },
+        commands: [],
+        configOptions: [],
+        directoryId: "root",
+        directoryLabel: "mobius",
+        kind: SESSION_READY_KIND,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        requestId: "prepare-1",
+        restored: false,
+        sessionId: "session-1",
+      }),
+    );
+    actor.receiveHostMessage(
+      host,
+      encodeSessionPromptCommand({
+        additionalDirectoryIds: [],
+        agentId: "codex",
+        bindingId: "workspace",
+        commandId: "command-1",
+        directoryId: "root",
+        images: [],
+        kind: SESSION_PROMPT_KIND,
+        prompt: "run protected action",
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        resources: [],
+        sessionId: "session-1",
+      }),
+    );
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionStartedEvent({
+        commandId: "command-1",
+        kind: SESSION_STARTED_KIND,
+        processAttemptId: "attempt-1",
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+      }),
+    );
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionPermissionRequestedEvent({
+        commandId: "command-1",
+        interactionId: "permission-1",
+        kind: SESSION_PERMISSION_REQUESTED_KIND,
+        options: [
+          {
+            kind: "allow_once",
+            name: "Allow once",
+            optionId: "allow-once",
+          },
+        ],
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+        title: "Run protected action",
+        toolCallId: "tool-1",
+        toolKind: "execute",
+      }),
+    );
+
+    daemon.close();
+    actor.detachDaemon(daemon);
+
+    expect(actor.readHistory()).toMatchObject({
+      sessions: [
+        {
+          pendingElicitations: [],
+          pendingPermissions: [],
+          sessionId: "session-1",
+        },
+      ],
+      turns: [
+        {
+          code: "daemon_disconnected",
+          commandId: "command-1",
+          status: "failed",
+        },
+      ],
+    });
+  });
+
+  it("Given a turn remains unacknowledged, When a browser refreshes after the delivery deadline, Then the conversation shows a retryable failure", () => {
+    const clock = new MutableClock();
+    const peers = new MemoryPeers();
+    const store = new MemoryTurnStore();
+    const actor = new ChannelActor("channel-1", store, peers, clock);
+    const host = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host);
+    peers.daemonSockets.push(daemon);
+    actor.attachDaemon();
+    actor.receiveHostMessage(
+      host,
+      encodeSessionPromptCommand({
+        additionalDirectoryIds: [],
+        agentId: "codex",
+        bindingId: "workspace",
+        commandId: "stalled-command",
+        directoryId: "root",
+        images: [],
+        kind: SESSION_PROMPT_KIND,
+        prompt: "stalled task",
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        resources: [],
+        sessionId: "session-1",
+      }),
+    );
+
+    clock.advance(60_000);
+    const history = actor.readHistory();
+
+    expect(history.turns).toMatchObject([
+      {
+        code: "daemon_start_timeout",
+        commandId: "stalled-command",
+        status: "failed",
+      },
+    ]);
+    expect(decodeSessionFailedEvent(host.messages.at(-1) ?? "")).toMatchObject({
+      code: "daemon_start_timeout",
+      commandId: "stalled-command",
+      sessionId: "session-1",
+    });
+  });
+
   it("Given runtime-neutral peers and storage, When a turn streams, Then every peer observes one persistent lifecycle", () => {
     const peers = new MemoryPeers();
     const store = new MemoryTurnStore();

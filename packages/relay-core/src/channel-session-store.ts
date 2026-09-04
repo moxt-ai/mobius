@@ -193,6 +193,24 @@ export class RecordedSession {
       ),
     );
 
+  readonly withoutInteractionsForCommands = (
+    commandIds: ReadonlySet<string>,
+  ): RecordedSession =>
+    new RecordedSession(
+      this.readyEvent(),
+      this.configOptions,
+      this.commands,
+      this.title,
+      this.updatedAt,
+      this.usage,
+      this.pendingPermissions.filter(
+        (entry) => !commandIds.has(entry.commandId),
+      ),
+      this.pendingElicitations.filter(
+        (entry) => !commandIds.has(entry.commandId),
+      ),
+    );
+
   readonly resolveElicitation = (
     event: SessionElicitationResolvedEvent,
   ): RecordedSession => {
@@ -211,6 +229,9 @@ export class RecordedSession {
 }
 
 export interface ChannelSessionStore {
+  readonly clearInteractionsForCommands: (
+    commandIds: readonly string[],
+  ) => void;
   readonly readSessions: () => readonly RecordedSession[];
   readonly recordCommands: (event: SessionCommandsUpdatedEvent) => void;
   readonly recordConfig: (event: SessionConfigUpdatedEvent) => void;
@@ -225,6 +246,18 @@ export interface ChannelSessionStore {
 
 export class MemoryChannelSessionStore implements ChannelSessionStore {
   readonly #sessions = new Map<string, RecordedSession>();
+
+  readonly clearInteractionsForCommands = (
+    commandIds: readonly string[],
+  ): void => {
+    const commandIdSet = new Set(commandIds);
+    for (const [sessionId, session] of this.#sessions) {
+      this.#sessions.set(
+        sessionId,
+        session.withoutInteractionsForCommands(commandIdSet),
+      );
+    }
+  };
 
   readonly readSessions = (): readonly RecordedSession[] =>
     [...this.#sessions.values()].sort((left, right) =>

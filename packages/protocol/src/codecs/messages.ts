@@ -11,7 +11,13 @@ import {
   AGENT_MESSAGE_DELTA_KIND,
   type AgentActivityEvent,
   type AgentMessageDeltaEvent,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_HEARTBEAT_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
   RUNTIME_STATUS_KIND,
+  type RuntimeHeartbeatAckEvent,
+  type RuntimeHeartbeatEvent,
+  type RuntimeLivenessReadyEvent,
   type RuntimeStatusEvent,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
@@ -347,6 +353,50 @@ export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
   };
 }
 
+export function decodeRuntimeLivenessReadyEvent(
+  encoded: string,
+): RuntimeLivenessReadyEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, ["kind", "protocolVersion"]);
+  assertProtocolVersion(value);
+  assertKind(value, RUNTIME_LIVENESS_READY_KIND);
+
+  return {
+    kind: RUNTIME_LIVENESS_READY_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+  };
+}
+
+export function decodeRuntimeHeartbeatEvent(
+  encoded: string,
+): RuntimeHeartbeatEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, ["heartbeatId", "kind", "protocolVersion"]);
+  assertProtocolVersion(value);
+  assertKind(value, RUNTIME_HEARTBEAT_KIND);
+
+  return {
+    heartbeatId: readIdentifier(value, "heartbeatId"),
+    kind: RUNTIME_HEARTBEAT_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+  };
+}
+
+export function decodeRuntimeHeartbeatAckEvent(
+  encoded: string,
+): RuntimeHeartbeatAckEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, ["heartbeatId", "kind", "protocolVersion"]);
+  assertProtocolVersion(value);
+  assertKind(value, RUNTIME_HEARTBEAT_ACK_KIND);
+
+  return {
+    heartbeatId: readIdentifier(value, "heartbeatId"),
+    kind: RUNTIME_HEARTBEAT_ACK_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+  };
+}
+
 export function decodeSessionStartedEvent(
   encoded: string,
 ): SessionStartedEvent {
@@ -494,6 +544,28 @@ export function encodeSessionCancelCommand(
 
 export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {
   return JSON.stringify(decodeRuntimeStatusEvent(JSON.stringify(message)));
+}
+
+export function encodeRuntimeLivenessReadyEvent(
+  message: RuntimeLivenessReadyEvent,
+): string {
+  return JSON.stringify(
+    decodeRuntimeLivenessReadyEvent(JSON.stringify(message)),
+  );
+}
+
+export function encodeRuntimeHeartbeatEvent(
+  message: RuntimeHeartbeatEvent,
+): string {
+  return JSON.stringify(decodeRuntimeHeartbeatEvent(JSON.stringify(message)));
+}
+
+export function encodeRuntimeHeartbeatAckEvent(
+  message: RuntimeHeartbeatAckEvent,
+): string {
+  return JSON.stringify(
+    decodeRuntimeHeartbeatAckEvent(JSON.stringify(message)),
+  );
 }
 
 export function encodeSessionStartedEvent(

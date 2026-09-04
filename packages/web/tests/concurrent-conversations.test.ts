@@ -5,6 +5,7 @@ import {
   ChannelConnection,
   ChannelHistory,
   CompletedRecordedTurn,
+  FailedRecordedTurn,
   PendingRecordedTurn,
   RecordedActivity,
   RunningRecordedTurn,
@@ -13,6 +14,7 @@ import {
   AgentChatMessage,
   CompletedTurnState,
   type Conversation,
+  FailedTurnState,
   PendingTurnState,
   RunningTurnState,
   StoppedTurnState,
@@ -33,6 +35,51 @@ function readConversation(
 }
 
 describe("Concurrent agent conversations", () => {
+  it("Given a locally pending turn, When relay recovery marks it failed, Then the same conversation accepts another message", () => {
+    useChatStore
+      .getState()
+      .configureChannel(
+        new ChannelConnection(
+          [new AgentOption("codex", "Codex")],
+          "channel",
+          "Local machine",
+          "workspace",
+        ),
+        new ChannelHistory([]),
+      );
+    const turn = useChatStore.getState().beginTurn("stalled task");
+
+    useChatStore
+      .getState()
+      .reconcileHistory(
+        new ChannelHistory([
+          new FailedRecordedTurn(
+            "codex",
+            turn.commandId,
+            new Date("2026-09-04T02:00:00.000Z"),
+            "stalled task",
+            "",
+            turn.sessionId,
+            "daemon_start_timeout",
+            "The local runtime did not acknowledge this request in time. Send it again.",
+          ),
+        ]),
+      );
+
+    const conversation = readConversation(
+      useChatStore.getState().conversations,
+      turn.conversationId,
+    );
+    const message = conversation.messages[1];
+    expect(message).toBeInstanceOf(AgentChatMessage);
+    if (!(message instanceof AgentChatMessage)) {
+      throw new Error("Expected a recovered agent message");
+    }
+    expect(message.state).toBeInstanceOf(FailedTurnState);
+    expect(conversation.isRunning).toBe(false);
+    expect(() => useChatStore.getState().beginTurn("try again")).not.toThrow();
+  });
+
   it("Given an agent is working, When the user starts another chat, Then both conversations remain independently usable", () => {
     const store = useChatStore.getState();
     store.configureChannel(
