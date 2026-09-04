@@ -87,7 +87,7 @@ function AgentRichContentItem({
         <ContentHeader content={content} />
         {href.length > 0 ? (
           <a
-            className="inline-flex min-h-9 items-center gap-1.5 break-all text-xs font-medium text-[#227b4e] underline decoration-[#2fb872]/40 underline-offset-2 hover:decoration-[#227b4e]"
+            className="inline-flex min-h-11 items-center gap-1.5 break-all text-xs font-medium text-success underline decoration-primary/40 underline-offset-2 hover:decoration-success focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-9"
             href={href}
             rel="noreferrer"
             target="_blank"

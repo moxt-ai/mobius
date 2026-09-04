@@ -31,7 +31,7 @@ function safeExternalUrl(value: string): string {
 function FieldControl({ field }: { readonly field: SessionElicitationField }) {
   if (field.type === "boolean") {
     return (
-      <label className="flex min-h-10 items-center gap-2 rounded-md border-[0.5px] border-black/9 px-3 text-xs text-[#454959]">
+      <label className="flex min-h-11 items-center gap-2 rounded-md border-[0.5px] border-black/9 px-3 text-xs text-[#454959] md:min-h-10">
         <input
           defaultChecked={field.hasDefaultValue && field.defaultBooleanValue}
           name={field.name}
@@ -46,7 +46,7 @@ function FieldControl({ field }: { readonly field: SessionElicitationField }) {
       <label className="grid gap-1.5 text-[11px] font-medium text-[#555c68]">
         {field.title}
         <select
-          className="min-h-10 rounded-md border-[0.5px] border-black/12 bg-white px-2.5 text-xs font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-[#2fb872]/35"
+          className="min-h-11 rounded-md border-[0.5px] border-black/12 bg-white px-2.5 text-base font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-10 md:text-xs"
           defaultValue={
             field.type === "multiselect"
               ? readMultiselectDefaults(field)
@@ -84,7 +84,7 @@ function FieldControl({ field }: { readonly field: SessionElicitationField }) {
     <label className="grid gap-1.5 text-[11px] font-medium text-[#555c68]">
       {field.title}
       <input
-        className="min-h-10 rounded-md border-[0.5px] border-black/12 bg-white px-3 text-xs font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-[#2fb872]/35"
+        className="min-h-11 rounded-md border-[0.5px] border-black/12 bg-white px-3 text-base font-normal text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-10 md:text-xs"
         defaultValue={
           field.hasDefaultValue
             ? numeric
@@ -162,7 +162,7 @@ function PermissionCard({
           <div className="mt-2.5 flex flex-wrap gap-2">
             {permission.options.map((option) => (
               <Button
-                className="min-h-10"
+                className="min-h-11 md:min-h-10"
                 disabled={busy}
                 key={option.optionId}
                 onClick={() => {
@@ -183,7 +183,7 @@ function PermissionCard({
               </Button>
             ))}
             <Button
-              className="min-h-10"
+              className="min-h-11 md:min-h-10"
               disabled={busy}
               onClick={() => {
                 setBusy(permission.interactionId);
@@ -255,7 +255,7 @@ function ElicitationCard({
                   </span>
                   {externalUrl.length > 0 && (
                     <a
-                      className="inline-flex min-h-10 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-[#3159a6] outline-none hover:bg-[#e5edff] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35"
+                      className="inline-flex min-h-11 items-center gap-1.5 rounded-md px-3 text-xs font-medium text-[#3159a6] outline-none hover:bg-[#e5edff] focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-10"
                       href={externalUrl}
                       rel="noreferrer"
                       target="_blank"
@@ -268,7 +268,7 @@ function ElicitationCard({
                 <div className="mt-2.5 flex flex-wrap gap-2">
                   {externalUrl.length > 0 && (
                     <Button
-                      className="min-h-10"
+                      className="min-h-11 md:min-h-10"
                       disabled={busy}
                       onClick={() => {
                         window.open(
@@ -290,7 +290,7 @@ function ElicitationCard({
                     </Button>
                   )}
                   <Button
-                    className="min-h-10"
+                    className="min-h-11 md:min-h-10"
                     disabled={busy}
                     onClick={() => cancel("decline")}
                     size="sm"
@@ -299,7 +299,7 @@ function ElicitationCard({
                     Decline
                   </Button>
                   <Button
-                    className="min-h-10"
+                    className="min-h-11 md:min-h-10"
                     disabled={busy}
                     onClick={() => cancel("cancel")}
                     size="sm"
@@ -332,7 +332,7 @@ function ElicitationCard({
               ))}
               <div className="flex flex-wrap gap-2">
                 <Button
-                  className="min-h-10"
+                  className="min-h-11 md:min-h-10"
                   disabled={busy}
                   size="sm"
                   type="submit"
@@ -340,7 +340,7 @@ function ElicitationCard({
                   Continue
                 </Button>
                 <Button
-                  className="min-h-10"
+                  className="min-h-11 md:min-h-10"
                   disabled={busy}
                   onClick={() => cancel("decline")}
                   size="sm"
@@ -349,7 +349,7 @@ function ElicitationCard({
                   Decline
                 </Button>
                 <Button
-                  className="min-h-10"
+                  className="min-h-11 md:min-h-10"
                   disabled={busy}
                   onClick={() => cancel("cancel")}
                   size="sm"

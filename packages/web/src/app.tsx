@@ -19,7 +19,25 @@ import {
   readChannelHistory,
   readChannelHistoryForSynchronization,
 } from "@/services/pairing-api";
-import { useChatStore } from "@/store/chat-store";
+import {
+  type DesktopSidebarLayoutState,
+  decodeSidebarLayoutPreference,
+  encodeSidebarLayoutPreference,
+  toggleSidebar,
+} from "@/services/workspace-layout";
+import { selectActiveConversation, useChatStore } from "@/store/chat-store";
+
+const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
+
+function initialSidebarLayout(): DesktopSidebarLayoutState {
+  try {
+    return decodeSidebarLayoutPreference(
+      window.localStorage.getItem(SIDEBAR_LAYOUT_STORAGE_KEY),
+    );
+  } catch {
+    return decodeSidebarLayoutPreference(null);
+  }
+}
 
 function ChannelErrorPage({
   message,
@@ -56,9 +74,21 @@ function ChannelWorkspace({
   readonly history: ChannelHistory;
 }) {
   const announcement = useChatStore((state) => state.announcement);
+  const conversation = useChatStore(selectActiveConversation);
   const configureChannel = useChatStore((state) => state.configureChannel);
   const createConversation = useChatStore((state) => state.createConversation);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
+  const [sidebarLayout, setSidebarLayout] =
+    useState<DesktopSidebarLayoutState>(initialSidebarLayout);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_LAYOUT_STORAGE_KEY,
+        encodeSidebarLayoutPreference(sidebarLayout),
+      );
+    } catch {}
+  }, [sidebarLayout]);
 
   useEffect(() => {
     configureChannel(connection, history);
@@ -115,24 +145,34 @@ function ChannelWorkspace({
   return (
     <>
       <a
-        className="fixed top-3 left-3 z-50 -translate-y-[180%] rounded-lg bg-[#2fb872] px-[13px] py-[9px] text-[13px] font-semibold text-[#062f1c] no-underline transition-transform duration-150 focus:translate-y-0"
+        className="fixed top-3 left-3 z-50 -translate-y-[180%] rounded-lg bg-[#2fb872] px-[13px] py-[9px] text-[13px] font-semibold text-[#062f1c] no-underline transition-transform duration-150 motion-reduce:transition-none focus:translate-y-0"
         href="#main-content"
       >
         Skip to conversation
       </a>
-      <div className="grid h-dvh w-full grid-cols-1 bg-background md:grid-cols-[264px_minmax(0,1fr)]">
-        <ConversationSidebar />
+      <div className="flex h-dvh w-full bg-background">
+        <ConversationSidebar
+          layout={sidebarLayout}
+          onLayoutChange={setSidebarLayout}
+        />
         <main
-          className="flex min-h-0 min-w-0 flex-col bg-background"
+          className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
           id="main-content"
         >
-          <ChatHeader />
+          <ChatHeader
+            desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
+            onToggleDesktopSidebar={() => {
+              setSidebarLayout((current) => toggleSidebar(current));
+            }}
+          />
           <section
             aria-label="Agent conversation"
             className="flex min-h-0 flex-1 flex-col"
           >
             <ChatMessageList />
-            <ChatComposer />
+            {conversation.messages.length > 0 && (
+              <ChatComposer placement="active" />
+            )}
             <p aria-live="polite" className="sr-only">
               {announcement}
             </p>

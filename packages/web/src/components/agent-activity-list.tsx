@@ -14,11 +14,12 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 
 import { AgentRichContent } from "@/components/agent-rich-content";
 import type { RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
+import { describeAgentActivities } from "@/services/activity-presentation";
 
 function activityIcon(activity: RecordedActivity): ReactNode {
   if (activity.activityType === "reasoning") {
@@ -59,10 +60,10 @@ function statusIcon(status: string, active: boolean): ReactNode {
     );
   }
   if (status === "completed") {
-    return <CircleCheck className="size-3 shrink-0" />;
+    return <CircleCheck className="size-3 shrink-0 text-success" />;
   }
   if (status === "failed") {
-    return <CircleX className="size-3 shrink-0" />;
+    return <CircleX className="size-3 shrink-0 text-destructive" />;
   }
   return <Clock3 className="size-3 shrink-0" />;
 }
@@ -85,7 +86,7 @@ function statusLabel(status: string, active: boolean): string {
 
 function ActivityText({ children }: { readonly children: string }) {
   return (
-    <pre className="max-h-72 overflow-auto rounded-md bg-black/[0.025] px-3 py-2.5 font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-[#5f6672]">
+    <pre className="max-h-72 overflow-auto rounded-md bg-black/[0.025] px-3 py-2.5 font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-copy-secondary">
       {children}
     </pre>
   );
@@ -96,10 +97,10 @@ function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
     <div className="mt-1 ml-[7px] grid gap-2 border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
       {activity.locations.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-[#8a919d] uppercase">
+          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Locations
           </p>
-          <ul className="m-0 grid list-none gap-0.5 p-0 font-mono text-[11px] leading-[18px] text-[#5f6672]">
+          <ul className="m-0 grid list-none gap-0.5 p-0 font-mono text-[11px] leading-[18px] text-copy-secondary">
             {activity.locations.map((location) => (
               <li className="break-all" key={location}>
                 {location}
@@ -110,7 +111,7 @@ function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
       )}
       {activity.input.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-[#8a919d] uppercase">
+          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Input
           </p>
           <ActivityText>{activity.input}</ActivityText>
@@ -118,7 +119,7 @@ function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
       )}
       {activity.output.length > 0 && (
         <div>
-          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-[#8a919d] uppercase">
+          <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Output
           </p>
           <ActivityText>{activity.output}</ActivityText>
@@ -155,6 +156,11 @@ function ActivityLine({
   readonly streaming: boolean;
 }) {
   const [open, setOpen] = useState(activity.status === "failed");
+  useEffect(() => {
+    if (activity.status === "failed") {
+      setOpen(true);
+    }
+  }, [activity.status]);
   const hasDetails =
     activity.input.length > 0 ||
     activity.output.length > 0 ||
@@ -164,26 +170,26 @@ function ActivityLine({
     <span className="flex min-w-0 flex-1 items-center gap-2">
       <span
         className={cn(
-          "shrink-0 text-[#7d8590]",
-          activity.status === "failed" && "text-[#b4232a]",
+          "shrink-0 text-copy-tertiary",
+          activity.status === "failed" && "text-destructive",
         )}
       >
         {activityIcon(activity)}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[#555c68]">
+      <span className="min-w-0 flex-1 truncate text-copy-secondary">
         {activity.title}
       </span>
       {activity.name.length > 0 && (
-        <code className="hidden max-w-32 truncate rounded bg-black/[0.035] px-1.5 py-0.5 font-mono text-[10px] text-[#7d8590] sm:block">
+        <code className="hidden max-w-32 truncate rounded bg-black/[0.035] px-1.5 py-0.5 font-mono text-[10px] text-copy-tertiary sm:block">
           {activity.name}
         </code>
       )}
       <span
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 text-[10px] text-[#8a919d]",
-          activity.status === "running" && streaming && "text-[#9a6700]",
-          activity.status === "completed" && "text-[#279a60]",
-          activity.status === "failed" && "text-[#b4232a]",
+          "inline-flex shrink-0 items-center gap-1 text-[10px] text-copy-tertiary",
+          activity.status === "running" && streaming && "text-warning",
+          activity.status === "completed" && "text-success",
+          activity.status === "failed" && "text-destructive",
         )}
       >
         {statusIcon(activity.status, streaming)}
@@ -213,9 +219,9 @@ function ActivityLine({
       }}
       open={open}
     >
-      <summary className="flex min-h-7 max-w-full cursor-pointer list-none items-center gap-1 rounded text-[13px] leading-[22px] outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
+      <summary className="flex min-h-11 max-w-full cursor-pointer list-none items-center gap-1 rounded text-[13px] leading-[22px] outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-7">
         {summary}
-        <ChevronRight className="size-3 shrink-0 text-[#9aa0aa] transition-transform duration-150 group-open/activity:rotate-90" />
+        <ChevronRight className="size-3 shrink-0 text-copy-tertiary transition-transform duration-150 motion-reduce:transition-none group-open/activity:rotate-90" />
       </summary>
       {activity.activityType === "tool" ? (
         <ToolDetails activity={activity} />
@@ -233,19 +239,27 @@ export function AgentActivityList({
   readonly activities: readonly RecordedActivity[];
   readonly streaming: boolean;
 }) {
-  const [manuallyOpen, setManuallyOpen] = useState(() =>
-    activities.some((activity) => activity.status === "failed"),
+  const initialPresentation = describeAgentActivities(activities, streaming);
+  const [manuallyOpen, setManuallyOpen] = useState(
+    () => !streaming && initialPresentation.defaultOpen,
   );
-  if (activities.length === 0) {
-    return null;
-  }
   const working =
     streaming &&
     activities.some(
       (activity) =>
         activity.status === "pending" || activity.status === "running",
     );
+  const presentation = describeAgentActivities(activities, streaming);
+  useEffect(() => {
+    if (!streaming && presentation.defaultOpen) {
+      setManuallyOpen(true);
+    }
+  }, [presentation.defaultOpen, streaming]);
+  if (activities.length === 0) {
+    return null;
+  }
   const open = streaming || manuallyOpen;
+  const disclosureLabel = presentation.label;
 
   return (
     <details
@@ -258,17 +272,14 @@ export function AgentActivityList({
       }}
       open={open}
     >
-      <summary className="flex min-h-7 w-fit cursor-pointer list-none items-center gap-1 rounded text-[13px] leading-[22px] text-[#828a99] outline-none select-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
-        <ChevronRight className="size-3 shrink-0 transition-transform duration-150 group-open/work:rotate-90" />
-        <span>
-          {working
-            ? "Working"
-            : open
-              ? "Hide intermediate steps"
-              : "Show intermediate steps"}
-        </span>
+      <summary
+        aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
+        className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
+      >
+        <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
+        <span>{disclosureLabel}</span>
         {working && (
-          <LoaderCircle className="ml-1 size-3.5 animate-spin text-[#9a6700] motion-reduce:animate-none" />
+          <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
         )}
       </summary>
       <div className="mt-1.5 grid gap-1">

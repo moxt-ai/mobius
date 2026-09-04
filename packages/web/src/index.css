@@ -14,12 +14,21 @@
   --secondary: rgba(11, 26, 57, 0.08);
   --secondary-foreground: #1c1e22;
   --muted: rgba(11, 26, 57, 0.05);
-  --muted-foreground: #737b89;
+  --muted-foreground: #68707d;
   --accent: rgba(11, 26, 57, 0.05);
   --accent-foreground: #0e0f11;
   --border: #c8cdd1;
   --input: #c8cdd1;
-  --ring: #2fb872;
+  --ring: #227b4e;
+  --destructive: #b4232a;
+  --destructive-foreground: #ffffff;
+  --success: #227b4e;
+  --warning: #9a6700;
+  --copy-secondary: #454959;
+  --copy-tertiary: #68707d;
+  --surface-subtle: #f7f8f9;
+  --success-subtle: #eefaf3;
+  --warning-subtle: #fff3c4;
   --sidebar: #f4f5f7;
   --sidebar-foreground: #0e0f11;
   --sidebar-accent: #e6e8eb;
@@ -45,6 +54,15 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-copy-secondary: var(--copy-secondary);
+  --color-copy-tertiary: var(--copy-tertiary);
+  --color-surface-subtle: var(--surface-subtle);
+  --color-success-subtle: var(--success-subtle);
+  --color-warning-subtle: var(--warning-subtle);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
@@ -116,8 +134,14 @@
 
 .composer-shell:focus-within {
   box-shadow:
-    inset 0 0 0 1px var(--primary),
+    inset 0 0 0 1px var(--ring),
     0 4px 12px rgba(47, 184, 114, 0.18);
+}
+
+.composer-shell:has([aria-haspopup="dialog"][aria-expanded="true"]) {
+  box-shadow:
+    inset 0 0 0 0.5px #aeb5bc,
+    0 4px 12px rgba(0, 0, 0, 0.08);
 }
 
 .agent-float {

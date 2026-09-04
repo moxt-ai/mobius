@@ -1,9 +1,10 @@
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, MoreHorizontal } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { AgentActivityList } from "@/components/agent-activity-list";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
+import { ChatComposer } from "@/components/chat-composer";
 import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,12 +31,12 @@ function EmptyConversation() {
   return (
     <section
       aria-labelledby="empty-title"
-      className="empty-conversation mx-auto mt-[clamp(56px,12vh,116px)] mb-10 w-[min(720px,calc(100%-40px))] text-center max-md:mt-[clamp(36px,8vh,72px)] max-md:w-[min(620px,calc(100%-28px))]"
+      className="empty-conversation mx-auto mt-[clamp(42px,10vh,92px)] mb-10 w-[min(840px,calc(100%-40px))] text-center max-md:mt-[clamp(24px,6vh,52px)] max-md:w-[min(620px,calc(100%-24px))]"
     >
       <div className="empty-conversation-avatar mx-auto mb-[13px] w-fit">
         <AgentAvatar floating />
       </div>
-      <p className="m-0 text-xs font-semibold text-[#279a60]">
+      <p className="m-0 text-xs font-semibold text-success">
         {conversation.agentLabel} on your machine
       </p>
       <h2
@@ -44,15 +45,15 @@ function EmptyConversation() {
       >
         What can I help you work on?
       </h2>
-      <p className="empty-conversation-description mx-auto mt-3 max-w-[560px] text-sm leading-[22px] text-[#454959] max-md:max-w-[440px] max-md:text-[13px] max-md:leading-5">
-        Messages travel through the Mobius relay to the authorized local
-        workspace, then stream back into this conversation.
+      <p className="empty-conversation-description mx-auto mt-2 max-w-[520px] text-sm leading-[22px] text-copy-secondary max-md:max-w-[420px] max-md:text-[13px] max-md:leading-5">
+        Plan, inspect, and make changes in your authorized local workspace.
       </p>
-      <fieldset className="empty-conversation-suggestions mx-auto mt-[30px] grid max-w-[620px] grid-cols-3 gap-[9px] border-0 p-0 text-left max-md:grid-cols-1 max-md:gap-[7px]">
+      <ChatComposer placement="idle" />
+      <fieldset className="empty-conversation-suggestions mx-auto mt-4 grid max-w-[720px] grid-cols-3 gap-2 border-0 p-0 text-left max-md:grid-cols-1 max-md:gap-1.5">
         <legend className="sr-only">Suggested prompts</legend>
         {suggestions.map((prompt) => (
           <Button
-            className="group min-h-[84px] items-start whitespace-normal rounded-xl border-black/9 bg-white px-[13px] py-3 text-left text-xs leading-[18px] font-normal text-[#454959] hover:-translate-y-px hover:border-black/12 hover:bg-[#fcfcfd] hover:text-foreground max-md:min-h-12 max-md:items-center"
+            className="group min-h-14 items-center whitespace-normal rounded-xl border-black/9 bg-white px-3 py-2.5 text-left text-xs leading-[18px] font-normal text-copy-secondary motion-safe:hover:-translate-y-px hover:border-black/12 hover:bg-background hover:text-foreground max-md:min-h-11"
             disabled={!runtime.canSend || conversation.isRunning}
             key={prompt}
             onClick={() => {
@@ -63,7 +64,7 @@ function EmptyConversation() {
             <span className="flex-1">{prompt}</span>
             <span
               aria-hidden="true"
-              className="mt-px text-muted-foreground transition-transform duration-150 group-hover:translate-x-0.5"
+              className="mt-px text-muted-foreground transition-transform duration-150 motion-reduce:transition-none group-hover:translate-x-0.5 motion-reduce:group-hover:translate-x-0"
             >
               →
             </span>
@@ -175,36 +176,47 @@ function AgentMessage({
         <AgentRichContent
           contents={message.contents.map((entry) => entry.content)}
         />
-        {message.state.appearance !== "completed" && (
-          <span
-            className={cn(
-              "turn-status mt-3 inline-flex w-fit items-center gap-[5px] rounded-md bg-black/[0.045] px-2 py-1 text-[11px] leading-4 text-muted-foreground",
-              message.state.appearance === "working" && "text-[#9a6700]",
-              message.state.appearance === "failed" && "text-[#b4232a]",
-            )}
-            data-state={message.state.appearance}
-          >
-            {message.state.label}
-          </span>
-        )}
-        <details className="mt-3 w-fit max-w-full text-[11px] text-muted-foreground">
-          <summary className="w-fit cursor-pointer rounded-sm outline-none select-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
-            Run details
-          </summary>
-          <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 leading-[17px]">
-            {message.state.details(sessionId).map((detail) => (
-              <div className="contents" key={detail.label}>
-                <dt>{detail.label}</dt>
-                <dd
-                  className="m-0 min-w-0 truncate font-mono text-[#454959]"
-                  title={detail.value}
-                >
-                  {detail.value}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </details>
+        <div className="mt-3 flex min-h-8 items-center gap-1.5">
+          {message.state.appearance !== "completed" && (
+            <span
+              className={cn(
+                "turn-status inline-flex w-fit items-center gap-[5px] rounded-md bg-black/[0.045] px-2 py-1 text-[11px] leading-4 text-muted-foreground",
+                message.state.appearance === "working" && "text-warning",
+                message.state.appearance === "failed" && "text-destructive",
+              )}
+              data-state={message.state.appearance}
+            >
+              {message.state.label}
+            </span>
+          )}
+          <details className="group/turn-details max-w-full text-[11px] text-muted-foreground">
+            <summary
+              aria-label="Show run details"
+              className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full outline-none select-none hover:bg-black/[0.045] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:size-8"
+              title="Run details"
+            >
+              <MoreHorizontal className="size-4" />
+            </summary>
+            <div className="mt-1.5 rounded-lg border-[0.5px] border-black/8 bg-surface-subtle p-3">
+              <p className="mb-2 text-[10px] font-semibold tracking-[0.06em] text-copy-tertiary uppercase">
+                Run details
+              </p>
+              <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 leading-[17px]">
+                {message.state.details(sessionId).map((detail) => (
+                  <div className="contents" key={detail.label}>
+                    <dt>{detail.label}</dt>
+                    <dd
+                      className="m-0 min-w-0 truncate font-mono text-copy-secondary"
+                      title={detail.value}
+                    >
+                      {detail.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </details>
+        </div>
       </div>
     </article>
   );
@@ -276,7 +288,7 @@ export function ChatMessageList() {
             aria-busy={conversation.isRunning}
             aria-live="polite"
             aria-relevant="additions text"
-            className="mx-auto min-h-full w-full max-w-[1000px] px-6 pt-10 pb-16 max-md:px-4 max-md:pt-7"
+            className="mx-auto min-h-full w-full max-w-[840px] px-6 pt-10 pb-16 max-md:px-4 max-md:pt-7"
             role="log"
           >
             {conversation.messages.map((message) => (
@@ -293,12 +305,15 @@ export function ChatMessageList() {
       </div>
       {showLatest && conversation.messages.length > 0 && (
         <Button
-          className="absolute right-6 bottom-3 h-[34px] rounded-full border-black/9 bg-white px-[11px] text-[11px] font-medium text-[#454959] shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:bg-[#fcfcfd] max-md:right-3.5 max-md:h-[38px]"
+          className="absolute right-6 bottom-3 h-[34px] rounded-full border-black/9 bg-white px-[11px] text-[11px] font-medium text-[#454959] shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:bg-[#fcfcfd] max-md:right-3.5 max-md:h-11"
           onClick={() => {
             const viewport = viewportRef.current;
             if (viewport !== null) {
               viewport.scrollTo({
-                behavior: "smooth",
+                behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                  .matches
+                  ? "auto"
+                  : "smooth",
                 top: viewport.scrollHeight,
               });
               followLatestRef.current = true;

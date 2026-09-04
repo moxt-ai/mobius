@@ -45,6 +45,7 @@ Make illegal states unrepresentable.
 - Deliver behavior as the smallest user-runnable vertical slice through input, logic, and observable output.
 - Describe each behavior slice as: "After this, a user can ... and see ..." If that sentence is not concrete, narrow the slice.
 - Start every behavior change with a failing Given-When-Then acceptance scenario that proves the user-visible slice through the first supported product boundary that can observe it. Treat the scenario as executable product documentation, and implement only what it requires.
+- Do not add unit tests by default. Add one only when the user explicitly requests unit-level coverage or a repository maintainer documents an exception for an invariant that cannot be exercised through a supported product boundary.
 - Critical user paths must use end-to-end tests. Protocols and external boundaries must use integration or contract tests. Do not test CI, linting, Git hooks, build tooling, dependency configuration, or other repository scaffolding.
 - Except for deterministic fake timers, mocks, spies, stubs, monkey patching, module replacement, and canned request interceptors are prohibited. If a real external dependency cannot be used safely or deterministically, inject a stateful fake through its production port.
 - Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.

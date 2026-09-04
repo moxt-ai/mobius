@@ -31,10 +31,22 @@ function createRelayUrl(connection: ChannelConnection): string {
 }
 
 function failureMessage(error: unknown): string {
-  if (error instanceof MobiusClientError) {
-    return `${error.code}: ${error.message}`;
-  }
-  return "unexpected_error: The request failed unexpectedly";
+  const failure = boundaryFailure(error);
+  return `${failure.code}: ${failure.message}`;
+}
+
+interface BoundaryFailure {
+  readonly code: string;
+  readonly message: string;
+}
+
+function boundaryFailure(error: unknown): BoundaryFailure {
+  return error instanceof MobiusClientError
+    ? { code: error.code, message: error.message }
+    : {
+        code: "unexpected_error",
+        message: "The request failed unexpectedly",
+      };
 }
 
 abstract class TransportConnection {
@@ -265,6 +277,15 @@ export async function listWorkspace(
   });
 }
 
+export type SessionConfigurationResult =
+  | { readonly kind: "applied" }
+  | { readonly kind: "ignored" }
+  | {
+      readonly code: string;
+      readonly kind: "failed";
+      readonly message: string;
+    };
+
 export async function configureSessionOption(
   expectedAgentId: string,
   expectedSessionId: string,
@@ -273,7 +294,7 @@ export async function configureSessionOption(
   option: SessionConfigOption,
   value: string,
   booleanValue: boolean,
-): Promise<void> {
+): Promise<SessionConfigurationResult> {
   const store = useChatStore.getState();
   const conversation = selectActiveConversation(store);
   if (
@@ -286,26 +307,26 @@ export async function configureSessionOption(
       expectedAdditionalDirectoryIds,
     )
   ) {
-    return;
+    return { kind: "ignored" };
   }
   const currentOption = conversation.session.configOptions.find(
     (candidate) => candidate.id === option.id,
   );
   if (currentOption === undefined || currentOption.type !== option.type) {
-    return;
+    return { kind: "ignored" };
   }
   if (
     currentOption.type === "select" &&
     (currentOption.currentValue === value ||
       !currentOption.values.some((candidate) => candidate.value === value))
   ) {
-    return;
+    return { kind: "ignored" };
   }
   if (
     currentOption.type === "boolean" &&
     currentOption.booleanValue === booleanValue
   ) {
-    return;
+    return { kind: "ignored" };
   }
   try {
     await transport.configure({
@@ -332,7 +353,9 @@ export async function configureSessionOption(
     ) {
       latestStore.setErrorMessage("");
     }
+    return { kind: "applied" };
   } catch (error) {
+    const failure = boundaryFailure(error);
     const latestStore = useChatStore.getState();
     if (
       selectActiveConversation(latestStore).matchesPreparation(
@@ -342,8 +365,9 @@ export async function configureSessionOption(
         expectedAdditionalDirectoryIds,
       )
     ) {
-      latestStore.setErrorMessage(failureMessage(error));
+      latestStore.setErrorMessage(`${failure.code}: ${failure.message}`);
     }
+    return { ...failure, kind: "failed" };
   }
 }
 

@@ -22,7 +22,7 @@ export function SelectTrigger({
   return (
     <SelectPrimitive.Trigger
       className={cn(
-        "inline-flex h-9 min-w-[136px] items-center justify-between gap-2 rounded-lg border-[0.5px] border-black/10 bg-white px-2.5 text-xs font-medium text-[#454959] outline-none transition-colors duration-150 hover:bg-[#fafafb] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35 disabled:cursor-not-allowed disabled:opacity-50",
+        "inline-flex h-9 min-w-[136px] items-center justify-between gap-2 rounded-lg border-[0.5px] border-black/10 bg-white px-2.5 text-xs font-medium text-copy-secondary outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-background focus-visible:ring-2 focus-visible:ring-ring/70 disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       data-slot="select-trigger"
@@ -83,7 +83,7 @@ export function SelectItem({
   return (
     <SelectPrimitive.Item
       className={cn(
-        "relative flex min-h-9 w-full cursor-default select-none items-center rounded-[7px] py-2 pr-8 pl-2.5 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-black/5 data-[state=checked]:font-medium data-[disabled]:opacity-50",
+        "relative flex min-h-11 w-full cursor-default select-none items-center rounded-[7px] py-2 pr-8 pl-2.5 text-xs outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-black/5 data-[state=checked]:font-medium data-[disabled]:opacity-50 md:min-h-9",
         className,
       )}
       data-slot="select-item"
@@ -91,7 +91,7 @@ export function SelectItem({
     >
       <span className="absolute right-2 flex size-4 items-center justify-center">
         <SelectPrimitive.ItemIndicator>
-          <Check className="size-3.5 text-[#279a60]" />
+          <Check className="size-3.5 text-success" />
         </SelectPrimitive.ItemIndicator>
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
