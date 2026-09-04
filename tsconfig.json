@@ -1,23 +1,8 @@
 {
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "module": "nodenext",
-    "target": "es2024",
-    "types": ["node"],
-    "rewriteRelativeImportExtensions": true,
-    "verbatimModuleSyntax": true,
-    "erasableSyntaxOnly": true,
-
-    "outDir": "./dist",
-    "rootDir": "./src",
-    "noEmitOnError": true,
-
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "exactOptionalPropertyTypes": true,
-    "noPropertyAccessFromIndexSignature": true,
-    "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true,
-    "noImplicitReturns": true
+    "noEmit": true,
+    "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["scripts/**/*.ts", "vitest.config.ts"]
 }

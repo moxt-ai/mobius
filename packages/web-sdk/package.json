@@ -1,0 +1,14 @@
+{
+  "name": "@moxt-ai/mobius-web-sdk",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@moxt-ai/mobius-protocol": "workspace:*"
+  }
+}

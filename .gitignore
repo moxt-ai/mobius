@@ -2,7 +2,12 @@ node_modules/
 dist/
 coverage/
 .vitest-reports/
+.wrangler/
+.vite/
+.mobius/
 .env
 .env.*
+.dev.vars
+.dev.vars.*
 *.pem
 .DS_Store

@@ -13,30 +13,48 @@ export interface TextLocation {
   readonly column: number;
 }
 
-export interface ChineseTextViolation extends TextLocation {
-  readonly path: string;
-  readonly source: "content" | "path" | "symlink-target";
+export class TextSource {
+  static readonly Content = new TextSource("content");
+  static readonly Path = new TextSource("path");
+  static readonly SymlinkTarget = new TextSource("symlink-target");
+
+  readonly value: string;
+
+  private constructor(value: string) {
+    this.value = value;
+  }
+
+  toString(): string {
+    return this.value;
+  }
 }
 
-export function findHanCharacter(value: string): TextLocation | null {
+export interface ChineseTextViolation extends TextLocation {
+  readonly path: string;
+  readonly source: TextSource;
+}
+
+export function findHanCharacter(value: string): readonly TextLocation[] {
   const match = HAN_CHARACTER.exec(value);
   if (match === null) {
-    return null;
+    return [];
   }
 
   const prefix = value.slice(0, match.index);
   const lineStart = prefix.lastIndexOf("\n") + 1;
 
-  return {
-    character: match[0],
-    line: prefix.split("\n").length,
-    column: [...prefix.slice(lineStart)].length + 1,
-  };
+  return [
+    {
+      character: match[0],
+      line: prefix.split("\n").length,
+      column: [...prefix.slice(lineStart)].length + 1,
+    },
+  ];
 }
 
 function violation(
   path: string,
-  source: ChineseTextViolation["source"],
+  source: TextSource,
   location: TextLocation,
 ): ChineseTextViolation {
   return { path, source, ...location };
@@ -49,9 +67,8 @@ export function findChineseTextViolations(
   const violations: ChineseTextViolation[] = [];
 
   for (const path of paths) {
-    const pathMatch = findHanCharacter(path);
-    if (pathMatch !== null) {
-      violations.push(violation(path, "path", pathMatch));
+    for (const pathMatch of findHanCharacter(path)) {
+      violations.push(violation(path, TextSource.Path, pathMatch));
     }
 
     const absolutePath = join(root, path);
@@ -60,9 +77,10 @@ export function findChineseTextViolations(
       continue;
     }
     if (file.isSymbolicLink()) {
-      const targetMatch = findHanCharacter(readlinkSync(absolutePath, "utf8"));
-      if (targetMatch !== null) {
-        violations.push(violation(path, "symlink-target", targetMatch));
+      for (const targetMatch of findHanCharacter(
+        readlinkSync(absolutePath, "utf8"),
+      )) {
+        violations.push(violation(path, TextSource.SymlinkTarget, targetMatch));
       }
       continue;
     }
@@ -75,9 +93,8 @@ export function findChineseTextViolations(
       continue;
     }
 
-    const contentMatch = findHanCharacter(content.toString("utf8"));
-    if (contentMatch !== null) {
-      violations.push(violation(path, "content", contentMatch));
+    for (const contentMatch of findHanCharacter(content.toString("utf8"))) {
+      violations.push(violation(path, TextSource.Content, contentMatch));
     }
   }
 

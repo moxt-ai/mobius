@@ -23,17 +23,38 @@ For values whose meaning can change after resolution, check both forms. Examples
 
 ## Make Illegal States Unrepresentable
 
-Use a discriminated union when behavior or available data depends on a lifecycle or protocol state:
+Use an abstract state base class with one concrete class per lifecycle state:
 
 ```ts
-type SessionState =
-  | { readonly kind: "connecting" }
-  | {
-      readonly kind: "active";
-      readonly sessionId: string;
-      readonly capabilities: ReadonlySet<Capability>;
-    }
-  | { readonly kind: "closed"; readonly reason: CloseReason };
+abstract class SessionState {
+  abstract readonly kind: string;
+}
+
+class ConnectingSessionState extends SessionState {
+  readonly kind = "connecting";
+}
+
+class ActiveSessionState extends SessionState {
+  readonly kind = "active";
+  readonly capabilities: ReadonlySet<Capability>;
+  readonly sessionId: string;
+
+  constructor(sessionId: string, capabilities: ReadonlySet<Capability>) {
+    super();
+    this.sessionId = sessionId;
+    this.capabilities = capabilities;
+  }
+}
+
+class ClosedSessionState extends SessionState {
+  readonly kind = "closed";
+  readonly reason: CloseReason;
+
+  constructor(reason: CloseReason) {
+    super();
+    this.reason = reason;
+  }
+}
 ```
 
 Do not model the same concept as unrelated optional fields:
@@ -48,7 +69,7 @@ interface SessionState {
 }
 ```
 
-State transitions should accept only valid source states and return a complete destination state. Consumers must use exhaustive branching without a permissive `default` branch. Use an `assertNever` helper when the control flow does not otherwise prove exhaustiveness.
+State transitions should accept only valid source-state classes and return a complete destination state. Consumers branch with `instanceof` and must reject unknown state classes explicitly.
 
 Use optional properties only when absence is meaningful within the same state. Use `null` only when an explicit empty value is part of the domain. Reserve `Partial<T>` for update payloads, never for lifecycle or protocol states.
 

@@ -1,0 +1,1 @@
+export const MOBIUS_PROTOCOL_VERSION = 1;

@@ -113,3 +113,117 @@ Requires Node.js 24.20.0 and pnpm.
 pnpm install
 pnpm check
 ```
+
+Start the local Cloudflare deployment profile and production Web build:
+
+```bash
+pnpm dev:relay
+```
+
+`pnpm dev:cloudflare` is the explicit profile command; `pnpm dev:relay` remains
+its short alias. The command applies local D1 migrations before Wrangler starts.
+
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787). The default page creates a
+short-lived pairing code and displays a command like this:
+
+```bash
+npx --yes @moxt-ai/mobius pair --url http://127.0.0.1:8787 --code XXXX-XXXX-XXXX-XXXX-XXXX --root "$PWD"
+```
+
+Run that command from the workspace that Mobius may access. The published
+`@moxt-ai/mobius` package is the extensible Mobius CLI; pairing and the long-lived
+daemon are capabilities within that package. The command resolves and approves
+the supplied root, claims the one-time code, starts the daemon, and keeps the
+terminal open. When developing the CLI from this checkout, the equivalent
+workspace command is `pnpm mobius pair ...`.
+The browser then moves to an independent `/channels/<channel-id>` route. Every new
+conversation can select Codex or Claude Code; the selection is locked after its
+first message so the ACP session remains coherent across turns. Conversations
+run independently, so a user can switch chats, create another chat, and start a
+second agent task while an earlier conversation is still working.
+
+The channel URL can be opened directly in any browser while its local daemon is
+running. During this early phase, the high-entropy channel identifier is the only
+browser-side access boundary: anyone who receives the URL can submit agent work
+to the paired workspace and read its persisted history. Add user or team
+authentication before exposing a channel beyond trusted collaborators.
+
+Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
+restart a previously paired daemon, use the channel identifier shown in its URL:
+
+```bash
+npx --yes @moxt-ai/mobius start --channel <channel-id>
+```
+
+The daemon uses the official
+[`codex-acp`](https://github.com/agentclientprotocol/codex-acp) and
+[`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
+adapters. Local credentials remain with those harnesses. Only the resolved root
+approved by the pairing command can be used as the `workspace` binding.
+
+For Web hot reload, run the relay and Vite together, then open
+[http://127.0.0.1:5190](http://127.0.0.1:5190):
+
+```bash
+pnpm dev:stack
+```
+
+### One-command Cloudflare preview
+
+Run the temporary deployment from the repository root:
+
+```bash
+pnpm wrangler deploy --temporary
+```
+
+This command builds the React application and deploys it as Worker Static Assets
+together with the Relay Worker, Durable Object, and an automatically provisioned
+D1 binding. Wrangler prints the temporary account's claim URL, and Mobius prints
+the Web URL. Open that URL and use the one-time command shown by the pairing page.
+The wrapper uses a dedicated temporary profile automatically, so an unrelated
+Wrangler login does not need to be removed or overwritten.
+
+The daemon receives a high-entropy channel token whose hash and channel metadata
+are stored in D1. The pairing code expires after ten minutes and can be claimed
+only once. Browser channel access is intentionally URL-based for now so a paired
+channel opens in any browser; application authentication is a separate follow-up.
+
+Cloudflare may apply an abuse-prevention challenge to an unclaimed temporary
+preview. If that blocks the non-browser daemon, claim the deployment using the
+private URL printed by Wrangler, or deploy from an authenticated account without
+`--temporary`, then run the newly generated pairing command. The cloud deployment
+does not run the local daemon or ACP agent; the pairing command starts it locally.
+
+The Web package uses Vite, TypeScript, React, Zustand, Tailwind CSS, and local
+shadcn/ui components. Zustand owns live page state, while each channel's Durable
+Object records pending, running, completed, and failed turns and restores them
+whenever the channel opens in another browser. Prompts and agent responses are
+therefore persisted in Cloudflare; local agent credentials remain only on the
+paired machine. Each conversation keeps one Mobius session across turns; ACP
+context remains live while the paired daemon process is running.
+
+## Workspace layout
+
+```text
+packages/
+  relay-core/        Portable Relay API, channel actor, state contracts, and ports
+  relay-cloudflare/  Worker, Durable Objects, D1, and Worker Assets composition
+  relay-node/        Reserved for the future single-instance Node profile
+  cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
+  protocol/          Shared Mobius commands, events, capabilities, and codecs
+  web/               React agent chat application and shadcn/ui components
+  web-sdk/           Browser-facing SDK
+deploy/
+  docker/            Reserved for the future relay-node image
+e2e/
+  fixtures/
+    fake-acp-agent/
+docs/
+scripts/
+```
+
+All runnable and importable product workspaces live under `packages/`. The empty
+`relay-node` and `deploy/docker` placeholders make the intended deployment
+boundary explicit without claiming Node or Docker support before those profiles
+exist. External boundary fixtures remain under `e2e/fixtures` because they are
+deterministic test dependencies rather than shipped product units.

@@ -1,0 +1,20 @@
+{
+  "name": "@moxt-ai/mobius-fake-acp-agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mobius-fake-acp-agent": "./dist/cli.js"
+  },
+  "exports": "./src/index.ts",
+  "scripts": {
+    "build": "tsc --project tsconfig.build.json",
+    "typecheck": "tsc --project tsconfig.json"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3"
+  }
+}

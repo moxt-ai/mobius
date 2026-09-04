@@ -1,0 +1,442 @@
+import {
+  AGENT_ACTIVITY_DETAIL_LIMIT,
+  AGENT_ACTIVITY_KIND,
+  AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
+  AGENT_ACTIVITY_LOCATION_LIMIT,
+  AGENT_MESSAGE_DELTA_KIND,
+  type AgentActivityEvent,
+  type AgentMessageDeltaEvent,
+  RUNTIME_STATUS_KIND,
+  type RuntimeStatusEvent,
+  SESSION_CANCEL_KIND,
+  SESSION_COMPLETED_KIND,
+  SESSION_FAILED_KIND,
+  SESSION_PROMPT_KIND,
+  SESSION_STARTED_KIND,
+  type SessionCancelCommand,
+  type SessionCompletedEvent,
+  type SessionFailedEvent,
+  type SessionPromptCommand,
+  type SessionStartedEvent,
+} from "../messages.ts";
+import { MOBIUS_PROTOCOL_VERSION } from "../version.ts";
+
+const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+const MAX_PROMPT_LENGTH = 10_000;
+const MAX_EVENT_TEXT_LENGTH = 100_000;
+const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
+const ACTIVITY_STATUSES = new Set([
+  "pending",
+  "running",
+  "completed",
+  "failed",
+]);
+const TOOL_KINDS = new Set([
+  "",
+  "delete",
+  "edit",
+  "execute",
+  "fetch",
+  "move",
+  "other",
+  "read",
+  "search",
+  "switch_mode",
+  "think",
+]);
+
+export class ProtocolMessageError extends Error {
+  readonly code = "invalid_protocol_message";
+
+  constructor(message: string, options: ErrorOptions = {}) {
+    super(message, options);
+    this.name = "ProtocolMessageError";
+  }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseJson(encoded: string): Readonly<Record<string, unknown>> {
+  let value: unknown;
+  try {
+    value = JSON.parse(encoded);
+  } catch (error) {
+    throw new ProtocolMessageError("Message is not valid JSON", {
+      cause: error,
+    });
+  }
+
+  if (!isRecord(value)) {
+    throw new ProtocolMessageError("Message must be a JSON object");
+  }
+
+  return value;
+}
+
+function assertExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  allowedKeys: readonly string[],
+): void {
+  for (const key of Object.keys(value)) {
+    if (!allowedKeys.includes(key)) {
+      throw new ProtocolMessageError(`Unexpected message field: ${key}`);
+    }
+  }
+}
+
+function readString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  maximumLength: number,
+): string {
+  const field = value[key];
+  if (
+    typeof field !== "string" ||
+    field.length === 0 ||
+    field.length > maximumLength
+  ) {
+    throw new ProtocolMessageError(`Invalid string field: ${key}`);
+  }
+  return field;
+}
+
+function readText(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  maximumLength: number,
+): string {
+  const field = value[key];
+  if (typeof field !== "string" || field.length > maximumLength) {
+    throw new ProtocolMessageError(`Invalid text field: ${key}`);
+  }
+  return field;
+}
+
+function readAllowedString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  allowedValues: ReadonlySet<string>,
+): string {
+  const field = readText(value, key, 64);
+  if (!allowedValues.has(field)) {
+    throw new ProtocolMessageError(`Invalid value field: ${key}`);
+  }
+  return field;
+}
+
+function readSequence(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): number {
+  const field = value[key];
+  if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
+    throw new ProtocolMessageError(`Invalid integer field: ${key}`);
+  }
+  return field;
+}
+
+function readLocations(
+  value: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const field = value["locations"];
+  if (!Array.isArray(field) || field.length > AGENT_ACTIVITY_LOCATION_LIMIT) {
+    throw new ProtocolMessageError("Invalid locations field");
+  }
+  const locations: string[] = [];
+  const unique = new Set<string>();
+  for (const location of field) {
+    if (
+      typeof location !== "string" ||
+      location.length === 0 ||
+      location.length > AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT
+    ) {
+      throw new ProtocolMessageError("Invalid activity location");
+    }
+    if (unique.has(location)) {
+      throw new ProtocolMessageError("Duplicate activity location");
+    }
+    unique.add(location);
+    locations.push(location);
+  }
+  return locations;
+}
+
+function readIdentifier(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string {
+  const field = readString(value, key, 128);
+  if (!IDENTIFIER_PATTERN.test(field)) {
+    throw new ProtocolMessageError(`Invalid identifier field: ${key}`);
+  }
+  return field;
+}
+
+function readBoolean(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): boolean {
+  const field = value[key];
+  if (typeof field !== "boolean") {
+    throw new ProtocolMessageError(`Invalid boolean field: ${key}`);
+  }
+  return field;
+}
+
+function assertProtocolVersion(value: Readonly<Record<string, unknown>>): void {
+  // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
+  if (value["protocolVersion"] !== MOBIUS_PROTOCOL_VERSION) {
+    throw new ProtocolMessageError("Unsupported protocol version");
+  }
+}
+
+function assertKind(
+  value: Readonly<Record<string, unknown>>,
+  expectedKind: string,
+): void {
+  // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
+  if (value["kind"] !== expectedKind) {
+    throw new ProtocolMessageError(`Expected message kind: ${expectedKind}`);
+  }
+}
+
+export function decodeMessageKind(encoded: string): string {
+  return readString(parseJson(encoded), "kind", 64);
+}
+
+export function decodeSessionPromptCommand(
+  encoded: string,
+): SessionPromptCommand {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "agentId",
+    "bindingId",
+    "commandId",
+    "kind",
+    "prompt",
+    "protocolVersion",
+    "sessionId",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, SESSION_PROMPT_KIND);
+
+  const prompt = readString(value, "prompt", MAX_PROMPT_LENGTH);
+  if (prompt.trim().length === 0) {
+    throw new ProtocolMessageError("Prompt must contain visible text");
+  }
+
+  return {
+    agentId: readIdentifier(value, "agentId"),
+    bindingId: readIdentifier(value, "bindingId"),
+    commandId: readIdentifier(value, "commandId"),
+    kind: SESSION_PROMPT_KIND,
+    prompt,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+  };
+}
+
+export function decodeSessionCancelCommand(
+  encoded: string,
+): SessionCancelCommand {
+  const value = parseJson(encoded);
+  assertExactKeys(value, ["commandId", "kind", "protocolVersion", "sessionId"]);
+  assertProtocolVersion(value);
+  assertKind(value, SESSION_CANCEL_KIND);
+
+  return {
+    commandId: readIdentifier(value, "commandId"),
+    kind: SESSION_CANCEL_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+  };
+}
+
+export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, ["kind", "online", "protocolVersion", "runtimeId"]);
+  assertProtocolVersion(value);
+  assertKind(value, RUNTIME_STATUS_KIND);
+
+  return {
+    kind: RUNTIME_STATUS_KIND,
+    online: readBoolean(value, "online"),
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    runtimeId: readIdentifier(value, "runtimeId"),
+  };
+}
+
+export function decodeSessionStartedEvent(
+  encoded: string,
+): SessionStartedEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "commandId",
+    "kind",
+    "processAttemptId",
+    "protocolVersion",
+    "sessionId",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, SESSION_STARTED_KIND);
+
+  return {
+    commandId: readIdentifier(value, "commandId"),
+    kind: SESSION_STARTED_KIND,
+    processAttemptId: readIdentifier(value, "processAttemptId"),
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+  };
+}
+
+export function decodeAgentMessageDeltaEvent(
+  encoded: string,
+): AgentMessageDeltaEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "commandId",
+    "kind",
+    "protocolVersion",
+    "sessionId",
+    "text",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, AGENT_MESSAGE_DELTA_KIND);
+
+  return {
+    commandId: readIdentifier(value, "commandId"),
+    kind: AGENT_MESSAGE_DELTA_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+    text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
+  };
+}
+
+export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "activityId",
+    "activityType",
+    "commandId",
+    "input",
+    "kind",
+    "locations",
+    "name",
+    "output",
+    "protocolVersion",
+    "sequence",
+    "sessionId",
+    "status",
+    "title",
+    "toolKind",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, AGENT_ACTIVITY_KIND);
+
+  return {
+    activityId: readIdentifier(value, "activityId"),
+    activityType: readAllowedString(value, "activityType", ACTIVITY_TYPES),
+    commandId: readIdentifier(value, "commandId"),
+    input: readText(value, "input", AGENT_ACTIVITY_DETAIL_LIMIT),
+    kind: AGENT_ACTIVITY_KIND,
+    locations: readLocations(value),
+    name: readText(value, "name", 128),
+    output: readText(value, "output", AGENT_ACTIVITY_DETAIL_LIMIT),
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sequence: readSequence(value, "sequence"),
+    sessionId: readIdentifier(value, "sessionId"),
+    status: readAllowedString(value, "status", ACTIVITY_STATUSES),
+    title: readString(value, "title", 500),
+    toolKind: readAllowedString(value, "toolKind", TOOL_KINDS),
+  };
+}
+
+export function decodeSessionCompletedEvent(
+  encoded: string,
+): SessionCompletedEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "commandId",
+    "kind",
+    "protocolVersion",
+    "sessionId",
+    "stopReason",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, SESSION_COMPLETED_KIND);
+
+  return {
+    commandId: readIdentifier(value, "commandId"),
+    kind: SESSION_COMPLETED_KIND,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+    stopReason: readString(value, "stopReason", 64),
+  };
+}
+
+export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
+  const value = parseJson(encoded);
+  assertExactKeys(value, [
+    "code",
+    "commandId",
+    "kind",
+    "message",
+    "protocolVersion",
+    "sessionId",
+  ]);
+  assertProtocolVersion(value);
+  assertKind(value, SESSION_FAILED_KIND);
+
+  return {
+    code: readIdentifier(value, "code"),
+    commandId: readIdentifier(value, "commandId"),
+    kind: SESSION_FAILED_KIND,
+    message: readString(value, "message", 500),
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    sessionId: readIdentifier(value, "sessionId"),
+  };
+}
+
+export function encodeSessionPromptCommand(
+  message: SessionPromptCommand,
+): string {
+  return JSON.stringify(message);
+}
+
+export function encodeSessionCancelCommand(
+  message: SessionCancelCommand,
+): string {
+  return JSON.stringify(message);
+}
+
+export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {
+  return JSON.stringify(message);
+}
+
+export function encodeSessionStartedEvent(
+  message: SessionStartedEvent,
+): string {
+  return JSON.stringify(message);
+}
+
+export function encodeAgentMessageDeltaEvent(
+  message: AgentMessageDeltaEvent,
+): string {
+  return JSON.stringify(message);
+}
+
+export function encodeAgentActivityEvent(message: AgentActivityEvent): string {
+  return JSON.stringify(message);
+}
+
+export function encodeSessionCompletedEvent(
+  message: SessionCompletedEvent,
+): string {
+  return JSON.stringify(message);
+}
+
+export function encodeSessionFailedEvent(message: SessionFailedEvent): string {
+  return JSON.stringify(message);
+}
