@@ -3,7 +3,7 @@ import {
   type ChannelPeers,
   type ChannelSocket,
 } from "@moxt-ai/mobius-relay-core";
-
+import { DurableObjectSessionStore } from "./durable-object-session-store.ts";
 import { DurableObjectTurnStore } from "./durable-object-turn-store.ts";
 
 const DAEMON_TAG = "daemon";
@@ -99,12 +99,14 @@ class CloudflareChannelPeers implements ChannelPeers {
 
 export class RuntimeRelay {
   private readonly peers: CloudflareChannelPeers;
+  private readonly sessionStore: DurableObjectSessionStore;
   private readonly state: DurableObjectState;
   private readonly turnStore: DurableObjectTurnStore;
 
   constructor(state: DurableObjectState) {
     this.state = state;
     this.peers = new CloudflareChannelPeers(state);
+    this.sessionStore = new DurableObjectSessionStore(state.storage);
     this.turnStore = new DurableObjectTurnStore(state.storage);
   }
 
@@ -181,6 +183,12 @@ export class RuntimeRelay {
   }
 
   private actor(runtimeId: string): ChannelActor {
-    return new ChannelActor(runtimeId, this.turnStore, this.peers);
+    return new ChannelActor(
+      runtimeId,
+      this.turnStore,
+      this.peers,
+      undefined,
+      this.sessionStore,
+    );
   }
 }

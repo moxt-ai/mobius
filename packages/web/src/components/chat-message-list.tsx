@@ -3,6 +3,8 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { AgentActivityList } from "@/components/agent-activity-list";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AgentMarkdown } from "@/components/agent-markdown";
+import { AgentRichContent } from "@/components/agent-rich-content";
+import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
 import {
   AgentChatMessage,
@@ -14,16 +16,12 @@ import { sendPrompt } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const SCROLL_TAIL_THRESHOLD = 96;
+const SAFE_IMAGE_MIME = /^image\/(?:gif|jpeg|png|webp)$/;
 const suggestions = [
   "Explain the current project structure",
   "Find the entry point for this workspace",
   "Summarize how the relay path works",
 ];
-
-const timeFormatter = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
 
 function EmptyConversation() {
   const conversation = useChatStore(selectActiveConversation);
@@ -80,14 +78,45 @@ function UserMessage({ message }: { readonly message: UserChatMessage }) {
   return (
     <article
       aria-label="Message from you"
-      className="mb-[30px] flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
+      className="mb-4 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
     >
-      <div className="max-w-[min(72%,620px)] max-md:max-w-[88%]">
-        <p className="mx-0.5 mb-1.5 text-right text-[11px] leading-4 font-medium text-muted-foreground">
-          You · {timeFormatter.format(message.createdAt)}
-        </p>
-        <div className="overflow-wrap-anywhere rounded-[15px_15px_4px_15px] border-[0.5px] border-black/6 bg-black/5 px-[13px] py-2.5 text-sm leading-[22px] whitespace-pre-wrap text-foreground">
-          {message.text}
+      <div className="max-w-[85%] max-md:max-w-[92%]">
+        <div className="overflow-wrap-anywhere grid gap-2 rounded-md bg-black/[0.05] px-4 py-3 text-[15px] leading-6 whitespace-pre-wrap text-foreground">
+          {message.images.length > 0 && (
+            <div className="grid grid-cols-2 gap-1.5">
+              {message.images.map((image) =>
+                SAFE_IMAGE_MIME.test(image.mimeType) ? (
+                  <img
+                    alt={image.name}
+                    className="max-h-56 w-full rounded-lg object-cover"
+                    key={image.name}
+                    loading="lazy"
+                    src={`data:${image.mimeType};base64,${image.data}`}
+                  />
+                ) : (
+                  <span
+                    className="rounded-lg border-[0.5px] border-black/9 bg-white/70 p-2 text-[10px] text-muted-foreground"
+                    key={image.name}
+                  >
+                    {image.name}
+                  </span>
+                ),
+              )}
+            </div>
+          )}
+          {message.resources.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {message.resources.map((resource) => (
+                <span
+                  className="rounded-md border-[0.5px] border-black/10 bg-white/70 px-2 py-1 font-mono text-[10px]"
+                  key={`${resource.uri}:${resource.name}`}
+                >
+                  {resource.name}
+                </span>
+              ))}
+            </div>
+          )}
+          {message.text.length > 0 && <span>{message.text}</span>}
         </div>
       </div>
     </article>
@@ -120,32 +149,17 @@ function AgentMessage({
   return (
     <article
       aria-label={`Message from ${agentLabel}`}
-      className="mb-[38px] grid grid-cols-[30px_minmax(0,1fr)] gap-[11px] motion-safe:animate-[message-enter_200ms_ease-out_both] max-[420px]:grid-cols-[27px_minmax(0,1fr)] max-[420px]:gap-[9px]"
+      className="mb-12 min-w-0 motion-safe:animate-[message-enter_200ms_ease-out_both]"
     >
-      <div className="mt-px scale-[0.875] origin-top-left">
-        <AgentAvatar compact />
-      </div>
       <div className="min-w-0">
-        <div className="flex min-h-[22px] items-center gap-2">
-          <p className="m-0 text-xs leading-4 font-semibold text-[#454959]">
-            {agentLabel}
-          </p>
-          <span
-            className={cn(
-              "turn-status inline-flex items-center gap-[5px] text-[11px] leading-4 text-muted-foreground",
-              message.state.appearance === "working" && "text-[#9a6700]",
-              message.state.appearance === "completed" && "text-[#279a60]",
-              message.state.appearance === "failed" && "text-[#b4232a]",
-            )}
-            data-state={message.state.appearance}
-          >
-            {message.state.label}
-          </span>
-        </div>
+        <AgentActivityList
+          activities={message.activities}
+          streaming={message.state.isStreaming}
+        />
         {message.text.length > 0 && (
           <div
             className={cn(
-              "agent-stream mt-[7px]",
+              "agent-stream",
               message.state.isStreaming && "is-streaming",
             )}
           >
@@ -158,12 +172,23 @@ function AgentMessage({
         {message.text.length === 0 &&
           message.state.isStreaming &&
           message.activities.length === 0 && <ThinkingIndicator />}
-        <AgentActivityList
-          activities={message.activities}
-          streaming={message.state.isStreaming}
+        <AgentRichContent
+          contents={message.contents.map((entry) => entry.content)}
         />
-        <details className="mt-[9px] w-fit max-w-full text-[11px] text-muted-foreground">
-          <summary className="w-fit cursor-pointer rounded-sm outline-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
+        {message.state.appearance !== "completed" && (
+          <span
+            className={cn(
+              "turn-status mt-3 inline-flex w-fit items-center gap-[5px] rounded-md bg-black/[0.045] px-2 py-1 text-[11px] leading-4 text-muted-foreground",
+              message.state.appearance === "working" && "text-[#9a6700]",
+              message.state.appearance === "failed" && "text-[#b4232a]",
+            )}
+            data-state={message.state.appearance}
+          >
+            {message.state.label}
+          </span>
+        )}
+        <details className="mt-3 w-fit max-w-full text-[11px] text-muted-foreground">
+          <summary className="w-fit cursor-pointer rounded-sm outline-none select-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
             Run details
           </summary>
           <dl className="mt-2 grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 leading-[17px]">
@@ -251,7 +276,7 @@ export function ChatMessageList() {
             aria-busy={conversation.isRunning}
             aria-live="polite"
             aria-relevant="additions text"
-            className="mx-auto min-h-full w-full max-w-[860px] px-8 pt-[46px] pb-10 max-md:px-4 max-md:pt-[30px] max-md:pb-7"
+            className="mx-auto min-h-full w-full max-w-[1000px] px-6 pt-10 pb-16 max-md:px-4 max-md:pt-7"
             role="log"
           >
             {conversation.messages.map((message) => (
@@ -262,6 +287,7 @@ export function ChatMessageList() {
                 sessionId={conversation.sessionId}
               />
             ))}
+            <SessionInteractions />
           </div>
         )}
       </div>

@@ -1,4 +1,16 @@
 import {
+  decodeAgentDisplayContentValue,
+  decodePromptImagesValue,
+  decodePromptResourcesValue,
+  decodeSessionCommandsUpdatedEvent,
+  decodeSessionElicitationRequestedEvent,
+  decodeSessionPermissionRequestedEvent,
+  decodeSessionReadyEvent,
+  decodeSessionUsageUpdatedEvent,
+  MOBIUS_PROTOCOL_VERSION,
+} from "@moxt-ai/mobius-web-sdk";
+
+import {
   AgentOption,
   type BrowserPairingStatus,
   ChannelConnection,
@@ -14,6 +26,8 @@ import {
   PairingApiError,
   PendingRecordedTurn,
   RecordedActivity,
+  RecordedContent,
+  RecordedSession,
   type RecordedTurn,
   RunningRecordedTurn,
   WaitingBrowserPairingStatus,
@@ -173,18 +187,24 @@ function decodeRecordedActivity(value: unknown): RecordedActivity {
   }
   const sequence = value["sequence"];
   const locationsValue = value["locations"];
+  const contentValue = value["content"] ?? [];
   if (
     typeof sequence !== "number" ||
     !Number.isSafeInteger(sequence) ||
     sequence < 0 ||
     !Array.isArray(locationsValue) ||
-    locationsValue.length > 12
+    locationsValue.length > 12 ||
+    !Array.isArray(contentValue) ||
+    contentValue.length > 500
   ) {
     throw new PairingApiError(
       "invalid_relay_response",
       "The relay returned invalid agent activity details.",
     );
   }
+  const content = contentValue.map((entry) =>
+    decodeAgentDisplayContentValue(entry),
+  );
   const locations: string[] = [];
   const uniqueLocations = new Set<string>();
   for (const location of locationsValue) {
@@ -217,7 +237,50 @@ function decodeRecordedActivity(value: unknown): RecordedActivity {
     ),
     readString(value["title"], "agent activity title", 500),
     readAllowedString(value["toolKind"], "agent tool kind", TOOL_KINDS),
+    content,
   );
+}
+
+function decodeRecordedContents(value: unknown): readonly RecordedContent[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 2_000) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned invalid agent content.",
+    );
+  }
+  const contents: RecordedContent[] = [];
+  const identifiers = new Set<string>();
+  for (const candidate of value) {
+    if (!isRecord(candidate)) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned invalid agent content.",
+      );
+    }
+    const contentId = readIdentifier(
+      candidate["contentId"],
+      "agent content identifier",
+    );
+    if (identifiers.has(contentId)) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned duplicate agent content.",
+      );
+    }
+    identifiers.add(contentId);
+    contents.push(
+      new RecordedContent(
+        readIdentifier(candidate["commandId"], "agent content command"),
+        contentId,
+        readText(candidate["messageId"], "agent content message", 255),
+        decodeAgentDisplayContentValue(candidate["content"]),
+      ),
+    );
+  }
+  return contents;
 }
 
 function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
@@ -348,6 +411,111 @@ function decodeChannelConnection(
   );
 }
 
+function decodeRecordedSession(value: unknown): RecordedSession {
+  if (!isRecord(value)) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid session snapshot.",
+    );
+  }
+  const sessionId = readIdentifier(value["sessionId"], "session identifier");
+  const ready = decodeSessionReadyEvent(
+    JSON.stringify({
+      additionalDirectories: value["additionalDirectories"],
+      agentId: value["agentId"],
+      agentName: value["agentName"],
+      agentVersion: value["agentVersion"],
+      capabilities: value["capabilities"],
+      commands: value["commands"],
+      configOptions: value["configOptions"],
+      directoryId: value["directoryId"],
+      directoryLabel: value["directoryLabel"],
+      kind: "session.ready",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "history-snapshot",
+      restored: value["restored"],
+      sessionId,
+    }),
+  );
+  const commands = decodeSessionCommandsUpdatedEvent(
+    JSON.stringify({
+      commands: value["commands"],
+      kind: "session.commands.updated",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId,
+    }),
+  ).commands;
+  const usageValue = value["usage"];
+  const permissionValue = value["pendingPermissions"];
+  const elicitationValue = value["pendingElicitations"];
+  if (
+    !Array.isArray(usageValue) ||
+    usageValue.length > 20 ||
+    !Array.isArray(permissionValue) ||
+    permissionValue.length > 20 ||
+    !Array.isArray(elicitationValue) ||
+    elicitationValue.length > 20
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned invalid session details.",
+    );
+  }
+  const usage = usageValue.map((entry) =>
+    decodeSessionUsageUpdatedEvent(JSON.stringify(entry)),
+  );
+  const permissions = permissionValue.map((entry) =>
+    decodeSessionPermissionRequestedEvent(JSON.stringify(entry)),
+  );
+  const elicitations = elicitationValue.map((entry) =>
+    decodeSessionElicitationRequestedEvent(JSON.stringify(entry)),
+  );
+  return new RecordedSession(
+    ready.additionalDirectories,
+    ready.agentId,
+    ready.agentName,
+    ready.agentVersion,
+    ready.capabilities,
+    commands,
+    ready.configOptions,
+    ready.directoryId,
+    ready.directoryLabel,
+    elicitations,
+    permissions,
+    ready.restored,
+    sessionId,
+    readText(value["title"], "session title", 500),
+    readText(value["updatedAt"], "session update time", 128),
+    usage,
+  );
+}
+
+function decodeRecordedSessions(value: unknown): readonly RecordedSession[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value) || value.length > 500) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned invalid session snapshots.",
+    );
+  }
+  const sessions: RecordedSession[] = [];
+  const identifiers = new Set<string>();
+  for (const candidate of value) {
+    const session = decodeRecordedSession(candidate);
+    if (identifiers.has(session.sessionId)) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned a duplicate session snapshot.",
+      );
+    }
+    identifiers.add(session.sessionId);
+    sessions.push(session);
+  }
+  return sessions;
+}
+
 function decodeRecordedTurn(value: unknown): RecordedTurn {
   if (!isRecord(value)) {
     throw new PairingApiError(
@@ -358,10 +526,13 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
   const agentId = readIdentifier(value["agentId"], "history agent");
   const commandId = readIdentifier(value["commandId"], "history command");
   const createdAt = readDate(value["createdAt"], "history timestamp");
-  const prompt = readString(value["prompt"], "history prompt", 10_000);
+  const prompt = readText(value["prompt"], "history prompt", 10_000);
   const response = readText(value["response"], "history response", 100_000);
   const sessionId = readIdentifier(value["sessionId"], "history session");
   const activities = decodeRecordedActivities(value["activities"]);
+  const images = decodePromptImagesValue(value["images"] ?? []);
+  const resources = decodePromptResourcesValue(value["resources"] ?? []);
+  const contents = decodeRecordedContents(value["contents"]);
   const status = value["status"];
   if (status === "pending") {
     return new PendingRecordedTurn(
@@ -372,6 +543,9 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
   }
   if (status === "running") {
@@ -384,6 +558,9 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       sessionId,
       readIdentifier(value["processAttemptId"], "history attempt"),
       activities,
+      images,
+      resources,
+      contents,
     );
   }
   if (status === "completed") {
@@ -397,6 +574,9 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       readIdentifier(value["processAttemptId"], "history attempt"),
       readString(value["stopReason"], "history stop reason", 64),
       activities,
+      images,
+      resources,
+      contents,
     );
   }
   if (status === "failed") {
@@ -410,6 +590,9 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       readIdentifier(value["code"], "history error code"),
       readString(value["message"], "history error message", 500),
       activities,
+      images,
+      resources,
+      contents,
     );
   }
   throw new PairingApiError(
@@ -446,7 +629,7 @@ function decodeChannelHistory(
     commandIds.add(turn.commandId);
     turns.push(turn);
   }
-  return new ChannelHistory(turns);
+  return new ChannelHistory(turns, decodeRecordedSessions(value["sessions"]));
 }
 
 export async function createBrowserPairing(): Promise<CreatedPairing> {

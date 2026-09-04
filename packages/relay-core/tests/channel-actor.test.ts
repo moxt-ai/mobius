@@ -1,20 +1,31 @@
 import {
   AGENT_ACTIVITY_KIND,
+  AGENT_CONTENT_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   type AgentActivityEvent,
+  type AgentContentEvent,
   type AgentMessageDeltaEvent,
   decodeSessionCancelCommand,
   encodeAgentActivityEvent,
+  encodeAgentContentEvent,
   encodeAgentMessageDeltaEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
+  encodeSessionPermissionRequestedEvent,
+  encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
+  encodeSessionReadyEvent,
   encodeSessionStartedEvent,
+  encodeSessionUsageUpdatedEvent,
   MOBIUS_PROTOCOL_VERSION,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
+  SESSION_PERMISSION_REQUESTED_KIND,
+  SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
+  SESSION_READY_KIND,
   SESSION_STARTED_KIND,
+  SESSION_USAGE_UPDATED_KIND,
   type SessionCancelCommand,
   type SessionCompletedEvent,
   type SessionFailedEvent,
@@ -32,6 +43,7 @@ import {
   FailedRecordedTurn,
   PendingRecordedTurn,
   RecordedActivity,
+  RecordedContent,
   type RecordedTurn,
   type RelayClock,
   RunningRecordedTurn,
@@ -84,6 +96,9 @@ class MemoryTurnStore implements ChannelTurnStore {
         turn.sessionId,
         turn.processAttemptId,
         turn.activities,
+        turn.images,
+        turn.resources,
+        turn.contents,
       ),
     );
   };
@@ -102,6 +117,9 @@ class MemoryTurnStore implements ChannelTurnStore {
         turn.processAttemptId,
         event.stopReason,
         turn.activities,
+        turn.images,
+        turn.resources,
+        turn.contents,
       ),
     );
   };
@@ -120,6 +138,9 @@ class MemoryTurnStore implements ChannelTurnStore {
         event.code,
         event.message,
         turn.activities,
+        turn.images,
+        turn.resources,
+        turn.contents,
       ),
     );
   };
@@ -140,6 +161,9 @@ class MemoryTurnStore implements ChannelTurnStore {
         turn.sessionId,
         event.processAttemptId,
         turn.activities,
+        turn.images,
+        turn.resources,
+        turn.contents,
       ),
     );
   };
@@ -163,12 +187,39 @@ class MemoryTurnStore implements ChannelTurnStore {
         turn.sessionId,
         turn.processAttemptId,
         activities,
+        turn.images,
+        turn.resources,
+        turn.contents,
       ),
     );
     this.activityEvents.push(event);
   };
 
   readonly readTurns = (): readonly RecordedTurn[] => [...this.turns.values()];
+
+  readonly recordContent = (event: AgentContentEvent): void => {
+    const turn = this.requireRunning(event.commandId, event.sessionId);
+    const contents = turn.contents.filter(
+      (candidate) => candidate.contentId !== event.contentId,
+    );
+    contents.push(RecordedContent.fromEvent(event));
+    this.turns.set(
+      event.commandId,
+      new RunningRecordedTurn(
+        turn.agentId,
+        turn.commandId,
+        turn.createdAt,
+        turn.prompt,
+        turn.response,
+        turn.sessionId,
+        turn.processAttemptId,
+        turn.activities,
+        turn.images,
+        turn.resources,
+        contents,
+      ),
+    );
+  };
 
   readonly recordPrompt = (
     command: SessionPromptCommand,
@@ -186,6 +237,10 @@ class MemoryTurnStore implements ChannelTurnStore {
         command.prompt,
         "",
         command.sessionId,
+        [],
+        command.images,
+        command.resources,
+        [],
       ),
     );
   };
@@ -225,12 +280,16 @@ describe("channel actor", () => {
     actor.attachDaemon();
 
     const prompt = encodeSessionPromptCommand({
+      additionalDirectoryIds: [],
       agentId: "codex",
       bindingId: "workspace",
       commandId: "command-1",
+      directoryId: "root",
+      images: [],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello",
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      resources: [],
       sessionId: "session-1",
     });
     actor.receiveHostMessage(sendingHost, prompt);
@@ -261,6 +320,7 @@ describe("channel actor", () => {
       activityId: "tool-1",
       activityType: "tool",
       commandId: "command-1",
+      content: [],
       input: '{"path":"package.json"}',
       kind: AGENT_ACTIVITY_KIND,
       locations: ["/workspace/package.json"],
@@ -338,12 +398,16 @@ describe("channel actor", () => {
     peers.daemonSockets.push(daemon);
 
     const prompt = encodeSessionPromptCommand({
+      additionalDirectoryIds: [],
       agentId: "codex",
       bindingId: "workspace",
       commandId: "command-1",
+      directoryId: "root",
+      images: [],
       kind: SESSION_PROMPT_KIND,
       prompt: "long task",
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      resources: [],
       sessionId: "session-1",
     });
     actor.receiveHostMessage(sendingHost, prompt);
@@ -377,6 +441,158 @@ describe("channel actor", () => {
     expect(observingHost.messages.at(-1)).toBe(cancellation);
     expect(actor.readHistory()).toMatchObject({
       turns: [{ commandId: "command-1", status: "running" }],
+    });
+  });
+
+  it("Given session control and rich ACP events, When they cross the relay, Then another browser can recover the complete session state", () => {
+    const peers = new MemoryPeers();
+    const store = new MemoryTurnStore();
+    const actor = new ChannelActor("channel-1", store, peers, new FixedClock());
+    const host = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host);
+    peers.daemonSockets.push(daemon);
+
+    const prepare = encodeSessionPrepareCommand({
+      additionalDirectoryIds: [],
+      agentId: "codex",
+      bindingId: "workspace",
+      directoryId: "root",
+      kind: SESSION_PREPARE_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "prepare-1",
+      sessionId: "session-1",
+    });
+    actor.receiveHostMessage(host, prepare);
+    expect(daemon.messages.at(-1)).toBe(prepare);
+
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionReadyEvent({
+        additionalDirectories: [],
+        agentId: "codex",
+        agentName: "Codex",
+        agentVersion: "1.0.0",
+        capabilities: {
+          additionalDirectories: true,
+          audioPrompt: false,
+          closeSession: true,
+          deleteSession: false,
+          embeddedContextPrompt: true,
+          imagePrompt: true,
+          listSessions: false,
+          loadSession: true,
+          resumeSession: true,
+        },
+        commands: [],
+        configOptions: [],
+        directoryId: "root",
+        directoryLabel: "mobius",
+        kind: SESSION_READY_KIND,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        requestId: "prepare-1",
+        restored: false,
+        sessionId: "session-1",
+      }),
+    );
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionUsageUpdatedEvent({
+        costAmount: 0.25,
+        costCurrency: "USD",
+        hasCost: true,
+        kind: SESSION_USAGE_UPDATED_KIND,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+        size: 200_000,
+        used: 50_000,
+      }),
+    );
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionPermissionRequestedEvent({
+        commandId: "command-1",
+        interactionId: "permission-1",
+        kind: SESSION_PERMISSION_REQUESTED_KIND,
+        options: [
+          {
+            kind: "allow_once",
+            name: "Allow once",
+            optionId: "allow-once",
+          },
+        ],
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+        title: "Run checks",
+        toolCallId: "tool-1",
+        toolKind: "execute",
+      }),
+    );
+
+    const prompt = encodeSessionPromptCommand({
+      additionalDirectoryIds: [],
+      agentId: "codex",
+      bindingId: "workspace",
+      commandId: "command-1",
+      directoryId: "root",
+      images: [
+        { data: "aW1hZ2U=", mimeType: "image/png", name: "preview.png" },
+      ],
+      kind: SESSION_PROMPT_KIND,
+      prompt: "inspect",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      resources: [],
+      sessionId: "session-1",
+    });
+    actor.receiveHostMessage(host, prompt);
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeSessionStartedEvent({
+        commandId: "command-1",
+        kind: SESSION_STARTED_KIND,
+        processAttemptId: "attempt-1",
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+      }),
+    );
+    actor.receiveDaemonMessage(
+      daemon,
+      encodeAgentContentEvent({
+        commandId: "command-1",
+        content: {
+          data: "aW1hZ2U=",
+          mimeType: "image/png",
+          name: "",
+          newText: "",
+          oldText: "",
+          path: "",
+          terminalId: "",
+          text: "",
+          type: "image",
+          uri: "",
+        },
+        contentId: "content-1",
+        kind: AGENT_CONTENT_KIND,
+        messageId: "message-1",
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId: "session-1",
+      }),
+    );
+
+    expect(actor.readHistory()).toMatchObject({
+      sessions: [
+        {
+          pendingPermissions: [{ interactionId: "permission-1" }],
+          sessionId: "session-1",
+          usage: [{ size: 200_000, used: 50_000 }],
+        },
+      ],
+      turns: [
+        {
+          contents: [{ contentId: "content-1" }],
+          images: [{ name: "preview.png" }],
+        },
+      ],
     });
   });
 });

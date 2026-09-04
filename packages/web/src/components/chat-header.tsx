@@ -1,4 +1,4 @@
-import { Menu } from "lucide-react";
+import { Menu, Plus, Slash } from "lucide-react";
 
 import { AgentAvatar } from "@/components/agent-avatar";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,7 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 export function ChatHeader() {
   const conversation = useChatStore(selectActiveConversation);
+  const createConversation = useChatStore((state) => state.createConversation);
   const runtime = useChatStore((state) => state.runtime);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
@@ -21,7 +22,7 @@ export function ChatHeader() {
     runtime instanceof UnavailableRuntimeState;
 
   return (
-    <header className="z-10 flex min-h-16 items-center border-b-[0.5px] border-black/6 bg-background/95 px-3 md:px-[22px]">
+    <header className="z-10 flex min-h-14 items-center border-b-[0.5px] border-black/6 bg-background/95 px-3 md:px-[18px]">
       <Button
         aria-controls="conversation-sidebar"
         aria-expanded={sidebarOpen}
@@ -36,19 +37,30 @@ export function ChatHeader() {
         <Menu className="size-[18px]" />
       </Button>
       <AgentAvatar compact />
-      <div className="ml-[11px] min-w-0">
-        <h1 className="truncate text-sm leading-5 font-semibold tracking-[-0.01em]">
-          {conversation.title}
-        </h1>
-        <p className="mt-px truncate text-[11px] leading-[15px] text-muted-foreground max-[420px]:hidden">
-          {conversation.agentLabel} <span aria-hidden="true">·</span> local
-          workspace
-        </p>
-      </div>
+      <strong className="ml-2 truncate text-sm leading-5 font-semibold tracking-[-0.01em]">
+        {conversation.agentLabel}
+      </strong>
+      <Slash
+        aria-hidden="true"
+        className="mx-1 size-3 shrink-0 -rotate-12 text-black/20"
+      />
+      <h1 className="min-w-0 truncate text-sm leading-5 font-semibold tracking-[-0.01em]">
+        {conversation.title}
+      </h1>
+      <Button
+        aria-label="New chat"
+        className="ml-auto"
+        onClick={createConversation}
+        size="icon"
+        title="New chat"
+        variant="ghost"
+      >
+        <Plus className="size-4" />
+      </Button>
       <div
         aria-live="polite"
         className={cn(
-          "ml-auto inline-flex min-h-[30px] items-center gap-[7px] rounded-full border-[0.5px] border-black/9 bg-white px-2.5 text-[11px] font-medium text-[#454959]",
+          "ml-1.5 inline-flex min-h-8 items-center gap-[7px] rounded-full px-2 text-[11px] font-medium text-[#737b89] hover:bg-black/[0.035]",
           unavailable && "text-[#b4232a]",
         )}
         role="status"

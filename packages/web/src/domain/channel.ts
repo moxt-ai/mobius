@@ -1,3 +1,16 @@
+import type {
+  AgentDisplayContent,
+  PromptImage,
+  PromptResource,
+  SessionCapabilities,
+  SessionCommand,
+  SessionConfigOption,
+  SessionElicitationRequestedEvent,
+  SessionPermissionRequestedEvent,
+  SessionUsageUpdatedEvent,
+  WorkspaceEntry,
+} from "@moxt-ai/mobius-web-sdk";
+
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -23,6 +36,7 @@ export class RecordedActivity {
   readonly status: string;
   readonly title: string;
   readonly toolKind: string;
+  readonly content: readonly AgentDisplayContent[];
 
   constructor(
     activityId: string,
@@ -35,6 +49,7 @@ export class RecordedActivity {
     status: string,
     title: string,
     toolKind: string,
+    content: readonly AgentDisplayContent[] = [],
   ) {
     this.activityId = activityId;
     this.activityType = activityType;
@@ -46,6 +61,81 @@ export class RecordedActivity {
     this.status = status;
     this.title = title;
     this.toolKind = toolKind;
+    this.content = content;
+  }
+}
+
+export class RecordedContent {
+  readonly commandId: string;
+  readonly content: AgentDisplayContent;
+  readonly contentId: string;
+  readonly messageId: string;
+
+  constructor(
+    commandId: string,
+    contentId: string,
+    messageId: string,
+    content: AgentDisplayContent,
+  ) {
+    this.commandId = commandId;
+    this.content = content;
+    this.contentId = contentId;
+    this.messageId = messageId;
+  }
+}
+
+export class RecordedSession {
+  readonly additionalDirectories: readonly WorkspaceEntry[];
+  readonly agentId: string;
+  readonly agentName: string;
+  readonly agentVersion: string;
+  readonly capabilities: SessionCapabilities;
+  readonly commands: readonly SessionCommand[];
+  readonly configOptions: readonly SessionConfigOption[];
+  readonly directoryId: string;
+  readonly directoryLabel: string;
+  readonly pendingElicitations: readonly SessionElicitationRequestedEvent[];
+  readonly pendingPermissions: readonly SessionPermissionRequestedEvent[];
+  readonly restored: boolean;
+  readonly sessionId: string;
+  readonly title: string;
+  readonly updatedAt: string;
+  readonly usage: readonly SessionUsageUpdatedEvent[];
+
+  constructor(
+    additionalDirectories: readonly WorkspaceEntry[],
+    agentId: string,
+    agentName: string,
+    agentVersion: string,
+    capabilities: SessionCapabilities,
+    commands: readonly SessionCommand[],
+    configOptions: readonly SessionConfigOption[],
+    directoryId: string,
+    directoryLabel: string,
+    pendingElicitations: readonly SessionElicitationRequestedEvent[],
+    pendingPermissions: readonly SessionPermissionRequestedEvent[],
+    restored: boolean,
+    sessionId: string,
+    title: string,
+    updatedAt: string,
+    usage: readonly SessionUsageUpdatedEvent[],
+  ) {
+    this.additionalDirectories = additionalDirectories;
+    this.agentId = agentId;
+    this.agentName = agentName;
+    this.agentVersion = agentVersion;
+    this.capabilities = capabilities;
+    this.commands = commands;
+    this.configOptions = configOptions;
+    this.directoryId = directoryId;
+    this.directoryLabel = directoryLabel;
+    this.pendingElicitations = pendingElicitations;
+    this.pendingPermissions = pendingPermissions;
+    this.restored = restored;
+    this.sessionId = sessionId;
+    this.title = title;
+    this.updatedAt = updatedAt;
+    this.usage = usage;
   }
 }
 
@@ -73,9 +163,12 @@ export abstract class RecordedTurn {
   readonly agentId: string;
   readonly commandId: string;
   readonly createdAt: Date;
+  readonly images: readonly PromptImage[];
   readonly prompt: string;
+  readonly resources: readonly PromptResource[];
   readonly response: string;
   readonly sessionId: string;
+  readonly contents: readonly RecordedContent[];
   abstract readonly status: string;
 
   protected constructor(
@@ -86,14 +179,20 @@ export abstract class RecordedTurn {
     response: string,
     sessionId: string,
     activities: readonly RecordedActivity[],
+    images: readonly PromptImage[],
+    resources: readonly PromptResource[],
+    contents: readonly RecordedContent[],
   ) {
     this.activities = activities;
     this.agentId = agentId;
     this.commandId = commandId;
     this.createdAt = createdAt;
+    this.images = images;
     this.prompt = prompt;
+    this.resources = resources;
     this.response = response;
     this.sessionId = sessionId;
+    this.contents = contents;
   }
 }
 
@@ -108,6 +207,9 @@ export class PendingRecordedTurn extends RecordedTurn {
     response: string,
     sessionId: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -117,6 +219,9 @@ export class PendingRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
   }
 }
@@ -134,6 +239,9 @@ export class RunningRecordedTurn extends RecordedTurn {
     sessionId: string,
     processAttemptId: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -143,6 +251,9 @@ export class RunningRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.processAttemptId = processAttemptId;
   }
@@ -163,6 +274,9 @@ export class CompletedRecordedTurn extends RecordedTurn {
     processAttemptId: string,
     stopReason: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -172,6 +286,9 @@ export class CompletedRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.processAttemptId = processAttemptId;
     this.stopReason = stopReason;
@@ -193,6 +310,9 @@ export class FailedRecordedTurn extends RecordedTurn {
     code: string,
     message: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -202,6 +322,9 @@ export class FailedRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.code = code;
     this.message = message;
@@ -209,9 +332,14 @@ export class FailedRecordedTurn extends RecordedTurn {
 }
 
 export class ChannelHistory {
+  readonly sessions: readonly RecordedSession[];
   readonly turns: readonly RecordedTurn[];
 
-  constructor(turns: readonly RecordedTurn[]) {
+  constructor(
+    turns: readonly RecordedTurn[],
+    sessions: readonly RecordedSession[] = [],
+  ) {
+    this.sessions = sessions;
     this.turns = turns;
   }
 }

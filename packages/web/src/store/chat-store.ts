@@ -1,3 +1,17 @@
+import type {
+  AgentContentEvent,
+  PromptImage,
+  PromptResource,
+  SessionCommandsUpdatedEvent,
+  SessionConfigUpdatedEvent,
+  SessionElicitationRequestedEvent,
+  SessionElicitationResolvedEvent,
+  SessionInfoUpdatedEvent,
+  SessionPermissionRequestedEvent,
+  SessionReadyEvent,
+  SessionUsageUpdatedEvent,
+  WorkspaceEntry,
+} from "@moxt-ai/mobius-web-sdk";
 import { create } from "zustand";
 
 import {
@@ -15,6 +29,7 @@ import {
   Conversation,
   FailedTurnState,
   PendingTurn,
+  ReadySessionState,
   RunningTurnState,
   type RuntimeConnectionState,
   StoppedTurnState,
@@ -25,6 +40,19 @@ import {
 const HISTORY_SYNC_ERROR_PREFIX = "history_sync_failed:";
 
 export interface ChatStore {
+  readonly addDraftImage: (image: PromptImage) => void;
+  readonly addDraftResource: (resource: PromptResource) => void;
+  readonly applySessionCommands: (event: SessionCommandsUpdatedEvent) => void;
+  readonly applySessionConfig: (event: SessionConfigUpdatedEvent) => void;
+  readonly applySessionElicitation: (
+    event: SessionElicitationRequestedEvent,
+  ) => void;
+  readonly applySessionInfo: (event: SessionInfoUpdatedEvent) => void;
+  readonly applySessionPermission: (
+    event: SessionPermissionRequestedEvent,
+  ) => void;
+  readonly applySessionReady: (event: SessionReadyEvent) => void;
+  readonly applySessionUsage: (event: SessionUsageUpdatedEvent) => void;
   readonly activeConversationId: string;
   readonly agents: readonly AgentOption[];
   readonly announcement: string;
@@ -49,17 +77,37 @@ export interface ChatStore {
     turn: PendingTurn,
     activity: RecordedActivity,
   ) => void;
+  readonly recordAgentContent: (event: AgentContentEvent) => void;
+  readonly removeDraftImage: (name: string) => void;
+  readonly removeDraftResource: (name: string) => void;
+  readonly resolveSessionElicitation: (
+    event: SessionElicitationResolvedEvent,
+  ) => void;
+  readonly resolveSessionPermission: (
+    interactionId: string,
+    sessionId: string,
+  ) => void;
   readonly requestStop: (turn: PendingTurn) => void;
   readonly reportHistorySyncFailure: (message: string) => void;
   readonly runtime: RuntimeConnectionState;
   readonly selectConversation: (conversationId: string) => void;
   readonly selectAgent: (agentId: string) => void;
+  readonly selectPrimaryDirectory: (directory: WorkspaceEntry) => void;
   readonly setDraft: (draft: string) => void;
   readonly setErrorMessage: (message: string) => void;
   readonly setRuntime: (runtime: RuntimeConnectionState) => void;
+  readonly setSessionPreparationFailed: (
+    sessionId: string,
+    agentId: string,
+    directoryId: string,
+    additionalDirectoryIds: readonly string[],
+    message: string,
+  ) => void;
+  readonly setSessionPreparing: (sessionId: string) => void;
   readonly setSidebarOpen: (open: boolean) => void;
   readonly sidebarOpen: boolean;
   readonly startAgentTurn: (turn: PendingTurn, attemptId: string) => void;
+  readonly toggleAdditionalDirectory: (directory: WorkspaceEntry) => void;
   readonly workspaceName: string;
 }
 
@@ -85,6 +133,37 @@ function readConversation(
     }
   }
   throw new Error("Conversation invariant failed");
+}
+
+function findConversationBySession(
+  conversations: readonly Conversation[],
+  sessionId: string,
+) {
+  return conversations.find(
+    (conversation) => conversation.sessionId === sessionId,
+  );
+}
+
+function replaceSessionConversation(
+  conversations: readonly Conversation[],
+  sessionId: string,
+  update: (conversation: Conversation) => Conversation,
+): readonly Conversation[] {
+  const conversation = findConversationBySession(conversations, sessionId);
+  if (conversation === undefined) {
+    return conversations;
+  }
+  return replaceConversation(conversations, update(conversation));
+}
+
+function readAgentMessageByCommand(
+  conversation: Conversation,
+  commandId: string,
+) {
+  return conversation.messages.find(
+    (message) =>
+      message instanceof AgentChatMessage && message.commandId === commandId,
+  );
 }
 
 function readAgentMessage(
@@ -123,13 +202,34 @@ function restoreConversations(
   history: ChannelHistory,
 ): readonly Conversation[] {
   const sessionIds: string[] = [];
+  const restoredSessionIds = new Set<string>();
+  const conversations: Conversation[] = [];
+
+  for (const session of history.sessions) {
+    const turns = history.turns.filter(
+      (turn) => turn.sessionId === session.sessionId,
+    );
+    try {
+      conversations.push(
+        Conversation.restoreWithSession(
+          readAgent(agents, session.agentId),
+          session,
+          turns,
+        ),
+      );
+      restoredSessionIds.add(session.sessionId);
+    } catch {}
+  }
+
   for (const turn of history.turns) {
-    if (!sessionIds.includes(turn.sessionId)) {
+    if (
+      !restoredSessionIds.has(turn.sessionId) &&
+      !sessionIds.includes(turn.sessionId)
+    ) {
       sessionIds.push(turn.sessionId);
     }
   }
 
-  const conversations: Conversation[] = [];
   for (const sessionId of sessionIds) {
     const turns = history.turns.filter((turn) => turn.sessionId === sessionId);
     const firstTurn = turns[0];
@@ -170,10 +270,28 @@ function reconcileConversations(
   history: ChannelHistory,
 ): readonly Conversation[] {
   const turnsBySession = groupTurnsBySession(history);
+  const sessionsById = new Map(
+    history.sessions.map((session) => [session.sessionId, session]),
+  );
   const existingSessionIds = new Set(
     conversations.map((conversation) => conversation.sessionId),
   );
   const discovered: Conversation[] = [];
+  for (const session of history.sessions) {
+    if (existingSessionIds.has(session.sessionId)) {
+      continue;
+    }
+    try {
+      discovered.push(
+        Conversation.restoreWithSession(
+          readAgent(agents, session.agentId),
+          session,
+          turnsBySession.get(session.sessionId) ?? [],
+        ),
+      );
+      existingSessionIds.add(session.sessionId);
+    } catch {}
+  }
   for (const [sessionId, turns] of turnsBySession) {
     if (existingSessionIds.has(sessionId)) {
       continue;
@@ -193,21 +311,34 @@ function reconcileConversations(
     } catch {}
   }
   const reconciled = conversations.map((conversation) => {
+    const recordedSession = sessionsById.get(conversation.sessionId);
+    const withSession =
+      recordedSession === undefined ||
+      !conversation.matchesPreparation(
+        recordedSession.agentId,
+        recordedSession.sessionId,
+        recordedSession.directoryId,
+        recordedSession.additionalDirectories.map(
+          (directory) => directory.directoryId,
+        ),
+      )
+        ? conversation
+        : conversation.reconcileRecordedSession(recordedSession);
     const turns = turnsBySession.get(conversation.sessionId);
     if (turns === undefined) {
-      return conversation;
+      return withSession;
     }
     const firstTurn = turns[0];
     if (firstTurn === undefined) {
       return conversation;
     }
     try {
-      return conversation.reconcileRecordedTurns(
+      return withSession.reconcileRecordedTurns(
         readAgent(agents, firstTurn.agentId),
         turns,
       );
     } catch {
-      return conversation;
+      return withSession;
     }
   });
   return [...discovered, ...reconciled];
@@ -250,8 +381,137 @@ export function selectActiveConversation(state: ChatStore): Conversation {
 
 export const useChatStore = create<ChatStore>()((set, get) => ({
   activeConversationId: initialConversation.id,
+  addDraftImage: (image) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.addDraftImage(image),
+        ),
+      };
+    });
+  },
+  addDraftResource: (resource) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.addDraftResource(resource),
+        ),
+      };
+    });
+  },
   agents: [defaultAgent],
   announcement: "",
+  applySessionCommands: (event) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.withCommands(event.commands),
+              )
+            : conversation,
+      ),
+    }));
+  },
+  applySessionConfig: (event) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.withConfig(event.configOptions),
+              )
+            : conversation,
+      ),
+    }));
+  },
+  applySessionElicitation: (event) => {
+    set((state) => ({
+      announcement: "The agent needs more information.",
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.withElicitation(event),
+              )
+            : conversation,
+      ),
+    }));
+  },
+  applySessionInfo: (event) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) => {
+          const titled = conversation.updateTitle(event.title);
+          return titled.session instanceof ReadySessionState
+            ? titled.withSession(titled.session.withUpdatedAt(event.updatedAt))
+            : titled;
+        },
+      ),
+    }));
+  },
+  applySessionPermission: (event) => {
+    set((state) => ({
+      announcement: "The agent is waiting for permission.",
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.withPermission(event),
+              )
+            : conversation,
+      ),
+    }));
+  },
+  applySessionReady: (event) => {
+    set((state) => {
+      const matchesSelection = state.conversations.some((conversation) =>
+        conversation.matchesPreparation(
+          event.agentId,
+          event.sessionId,
+          event.directoryId,
+          event.additionalDirectories.map((directory) => directory.directoryId),
+        ),
+      );
+      if (!matchesSelection) {
+        return {};
+      }
+      return {
+        conversations: replaceSessionConversation(
+          state.conversations,
+          event.sessionId,
+          (conversation) => conversation.applyReady(event),
+        ),
+        errorMessage: "",
+      };
+    });
+  },
+  applySessionUsage: (event) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(conversation.session.withUsage(event))
+            : conversation,
+      ),
+    }));
+  },
   appendAgentText: (turn, delta) => {
     set((state) => {
       const conversation = readConversation(
@@ -277,7 +537,12 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       throw new Error("A request is already running");
     }
     const commandId = crypto.randomUUID();
-    const userMessage = UserChatMessage.create(commandId, prompt);
+    const userMessage = UserChatMessage.create(
+      commandId,
+      prompt,
+      conversation.draftImages,
+      conversation.draftResources,
+    );
     const agentMessage = AgentChatMessage.create(commandId);
     const updatedConversation = conversation.addTurn(
       prompt,
@@ -434,6 +699,80 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       };
     });
   },
+  recordAgentContent: (event) => {
+    set((state) => {
+      const conversation = findConversationBySession(
+        state.conversations,
+        event.sessionId,
+      );
+      if (conversation === undefined) {
+        return {};
+      }
+      const message = readAgentMessageByCommand(conversation, event.commandId);
+      if (!(message instanceof AgentChatMessage)) {
+        return {};
+      }
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.replaceAgentMessage(
+            message.id,
+            message.recordContent(event),
+          ),
+        ),
+      };
+    });
+  },
+  removeDraftImage: (name) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.removeDraftImage(name),
+        ),
+      };
+    });
+  },
+  removeDraftResource: (name) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.removeDraftResource(name),
+        ),
+      };
+    });
+  },
+  resolveSessionElicitation: (event) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        event.sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.resolveElicitation(event),
+              )
+            : conversation,
+      ),
+    }));
+  },
+  resolveSessionPermission: (interactionId, sessionId) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        sessionId,
+        (conversation) =>
+          conversation.session instanceof ReadySessionState
+            ? conversation.withSession(
+                conversation.session.withoutPermission(interactionId),
+              )
+            : conversation,
+      ),
+    }));
+  },
   requestStop: (turn) => {
     set((state) => {
       const conversation = readConversation(
@@ -488,6 +827,17 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       return;
     }
   },
+  selectPrimaryDirectory: (directory) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.selectPrimaryDirectory(directory),
+        ),
+      };
+    });
+  },
   setDraft: (draft) => {
     set((state) => {
       const conversation = readActiveConversation(state);
@@ -504,6 +854,44 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
   },
   setRuntime: (runtime) => {
     set({ runtime });
+  },
+  setSessionPreparationFailed: (
+    sessionId,
+    agentId,
+    directoryId,
+    additionalDirectoryIds,
+    message,
+  ) => {
+    set((state) => {
+      const matchesSelection = state.conversations.some((conversation) =>
+        conversation.matchesPreparation(
+          agentId,
+          sessionId,
+          directoryId,
+          additionalDirectoryIds,
+        ),
+      );
+      if (!matchesSelection) {
+        return {};
+      }
+      return {
+        conversations: replaceSessionConversation(
+          state.conversations,
+          sessionId,
+          (conversation) => conversation.markSessionFailed(message),
+        ),
+        errorMessage: message,
+      };
+    });
+  },
+  setSessionPreparing: (sessionId) => {
+    set((state) => ({
+      conversations: replaceSessionConversation(
+        state.conversations,
+        sessionId,
+        (conversation) => conversation.markSessionPreparing(),
+      ),
+    }));
   },
   setSidebarOpen: (open) => {
     set({ sidebarOpen: open });
@@ -525,6 +913,17 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
           state.conversations,
           turn,
           nextState,
+        ),
+      };
+    });
+  },
+  toggleAdditionalDirectory: (directory) => {
+    set((state) => {
+      const conversation = readActiveConversation(state);
+      return {
+        conversations: replaceConversation(
+          state.conversations,
+          conversation.toggleAdditionalDirectory(directory),
         ),
       };
     });

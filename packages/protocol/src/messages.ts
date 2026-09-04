@@ -11,12 +11,16 @@ export const SESSION_COMPLETED_KIND = "session.completed";
 export const SESSION_FAILED_KIND = "session.failed";
 
 export interface SessionPromptCommand {
+  readonly additionalDirectoryIds: readonly string[];
   readonly agentId: string;
   readonly bindingId: string;
   readonly commandId: string;
+  readonly directoryId: string;
+  readonly images: readonly PromptImage[];
   readonly kind: typeof SESSION_PROMPT_KIND;
   readonly prompt: string;
   readonly protocolVersion: number;
+  readonly resources: readonly PromptResource[];
   readonly sessionId: string;
 }
 
@@ -54,6 +58,7 @@ export interface AgentActivityEvent {
   readonly activityId: string;
   readonly activityType: string;
   readonly commandId: string;
+  readonly content: readonly AgentDisplayContent[];
   readonly input: string;
   readonly kind: typeof AGENT_ACTIVITY_KIND;
   readonly locations: readonly string[];
@@ -83,3 +88,9 @@ export interface SessionFailedEvent {
   readonly protocolVersion: number;
   readonly sessionId: string;
 }
+
+import type {
+  AgentDisplayContent,
+  PromptImage,
+  PromptResource,
+} from "./control-messages.ts";

@@ -65,7 +65,11 @@ importers:
         specifier: 0.28.1
         version: 0.28.1
 
-  packages/protocol: {}
+  packages/protocol:
+    dependencies:
+      zod:
+        specifier: ^4.5.4
+        version: 4.5.4
 
   packages/relay-cloudflare:
     dependencies:

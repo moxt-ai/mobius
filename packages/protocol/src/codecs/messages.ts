@@ -1,4 +1,9 @@
 import {
+  decodeAgentDisplayContentValue,
+  decodePromptImagesValue,
+  decodePromptResourcesValue,
+} from "../control-messages.ts";
+import {
   AGENT_ACTIVITY_DETAIL_LIMIT,
   AGENT_ACTIVITY_KIND,
   AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
@@ -22,7 +27,9 @@ import {
 import { MOBIUS_PROTOCOL_VERSION } from "../version.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 10_000;
+const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
 const MAX_EVENT_TEXT_LENGTH = 100_000;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set([
@@ -163,6 +170,41 @@ function readLocations(
   return locations;
 }
 
+function readDirectoryIdentifiers(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  maximumCount: number,
+): readonly string[] {
+  const field = value[key];
+  if (!Array.isArray(field) || field.length > maximumCount) {
+    throw new ProtocolMessageError(`Invalid directory list field: ${key}`);
+  }
+  const identifiers: string[] = [];
+  const unique = new Set<string>();
+  for (const candidate of field) {
+    if (
+      typeof candidate !== "string" ||
+      !DIRECTORY_IDENTIFIER_PATTERN.test(candidate) ||
+      unique.has(candidate)
+    ) {
+      throw new ProtocolMessageError(`Invalid directory in field: ${key}`);
+    }
+    unique.add(candidate);
+    identifiers.push(candidate);
+  }
+  return identifiers;
+}
+
+function readActivityContent(
+  value: Readonly<Record<string, unknown>>,
+): readonly ReturnType<typeof decodeAgentDisplayContentValue>[] {
+  const field = value["content"];
+  if (!Array.isArray(field) || field.length > 100) {
+    throw new ProtocolMessageError("Invalid activity content field");
+  }
+  return field.map((entry) => decodeAgentDisplayContentValue(entry));
+}
+
 function readIdentifier(
   value: Readonly<Record<string, unknown>>,
   key: string,
@@ -170,6 +212,19 @@ function readIdentifier(
   const field = readString(value, key, 128);
   if (!IDENTIFIER_PATTERN.test(field)) {
     throw new ProtocolMessageError(`Invalid identifier field: ${key}`);
+  }
+  return field;
+}
+
+function readDirectoryIdentifier(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string {
+  const field = readString(value, key, 2_048);
+  if (!DIRECTORY_IDENTIFIER_PATTERN.test(field)) {
+    throw new ProtocolMessageError(
+      `Invalid directory identifier field: ${key}`,
+    );
   }
   return field;
 }
@@ -211,29 +266,53 @@ export function decodeSessionPromptCommand(
 ): SessionPromptCommand {
   const value = parseJson(encoded);
   assertExactKeys(value, [
+    "additionalDirectoryIds",
     "agentId",
     "bindingId",
     "commandId",
+    "directoryId",
+    "images",
     "kind",
     "prompt",
     "protocolVersion",
+    "resources",
     "sessionId",
   ]);
   assertProtocolVersion(value);
   assertKind(value, SESSION_PROMPT_KIND);
 
-  const prompt = readString(value, "prompt", MAX_PROMPT_LENGTH);
-  if (prompt.trim().length === 0) {
-    throw new ProtocolMessageError("Prompt must contain visible text");
+  const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
+  const images = decodePromptImagesValue(value["images"]);
+  const resources = decodePromptResourcesValue(value["resources"]);
+  const attachmentLength =
+    images.reduce((total, image) => total + image.data.length, 0) +
+    resources.reduce((total, resource) => total + resource.text.length, 0);
+  if (attachmentLength > MAX_PROMPT_ATTACHMENT_LENGTH) {
+    throw new ProtocolMessageError("Prompt attachments are too large");
+  }
+  if (
+    prompt.trim().length === 0 &&
+    images.length === 0 &&
+    resources.length === 0
+  ) {
+    throw new ProtocolMessageError("Prompt must contain content");
   }
 
   return {
+    additionalDirectoryIds: readDirectoryIdentifiers(
+      value,
+      "additionalDirectoryIds",
+      16,
+    ),
     agentId: readIdentifier(value, "agentId"),
     bindingId: readIdentifier(value, "bindingId"),
     commandId: readIdentifier(value, "commandId"),
+    directoryId: readDirectoryIdentifier(value, "directoryId"),
+    images,
     kind: SESSION_PROMPT_KIND,
     prompt,
     protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    resources,
     sessionId: readIdentifier(value, "sessionId"),
   };
 }
@@ -320,6 +399,7 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     "activityId",
     "activityType",
     "commandId",
+    "content",
     "input",
     "kind",
     "locations",
@@ -339,6 +419,7 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     activityId: readIdentifier(value, "activityId"),
     activityType: readAllowedString(value, "activityType", ACTIVITY_TYPES),
     commandId: readIdentifier(value, "commandId"),
+    content: readActivityContent(value),
     input: readText(value, "input", AGENT_ACTIVITY_DETAIL_LIMIT),
     kind: AGENT_ACTIVITY_KIND,
     locations: readLocations(value),
@@ -402,41 +483,41 @@ export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
 export function encodeSessionPromptCommand(
   message: SessionPromptCommand,
 ): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeSessionPromptCommand(JSON.stringify(message)));
 }
 
 export function encodeSessionCancelCommand(
   message: SessionCancelCommand,
 ): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeSessionCancelCommand(JSON.stringify(message)));
 }
 
 export function encodeRuntimeStatusEvent(message: RuntimeStatusEvent): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeRuntimeStatusEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionStartedEvent(
   message: SessionStartedEvent,
 ): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeSessionStartedEvent(JSON.stringify(message)));
 }
 
 export function encodeAgentMessageDeltaEvent(
   message: AgentMessageDeltaEvent,
 ): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeAgentMessageDeltaEvent(JSON.stringify(message)));
 }
 
 export function encodeAgentActivityEvent(message: AgentActivityEvent): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeAgentActivityEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionCompletedEvent(
   message: SessionCompletedEvent,
 ): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeSessionCompletedEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionFailedEvent(message: SessionFailedEvent): string {
-  return JSON.stringify(message);
+  return JSON.stringify(decodeSessionFailedEvent(JSON.stringify(message)));
 }

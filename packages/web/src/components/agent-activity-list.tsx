@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
 
+import { AgentRichContent } from "@/components/agent-rich-content";
 import type { RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
 
@@ -84,7 +85,7 @@ function statusLabel(status: string, active: boolean): string {
 
 function ActivityText({ children }: { readonly children: string }) {
   return (
-    <pre className="max-h-72 overflow-auto rounded-lg border-[0.5px] border-black/5 bg-black/[0.025] px-3 py-2.5 font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-[#5f6672]">
+    <pre className="max-h-72 overflow-auto rounded-md bg-black/[0.025] px-3 py-2.5 font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-[#5f6672]">
       {children}
     </pre>
   );
@@ -92,7 +93,7 @@ function ActivityText({ children }: { readonly children: string }) {
 
 function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
   return (
-    <div className="mt-1.5 ml-[22px] grid gap-2 pb-1.5">
+    <div className="mt-1 ml-[7px] grid gap-2 border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
       {activity.locations.length > 0 && (
         <div>
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-[#8a919d] uppercase">
@@ -123,6 +124,7 @@ function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
           <ActivityText>{activity.output}</ActivityText>
         </div>
       )}
+      <AgentRichContent contents={activity.content} />
     </div>
   );
 }
@@ -132,12 +134,15 @@ function NarrativeDetails({
 }: {
   readonly activity: RecordedActivity;
 }) {
-  if (activity.output.length === 0) {
+  if (activity.output.length === 0 && activity.content.length === 0) {
     return null;
   }
   return (
-    <div className="mt-1.5 ml-[22px] pb-1.5">
-      <ActivityText>{activity.output}</ActivityText>
+    <div className="mt-1 ml-[7px] border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
+      {activity.output.length > 0 && (
+        <ActivityText>{activity.output}</ActivityText>
+      )}
+      <AgentRichContent contents={activity.content} />
     </div>
   );
 }
@@ -153,7 +158,8 @@ function ActivityLine({
   const hasDetails =
     activity.input.length > 0 ||
     activity.output.length > 0 ||
-    activity.locations.length > 0;
+    activity.locations.length > 0 ||
+    activity.content.length > 0;
   const summary = (
     <span className="flex min-w-0 flex-1 items-center gap-2">
       <span
@@ -190,7 +196,9 @@ function ActivityLine({
 
   if (!hasDetails) {
     return (
-      <div className="flex min-h-7 items-center px-1 text-xs">{summary}</div>
+      <div className="flex min-h-7 items-center text-[13px] leading-[22px]">
+        {summary}
+      </div>
     );
   }
 
@@ -205,7 +213,7 @@ function ActivityLine({
       }}
       open={open}
     >
-      <summary className="flex min-h-7 max-w-full cursor-pointer list-none items-center gap-1 rounded px-1 text-xs outline-none hover:bg-black/[0.025] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
+      <summary className="flex min-h-7 max-w-full cursor-pointer list-none items-center gap-1 rounded text-[13px] leading-[22px] outline-none select-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
         {summary}
         <ChevronRight className="size-3 shrink-0 text-[#9aa0aa] transition-transform duration-150 group-open/activity:rotate-90" />
       </summary>
@@ -225,7 +233,9 @@ export function AgentActivityList({
   readonly activities: readonly RecordedActivity[];
   readonly streaming: boolean;
 }) {
-  const [open, setOpen] = useState(streaming);
+  const [manuallyOpen, setManuallyOpen] = useState(() =>
+    activities.some((activity) => activity.status === "failed"),
+  );
   if (activities.length === 0) {
     return null;
   }
@@ -235,27 +245,33 @@ export function AgentActivityList({
       (activity) =>
         activity.status === "pending" || activity.status === "running",
     );
+  const open = streaming || manuallyOpen;
 
   return (
     <details
-      className="group/work mt-3 rounded-lg border-[0.5px] border-black/7 bg-white/55 px-2.5 py-1.5"
-      data-testid="agent-work-details"
+      className="group/work mb-3"
+      data-testid="agent-process-disclosure"
       onToggle={(event) => {
-        setOpen(event.currentTarget.open);
+        if (!streaming) {
+          setManuallyOpen(event.currentTarget.open);
+        }
       }}
       open={open}
     >
-      <summary className="flex min-h-7 cursor-pointer list-none items-center gap-2 rounded px-1 text-[11px] font-medium text-[#676e79] outline-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
-        <ChevronRight className="size-3.5 shrink-0 transition-transform duration-150 group-open/work:rotate-90" />
-        <span>Work details</span>
-        <span className="font-normal text-[#949aa4]">
-          {activities.length.toString()}
+      <summary className="flex min-h-7 w-fit cursor-pointer list-none items-center gap-1 rounded text-[13px] leading-[22px] text-[#828a99] outline-none select-none hover:text-[#454959] focus-visible:ring-2 focus-visible:ring-[#2fb872]/35">
+        <ChevronRight className="size-3 shrink-0 transition-transform duration-150 group-open/work:rotate-90" />
+        <span>
+          {working
+            ? "Working"
+            : open
+              ? "Hide intermediate steps"
+              : "Show intermediate steps"}
         </span>
         {working && (
-          <LoaderCircle className="ml-auto size-3.5 animate-spin text-[#9a6700] motion-reduce:animate-none" />
+          <LoaderCircle className="ml-1 size-3.5 animate-spin text-[#9a6700] motion-reduce:animate-none" />
         )}
       </summary>
-      <div className="mt-1 border-t-[0.5px] border-black/6 pt-1">
+      <div className="mt-1.5 grid gap-1">
         {activities.map((activity) => (
           <ActivityLine
             activity={activity}

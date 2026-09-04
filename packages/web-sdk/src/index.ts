@@ -1,3 +1,34 @@
-export type { AgentActivityEvent } from "@moxt-ai/mobius-protocol";
-export { MOBIUS_PROTOCOL_VERSION } from "@moxt-ai/mobius-protocol";
+export type {
+  AgentActivityEvent,
+  AgentContentEvent,
+  AgentDisplayContent,
+  PromptImage,
+  PromptResource,
+  SessionCapabilities,
+  SessionCommand,
+  SessionCommandsUpdatedEvent,
+  SessionConfigOption,
+  SessionConfigUpdatedEvent,
+  SessionElicitationField,
+  SessionElicitationRequestedEvent,
+  SessionElicitationResolvedEvent,
+  SessionInfoUpdatedEvent,
+  SessionPermissionRequestedEvent,
+  SessionPermissionResolvedEvent,
+  SessionReadyEvent,
+  SessionUsageUpdatedEvent,
+  WorkspaceEntriesEvent,
+  WorkspaceEntry,
+} from "@moxt-ai/mobius-protocol";
+export {
+  decodeAgentDisplayContentValue,
+  decodePromptImagesValue,
+  decodePromptResourcesValue,
+  decodeSessionCommandsUpdatedEvent,
+  decodeSessionElicitationRequestedEvent,
+  decodeSessionPermissionRequestedEvent,
+  decodeSessionReadyEvent,
+  decodeSessionUsageUpdatedEvent,
+  MOBIUS_PROTOCOL_VERSION,
+} from "@moxt-ai/mobius-protocol";
 export * from "./client.ts";

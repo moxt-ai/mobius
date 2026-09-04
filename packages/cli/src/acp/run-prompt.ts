@@ -25,6 +25,7 @@ export async function runAcpPrompt(
   const sessions = new AcpSessionManager();
   try {
     return await sessions.runPrompt({
+      additionalDirectories: [],
       agent: new LocalAgentDefinition(
         "test-agent",
         "Test agent",
@@ -32,9 +33,12 @@ export async function runAcpPrompt(
         options.agentArguments,
       ),
       cwd: options.cwd,
+      commandId: crypto.randomUUID(),
+      images: [],
       onActivity: options.onActivity,
       onText: options.onText,
       prompt: options.prompt,
+      resources: [],
       sessionId: crypto.randomUUID(),
       signal: options.signal,
     });

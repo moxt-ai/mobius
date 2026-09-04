@@ -20,12 +20,30 @@ import {
 describe("session prompt protocol", () => {
   it("round-trips a valid command", () => {
     const command: SessionPromptCommand = {
+      additionalDirectoryIds: [],
       agentId: "codex",
       bindingId: "workspace",
       commandId: "command-1",
+      directoryId: "root",
+      images: [
+        {
+          data: "aW1hZ2U=",
+          mimeType: "image/png",
+          name: "screenshot.png",
+        },
+      ],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello from browser",
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      resources: [
+        {
+          mimeType: "text/plain",
+          name: "notes.txt",
+          text: "supporting context",
+          type: "embedded",
+          uri: "mobius://upload/notes.txt",
+        },
+      ],
       sessionId: "session-1",
     };
 
@@ -37,12 +55,16 @@ describe("session prompt protocol", () => {
   it("rejects a remote working directory", () => {
     const encoded = JSON.stringify({
       agentId: "codex",
+      additionalDirectoryIds: [],
       bindingId: "workspace",
       commandId: "command-1",
       cwd: "/tmp/untrusted",
+      directoryId: "root",
+      images: [],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello from browser",
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      resources: [],
       sessionId: "session-1",
     });
 
@@ -92,6 +114,20 @@ describe("agent activity protocol", () => {
       locations: ["/workspace/package.json"],
       name: "exec_command",
       output: "Tests passed",
+      content: [
+        {
+          data: "",
+          mimeType: "",
+          name: "",
+          newText: "const ready = true;",
+          oldText: "const ready = false;",
+          path: "/workspace/index.ts",
+          terminalId: "",
+          text: "",
+          type: "diff",
+          uri: "",
+        },
+      ],
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sequence: 2,
       sessionId: "session-1",
@@ -111,6 +147,7 @@ describe("agent activity protocol", () => {
       activityType: "tool",
       commandId: "command-1",
       input: "",
+      content: [],
       kind: AGENT_ACTIVITY_KIND,
       locations: [],
       name: "read_file",

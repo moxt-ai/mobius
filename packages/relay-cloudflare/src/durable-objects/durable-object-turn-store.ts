@@ -1,5 +1,7 @@
 import type {
   AgentActivityEvent,
+  AgentContentEvent,
+  AgentDisplayContent,
   AgentMessageDeltaEvent,
   SessionCompletedEvent,
   SessionFailedEvent,
@@ -7,11 +9,17 @@ import type {
   SessionStartedEvent,
 } from "@moxt-ai/mobius-protocol";
 import {
+  decodeAgentDisplayContentValue,
+  decodePromptImagesValue,
+  decodePromptResourcesValue,
+} from "@moxt-ai/mobius-protocol";
+import {
   type ChannelTurnStore,
   CompletedRecordedTurn,
   FailedRecordedTurn,
   PendingRecordedTurn,
   RecordedActivity,
+  RecordedContent,
   type RecordedTurn,
   RunningRecordedTurn,
 } from "@moxt-ai/mobius-relay-core";
@@ -51,6 +59,25 @@ interface HistoryActivityRow extends Record<string, SqlStorageValue> {
   readonly tool_kind: string;
 }
 
+interface TurnPayloadRow extends Record<string, SqlStorageValue> {
+  readonly command_id: string;
+  readonly images_json: string;
+  readonly resources_json: string;
+}
+
+interface ActivityContentRow extends Record<string, SqlStorageValue> {
+  readonly activity_id: string;
+  readonly command_id: string;
+  readonly content_json: string;
+}
+
+interface ContentRow extends Record<string, SqlStorageValue> {
+  readonly command_id: string;
+  readonly content_id: string;
+  readonly content_json: string;
+  readonly message_id: string;
+}
+
 function decodeLocations(encoded: string): readonly string[] {
   const value: unknown = JSON.parse(encoded);
   if (!Array.isArray(value)) {
@@ -64,6 +91,16 @@ function decodeLocations(encoded: string): readonly string[] {
     locations.push(location);
   }
   return locations;
+}
+
+function decodeActivityContent(
+  encoded: string,
+): readonly AgentDisplayContent[] {
+  const value: unknown = JSON.parse(encoded);
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid persisted activity content");
+  }
+  return value.map((entry) => decodeAgentDisplayContentValue(entry));
 }
 
 export class DurableObjectTurnStore implements ChannelTurnStore {
@@ -93,6 +130,21 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
     this.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS channel_turns_session_id ON channel_turns(session_id, created_at)",
     );
+    this.storage.sql.exec(`CREATE TABLE IF NOT EXISTS channel_turn_payloads (
+      command_id TEXT PRIMARY KEY,
+      images_json TEXT NOT NULL DEFAULT '[]',
+      resources_json TEXT NOT NULL DEFAULT '[]',
+      FOREIGN KEY (command_id) REFERENCES channel_turns(command_id)
+    )`);
+    this.storage.sql.exec(`CREATE TABLE IF NOT EXISTS channel_contents (
+      command_id TEXT NOT NULL,
+      content_id TEXT NOT NULL,
+      message_id TEXT NOT NULL DEFAULT '',
+      content_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL,
+      PRIMARY KEY (command_id, content_id),
+      FOREIGN KEY (command_id) REFERENCES channel_turns(command_id)
+    )`);
     this.storage.sql.exec(`CREATE TABLE IF NOT EXISTS channel_activities (
       command_id TEXT NOT NULL,
       activity_id TEXT NOT NULL,
@@ -112,6 +164,14 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
     this.storage.sql.exec(
       "CREATE INDEX IF NOT EXISTS channel_activities_sequence ON channel_activities(command_id, sequence_number)",
     );
+    this.storage.sql.exec(`CREATE TABLE IF NOT EXISTS channel_activity_content (
+      command_id TEXT NOT NULL,
+      activity_id TEXT NOT NULL,
+      content_json TEXT NOT NULL DEFAULT '[]',
+      PRIMARY KEY (command_id, activity_id),
+      FOREIGN KEY (command_id, activity_id)
+        REFERENCES channel_activities(command_id, activity_id)
+    )`);
   }
 
   readonly appendDelta = (event: AgentMessageDeltaEvent, now: number): void => {
@@ -229,6 +289,50 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
       event.toolKind,
       now,
     );
+    this.storage.sql.exec(
+      `INSERT INTO channel_activity_content (
+         command_id,
+         activity_id,
+         content_json
+       ) VALUES (?, ?, ?)
+       ON CONFLICT(command_id, activity_id) DO UPDATE SET
+         content_json = excluded.content_json`,
+      event.commandId,
+      event.activityId,
+      JSON.stringify(event.content),
+    );
+  };
+
+  readonly recordContent = (event: AgentContentEvent, now: number): void => {
+    const turns = this.storage.sql
+      .exec<{ readonly command_id: string }>(
+        `SELECT command_id FROM channel_turns
+         WHERE command_id = ? AND session_id = ? AND status = 'running'`,
+        event.commandId,
+        event.sessionId,
+      )
+      .toArray();
+    if (turns.length !== 1) {
+      throw new Error("Unknown prompt content");
+    }
+    this.storage.sql.exec(
+      `INSERT INTO channel_contents (
+         command_id,
+         content_id,
+         message_id,
+         content_json,
+         updated_at
+       ) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(command_id, content_id) DO UPDATE SET
+         message_id = excluded.message_id,
+         content_json = excluded.content_json,
+         updated_at = excluded.updated_at`,
+      event.commandId,
+      event.contentId,
+      event.messageId,
+      JSON.stringify(event.content),
+      now,
+    );
   };
 
   readonly readTurns = (): readonly RecordedTurn[] => {
@@ -254,6 +358,15 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
         HISTORY_TURN_LIMIT,
       )
       .toArray();
+    const payloads = new Map<string, TurnPayloadRow>();
+    for (const row of this.storage.sql
+      .exec<TurnPayloadRow>(
+        `SELECT command_id, images_json, resources_json
+         FROM channel_turn_payloads`,
+      )
+      .toArray()) {
+      payloads.set(row.command_id, row);
+    }
     const activitiesByCommand = new Map<string, RecordedActivity[]>();
     const commandIds = new Set(rows.map((row) => row.command_id));
     const activityRows = this.storage.sql
@@ -274,6 +387,42 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
          ORDER BY command_id, sequence_number`,
       )
       .toArray();
+    const activityContent = new Map<string, readonly AgentDisplayContent[]>();
+    for (const row of this.storage.sql
+      .exec<ActivityContentRow>(
+        `SELECT command_id, activity_id, content_json
+         FROM channel_activity_content`,
+      )
+      .toArray()) {
+      activityContent.set(
+        `${row.command_id}\0${row.activity_id}`,
+        decodeActivityContent(row.content_json),
+      );
+    }
+    const contentsByCommand = new Map<string, RecordedContent[]>();
+    for (const row of this.storage.sql
+      .exec<ContentRow>(
+        `SELECT command_id, content_id, message_id, content_json
+         FROM channel_contents
+         ORDER BY updated_at`,
+      )
+      .toArray()) {
+      if (!commandIds.has(row.command_id)) {
+        continue;
+      }
+      const content = new RecordedContent(
+        row.command_id,
+        row.content_id,
+        row.message_id,
+        decodeAgentDisplayContentValue(JSON.parse(row.content_json)),
+      );
+      const contents = contentsByCommand.get(row.command_id);
+      if (contents === undefined) {
+        contentsByCommand.set(row.command_id, [content]);
+      } else {
+        contents.push(content);
+      }
+    }
     for (const row of activityRows) {
       if (!commandIds.has(row.command_id)) {
         continue;
@@ -289,6 +438,7 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
         row.status,
         row.title,
         row.tool_kind,
+        activityContent.get(`${row.command_id}\0${row.activity_id}`) ?? [],
       );
       const activities = activitiesByCommand.get(row.command_id);
       if (activities === undefined) {
@@ -301,6 +451,16 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
     for (const row of rows) {
       const createdAt = new Date(row.created_at).toISOString();
       const activities = activitiesByCommand.get(row.command_id) ?? [];
+      const payload = payloads.get(row.command_id);
+      const images =
+        payload === undefined
+          ? []
+          : decodePromptImagesValue(JSON.parse(payload.images_json));
+      const resources =
+        payload === undefined
+          ? []
+          : decodePromptResourcesValue(JSON.parse(payload.resources_json));
+      const contents = contentsByCommand.get(row.command_id) ?? [];
       if (row.status === "pending") {
         turns.push(
           new PendingRecordedTurn(
@@ -311,6 +471,9 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
             row.response,
             row.session_id,
             activities,
+            images,
+            resources,
+            contents,
           ),
         );
       } else if (row.status === "running") {
@@ -324,6 +487,9 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
             row.session_id,
             row.process_attempt_id,
             activities,
+            images,
+            resources,
+            contents,
           ),
         );
       } else if (row.status === "completed") {
@@ -338,6 +504,9 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
             row.process_attempt_id,
             row.stop_reason,
             activities,
+            images,
+            resources,
+            contents,
           ),
         );
       } else if (row.status === "failed") {
@@ -352,6 +521,9 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
             row.error_code,
             row.error_message,
             activities,
+            images,
+            resources,
+            contents,
           ),
         );
       } else {
@@ -401,6 +573,16 @@ export class DurableObjectTurnStore implements ChannelTurnStore {
         command.prompt,
         now,
         now,
+      );
+      this.storage.sql.exec(
+        `INSERT INTO channel_turn_payloads (
+           command_id,
+           images_json,
+           resources_json
+         ) VALUES (?, ?, ?)`,
+        command.commandId,
+        JSON.stringify(command.images),
+        JSON.stringify(command.resources),
       );
     });
   };

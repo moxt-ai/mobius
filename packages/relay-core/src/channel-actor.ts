@@ -1,29 +1,68 @@
 import {
   AGENT_ACTIVITY_KIND,
+  AGENT_CONTENT_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   decodeAgentActivityEvent,
+  decodeAgentContentEvent,
   decodeAgentMessageDeltaEvent,
   decodeMessageKind,
   decodeSessionCancelCommand,
+  decodeSessionCommandsUpdatedEvent,
   decodeSessionCompletedEvent,
+  decodeSessionConfigUpdatedEvent,
+  decodeSessionConfigureCommand,
+  decodeSessionElicitationRequestedEvent,
+  decodeSessionElicitationResolvedEvent,
+  decodeSessionElicitationRespondCommand,
   decodeSessionFailedEvent,
+  decodeSessionInfoUpdatedEvent,
+  decodeSessionOperationFailedEvent,
+  decodeSessionPermissionRequestedEvent,
+  decodeSessionPermissionResolvedEvent,
+  decodeSessionPermissionRespondCommand,
+  decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
+  decodeSessionReadyEvent,
   decodeSessionStartedEvent,
+  decodeSessionUsageUpdatedEvent,
+  decodeWorkspaceEntriesEvent,
+  decodeWorkspaceListCommand,
   encodeRuntimeStatusEvent,
   encodeSessionFailedEvent,
+  encodeSessionOperationFailedEvent,
   MOBIUS_PROTOCOL_VERSION,
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
+  SESSION_COMMANDS_UPDATED_KIND,
   SESSION_COMPLETED_KIND,
+  SESSION_CONFIG_UPDATED_KIND,
+  SESSION_CONFIGURE_KIND,
+  SESSION_ELICITATION_REQUESTED_KIND,
+  SESSION_ELICITATION_RESOLVED_KIND,
+  SESSION_ELICITATION_RESPOND_KIND,
   SESSION_FAILED_KIND,
+  SESSION_INFO_UPDATED_KIND,
+  SESSION_OPERATION_FAILED_KIND,
+  SESSION_PERMISSION_REQUESTED_KIND,
+  SESSION_PERMISSION_RESOLVED_KIND,
+  SESSION_PERMISSION_RESPOND_KIND,
+  SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
+  SESSION_READY_KIND,
   SESSION_STARTED_KIND,
+  SESSION_USAGE_UPDATED_KIND,
   type SessionFailedEvent,
+  type SessionOperationFailedEvent,
+  WORKSPACE_ENTRIES_KIND,
+  WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-
+import {
+  type ChannelSessionStore,
+  MemoryChannelSessionStore,
+} from "./channel-session-store.ts";
 import { ChannelHistory, type ChannelTurnStore } from "./channel-turn-store.ts";
 
-const MAX_MESSAGE_LENGTH = 128 * 1024;
+const MAX_MESSAGE_LENGTH = 8 * 1024 * 1024;
 
 export interface RelayClock {
   readonly now: () => number;
@@ -49,6 +88,7 @@ export class ChannelActor {
   private readonly clock: RelayClock;
   private readonly peers: ChannelPeers;
   private readonly runtimeId: string;
+  private readonly sessionStore: ChannelSessionStore;
   private readonly turnStore: ChannelTurnStore;
 
   constructor(
@@ -56,10 +96,12 @@ export class ChannelActor {
     turnStore: ChannelTurnStore,
     peers: ChannelPeers,
     clock: RelayClock = new SystemRelayClock(),
+    sessionStore: ChannelSessionStore = new MemoryChannelSessionStore(),
   ) {
     this.clock = clock;
     this.peers = peers;
     this.runtimeId = runtimeId;
+    this.sessionStore = sessionStore;
     this.turnStore = turnStore;
   }
 
@@ -88,7 +130,11 @@ export class ChannelActor {
   };
 
   readonly readHistory = (): ChannelHistory =>
-    new ChannelHistory(this.runtimeId, this.turnStore.readTurns());
+    new ChannelHistory(
+      this.runtimeId,
+      this.turnStore.readTurns(),
+      this.sessionStore.readSessions(),
+    );
 
   readonly receiveDaemonMessage = (
     socket: ChannelSocket,
@@ -127,6 +173,31 @@ export class ChannelActor {
         this.receiveCancellation(message);
         return;
       }
+      if (kind === WORKSPACE_LIST_KIND) {
+        const command = decodeWorkspaceListCommand(message);
+        this.receiveControl(message, command.requestId, "");
+        return;
+      }
+      if (kind === SESSION_PREPARE_KIND) {
+        const command = decodeSessionPrepareCommand(message);
+        this.receiveControl(message, command.requestId, command.sessionId);
+        return;
+      }
+      if (kind === SESSION_CONFIGURE_KIND) {
+        const command = decodeSessionConfigureCommand(message);
+        this.receiveControl(message, command.requestId, command.sessionId);
+        return;
+      }
+      if (kind === SESSION_PERMISSION_RESPOND_KIND) {
+        const command = decodeSessionPermissionRespondCommand(message);
+        this.receiveControl(message, command.interactionId, command.sessionId);
+        return;
+      }
+      if (kind === SESSION_ELICITATION_RESPOND_KIND) {
+        const command = decodeSessionElicitationRespondCommand(message);
+        this.receiveControl(message, command.interactionId, command.sessionId);
+        return;
+      }
       throw new Error("Unsupported host message");
     } catch {
       socket.close(1008, "Invalid protocol message");
@@ -154,6 +225,29 @@ export class ChannelActor {
     }
 
     this.reportRuntimeOffline(command.commandId, command.sessionId);
+  }
+
+  private receiveControl(
+    message: string,
+    requestId: string,
+    sessionId: string,
+  ): void {
+    this.broadcast(this.peers.hosts(), message);
+    if (this.forwardToDaemon(message)) {
+      return;
+    }
+    const failure: SessionOperationFailedEvent = {
+      code: "runtime_offline",
+      kind: SESSION_OPERATION_FAILED_KIND,
+      message: "The local runtime is offline",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId,
+      sessionId,
+    };
+    this.broadcast(
+      this.peers.hosts(),
+      encodeSessionOperationFailedEvent(failure),
+    );
   }
 
   private forwardToDaemon(message: string): boolean {
@@ -226,12 +320,70 @@ export class ChannelActor {
       this.turnStore.recordActivity(decodeAgentActivityEvent(message), now);
       return;
     }
+    if (kind === AGENT_CONTENT_KIND) {
+      this.turnStore.recordContent(decodeAgentContentEvent(message), now);
+      return;
+    }
     if (kind === SESSION_COMPLETED_KIND) {
       this.turnStore.complete(decodeSessionCompletedEvent(message), now);
       return;
     }
     if (kind === SESSION_FAILED_KIND) {
       this.turnStore.fail(decodeSessionFailedEvent(message), now);
+      return;
+    }
+    if (kind === SESSION_READY_KIND) {
+      this.sessionStore.recordReady(decodeSessionReadyEvent(message));
+      return;
+    }
+    if (kind === SESSION_CONFIG_UPDATED_KIND) {
+      this.sessionStore.recordConfig(decodeSessionConfigUpdatedEvent(message));
+      return;
+    }
+    if (kind === SESSION_COMMANDS_UPDATED_KIND) {
+      this.sessionStore.recordCommands(
+        decodeSessionCommandsUpdatedEvent(message),
+      );
+      return;
+    }
+    if (kind === SESSION_INFO_UPDATED_KIND) {
+      this.sessionStore.recordInfo(decodeSessionInfoUpdatedEvent(message));
+      return;
+    }
+    if (kind === SESSION_USAGE_UPDATED_KIND) {
+      this.sessionStore.recordUsage(decodeSessionUsageUpdatedEvent(message));
+      return;
+    }
+    if (kind === SESSION_PERMISSION_REQUESTED_KIND) {
+      this.sessionStore.recordPermission(
+        decodeSessionPermissionRequestedEvent(message),
+      );
+      return;
+    }
+    if (kind === SESSION_PERMISSION_RESOLVED_KIND) {
+      this.sessionStore.resolvePermission(
+        decodeSessionPermissionResolvedEvent(message),
+      );
+      return;
+    }
+    if (kind === SESSION_ELICITATION_REQUESTED_KIND) {
+      this.sessionStore.recordElicitation(
+        decodeSessionElicitationRequestedEvent(message),
+      );
+      return;
+    }
+    if (kind === SESSION_ELICITATION_RESOLVED_KIND) {
+      this.sessionStore.resolveElicitation(
+        decodeSessionElicitationResolvedEvent(message),
+      );
+      return;
+    }
+    if (kind === WORKSPACE_ENTRIES_KIND) {
+      decodeWorkspaceEntriesEvent(message);
+      return;
+    }
+    if (kind === SESSION_OPERATION_FAILED_KIND) {
+      decodeSessionOperationFailedEvent(message);
       return;
     }
     throw new Error("Unsupported daemon message");

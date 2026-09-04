@@ -161,6 +161,18 @@ The daemon uses the official
 adapters. Local credentials remain with those harnesses. Only the resolved root
 approved by the pairing command can be used as the `workspace` binding.
 
+Each conversation negotiates its available ACP capabilities with the selected
+agent. When provided by that agent, the Web chat exposes session mode, model,
+reasoning effort, boolean options such as fast mode, context-window usage and
+cost, slash commands, permission requests, form or URL elicitation, image and
+embedded-resource prompts, rich agent content, and structured tool details.
+Unsupported controls are omitted instead of being simulated by Mobius.
+
+The workspace picker never sends local paths to the browser. It uses opaque
+directory identifiers, and the daemon resolves and authorizes every primary or
+additional directory against the root approved during pairing immediately
+before starting or configuring an ACP session.
+
 For Web hot reload, run the relay and Vite together, then open
 [http://127.0.0.1:5190](http://127.0.0.1:5190):
 
@@ -236,8 +248,10 @@ shadcn/ui components. Zustand owns live page state, while each channel's Durable
 Object records pending, running, completed, and failed turns and restores them
 whenever the channel opens in another browser. Prompts and agent responses are
 therefore persisted in Cloudflare; local agent credentials remain only on the
-paired machine. Each conversation keeps one Mobius session across turns; ACP
-context remains live while the paired daemon process is running.
+paired machine. Each conversation keeps one Mobius session across turns. The
+daemon stores the corresponding native ACP session identifier in its local
+SQLite database and uses ACP resume or load after a daemon restart when the
+selected agent advertises that capability.
 
 ## Workspace layout
 

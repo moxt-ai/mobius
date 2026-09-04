@@ -291,12 +291,16 @@ function startBrowserPrompt(
     socket.addEventListener("message", handleMessage);
     socket.send(
       encodeSessionPromptCommand({
+        additionalDirectoryIds: [],
         agentId,
         bindingId: "workspace",
         commandId,
+        directoryId: "root",
+        images: [],
         kind: SESSION_PROMPT_KIND,
         prompt,
         protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        resources: [],
         sessionId,
       }),
     );
@@ -345,12 +349,16 @@ async function verifyActiveTurnHistory(
     );
     controlledHost.send(
       encodeSessionPromptCommand({
+        additionalDirectoryIds: [],
         agentId: "codex",
         bindingId: "workspace",
         commandId: controlledCommandId,
+        directoryId: "root",
+        images: [],
         kind: SESSION_PROMPT_KIND,
         prompt: "controlled task",
         protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        resources: [],
         sessionId: controlledSessionId,
       }),
     );
@@ -420,6 +428,7 @@ async function verifyActiveTurnHistory(
         activityId: "controlled-tool",
         activityType: "tool",
         commandId: controlledCommandId,
+        content: [],
         input: '{"path":"package.json"}',
         kind: AGENT_ACTIVITY_KIND,
         locations: [`${repositoryRoot}/package.json`],

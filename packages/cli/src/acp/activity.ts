@@ -1,10 +1,12 @@
 import type {
+  ContentBlock,
   ContentChunk,
   Plan,
   PlanEntry,
   PlanRemoved,
   PlanUpdate,
   ToolCall,
+  ToolCallContent,
   ToolCallLocation,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
@@ -12,6 +14,7 @@ import {
   AGENT_ACTIVITY_DETAIL_LIMIT,
   AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
   AGENT_ACTIVITY_LOCATION_LIMIT,
+  type AgentDisplayContent,
 } from "@moxt-ai/mobius-protocol";
 
 const TRUNCATION_MARKER = "\n… output truncated by Mobius";
@@ -31,6 +34,7 @@ export class AcpActivity {
   readonly status: string;
   readonly title: string;
   readonly toolKind: string;
+  readonly content: readonly AgentDisplayContent[];
 
   constructor(
     activityId: string,
@@ -43,6 +47,7 @@ export class AcpActivity {
     status: string,
     title: string,
     toolKind: string,
+    content: readonly AgentDisplayContent[] = [],
   ) {
     this.activityId = activityId;
     this.activityType = activityType;
@@ -54,6 +59,7 @@ export class AcpActivity {
     this.status = status;
     this.title = title;
     this.toolKind = toolKind;
+    this.content = content;
   }
 
   readonly complete = (): AcpActivity =>
@@ -70,6 +76,7 @@ export class AcpActivity {
           "completed",
           this.title,
           this.toolKind,
+          this.content,
         )
       : this;
 }
@@ -108,6 +115,94 @@ function readContentOutput(content: unknown): string {
     return "";
   }
   return formatUnknown(content);
+}
+
+function emptyDisplayContent(
+  type: AgentDisplayContent["type"],
+): AgentDisplayContent {
+  return {
+    data: "",
+    mimeType: "",
+    name: "",
+    newText: "",
+    oldText: "",
+    path: "",
+    terminalId: "",
+    text: "",
+    type,
+    uri: "",
+  };
+}
+
+export function normalizeContentBlock(
+  content: ContentBlock,
+): AgentDisplayContent {
+  if (content.type === "text") {
+    return { ...emptyDisplayContent("text"), text: content.text };
+  }
+  if (content.type === "image") {
+    return {
+      ...emptyDisplayContent("image"),
+      data: content.data,
+      mimeType: content.mimeType,
+      uri: content.uri ?? "",
+    };
+  }
+  if (content.type === "resource_link") {
+    return {
+      ...emptyDisplayContent("resource_link"),
+      mimeType: content.mimeType ?? "",
+      name: content.name,
+      uri: content.uri,
+    };
+  }
+  if (content.type === "resource") {
+    if ("text" in content.resource) {
+      return {
+        ...emptyDisplayContent("resource"),
+        mimeType: content.resource.mimeType ?? "",
+        text: content.resource.text,
+        uri: content.resource.uri,
+      };
+    }
+    return {
+      ...emptyDisplayContent("resource"),
+      data: content.resource.blob,
+      mimeType: content.resource.mimeType ?? "",
+      uri: content.resource.uri,
+    };
+  }
+  return {
+    ...emptyDisplayContent("resource"),
+    data: content.data,
+    mimeType: content.mimeType,
+  };
+}
+
+function normalizeToolContent(
+  content: readonly ToolCallContent[],
+): readonly AgentDisplayContent[] {
+  const normalized: AgentDisplayContent[] = [];
+  for (const item of content) {
+    if (item.type === "diff") {
+      normalized.push({
+        ...emptyDisplayContent("diff"),
+        newText: item.newText,
+        oldText: item.oldText ?? "",
+        path: item.path,
+      });
+      continue;
+    }
+    if (item.type === "terminal") {
+      normalized.push({
+        ...emptyDisplayContent("terminal"),
+        terminalId: item.terminalId,
+      });
+      continue;
+    }
+    normalized.push(normalizeContentBlock(item.content));
+  }
+  return normalized;
 }
 
 function normalizeLocations(
@@ -278,6 +373,7 @@ export class AcpActivityTracker {
           "completed",
           previous.title,
           previous.toolKind,
+          previous.content,
         ),
       );
     }
@@ -304,6 +400,7 @@ export class AcpActivityTracker {
         normalizeToolStatus(update.status ?? "pending", "pending"),
         normalizeTitle(update.title, "Tool call"),
         update.kind ?? "other",
+        normalizeToolContent(update.content ?? []),
       ),
     );
   };
@@ -321,6 +418,10 @@ export class AcpActivityTracker {
         : update.content !== undefined && update.content !== null
           ? readContentOutput(update.content)
           : (previous?.output ?? "");
+    const content =
+      update.content === undefined || update.content === null
+        ? (previous?.content ?? [])
+        : normalizeToolContent(update.content);
     await this.#record(
       key,
       new AcpActivity(
@@ -346,6 +447,7 @@ export class AcpActivityTracker {
         update.kind === undefined || update.kind === null
           ? (previous?.toolKind ?? "other")
           : update.kind,
+        content,
       ),
     );
   };

@@ -1,11 +1,17 @@
 import type {
   AgentActivityEvent,
+  AgentContentEvent,
+  AgentDisplayContent,
   AgentMessageDeltaEvent,
+  PromptImage,
+  PromptResource,
   SessionCompletedEvent,
   SessionFailedEvent,
   SessionPromptCommand,
   SessionStartedEvent,
 } from "@moxt-ai/mobius-protocol";
+
+import type { RecordedSession } from "./channel-session-store.ts";
 
 export class RecordedActivity {
   readonly activityId: string;
@@ -18,6 +24,7 @@ export class RecordedActivity {
   readonly status: string;
   readonly title: string;
   readonly toolKind: string;
+  readonly content: readonly AgentDisplayContent[];
 
   constructor(
     activityId: string,
@@ -30,6 +37,7 @@ export class RecordedActivity {
     status: string,
     title: string,
     toolKind: string,
+    content: readonly AgentDisplayContent[] = [],
   ) {
     this.activityId = activityId;
     this.activityType = activityType;
@@ -41,6 +49,7 @@ export class RecordedActivity {
     this.status = status;
     this.title = title;
     this.toolKind = toolKind;
+    this.content = content;
   }
 
   static fromEvent(event: AgentActivityEvent): RecordedActivity {
@@ -55,6 +64,35 @@ export class RecordedActivity {
       event.status,
       event.title,
       event.toolKind,
+      event.content,
+    );
+  }
+}
+
+export class RecordedContent {
+  readonly commandId: string;
+  readonly content: AgentDisplayContent;
+  readonly contentId: string;
+  readonly messageId: string;
+
+  constructor(
+    commandId: string,
+    contentId: string,
+    messageId: string,
+    content: AgentDisplayContent,
+  ) {
+    this.commandId = commandId;
+    this.content = content;
+    this.contentId = contentId;
+    this.messageId = messageId;
+  }
+
+  static fromEvent(event: AgentContentEvent): RecordedContent {
+    return new RecordedContent(
+      event.commandId,
+      event.contentId,
+      event.messageId,
+      event.content,
     );
   }
 }
@@ -65,6 +103,9 @@ export abstract class RecordedTurn {
   readonly commandId: string;
   readonly createdAt: string;
   readonly prompt: string;
+  readonly images: readonly PromptImage[];
+  readonly resources: readonly PromptResource[];
+  readonly contents: readonly RecordedContent[];
   readonly response: string;
   readonly sessionId: string;
   abstract readonly status: string;
@@ -77,6 +118,9 @@ export abstract class RecordedTurn {
     response: string,
     sessionId: string,
     activities: readonly RecordedActivity[],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     this.activities = activities;
     this.agentId = agentId;
@@ -85,6 +129,9 @@ export abstract class RecordedTurn {
     this.prompt = prompt;
     this.response = response;
     this.sessionId = sessionId;
+    this.images = images;
+    this.resources = resources;
+    this.contents = contents;
   }
 }
 
@@ -99,6 +146,9 @@ export class PendingRecordedTurn extends RecordedTurn {
     response: string,
     sessionId: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -108,6 +158,9 @@ export class PendingRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
   }
 }
@@ -125,6 +178,9 @@ export class RunningRecordedTurn extends RecordedTurn {
     sessionId: string,
     processAttemptId: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -134,6 +190,9 @@ export class RunningRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.processAttemptId = processAttemptId;
   }
@@ -154,6 +213,9 @@ export class CompletedRecordedTurn extends RecordedTurn {
     processAttemptId: string,
     stopReason: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -163,6 +225,9 @@ export class CompletedRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.processAttemptId = processAttemptId;
     this.stopReason = stopReason;
@@ -184,6 +249,9 @@ export class FailedRecordedTurn extends RecordedTurn {
     code: string,
     message: string,
     activities: readonly RecordedActivity[] = [],
+    images: readonly PromptImage[] = [],
+    resources: readonly PromptResource[] = [],
+    contents: readonly RecordedContent[] = [],
   ) {
     super(
       agentId,
@@ -193,6 +261,9 @@ export class FailedRecordedTurn extends RecordedTurn {
       response,
       sessionId,
       activities,
+      images,
+      resources,
+      contents,
     );
     this.code = code;
     this.message = message;
@@ -201,10 +272,16 @@ export class FailedRecordedTurn extends RecordedTurn {
 
 export class ChannelHistory {
   readonly runtimeId: string;
+  readonly sessions: readonly RecordedSession[];
   readonly turns: readonly RecordedTurn[];
 
-  constructor(runtimeId: string, turns: readonly RecordedTurn[]) {
+  constructor(
+    runtimeId: string,
+    turns: readonly RecordedTurn[],
+    sessions: readonly RecordedSession[] = [],
+  ) {
     this.runtimeId = runtimeId;
+    this.sessions = sessions;
     this.turns = turns;
   }
 }
@@ -216,5 +293,6 @@ export interface ChannelTurnStore {
   readonly markStarted: (event: SessionStartedEvent, now: number) => void;
   readonly readTurns: () => readonly RecordedTurn[];
   readonly recordActivity: (event: AgentActivityEvent, now: number) => void;
+  readonly recordContent: (event: AgentContentEvent, now: number) => void;
   readonly recordPrompt: (command: SessionPromptCommand, now: number) => void;
 }
