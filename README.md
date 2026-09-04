@@ -8,32 +8,33 @@ agents across your local and cloud machines. The planned product scope includes:
 - **Host and connect** — Proxy network traffic to agents distributed across
   multiple local or cloud machines, manage their lifecycle, and expose them as
   network services that can be reached and invoked remotely.
-- **Agent identity for outbound requests** — When an agent initiates a request
-  to an external service, Mobius can issue a signed identity token for the
-  agent to use for authentication. In the human world, Google provides Gmail
-  accounts as an identity service; Mobius provides the equivalent identity
-  layer for agents. Third-party services must explicitly support and accept
-  this new token type.
-- **System prompt delivery** — External applications can register small system
-  prompt contributions with Mobius. Mobius includes the registered content in
-  the system prompt delivered to an agent, allowing the application to disclose
-  its service URL, API discovery location, and authentication method.
-- **Minimal and composable** — Mobius is intentionally small: it can be
-  deployed on a free Cloudflare Workers plan with minimal dependencies and
-  provides only a simple web interface. Dedicated services and apps provide
-  integrations for Slack, Discord, other IM platforms, and mobile devices.
-  Keeping Mobius's scope as small as possible makes it easy to compose with
-  these services into a complete team solution.
+- **Connect agents to external services** — External applications can register
+  small system prompt contributions that tell an agent which service is
+  available, where to discover its API, and how to call it. Mobius also provides
+  the agent with a signed identity token through an environment variable. The
+  agent can use that token to authenticate itself when it chooses to call an
+  external service. Service discovery and agent identity are two parts of the
+  same capability: enabling an agent to connect to and act in external services
+  as itself. In the human world, Google provides accounts as an identity layer
+  for people; Mobius provides the equivalent identity layer for agents.
+  Third-party services must explicitly support and accept this token type.
+- **Minimal and composable** — Mobius has few dependencies, can run on the free
+  Cloudflare Workers plan, works on its own, and can be composed with external
+  applications when needed.
 - **Centralized LLM provider management (optional)** — Manage the LLM
   providers used by your agents from one place, making it easy to switch a
   coding-plan subscription or change the API server with a single action.
 
-## Progressive capability disclosure
+## Connecting agents to external applications
+
+Mobius gives an agent two inputs for connecting to external applications: a
+concise system prompt contribution for discovering the application and a signed
+identity token exposed through an environment variable. The agent decides
+whether to use the application and sends the request itself.
 
 Mobius does not need to install a local tool or place a complete API schema in
-an agent's context for every available application. Instead, an application
-registers a concise system prompt contribution with Mobius for the relevant
-tenant or agent.
+an agent's context for every available application. An application instead
+registers its prompt contribution with Mobius for the relevant tenant or agent.
 
 For example, `app-slack` can register content that tells an agent:
 
@@ -43,26 +44,30 @@ For example, `app-slack` can register content that tells an agent:
 
 Mobius injects this contribution when it builds the agent's system prompt. The
 agent then decides whether the capability is relevant. Only when needed does the
-agent read the application's detailed API documentation, obtain its identity
-token from Mobius, and call the web service using an available HTTP client such
-as `curl`.
+agent read the application's detailed API documentation, read its identity
+token from the environment variable, and call the web service using an
+available HTTP client such as `curl`. Mobius does not intercept or proxy the
+request.
 
 ```text
 app-slack ── registers prompt contribution ──> Mobius
-                                                  │
-                                                  └── injects system prompt
-                                                          │
-                                                          ▼
-                                                        Agent
-                                                          │
-                                       reads API documentation when needed
-                                                          │
-                                       calls app-slack with agent identity token
+                                                  ├── system prompt ──────────┐
+                                                  │                           │
+                                                  └── identity token via ─────┤
+                                                      environment variable    │
+                                                                              ▼
+                                                                            Agent
+                                                                              │
+                                                           reads API documentation when needed
+                                                                              │
+                                                           calls app-slack with agent identity token
 ```
 
-This provides progressive disclosure: every agent receives only a short
-description of the available capability, while detailed API instructions enter
-the context only when the agent chooses to use it.
+This provides progressive disclosure as part of outbound connectivity: every
+agent receives only a short description of the available capability, while
+detailed API instructions enter the context only when the agent chooses to use
+it. The identity token then lets the external service authenticate which agent
+is making the request.
 
 ## Application boundary
 
