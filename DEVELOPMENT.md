@@ -135,3 +135,24 @@ Add defensive branches, compatibility paths, or fallback behavior only for a doc
 ## Comments
 
 Code should be self-explanatory through names, types, and structure. Implementation comments explain constraints, tradeoffs, compatibility requirements, or why an apparently simpler approach is unsafe; they do not merely restate what the code does. Public contract documentation describes purpose, supported usage, and observable behavior.
+
+## Publishing the CLI
+
+The `@moxt-ai/mobius` package is published by `.github/workflows/publish-cli.yml`
+when the version in `packages/cli/package.json` changes on `main`. The workflow
+compares the package version before and after the push, skips publication when
+the version is unchanged, and runs the full repository check before publishing
+to npm.
+
+Before the first automated release, configure a GitHub Actions trusted publisher
+for `@moxt-ai/mobius` in npm with these values:
+
+- Organization or user: `moxt-ai`
+- Repository: `mobius`
+- Workflow filename: `publish-cli.yml`
+- Environment: leave unset
+- Allowed actions: allow direct `npm publish`
+
+After trusted publishing is configured, merge a CLI version change to `main` to
+publish it. No release tag is required. The workflow uses npm trusted publishing,
+so it does not require an `NPM_TOKEN` repository secret.

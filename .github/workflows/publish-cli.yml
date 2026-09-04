@@ -1,0 +1,99 @@
+name: Publish CLI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - packages/cli/package.json
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish-cli
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: npm
+    if: github.repository == 'moxt-ai/mobius'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          package-manager-cache: false
+          registry-url: https://registry.npmjs.org
+
+      - name: Detect CLI version change
+        id: cli-version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ ! "$BEFORE_SHA" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]]; then
+            echo "::error title=Invalid push base::The previous commit SHA is invalid."
+            exit 1
+          fi
+
+          export BEFORE_MANIFEST="$RUNNER_TEMP/cli-package-before.json"
+          git show "${BEFORE_SHA}:packages/cli/package.json" > "$BEFORE_MANIFEST"
+
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from "node:fs";
+
+          const readVersion = (path) => {
+            const manifest = JSON.parse(readFileSync(path, "utf8"));
+            if (
+              typeof manifest !== "object" ||
+              manifest === null ||
+              Array.isArray(manifest) ||
+              typeof manifest.version !== "string"
+            ) {
+              throw new Error(`Package manifest at ${path} has no string version`);
+            }
+            return manifest.version;
+          };
+
+          const beforeManifest = process.env.BEFORE_MANIFEST;
+          const githubOutput = process.env.GITHUB_OUTPUT;
+          if (beforeManifest === undefined || githubOutput === undefined) {
+            throw new Error("Required GitHub Actions paths are unavailable");
+          }
+
+          const previousVersion = readVersion(beforeManifest);
+          const currentVersion = readVersion("packages/cli/package.json");
+          const changed = previousVersion !== currentVersion;
+
+          console.log(
+            changed
+              ? `CLI version changed from ${JSON.stringify(previousVersion)} to ${JSON.stringify(currentVersion)}.`
+              : `CLI version remains ${JSON.stringify(currentVersion)}; publication will be skipped.`,
+          );
+          appendFileSync(githubOutput, `changed=${String(changed)}\n`);
+          NODE
+
+      - name: Enable pnpm
+        if: steps.cli-version.outputs.changed == 'true'
+        run: |
+          corepack enable
+          pnpm --version
+          npm --version
+
+      - if: steps.cli-version.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - if: steps.cli-version.outputs.changed == 'true'
+        run: pnpm check
+
+      - name: Publish CLI
+        if: steps.cli-version.outputs.changed == 'true'
+        working-directory: packages/cli
+        run: npm publish --access public
