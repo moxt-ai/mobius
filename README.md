@@ -238,6 +238,17 @@ cost, slash commands, permission requests, form or URL elicitation, image and
 embedded-resource prompts, rich agent content, and structured tool details.
 Unsupported controls are omitted instead of being simulated by Mobius.
 
+After a prompt completes, users can open the Agent usage indicator to see the
+latest reported token breakdown and supported Agent quota metadata, including
+per-model totals from Codex ACP 1.8.0 and Claude ACP 0.73.0. These snapshots
+survive a browser reload. Context occupancy and cumulative cost come only from
+`usage_update`; final prompt counters are preserved separately and never added
+to context usage, quota totals, or earlier reports. Cache and reasoning counters
+can overlap other counters, and Claude's model totals can include subagent work.
+Missing measurements stay unavailable. Unknown metadata is discarded, while
+malformed supported fields fail with a sanitized `acp_invalid_prompt_response`
+error at the local ACP boundary.
+
 The workspace picker never sends local paths to the browser. It uses opaque
 directory identifiers, and the daemon resolves and authorizes every primary or
 additional directory against the root approved during pairing immediately

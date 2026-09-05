@@ -67,6 +67,119 @@ const modelOption: SessionConfigOption = {
 };
 
 describe("ACP session control protocol", () => {
+  it("Given older context history, When a current client decodes it, Then it remains a context snapshot", () => {
+    expect(
+      decodeSessionUsageUpdatedEvent(
+        JSON.stringify({
+          costAmount: 0.25,
+          costCurrency: "USD",
+          hasCost: true,
+          kind: SESSION_USAGE_UPDATED_KIND,
+          protocolVersion: 1,
+          sessionId: "session-1",
+          size: 200_000,
+          used: 50_000,
+        }),
+      ),
+    ).toMatchObject({ source: "context", used: 50_000, costAmount: 0.25 });
+  });
+
+  it.each([-1, 0.5, Number.MAX_SAFE_INTEGER + 1, "100", null])(
+    "Given an invalid final token count of %s, When usage crosses the protocol boundary, Then it is rejected",
+    (totalTokens) => {
+      expect(() =>
+        decodeSessionUsageUpdatedEvent(
+          JSON.stringify({
+            _meta: null,
+            commandId: "command-1",
+            kind: SESSION_USAGE_UPDATED_KIND,
+            protocolVersion: 1,
+            sessionId: "session-1",
+            source: "prompt",
+            usage: { inputTokens: 60, outputTokens: 40, totalTokens },
+          }),
+        ),
+      ).toThrow(ProtocolMessageError);
+    },
+  );
+
+  it("Given future metadata alongside a supported quota, When final usage crosses the protocol boundary, Then only bounded supported fields are retained", () => {
+    const tokens = {
+      cachedInputTokens: 20,
+      cachedWriteTokens: 10,
+      inputTokens: 60,
+      outputTokens: 40,
+      reasoningOutputTokens: 0,
+      totalTokens: 130,
+    };
+    const event = decodeSessionUsageUpdatedEvent(
+      JSON.stringify({
+        _meta: {
+          secret: "private",
+          quota: {
+            token_count: tokens,
+            model_usage: [
+              {
+                model: "claude-sonnet",
+                token_count: { ...tokens, totalTokens: 260 },
+                private: "private",
+              },
+            ],
+          },
+        },
+        commandId: "command-1",
+        kind: SESSION_USAGE_UPDATED_KIND,
+        protocolVersion: 1,
+        sessionId: "session-1",
+        source: "prompt",
+        usage: {
+          inputTokens: 60,
+          outputTokens: 40,
+          totalTokens: 130,
+          thoughtTokens: null,
+          _meta: { secret: "private" },
+        },
+      }),
+    );
+    expect(
+      decodeSessionUsageUpdatedEvent(encodeSessionUsageUpdatedEvent(event)),
+    ).toEqual(event);
+    expect(JSON.stringify(event)).not.toContain("private");
+    expect(event).toMatchObject({
+      _meta: {
+        quota: {
+          token_count: tokens,
+          model_usage: [{ token_count: { totalTokens: 260 } }],
+        },
+      },
+    });
+    expect(() =>
+      decodeSessionUsageUpdatedEvent(
+        JSON.stringify({ ...event, used: 50_000 }),
+      ),
+    ).toThrow(ProtocolMessageError);
+    if (event.source !== "prompt" || event._meta?.quota === undefined)
+      throw new Error("Expected prompt quota");
+    const quota = event._meta.quota;
+    for (const invalidQuota of [
+      {
+        ...quota,
+        model_usage: Array.from({ length: 101 }, () => quota.model_usage[0]),
+      },
+      {
+        ...quota,
+        model_usage: [{ model: "x".repeat(256), token_count: tokens }],
+      },
+      { ...quota, token_count: { ...tokens, cachedInputTokens: -1 } },
+    ]) {
+      expect(() =>
+        decodeSessionUsageUpdatedEvent(
+          JSON.stringify({ ...event, _meta: { quota: invalidQuota } }),
+        ),
+      ).toThrow(ProtocolMessageError);
+    }
+  });
+
   it("Given a missing registered Agent, When Web requests installation, Then only its request and Agent identifiers cross the boundary", () => {
     const command: AgentInstallRequestCommand = {
       agentId: "codex",
@@ -194,6 +307,7 @@ describe("ACP session control protocol", () => {
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
       size: 200_000,
+      source: "context",
       used: 50_000,
     };
 

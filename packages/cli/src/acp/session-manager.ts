@@ -18,6 +18,8 @@ import {
 import {
   AGENT_CONTENT_KIND,
   type AgentContentEvent,
+  type AgentPromptResponse,
+  decodeAgentPromptResponse,
   MOBIUS_PROTOCOL_VERSION,
   type PromptImage,
   type PromptResource,
@@ -107,9 +109,7 @@ export interface AcpElicitationResponseOptions {
   readonly sessionId: string;
 }
 
-export interface AcpPromptResult {
-  readonly stopReason: string;
-}
+export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
   readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
@@ -1302,7 +1302,7 @@ class AcpProcessSession implements AcpClientHandler {
     );
     this.#turn = running;
     try {
-      const response = await this.race(
+      const response: unknown = await this.race(
         this.#connection.agent.request(
           methods.agent.session.prompt,
           { prompt, sessionId: this.#nativeSessionId },
@@ -1313,7 +1313,28 @@ class AcpProcessSession implements AcpClientHandler {
       );
       await this.#updateTail;
       await running.activities.finish();
-      return { stopReason: response.stopReason };
+      let result: AcpPromptResult;
+      try {
+        result = decodeAgentPromptResponse(response);
+      } catch (cause) {
+        throw new AcpExecutionError(
+          "ACP agent returned an invalid prompt response",
+          { cause },
+          "acp_invalid_prompt_response",
+        );
+      }
+      if (result.usage != null || result._meta?.quota !== undefined) {
+        await this.#getObserver().onUsage({
+          _meta: result._meta ?? null,
+          commandId: options.commandId,
+          kind: SESSION_USAGE_UPDATED_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId: this.#mobiusSessionId,
+          source: "prompt",
+          usage: result.usage ?? null,
+        });
+      }
+      return result;
     } catch (error) {
       await running.activities.finish();
       if (error instanceof AcpExecutionError) {
@@ -1699,6 +1720,7 @@ class AcpProcessSession implements AcpClientHandler {
         protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
         size: Math.max(0, Math.trunc(update.size)),
+        source: "context",
         used: Math.max(0, Math.trunc(update.used)),
       });
     }

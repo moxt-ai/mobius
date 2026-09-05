@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { promptMetadataSchema, promptUsageSchema } from "./prompt-usage.ts";
 import { MOBIUS_PROTOCOL_VERSION } from "./version.ts";
 
 export const WORKSPACE_LIST_KIND = "workspace.list";
@@ -304,7 +305,7 @@ export type SessionConfigUpdatedEvent = z.infer<
   typeof sessionConfigUpdatedEventSchema
 >;
 
-const sessionUsageUpdatedEventSchema = z
+const sessionContextUsageUpdatedEventSchema = z
   .strictObject({
     costAmount: z.number().finite().nonnegative(),
     costCurrency: z.string().max(16),
@@ -313,9 +314,37 @@ const sessionUsageUpdatedEventSchema = z
     protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     size: z.number().int().nonnegative(),
+    source: z.literal("context").default("context"),
     used: z.number().int().nonnegative(),
   })
   .readonly();
+
+export type SessionContextUsageUpdatedEvent = z.infer<
+  typeof sessionContextUsageUpdatedEventSchema
+>;
+
+const sessionPromptUsageUpdatedEventSchema = z
+  .strictObject({
+    _meta: promptMetadataSchema.nullable(),
+    commandId: IDENTIFIER,
+    kind: z.literal(SESSION_USAGE_UPDATED_KIND),
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: IDENTIFIER,
+    source: z.literal("prompt"),
+    usage: promptUsageSchema.nullable(),
+  })
+  .refine((event) => event.usage !== null || event._meta?.quota !== undefined)
+  .readonly();
+
+export type SessionPromptUsageUpdatedEvent = z.infer<
+  typeof sessionPromptUsageUpdatedEventSchema
+>;
+
+// The context branch accepts pre-P0 history without a source discriminator.
+const sessionUsageUpdatedEventSchema = z.union([
+  sessionContextUsageUpdatedEventSchema,
+  sessionPromptUsageUpdatedEventSchema,
+]);
 
 export type SessionUsageUpdatedEvent = z.infer<
   typeof sessionUsageUpdatedEventSchema

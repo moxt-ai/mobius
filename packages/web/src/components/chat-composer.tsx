@@ -49,12 +49,13 @@ function ContextUsageIndicator() {
     return null;
   }
   const offset = CONTEXT_CIRCLE_CIRCUMFERENCE * (1 - usage.percent / 100);
-  const detail = `${usage.percent.toString()}% · ${usage.summary}${usage.costLabel.length > 0 ? ` · ${usage.costLabel}` : ""}`;
+  const hasContext = usage.context !== null;
+  const detail = `${hasContext ? `${usage.percent.toString()}% · ` : ""}${usage.summary}${usage.costLabel.length > 0 ? ` · ${usage.costLabel}` : ""}`;
 
   return (
     <details className="group/context relative">
       <summary
-        aria-label={`Context usage: ${detail}`}
+        aria-label={`Agent usage: ${detail}`}
         className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-black/[0.045] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 md:size-9"
         title={detail}
       >
@@ -89,15 +90,17 @@ function ContextUsageIndicator() {
       </summary>
       <div className="absolute right-0 bottom-[calc(100%+8px)] z-40 w-64 rounded-xl border-[0.5px] border-black/10 bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.14)]">
         <div className="flex items-center justify-between text-xs font-medium text-foreground">
-          <span>Context usage</span>
-          <span>{usage.percent.toString()}%</span>
+          <span>Agent usage</span>
+          {hasContext && <span>{usage.percent.toString()}% context</span>}
         </div>
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
-          <span
-            className="block h-full rounded-full bg-copy-tertiary transition-[width] duration-300 motion-reduce:transition-none"
-            style={{ width: `${usage.percent.toString()}%` }}
-          />
-        </div>
+        {hasContext && (
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+            <span
+              className="block h-full rounded-full bg-copy-tertiary transition-[width] duration-300 motion-reduce:transition-none"
+              style={{ width: `${usage.percent.toString()}%` }}
+            />
+          </div>
+        )}
         <p className="mt-2 text-[11px] leading-[18px] text-muted-foreground">
           {usage.summary}
         </p>
@@ -105,6 +108,19 @@ function ContextUsageIndicator() {
           <p className="mt-0.5 text-[11px] leading-[18px] text-muted-foreground">
             {usage.costLabel}
           </p>
+        )}
+        {usage.details.length > 0 && (
+          <dl className="mt-2 max-h-64 space-y-1 overflow-y-auto border-t border-black/[0.06] pt-2 text-xs text-muted-foreground">
+            {usage.details.map((detail, index) => (
+              <div
+                className="flex items-start justify-between gap-3"
+                key={`${index.toString()}-${detail.label}`}
+              >
+                <dt className="min-w-0 break-words">{detail.label}</dt>
+                <dd className="shrink-0 tabular-nums">{detail.value}</dd>
+              </div>
+            ))}
+          </dl>
         )}
       </div>
     </details>

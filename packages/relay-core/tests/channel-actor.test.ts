@@ -723,6 +723,7 @@ describe("channel actor", () => {
         protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: "session-1",
         size: 200_000,
+        source: "context",
         used: 50_000,
       }),
     );

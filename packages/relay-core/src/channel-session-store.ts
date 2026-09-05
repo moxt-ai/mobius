@@ -122,7 +122,7 @@ export class RecordedSession {
       this.commands,
       this.title,
       this.updatedAt,
-      [usage],
+      [...this.usage.filter((entry) => entry.source !== usage.source), usage],
       this.pendingPermissions,
       this.pendingElicitations,
     );

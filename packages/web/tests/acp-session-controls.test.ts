@@ -84,6 +84,80 @@ function configure(): void {
 }
 
 describe("ACP session controls", () => {
+  it("Given final Agent usage with or without context measurements, When a browser receives or restores snapshots, Then token details remain separate from context and cost", () => {
+    configure();
+    const sessionId = useChatStore.getState().conversations[0]?.sessionId ?? "";
+    useChatStore.getState().applySessionReady({ ...ready, sessionId });
+    const report = {
+      _meta: null,
+      commandId: "usage-command",
+      kind: "session.usage.updated",
+      protocolVersion: 1,
+      sessionId,
+      source: "prompt",
+      usage: {
+        totalTokens: 1_000,
+        inputTokens: 600,
+        outputTokens: 200,
+        cachedReadTokens: 200,
+        thoughtTokens: 50,
+      },
+    } satisfies SessionUsageUpdatedEvent;
+    useChatStore.getState().applySessionUsage(report);
+    const usage = () => useChatStore.getState().conversations[0]?.session.usage;
+    expect(usage()?.available).toBe(true);
+    expect(usage()?.summary).toBe("Context usage unavailable");
+    expect(usage()?.details).toContainEqual({
+      label: "Reported tokens",
+      value: "1,000",
+    });
+
+    const context = {
+      costAmount: 0.25,
+      costCurrency: "USD",
+      hasCost: true,
+      kind: "session.usage.updated",
+      protocolVersion: 1,
+      sessionId,
+      size: 200_000,
+      source: "context",
+      used: 50_000,
+    } satisfies SessionUsageUpdatedEvent;
+    useChatStore.getState().applySessionUsage(context);
+    useChatStore.getState().applySessionUsage(report);
+    useChatStore.getState().applySessionUsage(report);
+    expect(usage()?.percent).toBe(25);
+    expect(usage()?.costLabel).toBe("$0.25 USD");
+    expect(usage()?.prompt?.usage?.totalTokens).toBe(1_000);
+    const restored = ReadySessionState.fromRecorded(
+      new RecordedSession(
+        [],
+        ready.agentId,
+        ready.agentName,
+        ready.agentVersion,
+        ready.capabilities,
+        [],
+        [],
+        "root",
+        "mobius",
+        [],
+        [],
+        true,
+        sessionId,
+        "",
+        "",
+        [context, report],
+      ),
+    );
+    expect(restored.usage).toMatchObject({
+      context,
+      prompt: report,
+      percent: 25,
+      costLabel: "$0.25 USD",
+      details: usage()?.details,
+    });
+  });
+
   it("Given one agent is still preparing, When the user switches agents, Then stale readiness and failure results cannot replace the new selection", () => {
     useChatStore
       .getState()
@@ -261,6 +335,7 @@ describe("ACP session controls", () => {
       protocolVersion: 1,
       sessionId,
       size: 200_000,
+      source: "context",
       used: 50_000,
     } satisfies SessionUsageUpdatedEvent);
     useChatStore.getState().applySessionInfo({
@@ -509,6 +584,7 @@ describe("ACP session controls", () => {
       protocolVersion: 1,
       sessionId: "session-restored",
       size: 100_000,
+      source: "context",
       used: 40_000,
     } satisfies SessionUsageUpdatedEvent;
     const snapshot = new RecordedSession(

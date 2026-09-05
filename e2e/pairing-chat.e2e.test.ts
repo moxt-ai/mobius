@@ -33,11 +33,13 @@ import {
   decodeSessionFailedEvent,
   decodeSessionPromptCommand,
   decodeSessionStartedEvent,
+  decodeSessionUsageUpdatedEvent,
   encodeAgentActivityEvent,
   encodeAgentMessageDeltaEvent,
   encodeRuntimeHeartbeatEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
+  encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
   MOBIUS_PROTOCOL_VERSION,
@@ -48,8 +50,12 @@ import {
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
   SESSION_FAILED_KIND,
+  SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
+  SESSION_READY_KIND,
   SESSION_STARTED_KIND,
+  SESSION_USAGE_UPDATED_KIND,
+  type SessionUsageUpdatedEvent,
 } from "../packages/protocol/src/index.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -152,10 +158,16 @@ class BrowserPairingCredentials {
 class BrowserPromptResult {
   readonly stopReason: string;
   readonly text: string;
+  readonly usage: readonly SessionUsageUpdatedEvent[];
 
-  constructor(text: string, stopReason: string) {
+  constructor(
+    text: string,
+    stopReason: string,
+    usage: readonly SessionUsageUpdatedEvent[],
+  ) {
     this.text = text;
     this.stopReason = stopReason;
+    this.usage = usage;
   }
 }
 
@@ -346,6 +358,7 @@ function startBrowserPrompt(
   const commandId = crypto.randomUUID();
   const result = new Promise<BrowserPromptResult>((resolve, reject) => {
     let text = "";
+    const usage: SessionUsageUpdatedEvent[] = [];
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("The browser prompt timed out"));
@@ -359,6 +372,11 @@ function startBrowserPrompt(
         return;
       }
       const kind = decodeMessageKind(event.data);
+      if (kind === SESSION_USAGE_UPDATED_KIND) {
+        const update = decodeSessionUsageUpdatedEvent(event.data);
+        if (update.sessionId === sessionId) usage.push(update);
+        return;
+      }
       if (kind === AGENT_MESSAGE_DELTA_KIND) {
         const delta = decodeAgentMessageDeltaEvent(event.data);
         if (delta.commandId === commandId) {
@@ -370,7 +388,7 @@ function startBrowserPrompt(
         const completed = decodeSessionCompletedEvent(event.data);
         if (completed.commandId === commandId) {
           cleanup();
-          resolve(new BrowserPromptResult(text, completed.stopReason));
+          resolve(new BrowserPromptResult(text, completed.stopReason, usage));
         }
         return;
       }
@@ -857,7 +875,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given one ready Agent and a local Agent CLI without its adapter, When the machine pairs and a browser connects, Then the adapter is installed automatically and responses persist", {
+  it("Given supported Agents on a paired machine, When a browser sends prompts, Then adapters are installed and responses and usage persist without double-counting", {
     timeout: 45_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -1099,6 +1117,94 @@ describe("pairing and channel chat", () => {
           await expect(
             runBrowserPrompt(socket, "codex", codexSessionId, "second"),
           ).resolves.toBe("Codex turn 2: second");
+          const usageSessions: string[] = [];
+          for (const [agent, label, total] of [
+            ["codex", "Codex", 1_000],
+            ["claude", "Claude", 1_100],
+          ] satisfies readonly (readonly [string, string, number])[]) {
+            const usageSessionId = crypto.randomUUID();
+            usageSessions.push(usageSessionId);
+            const preparedUsageSession = waitForProtocolKind(
+              socket,
+              SESSION_READY_KIND,
+            );
+            socket.send(
+              encodeSessionPrepareCommand({
+                additionalDirectoryIds: [],
+                agentId: agent,
+                bindingId: "workspace",
+                directoryId: "root",
+                kind: SESSION_PREPARE_KIND,
+                protocolVersion: MOBIUS_PROTOCOL_VERSION,
+                requestId: crypto.randomUUID(),
+                sessionId: usageSessionId,
+              }),
+            );
+            await preparedUsageSession;
+            for (const turn of [1, 2]) {
+              const running = startBrowserPrompt(
+                socket,
+                agent,
+                usageSessionId,
+                `report ${label} usage`,
+              );
+              const result = await running.result;
+              expect(result.usage).toMatchObject([
+                {
+                  source: "context",
+                  size: 200_000,
+                  used: 50_000,
+                  costAmount: 0.125 * turn,
+                },
+                {
+                  source: "prompt",
+                  commandId: running.commandId,
+                  usage: {
+                    totalTokens: total * turn,
+                    inputTokens: 600 * turn,
+                    outputTokens: 200 * turn,
+                  },
+                  _meta: {
+                    quota: {
+                      token_count: { totalTokens: total * turn },
+                      model_usage: [
+                        expect.objectContaining({ model: expect.any(String) }),
+                      ],
+                    },
+                  },
+                },
+              ]);
+              expect(JSON.stringify(result.usage)).not.toContain("privateData");
+            }
+          }
+          const usageHistory = await fetch(
+            new URL(
+              `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
+              origin,
+            ),
+          );
+          await expect(usageHistory.json()).resolves.toMatchObject({
+            sessions: expect.arrayContaining(
+              usageSessions.map((sessionId, index) =>
+                expect.objectContaining({
+                  sessionId,
+                  usage: [
+                    expect.objectContaining({
+                      source: "context",
+                      used: 50_000,
+                      costAmount: 0.25,
+                    }),
+                    expect.objectContaining({
+                      source: "prompt",
+                      usage: expect.objectContaining({
+                        totalTokens: index === 0 ? 2_000 : 2_200,
+                      }),
+                    }),
+                  ],
+                }),
+              ),
+            ),
+          });
           const cancellationSessionId = crypto.randomUUID();
           const startedCancellation = waitForProtocolKind(
             socket,

@@ -5,9 +5,11 @@ import type {
   SessionCapabilities,
   SessionCommand,
   SessionConfigOption,
+  SessionContextUsageUpdatedEvent,
   SessionElicitationRequestedEvent,
   SessionElicitationResolvedEvent,
   SessionPermissionRequestedEvent,
+  SessionPromptUsageUpdatedEvent,
   SessionReadyEvent,
   SessionUsageUpdatedEvent,
   WorkspaceEntry,
@@ -38,17 +40,29 @@ const EMPTY_CAPABILITIES: SessionCapabilities = {
 
 export abstract class SessionUsageState {
   abstract readonly available: boolean;
+  abstract readonly context: SessionContextUsageUpdatedEvent | null;
   abstract readonly costLabel: string;
+  abstract readonly details: readonly {
+    readonly label: string;
+    readonly value: string;
+  }[];
   abstract readonly percent: number;
+  abstract readonly prompt: SessionPromptUsageUpdatedEvent | null;
   abstract readonly size: number;
   abstract readonly summary: string;
   abstract readonly used: number;
+
+  readonly withUpdate = (event: SessionUsageUpdatedEvent): SessionUsageState =>
+    new MeasuredSessionUsage(event, this);
 }
 
 class UnknownSessionUsage extends SessionUsageState {
   readonly available = false;
+  readonly context = null;
   readonly costLabel = "";
+  readonly details = [];
   readonly percent = 0;
+  readonly prompt = null;
   readonly size = 0;
   readonly summary = "Context usage unavailable";
   readonly used = 0;
@@ -56,28 +70,83 @@ class UnknownSessionUsage extends SessionUsageState {
 
 class MeasuredSessionUsage extends SessionUsageState {
   readonly available = true;
+  readonly context: SessionContextUsageUpdatedEvent | null;
   readonly costLabel: string;
+  readonly details: readonly {
+    readonly label: string;
+    readonly value: string;
+  }[];
   readonly percent: number;
+  readonly prompt: SessionPromptUsageUpdatedEvent | null;
   readonly size: number;
   readonly summary: string;
   readonly used: number;
 
-  constructor(event: SessionUsageUpdatedEvent) {
+  constructor(event: SessionUsageUpdatedEvent, previous: SessionUsageState) {
     super();
-    this.size = event.size;
-    this.used = event.used;
-    this.percent =
-      event.size === 0
-        ? 0
-        : Math.min(100, Math.round((event.used / event.size) * 100));
-    this.summary = `${formatCompactNumber(event.used)} / ${formatCompactNumber(event.size)} tokens`;
-    if (!event.hasCost) {
-      this.costLabel = "";
-    } else if (event.costCurrency.toUpperCase() === "USD") {
-      this.costLabel = `$${event.costAmount.toFixed(2)} ${event.costCurrency}`;
-    } else {
-      this.costLabel = `${event.costAmount.toFixed(2)} ${event.costCurrency}`;
+    switch (event.source) {
+      case "context":
+        this.context = event;
+        this.prompt = previous.prompt;
+        break;
+      case "prompt":
+        this.context = previous.context;
+        this.prompt = event;
+        break;
+      default: {
+        const unhandled: never = event;
+        throw new Error(`Unknown usage source: ${String(unhandled)}`);
+      }
     }
+    const context = this.context;
+    this.size = context?.size ?? 0;
+    this.used = context?.used ?? 0;
+    this.percent =
+      this.size === 0
+        ? 0
+        : Math.min(100, Math.round((this.used / this.size) * 100));
+    this.summary =
+      context === null
+        ? "Context usage unavailable"
+        : `${formatCompactNumber(this.used)} / ${formatCompactNumber(this.size)} tokens`;
+    if (!context?.hasCost) {
+      this.costLabel = "";
+    } else if (context.costCurrency.toUpperCase() === "USD") {
+      this.costLabel = `$${context.costAmount.toFixed(2)} ${context.costCurrency}`;
+    } else {
+      this.costLabel = `${context.costAmount.toFixed(2)} ${context.costCurrency}`;
+    }
+    const details: { readonly label: string; readonly value: string }[] = [];
+    const usage = this.prompt?.usage;
+    if (usage != null) {
+      for (const [label, value] of [
+        ["Reported tokens", usage.totalTokens],
+        ["Input", usage.inputTokens],
+        ["Output", usage.outputTokens],
+        ["Cache read", usage.cachedReadTokens],
+        ["Cache write", usage.cachedWriteTokens],
+        ["Reasoning", usage.thoughtTokens],
+      ] satisfies readonly (readonly [string, number | null | undefined])[]) {
+        if (value != null)
+          details.push({ label, value: value.toLocaleString("en-US") });
+      }
+    }
+    const quota = this.prompt?._meta?.quota;
+    if (quota !== undefined) {
+      if (quota.token_count !== null) {
+        details.push({
+          label: "Agent quota tokens",
+          value: quota.token_count.totalTokens.toLocaleString("en-US"),
+        });
+      }
+      for (const model of quota.model_usage) {
+        details.push({
+          label: model.model,
+          value: model.token_count.totalTokens.toLocaleString("en-US"),
+        });
+      }
+    }
+    this.details = details;
   }
 }
 
@@ -237,7 +306,10 @@ export class ReadySessionState extends AgentSessionState {
   }
 
   static fromRecorded(recorded: RecordedSession): ReadySessionState {
-    const latestUsage = recorded.usage.at(-1);
+    const usage = recorded.usage.reduce<SessionUsageState>(
+      (previous, event) => previous.withUpdate(event),
+      new UnknownSessionUsage(),
+    );
     return new ReadySessionState(
       recorded.agentName,
       recorded.agentVersion,
@@ -247,9 +319,7 @@ export class ReadySessionState extends AgentSessionState {
       recorded.pendingElicitations,
       recorded.pendingPermissions,
       recorded.restored,
-      latestUsage === undefined
-        ? new UnknownSessionUsage()
-        : new MeasuredSessionUsage(latestUsage),
+      usage,
       recorded.updatedAt,
     );
   }
@@ -338,7 +408,7 @@ export class ReadySessionState extends AgentSessionState {
       this.elicitations,
       this.permissions,
       this.restored,
-      new MeasuredSessionUsage(usage),
+      this.usage.withUpdate(usage),
       this.updatedAt,
     );
 

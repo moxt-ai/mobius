@@ -6,6 +6,7 @@ import { join } from "node:path";
 import * as acp from "@agentclientprotocol/sdk";
 
 import { FAKE_ACP_AGENT_NAME } from "./index.ts";
+import { promptUsageResponse } from "./usage.ts";
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -429,6 +430,18 @@ acp
       }
       const toolCallId = `tool-${turnNumber.toString()}`;
 
+      if (prompt === "report Codex usage" || prompt === "report Claude usage") {
+        await context.client.notify(acp.methods.client.session.update, {
+          sessionId: context.params.sessionId,
+          update: {
+            cost: { amount: 0.125 * turnNumber, currency: "USD" },
+            sessionUpdate: "usage_update",
+            size: 200_000,
+            used: 50_000,
+          },
+        });
+      }
+
       if (prompt === "exercise ACP controls") {
         await context.client.notify(acp.methods.client.session.update, {
           sessionId: context.params.sessionId,
@@ -636,7 +649,9 @@ acp
         });
       }
 
-      return { stopReason: "end_turn" };
+      return (
+        promptUsageResponse(prompt, turnNumber) ?? { stopReason: "end_turn" }
+      );
     } finally {
       turnCancellations.delete(context.params.sessionId);
     }
