@@ -3,8 +3,18 @@ import { basename } from "node:path";
 
 import {
   AGENT_ACTIVITY_KIND,
+  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
+  AGENT_INSTALL_CANCEL_KIND,
+  AGENT_INSTALL_CANCELLED_KIND,
+  AGENT_INSTALL_COMPLETED_KIND,
+  AGENT_INSTALL_FAILED_KIND,
+  AGENT_INSTALL_PROGRESS_KIND,
+  AGENT_INSTALL_REQUEST_KIND,
+  AGENT_INSTALL_STARTED_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   type AgentContentEvent,
+  decodeAgentInstallCancelCommand,
+  decodeAgentInstallRequestCommand,
   decodeMessageKind,
   decodeRuntimeHeartbeatAckEvent,
   decodeRuntimeLivenessReadyEvent,
@@ -17,6 +27,12 @@ import {
   decodeWorkspaceListCommand,
   encodeAgentActivityEvent,
   encodeAgentContentEvent,
+  encodeAgentInstallAwaitingApprovalEvent,
+  encodeAgentInstallCancelledEvent,
+  encodeAgentInstallCompletedEvent,
+  encodeAgentInstallFailedEvent,
+  encodeAgentInstallProgressEvent,
+  encodeAgentInstallStartedEvent,
   encodeAgentMessageDeltaEvent,
   encodeSessionCommandsUpdatedEvent,
   encodeSessionCompletedEvent,
@@ -68,10 +84,29 @@ import {
   NullAcpSessionObserver,
 } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
+import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
+import { LocalAgentCatalogError } from "./agent-catalog/local-agent.ts";
+import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
+import {
+  type AgentInstallation,
+  AgentInstallationManager,
+  AwaitingLocalApproval,
+  CancelledInstallation,
+  FailedInstallation,
+  type InstallationAudit,
+  type InstallationObserver,
+  RequestedInstallation,
+  RunningInstallation,
+  SucceededInstallation,
+} from "./agent-installation/agent-installation-manager.ts";
+import { AutomaticAdapterProvisioner } from "./agent-installation/automatic-adapter-provisioner.ts";
+import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
+import { ConsoleInstallationAuthorizer } from "./agent-installation/local-installation-authorizer.ts";
+import { ManagedAdapterInstaller } from "./agent-installation/managed-adapter-installer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/authorize-binding.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import { type DaemonConfig, findLocalAgent } from "./config.ts";
+import type { DaemonConfig } from "./config.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import {
@@ -79,6 +114,7 @@ import {
   type DaemonTimer,
   systemDaemonTimer,
 } from "./relay-connection/timer.ts";
+import { readStateDirectory } from "./storage/state-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const RELAY_CONNECTION_REFRESH_MILLISECONDS = 20 * 60 * 1_000;
@@ -207,6 +243,140 @@ class DaemonAcpObserver implements AcpSessionObserver {
   };
 }
 
+class AuditInstallationEvents implements InstallationAudit {
+  readonly #audit: AuditStore;
+
+  constructor(audit: AuditStore) {
+    this.#audit = audit;
+  }
+
+  readonly record = (
+    event: string,
+    requestId: string,
+    agentId: string,
+    details: Readonly<Record<string, string>> = {},
+  ): void => {
+    this.#audit.record({
+      commandId: requestId,
+      details,
+      event,
+      sessionId: `agent-installation:${agentId}`,
+    });
+  };
+}
+
+class DaemonInstallationObserver implements InstallationObserver {
+  readonly #started = new Set<string>();
+  #socket: WebSocket | null = null;
+
+  readonly connect = (socket: WebSocket): void => {
+    this.#socket = socket;
+  };
+
+  readonly disconnect = (socket: WebSocket): void => {
+    if (this.#socket === socket) {
+      this.#socket = null;
+    }
+  };
+
+  readonly #send = (socket: WebSocket, message: string): void => {
+    try {
+      send(socket, message);
+    } catch {
+      if (this.#socket === socket) {
+        this.#socket = null;
+      }
+    }
+  };
+
+  readonly onState = (state: AgentInstallation): Promise<void> => {
+    const socket = this.#socket;
+    if (socket === null || socket.readyState !== WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    if (state instanceof RequestedInstallation) {
+      return Promise.resolve();
+    }
+    if (state instanceof AwaitingLocalApproval) {
+      this.#send(
+        socket,
+        encodeAgentInstallAwaitingApprovalEvent({
+          agentId: state.agentId,
+          kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: state.requestId,
+        }),
+      );
+      return Promise.resolve();
+    }
+    if (state instanceof RunningInstallation) {
+      if (!this.#started.has(state.requestId)) {
+        this.#started.add(state.requestId);
+        this.#send(
+          socket,
+          encodeAgentInstallStartedEvent({
+            agentId: state.agentId,
+            kind: AGENT_INSTALL_STARTED_KIND,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
+            requestId: state.requestId,
+          }),
+        );
+      }
+      this.#send(
+        socket,
+        encodeAgentInstallProgressEvent({
+          agentId: state.agentId,
+          kind: AGENT_INSTALL_PROGRESS_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: state.requestId,
+          stage: state.stage,
+        }),
+      );
+      return Promise.resolve();
+    }
+    if (state instanceof SucceededInstallation) {
+      this.#send(
+        socket,
+        encodeAgentInstallCompletedEvent({
+          agentId: state.agentId,
+          authenticationMayBeRequired: state.authenticationMayBeRequired,
+          kind: AGENT_INSTALL_COMPLETED_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: state.requestId,
+        }),
+      );
+      return Promise.resolve();
+    }
+    if (state instanceof FailedInstallation) {
+      this.#send(
+        socket,
+        encodeAgentInstallFailedEvent({
+          agentId: state.agentId,
+          code: state.code,
+          kind: AGENT_INSTALL_FAILED_KIND,
+          message: state.message,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: state.requestId,
+        }),
+      );
+      return Promise.resolve();
+    }
+    if (state instanceof CancelledInstallation) {
+      this.#send(
+        socket,
+        encodeAgentInstallCancelledEvent({
+          agentId: state.agentId,
+          kind: AGENT_INSTALL_CANCELLED_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: state.requestId,
+        }),
+      );
+      return Promise.resolve();
+    }
+    throw new Error("Unsupported Agent installation state");
+  };
+}
+
 class ResolvedSessionDirectories {
   readonly additionalDirectories: readonly string[];
   readonly additionalDirectoryEntries: readonly {
@@ -295,7 +465,8 @@ function reportFailure(
 function operationErrorCode(error: unknown): string {
   if (
     error instanceof AcpExecutionError ||
-    error instanceof LocalAuthorizationError
+    error instanceof LocalAuthorizationError ||
+    error instanceof LocalAgentCatalogError
   ) {
     return error.code;
   }
@@ -305,7 +476,8 @@ function operationErrorCode(error: unknown): string {
 function operationErrorMessage(error: unknown): string {
   if (
     error instanceof AcpExecutionError ||
-    error instanceof LocalAuthorizationError
+    error instanceof LocalAuthorizationError ||
+    error instanceof LocalAgentCatalogError
   ) {
     return error.message;
   }
@@ -421,7 +593,7 @@ async function executeSessionPrepare(
       command.directoryId,
       command.additionalDirectoryIds,
     );
-    const agent = findLocalAgent(config.agents, command.agentId);
+    const agent = config.catalog.find(command.agentId);
     const prepared = await sessions.prepareSession({
       additionalDirectories: resolved.additionalDirectories,
       agent,
@@ -480,7 +652,7 @@ async function executeSessionConfigure(
     );
     const configOptions = await sessions.configureSession({
       additionalDirectories: resolved.additionalDirectories,
-      agent: findLocalAgent(config.agents, command.agentId),
+      agent: config.catalog.find(command.agentId),
       booleanValue: command.booleanValue,
       configId: command.configId,
       cwd: resolved.cwd,
@@ -526,7 +698,7 @@ async function executePrompt(
       command.directoryId,
       command.additionalDirectoryIds,
     );
-    const agent = findLocalAgent(config.agents, command.agentId);
+    const agent = config.catalog.find(command.agentId);
     const processAttemptId = randomUUID();
     audit.record({
       commandId: command.commandId,
@@ -616,11 +788,14 @@ async function executePrompt(
       event: "session_failed",
       sessionId: command.sessionId,
     });
+    const code = operationErrorCode(error);
     reportFailure(
       socket,
       command,
-      "agent_execution_failed",
-      "The local agent could not complete the request",
+      code === "session_operation_failed" ? "agent_execution_failed" : code,
+      code === "session_operation_failed"
+        ? "The local agent could not complete the request"
+        : operationErrorMessage(error),
     );
     console.error("Mobius daemon command failed", error);
   }
@@ -652,6 +827,8 @@ async function runRelayConnection(
   directories: WorkspaceDirectoryService,
   audit: AuditStore,
   sessions: AcpSessionManager,
+  installations: AgentInstallationManager,
+  installationObserver: DaemonInstallationObserver,
   signal: AbortSignal,
   timer: DaemonTimer,
 ): Promise<void> {
@@ -661,6 +838,7 @@ async function runRelayConnection(
   const activeTurns = new Map<string, ActiveDaemonTurn>();
   const connectionController = new AbortController();
   sessions.setObserver(new DaemonAcpObserver(socket));
+  installationObserver.connect(socket);
 
   await new Promise<void>((resolve, reject) => {
     let finished = false;
@@ -672,6 +850,7 @@ async function runRelayConnection(
       socket.removeEventListener("close", handleClose);
       socket.removeEventListener("error", handleError);
       socket.removeEventListener("message", handleMessage);
+      installationObserver.disconnect(socket);
       connectionController.abort();
       for (const turn of activeTurns.values()) {
         turn.abortConnection();
@@ -851,6 +1030,24 @@ async function runRelayConnection(
             });
           return;
         }
+        if (kind === AGENT_INSTALL_REQUEST_KIND) {
+          const command = decodeAgentInstallRequestCommand(encoded);
+          void installations
+            .request(command, signal)
+            .catch((error: unknown) => {
+              console.error("Mobius Agent installation failed", error);
+            });
+          return;
+        }
+        if (kind === AGENT_INSTALL_CANCEL_KIND) {
+          const command = decodeAgentInstallCancelCommand(encoded);
+          void installations
+            .cancel(command.requestId)
+            .catch((error: unknown) => {
+              reportOperationFailure(socket, command.requestId, "", error);
+            });
+          return;
+        }
         if (kind !== SESSION_PROMPT_KIND) {
           throw new Error("Unsupported protocol message");
         }
@@ -905,6 +1102,33 @@ export async function runDaemon(
   signal: AbortSignal,
   timer: DaemonTimer = systemDaemonTimer,
 ): Promise<void> {
+  const installationAudit = new AuditInstallationEvents(audit);
+  const stateDirectory = readStateDirectory();
+  const specifications = supportedLocalAgentSpecifications();
+  const installationExecutor = new FixedInstallationExecutor({
+    approvedRoot: config.approvedRoot,
+    audit: installationAudit,
+    catalog: config.catalog,
+    environment: process.env,
+    publishCatalog: async (installationSignal) =>
+      await publishAgentCatalog(config, installationSignal),
+    stateDirectory,
+  });
+  await new AutomaticAdapterProvisioner(
+    {
+      approvedRoot: config.approvedRoot,
+      audit: installationAudit,
+      catalog: config.catalog,
+      environment: process.env,
+    },
+    new ManagedAdapterInstaller({
+      approvedRoot: config.approvedRoot,
+      environment: process.env,
+      stateDirectory,
+    }),
+    specifications,
+  ).prepare(signal);
+
   const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
   const sessions = new AcpSessionManager(
     new NullAcpSessionObserver(),
@@ -914,16 +1138,27 @@ export async function runDaemon(
     config.bindingId,
     config.approvedRoot,
   );
+  const installationObserver = new DaemonInstallationObserver();
+  const installations = new AgentInstallationManager(
+    specifications,
+    new ConsoleInstallationAuthorizer(stateDirectory),
+    installationExecutor,
+    installationObserver,
+    installationAudit,
+  );
   let retryAnnounced = false;
 
   try {
     while (!signal.aborted) {
       try {
+        await publishAgentCatalog(config, signal);
         await runRelayConnection(
           config,
           directories,
           audit,
           sessions,
+          installations,
+          installationObserver,
           signal,
           timer,
         );
@@ -941,7 +1176,14 @@ export async function runDaemon(
       await waitForRelayRetry(signal, timer);
     }
   } finally {
-    await sessions.close();
-    sessionStore.close();
+    try {
+      await installations.close();
+    } finally {
+      try {
+        await sessions.close();
+      } finally {
+        sessionStore.close();
+      }
+    }
   }
 }

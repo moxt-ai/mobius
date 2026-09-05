@@ -20,6 +20,7 @@ import {
   CreatedPairing,
   ExpiredBrowserPairingStatus,
   FailedRecordedTurn,
+  InstallableAgentOption,
   isIdentifier,
   isPairingCode,
   isToken,
@@ -311,7 +312,7 @@ function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
 }
 
 function decodeAgents(value: unknown): readonly AgentOption[] {
-  if (!Array.isArray(value) || value.length === 0 || value.length > 8) {
+  if (!Array.isArray(value) || value.length > 8) {
     throw new PairingApiError(
       "invalid_relay_response",
       "The relay returned an invalid agent directory.",
@@ -320,7 +321,12 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
   const agents: AgentOption[] = [];
   const identifiers = new Set<string>();
   for (const candidate of value) {
-    if (!isRecord(candidate)) {
+    if (
+      !isRecord(candidate) ||
+      Object.keys(candidate).length !== 2 ||
+      !Object.hasOwn(candidate, "id") ||
+      !Object.hasOwn(candidate, "label")
+    ) {
       throw new PairingApiError(
         "invalid_relay_response",
         "The relay returned an invalid agent directory.",
@@ -343,6 +349,55 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     }
     identifiers.add(id);
     agents.push(new AgentOption(id, label.trim()));
+  }
+  return agents;
+}
+
+function decodeInstallableAgents(
+  value: unknown,
+): readonly InstallableAgentOption[] {
+  if (!Array.isArray(value) || value.length > 8) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid installable Agent directory.",
+    );
+  }
+  const agents: InstallableAgentOption[] = [];
+  const identifiers = new Set<string>();
+  for (const candidate of value) {
+    if (
+      !isRecord(candidate) ||
+      Object.keys(candidate).length !== 3 ||
+      !Object.hasOwn(candidate, "id") ||
+      !Object.hasOwn(candidate, "label") ||
+      !Object.hasOwn(candidate, "requiresLocalApproval")
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid installable Agent directory.",
+      );
+    }
+    const id = candidate["id"];
+    const label = candidate["label"];
+    const requiresLocalApproval = candidate["requiresLocalApproval"];
+    if (
+      typeof id !== "string" ||
+      !isIdentifier(id) ||
+      identifiers.has(id) ||
+      typeof label !== "string" ||
+      label.trim().length === 0 ||
+      label.length > 80 ||
+      typeof requiresLocalApproval !== "boolean"
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid installable Agent directory.",
+      );
+    }
+    identifiers.add(id);
+    agents.push(
+      new InstallableAgentOption(id, label.trim(), requiresLocalApproval),
+    );
   }
   return agents;
 }
@@ -403,11 +458,25 @@ function decodeChannelConnection(
       "The relay returned an invalid channel.",
     );
   }
+  const agents = decodeAgents(value["agents"]);
+  const installableAgents = decodeInstallableAgents(value["installableAgents"]);
+  if (
+    agents.length + installableAgents.length === 0 ||
+    installableAgents.some((agent) =>
+      agents.some((available) => available.id === agent.id),
+    )
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid Agent catalog.",
+    );
+  }
   return new ChannelConnection(
-    decodeAgents(value["agents"]),
+    agents,
     channelId,
     readString(value["machineName"], "machine name", 120),
     readString(value["workspaceName"], "workspace name", 120),
+    installableAgents,
   );
 }
 

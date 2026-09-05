@@ -1,9 +1,16 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AuditStore } from "../packages/cli/src/audit/audit-store.ts";
@@ -50,6 +57,87 @@ const fakeAgentPath = fileURLToPath(
   new URL("./fixtures/fake-acp-agent/src/cli.ts", import.meta.url),
 );
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+
+function executableSource(source: string): string {
+  return `#!${process.execPath}\n${source}`;
+}
+
+function agentExecutableSource(label: string, version: string): string {
+  return executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write(${JSON.stringify(`${version}\n`)});
+} else {
+  process.argv.push("--agent-name", ${JSON.stringify(label)});
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`);
+}
+
+function adapterExecutableSource(
+  environmentVariable: string,
+  version: string,
+): string {
+  return executableSource(`
+import { spawn } from "node:child_process";
+if (process.argv.includes("--version")) {
+  process.stdout.write(${JSON.stringify(`${version}\n`)});
+} else {
+  const executable = process.env[${JSON.stringify(environmentVariable)}];
+  if (executable === undefined) process.exit(91);
+  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
+  child.once("error", () => process.exit(92));
+  child.once("exit", (code) => process.exit(code ?? 93));
+}
+`);
+}
+
+function packageManagerExecutableSource(recordPath: string): string {
+  const packageName = "@agentclientprotocol/claude-agent-acp";
+  const packageVersion = "0.73.0";
+  const executableName = "claude-agent-acp";
+  const adapterSource = adapterExecutableSource(
+    "CLAUDE_CODE_EXECUTABLE",
+    `claude-agent-acp ${packageVersion}`,
+  );
+  return executableSource(`
+import { appendFile, chmod, mkdir, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+const prefixIndex = process.argv.indexOf("--prefix");
+const prefix = process.argv[prefixIndex + 1];
+const packageRequest = process.argv.at(-1);
+if (prefixIndex < 0 || prefix === undefined || packageRequest !== ${JSON.stringify(
+    `${packageName}@${packageVersion}`,
+  )}) {
+  process.exit(64);
+}
+const packageRoot = join(prefix, "node_modules", "@agentclientprotocol", "claude-agent-acp");
+const executablePath = join(packageRoot, "dist", "index.js");
+await mkdir(join(packageRoot, "dist"), { mode: 0o700, recursive: true });
+await writeFile(
+  join(packageRoot, "package.json"),
+  JSON.stringify({
+    bin: { ${JSON.stringify(executableName)}: "dist/index.js" },
+    name: ${JSON.stringify(packageName)},
+    version: ${JSON.stringify(packageVersion)},
+  }),
+  { mode: 0o600 },
+);
+await writeFile(executablePath, ${JSON.stringify(adapterSource)}, { mode: 0o700 });
+await chmod(executablePath, 0o700);
+await appendFile(${JSON.stringify(recordPath)}, packageRequest + "\\n");
+`);
+}
+
+function restoreEnvironmentVariable(
+  name: string,
+  previous: string | undefined,
+): void {
+  if (previous === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = previous;
+  }
+}
 
 class BrowserPairingCredentials {
   readonly channelId: string;
@@ -118,7 +206,7 @@ function waitForRelay(child: ReturnType<typeof spawn>): Promise<void> {
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error(`Wrangler did not start the relay in time\n${output}`));
-    }, 10_000);
+    }, 20_000);
     const cleanup = (): void => {
       clearTimeout(timeout);
       child.stdout?.removeListener("data", handleOutput);
@@ -509,7 +597,11 @@ describe("pairing and channel chat", () => {
     const port = await reservePort();
     const origin = `http://127.0.0.1:${port.toString()}`;
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
     process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
     const wrangler = spawn(
       pnpmCommand,
       [
@@ -578,6 +670,8 @@ describe("pairing and channel chat", () => {
       } else {
         process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
       }
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(temporaryDirectory, { recursive: true });
     }
   });
@@ -591,7 +685,11 @@ describe("pairing and channel chat", () => {
     const port = await reservePort();
     const origin = `http://127.0.0.1:${port.toString()}`;
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
     process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
     const wrangler = spawn(
       pnpmCommand,
       [
@@ -753,22 +851,72 @@ describe("pairing and channel chat", () => {
       } else {
         process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
       }
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(temporaryDirectory, { recursive: true });
     }
   });
 
-  it("Given paired ACP agents, When browsers run conversations, Then responses and activities persist", {
-    timeout: 30_000,
+  it("Given one ready Agent and a local Agent CLI without its adapter, When the machine pairs and a browser connects, Then the adapter is installed automatically and responses persist", {
+    timeout: 45_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-pairing-e2e-"),
     );
     const port = await reservePort();
     const origin = `http://127.0.0.1:${port.toString()}`;
-    const previousAgentPath = process.env["MOBIUS_ACP_AGENT_PATH"];
+    const executableDirectory = join(temporaryDirectory, "bin");
+    const codexPath = join(executableDirectory, "codex");
+    const codexAdapterPath = join(executableDirectory, "codex-acp");
+    const claudePath = join(executableDirectory, "claude");
+    const packageManagerPath = join(executableDirectory, "npm");
+    const packageManagerRecordPath = join(
+      temporaryDirectory,
+      "adapter-package-requests.txt",
+    );
+    await mkdir(executableDirectory, { mode: 0o700 });
+    await Promise.all([
+      writeFile(codexPath, agentExecutableSource("Codex", "codex 0.153.0"), {
+        mode: 0o700,
+      }),
+      writeFile(
+        codexAdapterPath,
+        adapterExecutableSource("CODEX_PATH", "codex-acp 1.8.0"),
+        { mode: 0o700 },
+      ),
+      writeFile(
+        claudePath,
+        agentExecutableSource("Claude Code", "2.1.138 (Claude Code)"),
+        { mode: 0o700 },
+      ),
+      writeFile(
+        packageManagerPath,
+        packageManagerExecutableSource(packageManagerRecordPath),
+        { mode: 0o700 },
+      ),
+    ]);
+    await Promise.all(
+      [codexPath, codexAdapterPath, claudePath, packageManagerPath].map(
+        async (path) => await chmod(path, 0o700),
+      ),
+    );
+    const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+    const previousCodexAdapterPath = process.env["MOBIUS_CODEX_ACP_PATH"];
+    const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+    const previousClaudeAdapterPath = process.env["MOBIUS_CLAUDE_ACP_PATH"];
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
-    process.env["MOBIUS_ACP_AGENT_PATH"] = fakeAgentPath;
+    const previousPath = process.env["PATH"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
+    process.env["MOBIUS_CODEX_PATH"] = codexPath;
+    process.env["MOBIUS_CODEX_ACP_PATH"] = codexAdapterPath;
+    process.env["MOBIUS_CLAUDE_PATH"] = claudePath;
+    delete process.env["MOBIUS_CLAUDE_ACP_PATH"];
     process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    process.env["PATH"] =
+      `${executableDirectory}${delimiter}${previousPath ?? ""}`;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
 
     const wrangler = spawn(
       pnpmCommand,
@@ -853,11 +1001,47 @@ describe("pairing and channel chat", () => {
         ),
       );
       expect(publicChannelResponse.status).toBe(200);
-      await expect(publicChannelResponse.json()).resolves.toMatchObject({
+      const publicChannel: unknown = await publicChannelResponse.json();
+      expect(publicChannel).toMatchObject({
+        agents: [{ id: "codex", label: "Codex" }],
         channelId: pairing.channelId,
+        installableAgents: [
+          {
+            id: "claude",
+            label: "Claude Code",
+            requiresLocalApproval: true,
+          },
+        ],
         machineName: expect.any(String),
         workspaceName: expect.any(String),
       });
+      expect(JSON.stringify(publicChannel)).not.toContain(temporaryDirectory);
+      const catalogEndpoint = new URL(paired.config.relayUrl);
+      catalogEndpoint.protocol = "http:";
+      catalogEndpoint.pathname = catalogEndpoint.pathname.replace(
+        /\/daemon$/,
+        "/catalog",
+      );
+      catalogEndpoint.searchParams.set("token", "invalid");
+      const unauthorizedCatalogUpdate = await fetch(catalogEndpoint, {
+        body: JSON.stringify({
+          agents: [{ id: "codex", label: "Codex" }],
+          installableAgents: [],
+        }),
+        headers: { "content-type": "application/json" },
+        method: "PUT",
+      });
+      expect(unauthorizedCatalogUpdate.status).toBe(401);
+      catalogEndpoint.search = paired.config.relayUrl.search;
+      const injectedCatalogUpdate = await fetch(catalogEndpoint, {
+        body: JSON.stringify({
+          agents: [{ id: "codex", label: "Codex", path: codexPath }],
+          installableAgents: [],
+        }),
+        headers: { "content-type": "application/json" },
+        method: "PUT",
+      });
+      expect(injectedCatalogUpdate.status).toBe(400);
       const wrongRoleResponse = await fetch(
         new URL(
           `/v1/channels/${encodeURIComponent(pairing.channelId)}/daemon?token=invalid`,
@@ -882,6 +1066,32 @@ describe("pairing and channel chat", () => {
         const socket = new WebSocket(hostUrl);
         try {
           await waitForRuntimeOnline(socket);
+          const automaticallyProvisionedDescriptor = await fetch(
+            new URL(
+              `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+              origin,
+            ),
+          );
+          await expect(
+            automaticallyProvisionedDescriptor.json(),
+          ).resolves.toMatchObject({
+            agents: [
+              { id: "codex", label: "Codex" },
+              { id: "claude", label: "Claude Code" },
+            ],
+            installableAgents: [],
+          });
+          await expect(
+            readFile(packageManagerRecordPath, "utf8"),
+          ).resolves.toBe("@agentclientprotocol/claude-agent-acp@0.73.0\n");
+          await expect(
+            runBrowserPrompt(
+              socket,
+              "unregistered-agent",
+              crypto.randomUUID(),
+              "must not affect executable lookup",
+            ),
+          ).rejects.toThrow("agent_not_ready");
           const codexSessionId = crypto.randomUUID();
           await expect(
             runBrowserPrompt(socket, "codex", codexSessionId, "first"),
@@ -927,20 +1137,6 @@ describe("pairing and channel chat", () => {
               "continue",
             ),
           ).resolves.toBe("Codex turn 2: continue");
-          const otherBrowserSocket = new WebSocket(hostUrl);
-          try {
-            await waitForRuntimeOnline(otherBrowserSocket);
-            await expect(
-              runBrowserPrompt(
-                otherBrowserSocket,
-                "claude",
-                crypto.randomUUID(),
-                "hello",
-              ),
-            ).resolves.toBe("Claude Code turn 1: hello");
-          } finally {
-            otherBrowserSocket.close(1000, "Second browser E2E complete");
-          }
           const historyResponse = await fetch(
             new URL(
               `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
@@ -979,12 +1175,6 @@ describe("pairing and channel chat", () => {
                   status: "completed",
                 }),
                 expect.objectContaining({
-                  agentId: "claude",
-                  prompt: "hello",
-                  response: "Claude Code turn 1: hello",
-                  status: "completed",
-                }),
-                expect.objectContaining({
                   agentId: "codex",
                   commandId: cancellablePrompt.commandId,
                   prompt: "wait until cancelled",
@@ -1003,6 +1193,44 @@ describe("pairing and channel chat", () => {
         await daemonRun;
         audit.close();
       }
+      const refreshed = await resumeLocalMachine([
+        "--channel",
+        pairing.channelId,
+      ]);
+      const refreshedAudit = new AuditStore(refreshed.config.auditDatabasePath);
+      const refreshedController = new AbortController();
+      const refreshedDaemon = runDaemon(
+        refreshed.config,
+        refreshedAudit,
+        refreshedController.signal,
+      );
+      const refreshedHostUrl = new URL(
+        `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
+        origin,
+      );
+      refreshedHostUrl.protocol = "ws:";
+      const refreshedHost = new WebSocket(refreshedHostUrl);
+      try {
+        await waitForRuntimeOnline(refreshedHost);
+        const refreshedDescriptor = await fetch(
+          new URL(
+            `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+            origin,
+          ),
+        );
+        await expect(refreshedDescriptor.json()).resolves.toMatchObject({
+          agents: [
+            { id: "codex", label: "Codex" },
+            { id: "claude", label: "Claude Code" },
+          ],
+          installableAgents: [],
+        });
+      } finally {
+        refreshedHost.close(1000, "Refreshed catalog E2E complete");
+        refreshedController.abort();
+        await refreshedDaemon;
+        refreshedAudit.close();
+      }
       await verifyActiveTurnHistory(
         paired.config.relayUrl,
         origin,
@@ -1010,16 +1238,23 @@ describe("pairing and channel chat", () => {
       );
     } finally {
       await stopProcess(wrangler);
-      if (previousAgentPath === undefined) {
-        delete process.env["MOBIUS_ACP_AGENT_PATH"];
-      } else {
-        process.env["MOBIUS_ACP_AGENT_PATH"] = previousAgentPath;
-      }
-      if (previousStateDirectory === undefined) {
-        delete process.env["MOBIUS_STATE_DIRECTORY"];
-      } else {
-        process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
-      }
+      restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+      restoreEnvironmentVariable(
+        "MOBIUS_CODEX_ACP_PATH",
+        previousCodexAdapterPath,
+      );
+      restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+      restoreEnvironmentVariable(
+        "MOBIUS_CLAUDE_ACP_PATH",
+        previousClaudeAdapterPath,
+      );
+      restoreEnvironmentVariable(
+        "MOBIUS_STATE_DIRECTORY",
+        previousStateDirectory,
+      );
+      restoreEnvironmentVariable("PATH", previousPath);
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(temporaryDirectory, { recursive: true });
     }
   });

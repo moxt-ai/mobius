@@ -7,6 +7,7 @@ import {
   createRandomToken,
   ExpiredPairingStatus,
   hashSecret,
+  type InstallableAgentDescriptor,
   normalizePairingCode,
   PAIRING_LIFETIME_MILLISECONDS,
   PairedPairingStatus,
@@ -15,6 +16,7 @@ import {
   type PairingStatus,
   PendingPairingStatus,
   parseAgents,
+  parseInstallableAgents,
   validateToken,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -22,6 +24,7 @@ interface PairingChannelRow {
   readonly agents_json: string;
   readonly channel_id: string;
   readonly expires_at: number;
+  readonly installable_agents_json: string;
   readonly machine_name: string;
   readonly status: string;
   readonly workspace_name: string;
@@ -34,6 +37,7 @@ interface ClaimedChannelRow {
 interface PublicChannelRow {
   readonly agents_json: string;
   readonly channel_id: string;
+  readonly installable_agents_json: string;
   readonly machine_name: string;
   readonly workspace_name: string;
 }
@@ -87,6 +91,7 @@ export class D1PairingDirectory implements PairingDirectory {
     machineName: string,
     workspaceName: string,
     agents: readonly AgentDescriptor[],
+    installableAgents: readonly InstallableAgentDescriptor[],
     signal: AbortSignal,
   ): Promise<ClaimedPairing> => {
     signal.throwIfAborted();
@@ -100,7 +105,8 @@ export class D1PairingDirectory implements PairingDirectory {
              claimed_at = ?,
              machine_name = ?,
              workspace_name = ?,
-             agents_json = ?
+             agents_json = ?,
+             installable_agents_json = ?
          WHERE pairing_code_hash = ?
            AND status = 'pending'
            AND expires_at > ?
@@ -112,6 +118,7 @@ export class D1PairingDirectory implements PairingDirectory {
         machineName,
         workspaceName,
         JSON.stringify(agents),
+        JSON.stringify(installableAgents),
         await hashSecret(normalizePairingCode(pairingCode)),
         now,
       )
@@ -180,7 +187,8 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT channel_id, machine_name, workspace_name, agents_json
+        `SELECT channel_id, machine_name, workspace_name, agents_json,
+                installable_agents_json
          FROM pairing_channels
          WHERE channel_id = ? AND status = 'paired'`,
       )
@@ -204,6 +212,7 @@ export class D1PairingDirectory implements PairingDirectory {
       row.channel_id,
       row.machine_name,
       row.workspace_name,
+      parseInstallableAgents(row.installable_agents_json),
     );
   };
 
@@ -215,7 +224,8 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT status, channel_id, expires_at, machine_name, workspace_name, agents_json
+        `SELECT status, channel_id, expires_at, machine_name, workspace_name,
+                agents_json, installable_agents_json
          FROM pairing_channels
          WHERE pairing_id = ? AND poll_token_hash = ?`,
       )
@@ -235,6 +245,7 @@ export class D1PairingDirectory implements PairingDirectory {
         row.channel_id,
         row.machine_name,
         row.workspace_name,
+        parseInstallableAgents(row.installable_agents_json),
       );
     }
     if (row.status !== "pending") {
@@ -247,5 +258,37 @@ export class D1PairingDirectory implements PairingDirectory {
       return new ExpiredPairingStatus();
     }
     return new PendingPairingStatus(new Date(row.expires_at).toISOString());
+  };
+
+  readonly updateAgentCatalog = async (
+    channelId: string,
+    token: string,
+    agents: readonly AgentDescriptor[],
+    installableAgents: readonly InstallableAgentDescriptor[],
+    signal: AbortSignal,
+  ): Promise<void> => {
+    signal.throwIfAborted();
+    const result = await this.database
+      .prepare(
+        `UPDATE pairing_channels
+         SET agents_json = ?, installable_agents_json = ?
+         WHERE channel_id = ?
+           AND daemon_token_hash = ?
+           AND status = 'paired'`,
+      )
+      .bind(
+        JSON.stringify(agents),
+        JSON.stringify(installableAgents),
+        channelId,
+        await hashSecret(validateToken(token)),
+      )
+      .run();
+    signal.throwIfAborted();
+    if (result.meta.changes !== 1) {
+      throw new PairingDirectoryError(
+        "unauthorized",
+        "A valid channel token is required",
+      );
+    }
   };
 }

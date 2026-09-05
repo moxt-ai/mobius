@@ -1,4 +1,6 @@
-import { LoaderCircle, MessageSquare, Plus, X } from "lucide-react";
+import { LoaderCircle, MessageSquare, Plus, Settings, X } from "lucide-react";
+
+import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
@@ -10,7 +12,7 @@ import {
   resizeSidebar,
   sidebarDisplayWidth,
 } from "@/services/workspace-layout";
-import { selectActiveConversation, useChatStore } from "@/store/chat-store";
+import { useChatStore } from "@/store/chat-store";
 
 function MobiusMark() {
   return (
@@ -27,16 +29,23 @@ function MobiusMark() {
 }
 
 interface ConversationSidebarProps {
+  readonly channelId: string;
   readonly layout: DesktopSidebarLayoutState;
   readonly onLayoutChange: (layout: DesktopSidebarLayoutState) => void;
+  readonly settingsOpen: boolean;
 }
 
 export function ConversationSidebar({
+  channelId,
   layout,
   onLayoutChange,
+  settingsOpen,
 }: ConversationSidebarProps) {
   const conversations = useChatStore((state) => state.conversations);
-  const activeConversation = useChatStore(selectActiveConversation);
+  const activeConversationId = useChatStore(
+    (state) => state.activeConversationId,
+  );
+  const agents = useChatStore((state) => state.agents);
   const createConversation = useChatStore((state) => state.createConversation);
   const runtime = useChatStore((state) => state.runtime);
   const selectConversation = useChatStore((state) => state.selectConversation);
@@ -50,9 +59,17 @@ export function ConversationSidebar({
     (conversation) => !conversation.isRunning,
   );
   const displayWidth = sidebarDisplayWidth(layout);
+  const channelPath = `/channels/${encodeURIComponent(channelId)}`;
+
+  const returnToChat = (): void => {
+    setSidebarOpen(false);
+    if (settingsOpen) {
+      window.location.assign(channelPath);
+    }
+  };
 
   const conversationButton = (conversation: (typeof conversations)[number]) => {
-    const active = conversation.id === activeConversation.id;
+    const active = !settingsOpen && conversation.id === activeConversationId;
     return (
       <Button
         aria-current={active ? "page" : undefined}
@@ -63,6 +80,7 @@ export function ConversationSidebar({
         key={conversation.id}
         onClick={() => {
           selectConversation(conversation.id);
+          returnToChat();
         }}
         variant="ghost"
       >
@@ -147,7 +165,11 @@ export function ConversationSidebar({
           <div className="px-3 pt-2 pb-3">
             <Button
               className="h-11 w-full justify-start rounded-[10px] border-black/9 bg-white px-2.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-background md:h-10"
-              onClick={createConversation}
+              disabled={agents.length === 0}
+              onClick={() => {
+                createConversation();
+                returnToChat();
+              }}
               variant="outline"
             >
               <Plus className="size-[17px]" />
@@ -185,6 +207,27 @@ export function ConversationSidebar({
                 {recentConversations.map(conversationButton)}
               </div>
             </section>
+          </nav>
+
+          {!settingsOpen && <AgentInstallationSidebarPanel />}
+
+          <nav
+            aria-label="Channel settings"
+            className="border-t-[0.5px] border-black/6 px-3 py-2.5"
+          >
+            <a
+              aria-current={settingsOpen ? "page" : undefined}
+              className={cn(
+                "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                settingsOpen && "bg-black/8 hover:bg-black/8",
+              )}
+              href={`/channels/${encodeURIComponent(channelId)}/settings`}
+            >
+              <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
+                <Settings aria-hidden="true" className="size-3.5" />
+              </span>
+              Agent settings
+            </a>
           </nav>
 
           <div className="flex min-h-[56px] items-center justify-between gap-3 border-t-[0.5px] border-black/6 px-4 py-2.5">

@@ -7,17 +7,22 @@ import {
   stat,
   writeFile,
 } from "node:fs/promises";
-import { homedir, hostname } from "node:os";
+import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { fetch, type Response } from "undici";
-
+import {
+  discoverLocalAgentInventory,
+  type LocalAgentInventory,
+} from "../agent-catalog/discover-local-agents.ts";
+import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
 import {
   createDaemonConfig,
   type DaemonConfig,
-  loadLocalAgents,
+  type LocalAgentDefinition,
 } from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { readStateDirectory } from "../storage/state-directory.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -283,8 +288,11 @@ function decodeClaimResponse(value: unknown): ClaimPairingResponse {
 async function claimPairing(
   options: PairCommandOptions,
   approvedRoot: string,
+  localAgents: readonly LocalAgentDefinition[],
+  installableAgents: readonly InstallableAgentDefinition[],
+  signal: AbortSignal,
 ): Promise<ClaimPairingResponse> {
-  const agents = loadLocalAgents().map((agent) => ({
+  const agents = localAgents.map((agent) => ({
     id: agent.id,
     label: agent.label,
   }));
@@ -294,6 +302,11 @@ async function claimPairing(
     response = await fetch(endpoint, {
       body: JSON.stringify({
         agents,
+        installableAgents: installableAgents.map((agent) => ({
+          id: agent.id,
+          label: agent.label,
+          requiresLocalApproval: agent.requiresLocalApproval,
+        })),
         machineName: hostname(),
         pairingCode: options.code,
         workspaceName: basename(approvedRoot) || "Local workspace",
@@ -301,7 +314,10 @@ async function claimPairing(
       dispatcher: environmentProxyDispatcher,
       headers: { "content-type": "application/json" },
       method: "POST",
-      signal: AbortSignal.timeout(PAIRING_TIMEOUT_MILLISECONDS),
+      signal: AbortSignal.any([
+        signal,
+        AbortSignal.timeout(PAIRING_TIMEOUT_MILLISECONDS),
+      ]),
     });
   } catch (error) {
     throw new PairingClientError(
@@ -316,15 +332,6 @@ async function claimPairing(
     throw readRelayError(value);
   }
   return decodeClaimResponse(value);
-}
-
-function readStateDirectory(): string {
-  // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-  const configured = process.env["MOBIUS_STATE_DIRECTORY"]?.trim();
-  if (configured !== undefined && configured.length > 0) {
-    return resolve(configured);
-  }
-  return join(homedir(), ".mobius");
 }
 
 async function persistConnection(
@@ -436,10 +443,21 @@ async function readSavedConnection(
   };
 }
 
+function assertInventoryUsable(inventory: LocalAgentInventory): void {
+  if (inventory.available.length + inventory.installable.length === 0) {
+    throw new PairingClientError(
+      "no_supported_agent",
+      "No supported Agent is ready or safely installable on this machine",
+    );
+  }
+}
+
 function buildPairedDaemon(
   connection: SavedConnection,
   connectionPath: string,
+  inventory: LocalAgentInventory,
 ): PairedDaemon {
+  assertInventoryUsable(inventory);
   const relayUrl = new URL(
     `/v1/channels/${encodeURIComponent(connection.channelId)}/daemon`,
     connection.relayOrigin,
@@ -457,22 +475,40 @@ function buildPairedDaemon(
       `/channels/${encodeURIComponent(connection.channelId)}`,
       connection.relayOrigin,
     ).toString(),
-    config: createDaemonConfig({
-      approvedRoot: connection.approvedRoot,
-      auditDatabasePath,
-      channelId: connection.channelId,
-      relayUrl,
-    }),
+    config: createDaemonConfig(
+      {
+        approvedRoot: connection.approvedRoot,
+        auditDatabasePath,
+        channelId: connection.channelId,
+        relayUrl,
+      },
+      inventory.readyAgents(),
+      inventory.installable,
+    ),
     connectionPath,
   };
 }
 
 export async function pairLocalMachine(
   arguments_: readonly string[],
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
   const options = parsePairCommand(arguments_);
   const approvedRoot = await resolveApprovedRoot(options.root);
-  const claim = await claimPairing(options, approvedRoot);
+  const inventory = await discoverLocalAgentInventory({
+    approvedRoot,
+    environment: process.env,
+    signal,
+  });
+  assertInventoryUsable(inventory);
+  const agents = inventory.readyAgents();
+  const claim = await claimPairing(
+    options,
+    approvedRoot,
+    agents,
+    inventory.installable,
+    signal,
+  );
   const connectionPath = await persistConnection(
     claim.channelId,
     options.relayOrigin,
@@ -487,11 +523,13 @@ export async function pairLocalMachine(
       relayOrigin: options.relayOrigin,
     },
     connectionPath,
+    inventory,
   );
 }
 
 export async function resumeLocalMachine(
   arguments_: readonly string[],
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
   const channelId = parseChannelArgument(arguments_);
   const connectionPath = join(
@@ -499,8 +537,11 @@ export async function resumeLocalMachine(
     "connections",
     `${channelId}.json`,
   );
-  return buildPairedDaemon(
-    await readSavedConnection(channelId),
-    connectionPath,
-  );
+  const connection = await readSavedConnection(channelId);
+  const inventory = await discoverLocalAgentInventory({
+    approvedRoot: connection.approvedRoot,
+    environment: process.env,
+    signal,
+  });
+  return buildPairedDaemon(connection, connectionPath, inventory);
 }

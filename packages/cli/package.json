@@ -1,6 +1,6 @@
 {
   "name": "@moxt-ai/mobius",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "Mobius CLI for pairing and running local AI agent services.",
   "type": "module",
   "bin": {
@@ -16,7 +16,7 @@
     "dist"
   ],
   "engines": {
-    "node": ">=24.20.0 <25"
+    "node": ">=22.13.0"
   },
   "publishConfig": {
     "access": "public"
@@ -34,8 +34,6 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@agentclientprotocol/claude-agent-acp": "0.73.0",
-    "@agentclientprotocol/codex-acp": "1.8.0",
     "@agentclientprotocol/sdk": "^1.4.0",
     "undici": "7.29.0"
   },
@@ -44,7 +42,7 @@
     "@types/node": "^24.13.3",
     "esbuild": "0.28.1"
   },
-  "main": "index.js",
+  "main": "dist/index.js",
   "directories": {
     "test": "tests"
   },

@@ -107,7 +107,7 @@ Cloud-based integration targets:
 
 ## Development
 
-Requires Node.js 24.20.0 and pnpm.
+Repository development requires Node.js 24.20.0 and pnpm. The published CLI supports Node.js 22.13.0 or newer.
 
 ```bash
 pnpm install
@@ -137,10 +137,17 @@ the supplied root, claims the one-time code, starts the daemon, and keeps the
 terminal open. When developing the CLI from this checkout, the equivalent
 workspace command is `pnpm mobius pair ...`.
 The browser then moves to an independent `/channels/<channel-id>` route. Every new
-conversation can select Codex or Claude Code; the selection is locked after its
-first message so the ACP session remains coherent across turns. Conversations
-run independently, so a user can switch chats, create another chat, and start a
-second agent task while an earlier conversation is still working.
+conversation can select a locally verified Codex or Claude Code integration; the
+selection is locked after its first message so the ACP session remains coherent
+across turns. Conversations run independently, so a user can switch chats,
+create another chat, and start a second agent task while an earlier conversation
+is still working.
+
+The channel sidebar links to `/channels/<channel-id>/settings`, where the user can
+see verified local Agents separately from supported integrations that still need
+installation or recovery. Missing integrations use the same locally authorized
+install, retry, progress, and cancellation flow. The page intentionally does not
+expose local paths, versions, credentials, or a remote uninstall action.
 
 The channel URL can be opened directly in any browser while its local daemon is
 running. During this early phase, the high-entropy channel identifier is the only
@@ -155,11 +162,74 @@ restart a previously paired daemon, use the channel identifier shown in its URL:
 npx --yes @moxt-ai/mobius start --channel <channel-id>
 ```
 
-The daemon uses the official
-[`codex-acp`](https://github.com/agentclientprotocol/codex-acp) and
-[`claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
-adapters. Local credentials remain with those harnesses. Only the resolved root
-approved by the pairing command can be used as the `workspace` binding.
+Mobius does not bundle Codex, Claude Code, or their platform binaries. Pairing
+and every saved-channel start discover the Agent CLI and its ACP adapter, run
+bounded version probes, and complete an ACP initialize handshake. Only complete
+integrations are advertised. Inspect the local result without pairing:
+
+```bash
+npx --yes @moxt-ai/mobius agents
+npx --yes @moxt-ai/mobius agents --json
+```
+
+Discovery checks these explicit local overrides before direct `PATH` lookup:
+
+- `MOBIUS_CODEX_PATH` and `MOBIUS_CODEX_ACP_PATH`
+- `MOBIUS_CLAUDE_PATH` and `MOBIUS_CLAUDE_ACP_PATH`
+
+Automatic lookup will not select an executable inside the approved workspace.
+An explicit override is authoritative and fails closed; an automatically found
+external executable must pass the full probe before Mobius may fall back to a
+previously verified private cache entry.
+Executable paths, versions, identities, probe output, and adapter environment
+stay on the local machine. The Relay receives only stable Agent identifiers,
+labels, and sanitized ready/installable metadata.
+
+If an Agent CLI passes local executable and version checks but its adapter is
+missing, broken, or ACP-incompatible, the paired daemon automatically installs
+the exact pinned adapter into Mobius's private cache with optional platform Agent
+dependencies omitted. It then repeats the complete discovery and ACP initialize
+handshake before advertising the Agent. Mobius never installs or replaces the
+Agent CLI through this automatic path. An explicit adapter override remains
+authoritative and is never replaced automatically. Adapter installation failure
+does not take the channel offline; the Agent remains in the installable catalog
+with a sanitized diagnostic.
+
+`mobius agents` and the one-time pairing claim remain read-only. The command
+prints the exact lightweight adapter recovery command when applicable, while
+automatic adapter provisioning begins only as the authenticated local daemon
+starts.
+
+When no verified Agent is ready, the channel remains online and Web offers the
+supported fixed user-level Agent installation and recovery recipes. A Web click
+is only a request:
+by default, the terminal running Mobius must approve that individual request
+before an installer starts. The initial recipes use the documented
+[Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli) and
+[Claude Code native stable channel](https://code.claude.com/docs/en/installation).
+Mobius downloads the official installer into a private temporary directory,
+applies bounded verification and execution,
+installs a pinned ACP adapter into `~/.mobius/adapters`, repeats normal ACP
+discovery, and publishes the Agent only after the full path succeeds. Progress
+sent to Web contains stages and stable errors, never commands, URLs, paths, raw
+output, environment values, or credentials. Installing an Agent does not sign
+the user into its provider.
+
+A local user may explicitly grant one fixed recipe by creating a private
+mode-`0600` `~/.mobius/installation-grants.json` file:
+
+```json
+{
+  "version": 1,
+  "agents": ["codex"]
+}
+```
+
+The grant is disabled by default, is scoped to the listed built-in Agent IDs,
+and is revoked by removing an ID or the file. It cannot change a release
+channel, command, URL, arguments, or installation target. Local provider
+credentials remain with Codex or Claude Code. Only the resolved root approved
+by the pairing command can be used as the `workspace` binding.
 
 Each conversation negotiates its available ACP capabilities with the selected
 agent. When provided by that agent, the Web chat exposes session mode, model,

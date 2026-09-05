@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
+import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
-import type { DaemonConfig } from "./config.ts";
+import { type DaemonConfig, loadApprovedRoot } from "./config.ts";
 import {
   pairLocalMachine,
   resumeLocalMachine,
@@ -17,10 +19,12 @@ const USAGE = `Mobius CLI
 Usage:
   mobius pair --url <relay-url> --code <pairing-code> --root <workspace>
   mobius start --channel <channel-id>
+  mobius agents [--json]
 
 Commands:
   pair   Pair this machine and start its local daemon
   start  Start the local daemon for a saved channel
+  agents Show locally available and installable Agents
 `;
 
 async function main(): Promise<void> {
@@ -30,9 +34,31 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (command === "agents") {
+    const arguments_ = process.argv.slice(3);
+    if (
+      arguments_.length > 1 ||
+      (arguments_.length === 1 && arguments_[0] !== "--json")
+    ) {
+      throw new Error("Usage: mobius agents [--json]");
+    }
+    const inventory = await discoverLocalAgentInventory({
+      approvedRoot: loadApprovedRoot(),
+      environment: process.env,
+      signal: shutdown.signal,
+    });
+    process.stdout.write(
+      formatAgentDiagnostics(inventory, arguments_[0] === "--json"),
+    );
+    return;
+  }
+
   let config: DaemonConfig;
   if (command === "pair") {
-    const paired = await pairLocalMachine(process.argv.slice(3));
+    const paired = await pairLocalMachine(
+      process.argv.slice(3),
+      shutdown.signal,
+    );
     config = paired.config;
     process.stdout.write("\nLocal machine paired.\n");
     process.stdout.write(`Channel: ${paired.channelUrl}\n`);
@@ -41,7 +67,10 @@ async function main(): Promise<void> {
     );
     process.stdout.write(`Connection saved to ${paired.connectionPath}\n`);
   } else if (command === "start") {
-    const paired = await resumeLocalMachine(process.argv.slice(3));
+    const paired = await resumeLocalMachine(
+      process.argv.slice(3),
+      shutdown.signal,
+    );
     config = paired.config;
     process.stdout.write("\nSaved local machine channel loaded.\n");
     process.stdout.write(`Channel: ${paired.channelUrl}\n`);

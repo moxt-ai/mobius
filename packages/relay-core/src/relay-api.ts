@@ -5,9 +5,11 @@ import type { ChannelRuntime } from "./channel-runtime.ts";
 import {
   type PairingDirectory,
   PairingDirectoryError,
+  validateAgentCatalog,
   validateAgents,
   validateDisplayName,
   validateIdentifier,
+  validateInstallableAgents,
   validatePairingCode,
 } from "./pairing-directory.ts";
 
@@ -206,16 +208,23 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
       const body = await parseJsonBody(context.req.raw, context.req.raw.signal);
       assertExactKeys(body, [
         "agents",
+        "installableAgents",
         "machineName",
         "pairingCode",
         "workspaceName",
       ]);
+      const agents = validateAgents(body["agents"]);
+      const installableAgents = validateInstallableAgents(
+        body["installableAgents"],
+      );
+      validateAgentCatalog(agents, installableAgents);
       return context.json(
         await dependencies.pairingDirectory.claimPairing(
           validatePairingCode(body["pairingCode"]),
           validateDisplayName(body["machineName"], "machine_name"),
           validateDisplayName(body["workspaceName"], "workspace_name"),
-          validateAgents(body["agents"]),
+          agents,
+          installableAgents,
           context.req.raw.signal,
         ),
       );
@@ -233,6 +242,45 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
           error: {
             code: "directory_unavailable",
             message: "The pairing directory is unavailable",
+          },
+        },
+        503,
+      );
+    }
+  });
+
+  app.put("/v1/channels/:channelId/catalog", async (context) => {
+    try {
+      const body = await parseJsonBody(context.req.raw, context.req.raw.signal);
+      assertExactKeys(body, ["agents", "installableAgents"]);
+      const agents = validateAgents(body["agents"]);
+      const installableAgents = validateInstallableAgents(
+        body["installableAgents"],
+      );
+      validateAgentCatalog(agents, installableAgents);
+      await dependencies.pairingDirectory.updateAgentCatalog(
+        validateIdentifier(context.req.param("channelId"), "channel_id"),
+        context.req.query("token") ?? "",
+        agents,
+        installableAgents,
+        context.req.raw.signal,
+      );
+      return new Response(null, { status: 204 });
+    } catch (error) {
+      preserveCancellation(context.req.raw.signal, error);
+      if (error instanceof PairingDirectoryError) {
+        const status = error.code === "unauthorized" ? 401 : 400;
+        return context.json(
+          { error: { code: error.code, message: error.message } },
+          status,
+        );
+      }
+      reportUnexpectedError(error);
+      return context.json(
+        {
+          error: {
+            code: "directory_unavailable",
+            message: "The channel directory is unavailable",
           },
         },
         503,

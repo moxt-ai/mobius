@@ -21,6 +21,15 @@ export const SESSION_ELICITATION_RESPOND_KIND = "session.elicitation.respond";
 export const SESSION_ELICITATION_RESOLVED_KIND = "session.elicitation.resolved";
 export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
 export const AGENT_CONTENT_KIND = "agent.content";
+export const AGENT_INSTALL_REQUEST_KIND = "agent.install.request";
+export const AGENT_INSTALL_CANCEL_KIND = "agent.install.cancel";
+export const AGENT_INSTALL_AWAITING_APPROVAL_KIND =
+  "agent.install.awaiting_approval";
+export const AGENT_INSTALL_STARTED_KIND = "agent.install.started";
+export const AGENT_INSTALL_PROGRESS_KIND = "agent.install.progress";
+export const AGENT_INSTALL_COMPLETED_KIND = "agent.install.completed";
+export const AGENT_INSTALL_FAILED_KIND = "agent.install.failed";
+export const AGENT_INSTALL_CANCELLED_KIND = "agent.install.cancelled";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
@@ -465,6 +474,115 @@ const agentContentEventSchema = z
 
 export type AgentContentEvent = z.infer<typeof agentContentEventSchema>;
 
+const agentInstallIdentityFields = {
+  agentId: IDENTIFIER,
+  protocolVersion: PROTOCOL_VERSION,
+  requestId: IDENTIFIER,
+};
+
+const agentInstallRequestCommandSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    kind: z.literal(AGENT_INSTALL_REQUEST_KIND),
+  })
+  .readonly();
+
+export type AgentInstallRequestCommand = z.infer<
+  typeof agentInstallRequestCommandSchema
+>;
+
+const agentInstallCancelCommandSchema = z
+  .strictObject({
+    kind: z.literal(AGENT_INSTALL_CANCEL_KIND),
+    protocolVersion: PROTOCOL_VERSION,
+    requestId: IDENTIFIER,
+  })
+  .readonly();
+
+export type AgentInstallCancelCommand = z.infer<
+  typeof agentInstallCancelCommandSchema
+>;
+
+const agentInstallAwaitingApprovalEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    kind: z.literal(AGENT_INSTALL_AWAITING_APPROVAL_KIND),
+  })
+  .readonly();
+
+export type AgentInstallAwaitingApprovalEvent = z.infer<
+  typeof agentInstallAwaitingApprovalEventSchema
+>;
+
+const agentInstallStartedEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    kind: z.literal(AGENT_INSTALL_STARTED_KIND),
+  })
+  .readonly();
+
+export type AgentInstallStartedEvent = z.infer<
+  typeof agentInstallStartedEventSchema
+>;
+
+const installationStageSchema = z.enum([
+  "downloading",
+  "verifying",
+  "installing_agent",
+  "installing_adapter",
+  "checking_acp",
+]);
+
+export type AgentInstallationStage = z.infer<typeof installationStageSchema>;
+
+const agentInstallProgressEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    kind: z.literal(AGENT_INSTALL_PROGRESS_KIND),
+    stage: installationStageSchema,
+  })
+  .readonly();
+
+export type AgentInstallProgressEvent = z.infer<
+  typeof agentInstallProgressEventSchema
+>;
+
+const agentInstallCompletedEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    authenticationMayBeRequired: z.boolean(),
+    kind: z.literal(AGENT_INSTALL_COMPLETED_KIND),
+  })
+  .readonly();
+
+export type AgentInstallCompletedEvent = z.infer<
+  typeof agentInstallCompletedEventSchema
+>;
+
+const agentInstallFailedEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    code: IDENTIFIER,
+    kind: z.literal(AGENT_INSTALL_FAILED_KIND),
+    message: z.string().min(1).max(500),
+  })
+  .readonly();
+
+export type AgentInstallFailedEvent = z.infer<
+  typeof agentInstallFailedEventSchema
+>;
+
+const agentInstallCancelledEventSchema = z
+  .strictObject({
+    ...agentInstallIdentityFields,
+    kind: z.literal(AGENT_INSTALL_CANCELLED_KIND),
+  })
+  .readonly();
+
+export type AgentInstallCancelledEvent = z.infer<
+  typeof agentInstallCancelledEventSchema
+>;
+
 function parseJson(encoded: string): unknown {
   try {
     return JSON.parse(encoded);
@@ -619,3 +737,57 @@ export const decodeAgentContentEvent = (encoded: string): AgentContentEvent =>
   decode(encoded, agentContentEventSchema);
 export const encodeAgentContentEvent = (message: AgentContentEvent): string =>
   encode(message, agentContentEventSchema);
+export const decodeAgentInstallRequestCommand = (
+  encoded: string,
+): AgentInstallRequestCommand =>
+  decode(encoded, agentInstallRequestCommandSchema);
+export const encodeAgentInstallRequestCommand = (
+  message: AgentInstallRequestCommand,
+): string => encode(message, agentInstallRequestCommandSchema);
+export const decodeAgentInstallCancelCommand = (
+  encoded: string,
+): AgentInstallCancelCommand =>
+  decode(encoded, agentInstallCancelCommandSchema);
+export const encodeAgentInstallCancelCommand = (
+  message: AgentInstallCancelCommand,
+): string => encode(message, agentInstallCancelCommandSchema);
+export const decodeAgentInstallAwaitingApprovalEvent = (
+  encoded: string,
+): AgentInstallAwaitingApprovalEvent =>
+  decode(encoded, agentInstallAwaitingApprovalEventSchema);
+export const encodeAgentInstallAwaitingApprovalEvent = (
+  message: AgentInstallAwaitingApprovalEvent,
+): string => encode(message, agentInstallAwaitingApprovalEventSchema);
+export const decodeAgentInstallStartedEvent = (
+  encoded: string,
+): AgentInstallStartedEvent => decode(encoded, agentInstallStartedEventSchema);
+export const encodeAgentInstallStartedEvent = (
+  message: AgentInstallStartedEvent,
+): string => encode(message, agentInstallStartedEventSchema);
+export const decodeAgentInstallProgressEvent = (
+  encoded: string,
+): AgentInstallProgressEvent =>
+  decode(encoded, agentInstallProgressEventSchema);
+export const encodeAgentInstallProgressEvent = (
+  message: AgentInstallProgressEvent,
+): string => encode(message, agentInstallProgressEventSchema);
+export const decodeAgentInstallCompletedEvent = (
+  encoded: string,
+): AgentInstallCompletedEvent =>
+  decode(encoded, agentInstallCompletedEventSchema);
+export const encodeAgentInstallCompletedEvent = (
+  message: AgentInstallCompletedEvent,
+): string => encode(message, agentInstallCompletedEventSchema);
+export const decodeAgentInstallFailedEvent = (
+  encoded: string,
+): AgentInstallFailedEvent => decode(encoded, agentInstallFailedEventSchema);
+export const encodeAgentInstallFailedEvent = (
+  message: AgentInstallFailedEvent,
+): string => encode(message, agentInstallFailedEventSchema);
+export const decodeAgentInstallCancelledEvent = (
+  encoded: string,
+): AgentInstallCancelledEvent =>
+  decode(encoded, agentInstallCancelledEventSchema);
+export const encodeAgentInstallCancelledEvent = (
+  message: AgentInstallCancelledEvent,
+): string => encode(message, agentInstallCancelledEventSchema);

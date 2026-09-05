@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 export interface AuditRecord {
   readonly commandId: string;
+  readonly details?: Readonly<Record<string, string>>;
   readonly event: string;
   readonly sessionId: string;
 }
@@ -20,9 +21,20 @@ export class AuditStore {
         recorded_at TEXT NOT NULL,
         event TEXT NOT NULL,
         command_id TEXT NOT NULL,
-        session_id TEXT NOT NULL
+        session_id TEXT NOT NULL,
+        details_json TEXT NOT NULL DEFAULT '{}'
       ) STRICT
     `);
+    const columns = this.database
+      .prepare("PRAGMA table_info(audit_events)")
+      .all();
+    if (
+      !columns.some((column) => Reflect.get(column, "name") === "details_json")
+    ) {
+      this.database.exec(
+        "ALTER TABLE audit_events ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
+      );
+    }
   }
 
   record(record: AuditRecord): void {
@@ -33,8 +45,9 @@ export class AuditStore {
             recorded_at,
             event,
             command_id,
-            session_id
-          ) VALUES (?, ?, ?, ?)
+            session_id,
+            details_json
+          ) VALUES (?, ?, ?, ?, ?)
         `,
       )
       .run(
@@ -42,6 +55,7 @@ export class AuditStore {
         record.event,
         record.commandId,
         record.sessionId,
+        JSON.stringify(record.details ?? {}),
       );
   }
 

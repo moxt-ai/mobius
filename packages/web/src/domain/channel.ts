@@ -1,5 +1,6 @@
 import type {
   AgentDisplayContent,
+  AgentInstallationStage,
   PromptImage,
   PromptResource,
   SessionCapabilities,
@@ -22,6 +23,161 @@ export class AgentOption {
   constructor(id: string, label: string) {
     this.id = id;
     this.label = label;
+  }
+}
+
+export class InstallableAgentOption {
+  readonly id: string;
+  readonly label: string;
+  readonly requiresLocalApproval: boolean;
+
+  constructor(id: string, label: string, requiresLocalApproval: boolean) {
+    this.id = id;
+    this.label = label;
+    this.requiresLocalApproval = requiresLocalApproval;
+  }
+}
+
+export abstract class AgentInstallationViewState {
+  readonly agentId: string;
+  abstract readonly canCancel: boolean;
+  abstract readonly message: string;
+  abstract readonly status: string;
+
+  protected constructor(agentId: string) {
+    this.agentId = agentId;
+  }
+}
+
+export class IdleAgentInstallationState extends AgentInstallationViewState {
+  readonly canCancel = false;
+  readonly message = "Available for installation on this machine.";
+  readonly status = "idle";
+
+  constructor(agentId: string) {
+    super(agentId);
+  }
+}
+
+export abstract class RequestedAgentInstallationState extends AgentInstallationViewState {
+  readonly requestId: string;
+
+  protected constructor(agentId: string, requestId: string) {
+    super(agentId);
+    this.requestId = requestId;
+  }
+}
+
+export class RequestingAgentInstallationState extends RequestedAgentInstallationState {
+  readonly canCancel = true;
+  readonly message = "Requesting local approval.";
+  readonly status = "requesting";
+
+  constructor(agentId: string, requestId: string) {
+    super(agentId, requestId);
+  }
+}
+
+export class AwaitingAgentInstallationApprovalState extends RequestedAgentInstallationState {
+  readonly canCancel = true;
+  readonly message = "Waiting for confirmation on this machine.";
+  readonly status = "awaiting_approval";
+
+  constructor(agentId: string, requestId: string) {
+    super(agentId, requestId);
+  }
+}
+
+export class StartingAgentInstallationState extends RequestedAgentInstallationState {
+  readonly canCancel = true;
+  readonly message = "Starting the approved installation recipe.";
+  readonly status = "starting";
+
+  constructor(agentId: string, requestId: string) {
+    super(agentId, requestId);
+  }
+}
+
+function installationStageMessage(stage: AgentInstallationStage): string {
+  if (stage === "downloading") {
+    return "Downloading from the approved vendor.";
+  }
+  if (stage === "verifying") {
+    return "Verifying the downloaded installer.";
+  }
+  if (stage === "installing_agent") {
+    return "Installing the Agent for this user.";
+  }
+  if (stage === "installing_adapter") {
+    return "Installing or locating the ACP adapter.";
+  }
+  if (stage === "checking_acp") {
+    return "Checking the complete ACP connection.";
+  }
+  throw new Error("Unsupported Agent installation stage");
+}
+
+export class RunningAgentInstallationState extends RequestedAgentInstallationState {
+  readonly canCancel = true;
+  readonly message: string;
+  readonly stage: AgentInstallationStage;
+  readonly status = "running";
+
+  constructor(
+    agentId: string,
+    requestId: string,
+    stage: AgentInstallationStage,
+  ) {
+    super(agentId, requestId);
+    this.message = installationStageMessage(stage);
+    this.stage = stage;
+  }
+}
+
+export class SucceededAgentInstallationState extends RequestedAgentInstallationState {
+  readonly authenticationMayBeRequired: boolean;
+  readonly canCancel = false;
+  readonly message: string;
+  readonly status = "succeeded";
+
+  constructor(
+    agentId: string,
+    requestId: string,
+    authenticationMayBeRequired: boolean,
+  ) {
+    super(agentId, requestId);
+    this.authenticationMayBeRequired = authenticationMayBeRequired;
+    this.message = authenticationMayBeRequired
+      ? "Installed; sign-in may still be required."
+      : "Installed and ready.";
+  }
+}
+
+export class FailedAgentInstallationState extends RequestedAgentInstallationState {
+  readonly canCancel = false;
+  readonly code: string;
+  readonly message: string;
+  readonly status = "failed";
+
+  constructor(
+    agentId: string,
+    requestId: string,
+    code: string,
+    message: string,
+  ) {
+    super(agentId, requestId);
+    this.code = code;
+    this.message = message;
+  }
+}
+
+export class CancelledAgentInstallationState extends RequestedAgentInstallationState {
+  readonly canCancel = false;
+  readonly message = "Installation was cancelled.";
+  readonly status = "cancelled";
+
+  constructor(agentId: string, requestId: string) {
+    super(agentId, requestId);
   }
 }
 
@@ -142,6 +298,7 @@ export class RecordedSession {
 export class ChannelConnection {
   readonly agents: readonly AgentOption[];
   readonly channelId: string;
+  readonly installableAgents: readonly InstallableAgentOption[];
   readonly machineName: string;
   readonly workspaceName: string;
 
@@ -150,9 +307,11 @@ export class ChannelConnection {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    installableAgents: readonly InstallableAgentOption[] = [],
   ) {
     this.agents = agents;
     this.channelId = channelId;
+    this.installableAgents = installableAgents;
     this.machineName = machineName;
     this.workspaceName = workspaceName;
   }

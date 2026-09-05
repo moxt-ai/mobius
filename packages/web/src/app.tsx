@@ -1,6 +1,7 @@
 import { CircleAlert, Home, LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
-
+import { AgentInstallationPage } from "@/components/agent-installation-panel";
+import { AgentSettingsPage } from "@/components/agent-settings-page";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatHeader } from "@/components/chat-header";
 import { ChatMessageList } from "@/components/chat-message-list";
@@ -25,7 +26,7 @@ import {
   encodeSidebarLayoutPreference,
   toggleSidebar,
 } from "@/services/workspace-layout";
-import { selectActiveConversation, useChatStore } from "@/store/chat-store";
+import { useChatStore } from "@/store/chat-store";
 
 const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
 
@@ -66,18 +67,41 @@ function ChannelErrorPage({
   );
 }
 
+abstract class ChannelPage {
+  abstract readonly name: string;
+}
+
+class ConversationChannelPage extends ChannelPage {
+  readonly name = "conversation";
+}
+
+class AgentSettingsChannelPage extends ChannelPage {
+  readonly name = "agent_settings";
+}
+
 function ChannelWorkspace({
   connection,
   history,
+  page,
 }: {
   readonly connection: ChannelConnection;
   readonly history: ChannelHistory;
+  readonly page: ChannelPage;
 }) {
   const announcement = useChatStore((state) => state.announcement);
-  const conversation = useChatStore(selectActiveConversation);
+  const activeConversationMessageCount = useChatStore((state) => {
+    const conversation = state.conversations.find(
+      (candidate) => candidate.id === state.activeConversationId,
+    );
+    return conversation?.messages.length ?? 0;
+  });
+  const agents = useChatStore((state) => state.agents);
+  const channelConfigured = useChatStore((state) => state.channelConfigured);
   const configureChannel = useChatStore((state) => state.configureChannel);
   const createConversation = useChatStore((state) => state.createConversation);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
+  const settingsOpen = page instanceof AgentSettingsChannelPage;
+  const channelPath = `/channels/${encodeURIComponent(connection.channelId)}`;
   const [sidebarLayout, setSidebarLayout] =
     useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
@@ -135,12 +159,22 @@ function ChannelWorkspace({
       ) {
         event.preventDefault();
         createConversation();
+        if (settingsOpen) {
+          window.location.assign(channelPath);
+        }
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [createConversation, setSidebarOpen]);
+  }, [channelPath, createConversation, setSidebarOpen, settingsOpen]);
+
+  if (!channelConfigured) {
+    return <ChannelLoadingPage />;
+  }
+  if (agents.length === 0 && page instanceof ConversationChannelPage) {
+    return <AgentInstallationPage channelId={connection.channelId} />;
+  }
 
   return (
     <>
@@ -148,35 +182,49 @@ function ChannelWorkspace({
         className="fixed top-3 left-3 z-50 -translate-y-[180%] rounded-lg bg-[#2fb872] px-[13px] py-[9px] text-[13px] font-semibold text-[#062f1c] no-underline transition-transform duration-150 motion-reduce:transition-none focus:translate-y-0"
         href="#main-content"
       >
-        Skip to conversation
+        {settingsOpen ? "Skip to Agent settings" : "Skip to conversation"}
       </a>
       <div className="flex h-dvh w-full bg-background">
         <ConversationSidebar
+          channelId={connection.channelId}
           layout={sidebarLayout}
           onLayoutChange={setSidebarLayout}
+          settingsOpen={settingsOpen}
         />
         <main
           className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
           id="main-content"
         >
-          <ChatHeader
-            desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
-            onToggleDesktopSidebar={() => {
-              setSidebarLayout((current) => toggleSidebar(current));
-            }}
-          />
-          <section
-            aria-label="Agent conversation"
-            className="flex min-h-0 flex-1 flex-col"
-          >
-            <ChatMessageList />
-            {conversation.messages.length > 0 && (
-              <ChatComposer placement="active" />
-            )}
-            <p aria-live="polite" className="sr-only">
-              {announcement}
-            </p>
-          </section>
+          {settingsOpen ? (
+            <AgentSettingsPage
+              channelId={connection.channelId}
+              desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
+              onToggleDesktopSidebar={() => {
+                setSidebarLayout((current) => toggleSidebar(current));
+              }}
+            />
+          ) : (
+            <>
+              <ChatHeader
+                desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
+                onToggleDesktopSidebar={() => {
+                  setSidebarLayout((current) => toggleSidebar(current));
+                }}
+              />
+              <section
+                aria-label="Agent conversation"
+                className="flex min-h-0 flex-1 flex-col"
+              >
+                <ChatMessageList />
+                {activeConversationMessageCount > 0 && (
+                  <ChatComposer placement="active" />
+                )}
+                <p aria-live="polite" className="sr-only">
+                  {announcement}
+                </p>
+              </section>
+            </>
+          )}
         </main>
       </div>
     </>
@@ -233,7 +281,13 @@ function ChannelLoadingPage() {
   );
 }
 
-function ChannelRoute({ channelId }: { readonly channelId: string }) {
+function ChannelRoute({
+  channelId,
+  page,
+}: {
+  readonly channelId: string;
+  readonly page: ChannelPage;
+}) {
   const [state, setState] = useState<ChannelRouteState>(
     new LoadingChannelRouteState(),
   );
@@ -268,7 +322,11 @@ function ChannelRoute({ channelId }: { readonly channelId: string }) {
 
   if (state instanceof ReadyChannelRouteState) {
     return (
-      <ChannelWorkspace connection={state.connection} history={state.history} />
+      <ChannelWorkspace
+        connection={state.connection}
+        history={state.history}
+        page={page}
+      />
     );
   }
   if (state instanceof FailedChannelRouteState) {
@@ -284,7 +342,9 @@ export function App() {
     return <PairingPage />;
   }
 
-  const match = /^\/channels\/([^/]+)$/.exec(window.location.pathname);
+  const match = /^\/channels\/([^/]+)(?:\/(settings))?\/?$/.exec(
+    window.location.pathname,
+  );
   if (match === null) {
     return (
       <ChannelErrorPage
@@ -314,5 +374,10 @@ export function App() {
     );
   }
 
-  return <ChannelRoute channelId={channelId} />;
+  const page =
+    match[2] === "settings"
+      ? new AgentSettingsChannelPage()
+      : new ConversationChannelPage();
+
+  return <ChannelRoute channelId={channelId} page={page} />;
 }

@@ -1,5 +1,11 @@
 import type {
   AgentContentEvent,
+  AgentInstallAwaitingApprovalEvent,
+  AgentInstallCancelledEvent,
+  AgentInstallCompletedEvent,
+  AgentInstallFailedEvent,
+  AgentInstallProgressEvent,
+  AgentInstallStartedEvent,
   PromptImage,
   PromptResource,
   SessionCommandsUpdatedEvent,
@@ -15,11 +21,22 @@ import type {
 import { create } from "zustand";
 
 import {
+  type AgentInstallationViewState,
   AgentOption,
+  AwaitingAgentInstallationApprovalState,
+  CancelledAgentInstallationState,
   type ChannelConnection,
   type ChannelHistory,
+  FailedAgentInstallationState,
+  IdleAgentInstallationState,
+  type InstallableAgentOption,
   type RecordedActivity,
   type RecordedTurn,
+  RequestedAgentInstallationState,
+  RequestingAgentInstallationState,
+  RunningAgentInstallationState,
+  StartingAgentInstallationState,
+  SucceededAgentInstallationState,
 } from "@/domain/channel";
 import {
   AgentChatMessage,
@@ -55,9 +72,26 @@ export interface ChatStore {
   readonly applySessionUsage: (event: SessionUsageUpdatedEvent) => void;
   readonly activeConversationId: string;
   readonly agents: readonly AgentOption[];
+  readonly agentInstallations: readonly AgentInstallationViewState[];
   readonly announcement: string;
   readonly appendAgentText: (turn: PendingTurn, delta: string) => void;
   readonly beginTurn: (prompt: string) => PendingTurn;
+  readonly beginAgentInstallation: (agentId: string, requestId: string) => void;
+  readonly applyAgentInstallAwaitingApproval: (
+    event: AgentInstallAwaitingApprovalEvent,
+  ) => void;
+  readonly applyAgentInstallCancelled: (
+    event: AgentInstallCancelledEvent,
+  ) => void;
+  readonly applyAgentInstallCompleted: (
+    event: AgentInstallCompletedEvent,
+  ) => void;
+  readonly applyAgentInstallFailed: (event: AgentInstallFailedEvent) => void;
+  readonly applyAgentInstallProgress: (
+    event: AgentInstallProgressEvent,
+  ) => void;
+  readonly applyAgentInstallStarted: (event: AgentInstallStartedEvent) => void;
+  readonly channelConfigured: boolean;
   readonly completeTurn: (
     turn: PendingTurn,
     attemptId: string,
@@ -72,7 +106,9 @@ export interface ChatStore {
   readonly errorMessage: string;
   readonly failTurn: (turn: PendingTurn, message: string) => void;
   readonly machineName: string;
+  readonly installableAgents: readonly InstallableAgentOption[];
   readonly reconcileHistory: (history: ChannelHistory) => void;
+  readonly refreshChannelConnection: (connection: ChannelConnection) => void;
   readonly recordAgentActivity: (
     turn: PendingTurn,
     activity: RecordedActivity,
@@ -113,6 +149,62 @@ export interface ChatStore {
 
 const defaultAgent = new AgentOption("codex", "Codex");
 const initialConversation = Conversation.create(defaultAgent);
+
+function initialInstallationStates(
+  installableAgents: readonly InstallableAgentOption[],
+  previous: readonly AgentInstallationViewState[] = [],
+): readonly AgentInstallationViewState[] {
+  return installableAgents.map((agent) => {
+    const existing = previous.find((state) => state.agentId === agent.id);
+    return existing ?? new IdleAgentInstallationState(agent.id);
+  });
+}
+
+function transitionInstallationState(
+  states: readonly AgentInstallationViewState[],
+  agentId: string,
+  requestId: string,
+  next: AgentInstallationViewState,
+): readonly AgentInstallationViewState[] {
+  return states.map((state) => {
+    if (state.agentId !== agentId) {
+      return state;
+    }
+    if (
+      state.canCancel &&
+      state instanceof RequestedAgentInstallationState &&
+      state.requestId !== requestId
+    ) {
+      return state;
+    }
+    return next;
+  });
+}
+
+class ReconciledAgentCatalog {
+  readonly activeConversationId: string;
+  readonly conversations: readonly Conversation[];
+
+  constructor(
+    agents: readonly AgentOption[],
+    conversations: readonly Conversation[],
+    activeConversationId: string,
+  ) {
+    const identifiers = new Set(agents.map((agent) => agent.id));
+    const retained = conversations.filter((conversation) =>
+      identifiers.has(conversation.agentId),
+    );
+    this.conversations =
+      retained.length === 0 && agents.length > 0
+        ? [Conversation.create(readDefaultAgent(agents))]
+        : retained;
+    this.activeConversationId = this.conversations.some(
+      (conversation) => conversation.id === activeConversationId,
+    )
+      ? activeConversationId
+      : (this.conversations[0]?.id ?? "");
+  }
+}
 
 function readActiveConversation(state: ChatStore): Conversation {
   for (const conversation of state.conversations) {
@@ -404,7 +496,90 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     });
   },
   agents: [defaultAgent],
+  agentInstallations: [],
   announcement: "",
+  applyAgentInstallAwaitingApproval: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new AwaitingAgentInstallationApprovalState(
+          event.agentId,
+          event.requestId,
+        ),
+      ),
+      announcement: "Agent installation is waiting for local approval.",
+    }));
+  },
+  applyAgentInstallCancelled: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new CancelledAgentInstallationState(event.agentId, event.requestId),
+      ),
+      announcement: "Agent installation was cancelled.",
+    }));
+  },
+  applyAgentInstallCompleted: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new SucceededAgentInstallationState(
+          event.agentId,
+          event.requestId,
+          event.authenticationMayBeRequired,
+        ),
+      ),
+      announcement: "Agent installation completed.",
+    }));
+  },
+  applyAgentInstallFailed: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new FailedAgentInstallationState(
+          event.agentId,
+          event.requestId,
+          event.code,
+          event.message,
+        ),
+      ),
+      announcement: `Agent installation failed. ${event.message}`,
+    }));
+  },
+  applyAgentInstallProgress: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new RunningAgentInstallationState(
+          event.agentId,
+          event.requestId,
+          event.stage,
+        ),
+      ),
+      announcement: "Agent installation is in progress.",
+    }));
+  },
+  applyAgentInstallStarted: (event) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        event.agentId,
+        event.requestId,
+        new StartingAgentInstallationState(event.agentId, event.requestId),
+      ),
+      announcement: "Agent installation started.",
+    }));
+  },
   applySessionCommands: (event) => {
     set((state) => ({
       conversations: replaceSessionConversation(
@@ -565,6 +740,18 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       agentMessage.id,
     );
   },
+  beginAgentInstallation: (agentId, requestId) => {
+    set((state) => ({
+      agentInstallations: transitionInstallationState(
+        state.agentInstallations,
+        agentId,
+        requestId,
+        new RequestingAgentInstallationState(agentId, requestId),
+      ),
+      announcement: "Requesting local Agent installation approval.",
+    }));
+  },
+  channelConfigured: false,
   completeTurn: (turn, attemptId, stopReason) => {
     set((state) => {
       const conversation = readConversation(
@@ -597,20 +784,18 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
   },
   configureChannel: (connection, history) => {
     const restored = restoreConversations(connection.agents, history);
-    const conversations =
-      restored.length === 0
-        ? [Conversation.create(readDefaultAgent(connection.agents))]
-        : restored;
-    const activeConversation = conversations[0];
-    if (activeConversation === undefined) {
-      throw new Error("Channel conversation invariant failed");
-    }
+    const catalog = new ReconciledAgentCatalog(connection.agents, restored, "");
     set({
-      activeConversationId: activeConversation.id,
+      activeConversationId: catalog.activeConversationId,
+      agentInstallations: initialInstallationStates(
+        connection.installableAgents,
+      ),
       agents: connection.agents,
       announcement: "",
-      conversations,
+      channelConfigured: true,
+      conversations: catalog.conversations,
       errorMessage: "",
+      installableAgents: connection.installableAgents,
       machineName: connection.machineName,
       runtime: new ConnectingRuntimeState(),
       sidebarOpen: false,
@@ -620,6 +805,9 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
   conversations: [initialConversation],
   createConversation: () => {
     const state = get();
+    if (state.agents.length === 0) {
+      return;
+    }
     const activeConversation = readActiveConversation(state);
     if (activeConversation.messages.length === 0) {
       set({ sidebarOpen: false });
@@ -656,6 +844,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       };
     });
   },
+  installableAgents: [],
   machineName: "Local machine",
   reconcileHistory: (history) => {
     set((state) => {
@@ -678,6 +867,27 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         errorMessage: state.errorMessage.startsWith(HISTORY_SYNC_ERROR_PREFIX)
           ? ""
           : state.errorMessage,
+      };
+    });
+  },
+  refreshChannelConnection: (connection) => {
+    set((state) => {
+      const catalog = new ReconciledAgentCatalog(
+        connection.agents,
+        state.conversations,
+        state.activeConversationId,
+      );
+      return {
+        activeConversationId: catalog.activeConversationId,
+        agentInstallations: initialInstallationStates(
+          connection.installableAgents,
+          state.agentInstallations,
+        ),
+        agents: connection.agents,
+        conversations: catalog.conversations,
+        installableAgents: connection.installableAgents,
+        machineName: connection.machineName,
+        workspaceName: connection.workspaceName,
       };
     });
   },

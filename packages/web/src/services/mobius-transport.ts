@@ -1,7 +1,10 @@
 import {
+  type AgentInstallCancelRequest,
+  type AgentInstallRequest,
   type CancelRequest,
   connectMobiusClient,
   type ElicitationResponseRequest,
+  MOBIUS_PROTOCOL_VERSION,
   type MobiusClient,
   MobiusClientError,
   type PermissionResponseRequest,
@@ -14,13 +17,17 @@ import {
   type WorkspaceEntriesEvent,
   type WorkspaceListRequest,
 } from "@moxt-ai/mobius-web-sdk";
-
-import { type ChannelConnection, RecordedActivity } from "@/domain/channel";
+import {
+  type ChannelConnection,
+  RecordedActivity,
+  RequestedAgentInstallationState,
+} from "@/domain/channel";
 import {
   OfflineRuntimeState,
   OnlineRuntimeState,
   UnavailableRuntimeState,
 } from "@/domain/chat";
+import { readChannelConnection } from "@/services/pairing-api";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
@@ -50,6 +57,9 @@ function boundaryFailure(error: unknown): BoundaryFailure {
 }
 
 abstract class TransportConnection {
+  abstract readonly cancelAgentInstallation: (
+    request: AgentInstallCancelRequest,
+  ) => Promise<void>;
   abstract readonly cancel: (request: CancelRequest) => Promise<void>;
   abstract readonly close: () => Promise<void>;
   abstract readonly configure: (
@@ -68,9 +78,13 @@ abstract class TransportConnection {
     request: SessionPrepareRequest,
   ) => Promise<SessionReadyEvent>;
   abstract readonly prompt: (request: PromptRequest) => Promise<PromptResult>;
+  abstract readonly installAgent: (
+    request: AgentInstallRequest,
+  ) => Promise<void>;
 }
 
 class DisconnectedTransport extends TransportConnection {
+  readonly cancelAgentInstallation = (): Promise<void> => this.notInitialized();
   readonly cancel = (): Promise<void> =>
     Promise.reject(
       new MobiusClientError(
@@ -88,6 +102,8 @@ class DisconnectedTransport extends TransportConnection {
   readonly listWorkspace = (): Promise<WorkspaceEntriesEvent> =>
     this.notInitialized();
 
+  readonly installAgent = (): Promise<void> => this.notInitialized();
+
   readonly permission = (): Promise<void> => this.notInitialized();
 
   readonly prepare = (): Promise<SessionReadyEvent> => this.notInitialized();
@@ -104,10 +120,12 @@ class DisconnectedTransport extends TransportConnection {
 }
 
 class ConnectedTransport extends TransportConnection {
+  readonly #channelId: string;
   readonly #client: Promise<MobiusClient>;
 
   constructor(connection: ChannelConnection, onActivity: () => void) {
     super();
+    this.#channelId = connection.channelId;
     this.#client = connectMobiusClient({
       onActivity,
       onCommands: (event) => {
@@ -118,6 +136,25 @@ class ConnectedTransport extends TransportConnection {
       },
       onContent: (event) => {
         useChatStore.getState().recordAgentContent(event);
+      },
+      onInstallAwaitingApproval: (event) => {
+        useChatStore.getState().applyAgentInstallAwaitingApproval(event);
+      },
+      onInstallCancelled: (event) => {
+        useChatStore.getState().applyAgentInstallCancelled(event);
+      },
+      onInstallCompleted: (event) => {
+        useChatStore.getState().applyAgentInstallCompleted(event);
+        void this.#refreshAgentCatalog();
+      },
+      onInstallFailed: (event) => {
+        useChatStore.getState().applyAgentInstallFailed(event);
+      },
+      onInstallProgress: (event) => {
+        useChatStore.getState().applyAgentInstallProgress(event);
+      },
+      onInstallStarted: (event) => {
+        useChatStore.getState().applyAgentInstallStarted(event);
       },
       onElicitation: (event) => {
         useChatStore.getState().applySessionElicitation(event);
@@ -147,6 +184,9 @@ class ConnectedTransport extends TransportConnection {
           .setRuntime(
             online ? new OnlineRuntimeState() : new OfflineRuntimeState(),
           );
+        if (online) {
+          void this.#refreshAgentCatalog();
+        }
       },
       onReady: (event) => {
         useChatStore.getState().applySessionReady(event);
@@ -178,6 +218,13 @@ class ConnectedTransport extends TransportConnection {
     client.cancel(request);
   };
 
+  readonly cancelAgentInstallation = async (
+    request: AgentInstallCancelRequest,
+  ): Promise<void> => {
+    const client = await this.#client;
+    client.cancelAgentInstallation(request);
+  };
+
   readonly configure = async (
     request: SessionConfigureRequest,
   ): Promise<void> => {
@@ -199,6 +246,13 @@ class ConnectedTransport extends TransportConnection {
     return await client.listWorkspace(request);
   };
 
+  readonly installAgent = async (
+    request: AgentInstallRequest,
+  ): Promise<void> => {
+    const client = await this.#client;
+    await client.installAgent(request);
+  };
+
   readonly permission = async (
     request: PermissionResponseRequest,
   ): Promise<void> => {
@@ -216,6 +270,15 @@ class ConnectedTransport extends TransportConnection {
   readonly prompt = async (request: PromptRequest): Promise<PromptResult> => {
     const client = await this.#client;
     return await client.prompt(request);
+  };
+
+  readonly #refreshAgentCatalog = async (): Promise<void> => {
+    try {
+      const connection = await readChannelConnection(this.#channelId);
+      useChatStore.getState().refreshChannelConnection(connection);
+    } catch (error) {
+      useChatStore.getState().setErrorMessage(failureMessage(error));
+    }
   };
 }
 
@@ -479,6 +542,65 @@ export async function stopActiveTurn(): Promise<void> {
     useChatStore.getState().setErrorMessage("");
   } catch (error) {
     useChatStore.getState().setErrorMessage(failureMessage(error));
+  }
+}
+
+export async function installLocalAgent(agentId: string): Promise<void> {
+  const state = useChatStore.getState();
+  if (!state.installableAgents.some((agent) => agent.id === agentId)) {
+    return;
+  }
+  const installation = state.agentInstallations.find(
+    (candidate) => candidate.agentId === agentId,
+  );
+  if (installation?.canCancel === true) {
+    return;
+  }
+  const requestId = crypto.randomUUID();
+  state.beginAgentInstallation(agentId, requestId);
+  try {
+    await transport.installAgent({ agentId, requestId });
+  } catch (error) {
+    const failure =
+      error instanceof MobiusClientError
+        ? error
+        : new MobiusClientError(
+            "unexpected_error",
+            "The Agent installation failed unexpectedly",
+          );
+    if (failure.code === "installation_cancelled") {
+      return;
+    }
+    useChatStore.getState().applyAgentInstallFailed({
+      agentId,
+      code: failure.code,
+      kind: "agent.install.failed",
+      message: failure.message,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      requestId,
+    });
+  }
+}
+
+export async function cancelLocalAgentInstallation(
+  agentId: string,
+): Promise<void> {
+  const state = useChatStore.getState();
+  const installation = state.agentInstallations.find(
+    (candidate) => candidate.agentId === agentId,
+  );
+  if (
+    !(installation instanceof RequestedAgentInstallationState) ||
+    !installation.canCancel
+  ) {
+    return;
+  }
+  try {
+    await transport.cancelAgentInstallation({
+      requestId: installation.requestId,
+    });
+  } catch (error) {
+    state.setErrorMessage(failureMessage(error));
   }
 }
 

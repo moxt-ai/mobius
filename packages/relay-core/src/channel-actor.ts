@@ -1,9 +1,25 @@
 import {
   AGENT_ACTIVITY_KIND,
   AGENT_CONTENT_KIND,
+  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
+  AGENT_INSTALL_CANCEL_KIND,
+  AGENT_INSTALL_CANCELLED_KIND,
+  AGENT_INSTALL_COMPLETED_KIND,
+  AGENT_INSTALL_FAILED_KIND,
+  AGENT_INSTALL_PROGRESS_KIND,
+  AGENT_INSTALL_REQUEST_KIND,
+  AGENT_INSTALL_STARTED_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   decodeAgentActivityEvent,
   decodeAgentContentEvent,
+  decodeAgentInstallAwaitingApprovalEvent,
+  decodeAgentInstallCancelCommand,
+  decodeAgentInstallCancelledEvent,
+  decodeAgentInstallCompletedEvent,
+  decodeAgentInstallFailedEvent,
+  decodeAgentInstallProgressEvent,
+  decodeAgentInstallRequestCommand,
+  decodeAgentInstallStartedEvent,
   decodeAgentMessageDeltaEvent,
   decodeMessageKind,
   decodeSessionCancelCommand,
@@ -208,6 +224,16 @@ export class ChannelActor {
       if (kind === SESSION_ELICITATION_RESPOND_KIND) {
         const command = decodeSessionElicitationRespondCommand(message);
         this.receiveControl(message, command.interactionId, command.sessionId);
+        return;
+      }
+      if (kind === AGENT_INSTALL_REQUEST_KIND) {
+        const command = decodeAgentInstallRequestCommand(message);
+        this.receiveControl(message, command.requestId, "");
+        return;
+      }
+      if (kind === AGENT_INSTALL_CANCEL_KIND) {
+        const command = decodeAgentInstallCancelCommand(message);
+        this.receiveControl(message, command.requestId, "");
         return;
       }
       throw new Error("Unsupported host message");
@@ -423,6 +449,30 @@ export class ChannelActor {
     }
     if (kind === SESSION_OPERATION_FAILED_KIND) {
       decodeSessionOperationFailedEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_AWAITING_APPROVAL_KIND) {
+      decodeAgentInstallAwaitingApprovalEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_STARTED_KIND) {
+      decodeAgentInstallStartedEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_PROGRESS_KIND) {
+      decodeAgentInstallProgressEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_COMPLETED_KIND) {
+      decodeAgentInstallCompletedEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_FAILED_KIND) {
+      decodeAgentInstallFailedEvent(message);
+      return;
+    }
+    if (kind === AGENT_INSTALL_CANCELLED_KIND) {
+      decodeAgentInstallCancelledEvent(message);
       return;
     }
     throw new Error("Unsupported daemon message");

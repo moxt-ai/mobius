@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { once } from "node:events";
 
 import {
   type AgentCapabilities,
@@ -48,6 +47,10 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 import type { LocalAgentDefinition } from "../config.ts";
+import {
+  revalidateExecutable,
+  stopProcessTree,
+} from "../process/executable.ts";
 import {
   type AcpActivity,
   AcpActivityTracker,
@@ -258,32 +261,6 @@ export function createWritableAcpStream(
       });
     },
   });
-}
-
-async function stopAgentProcess(
-  child: ReturnType<typeof spawn>,
-): Promise<void> {
-  child.stdin?.end();
-  if (child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  try {
-    await once(child, "exit", {
-      signal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
-    });
-  } catch {
-    if (child.exitCode === null) {
-      child.kill("SIGKILL");
-      try {
-        await once(child, "exit", {
-          signal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
-        });
-      } catch {
-        // Teardown must not wait forever for a process the OS did not reap.
-      }
-    }
-  }
 }
 
 function truncate(value: string, maximumLength: number): string {
@@ -936,8 +913,11 @@ class AcpProcessSession implements AcpClientHandler {
     this.#getObserver = getObserver;
     this.#mobiusSessionId = mobiusSessionId;
     this.#store = store;
-    this.#child = spawn(agent.command, [...agent.arguments], {
+    this.#child = spawn(agent.adapterPath, [...agent.arguments], {
       cwd,
+      detached: process.platform !== "win32",
+      env: { ...process.env, ...agent.environment },
+      shell: false,
       stdio: ["pipe", "pipe", "pipe"],
     });
     const stdin = this.#child.stdin;
@@ -968,6 +948,18 @@ class AcpProcessSession implements AcpClientHandler {
     store: AcpSessionStore,
   ): Promise<AcpProcessSession> => {
     options.signal.throwIfAborted();
+    const [adapterUnchanged, agentUnchanged] = await Promise.all([
+      revalidateExecutable(options.agent.adapterIdentity),
+      revalidateExecutable(options.agent.agentIdentity),
+    ]);
+    options.signal.throwIfAborted();
+    if (!adapterUnchanged || !agentUnchanged) {
+      throw new AcpExecutionError(
+        "The local Agent runtime changed; restart Mobius before starting a new conversation",
+        {},
+        "agent_runtime_changed",
+      );
+    }
     const runtime = new AcpProcessSession(
       options.agent,
       options.cwd,
@@ -1021,7 +1013,7 @@ class AcpProcessSession implements AcpClientHandler {
             plan: {},
             session: { configOptions: { boolean: {} } },
           },
-          clientInfo: { name: "mobius", version: "0.0.2" },
+          clientInfo: { name: "mobius", version: "0.0.3" },
           protocolVersion: PROTOCOL_VERSION,
         },
         { cancellationSignal: signal },
@@ -1734,7 +1726,7 @@ class AcpProcessSession implements AcpClientHandler {
 
   readonly closeProcess = async (): Promise<void> => {
     this.#connection.close();
-    await stopAgentProcess(this.#child);
+    await stopProcessTree(this.#child);
   };
 
   readonly race = async <T>(
