@@ -68,7 +68,7 @@ if (process.argv.includes("--version")) {
         {
           env: {
             ...process.env,
-            MOBIUS_APPROVED_ROOT: repositoryRoot,
+            MOBIUS_DEFAULT_WORKSPACE: repositoryRoot,
             MOBIUS_CODEX_ACP_PATH: adapterPath,
             MOBIUS_CODEX_PATH: codexPath,
             MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "state"),

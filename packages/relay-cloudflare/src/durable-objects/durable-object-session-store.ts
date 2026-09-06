@@ -1,10 +1,12 @@
 import {
+  decodeNativeSessionHistory,
   decodeSessionCommandsUpdatedEvent,
   decodeSessionElicitationRequestedEvent,
   decodeSessionPermissionRequestedEvent,
   decodeSessionReadyEvent,
   decodeSessionUsageUpdatedEvent,
   MOBIUS_PROTOCOL_VERSION,
+  type NativeSessionHistory,
   type SessionCommandsUpdatedEvent,
   type SessionConfigUpdatedEvent,
   type SessionElicitationRequestedEvent,
@@ -83,6 +85,9 @@ function decodeSnapshot(encoded: string): RecordedSession {
   if (typeof title !== "string" || typeof updatedAt !== "string") {
     throw new Error("Invalid persisted session information");
   }
+  const status = value["status"] ?? "active";
+  if (status !== "active" && status !== "deleted")
+    throw new Error("Invalid persisted session status");
   return new RecordedSession(
     ready,
     ready.configOptions,
@@ -92,11 +97,21 @@ function decodeSnapshot(encoded: string): RecordedSession {
     usage,
     permissions,
     elicitations,
+    value["nativeHistory"] == null
+      ? null
+      : decodeNativeSessionHistory(value["nativeHistory"]),
+    status,
   );
 }
 
 export class DurableObjectSessionStore implements ChannelSessionStore {
   readonly #storage: DurableObjectStorage;
+  readonly removeSessions = (sessionIds: readonly string[]): void => {
+    for (const id of sessionIds) {
+      const session = this.find(id);
+      if (session !== undefined) this.write(session.withDeleted());
+    }
+  };
 
   constructor(storage: DurableObjectStorage) {
     this.#storage = storage;
@@ -138,7 +153,10 @@ export class DurableObjectSessionStore implements ChannelSessionStore {
       .toArray()
       .map((row) => decodeSnapshot(row.snapshot_json));
 
-  readonly recordReady = (event: SessionReadyEvent): void => {
+  readonly recordReady = (
+    event: SessionReadyEvent,
+    history?: NativeSessionHistory,
+  ): void => {
     const previous = this.find(event.sessionId);
     this.write(
       new RecordedSession(
@@ -150,6 +168,8 @@ export class DurableObjectSessionStore implements ChannelSessionStore {
         previous?.usage ?? [],
         previous?.pendingPermissions ?? [],
         previous?.pendingElicitations ?? [],
+        history ?? previous?.nativeHistory ?? null,
+        previous?.status ?? "active",
       ),
     );
   };

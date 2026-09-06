@@ -72,7 +72,7 @@ if (process.argv.includes("--version")) {
       await Promise.all([chmod(codexPath, 0o700), chmod(adapterPath, 0o700)]);
 
       const inventory = await discoverLocalAgentInventory({
-        approvedRoot: repositoryRoot,
+        defaultWorkspace: repositoryRoot,
         environment: { PATH: temporaryDirectory },
         signal: new AbortController().signal,
       });
@@ -192,7 +192,7 @@ if (process.argv.includes("--version")) {
       );
 
       const inventory = await discoverLocalAgentInventory({
-        approvedRoot: repositoryRoot,
+        defaultWorkspace: repositoryRoot,
         environment: {
           MOBIUS_STATE_DIRECTORY: stateDirectory,
           PATH: externalDirectory,
@@ -259,7 +259,7 @@ if (process.argv.includes("--version")) {
         );
         await chmod(adapterPath, 0o700);
         const inventory = await discoverLocalAgentInventory({
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           environment: {
             MOBIUS_CODEX_ACP_PATH: adapterPath,
             MOBIUS_CODEX_PATH: codexLink,
@@ -314,7 +314,7 @@ if (process.argv.includes("--version")) {
     },
   );
 
-  it("Given PATH points at an executable inside the approved workspace, When automatic lookup runs, Then it is rejected while an explicit local override remains authoritative", async () => {
+  it("Given PATH contains an Agent in the default working directory, When the paired machine discovers Agents, Then the working directory does not exclude that executable", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "mobius-path-boundary-"));
     const codexPath = join(workspace, "codex");
     try {
@@ -328,14 +328,14 @@ if (process.argv.includes("--version")) {
 
       await expect(
         resolveAgentExecutable(specification, {
-          approvedRoot: workspace,
+          defaultWorkspace: workspace,
           environment: { PATH: workspace },
           signal: new AbortController().signal,
         }),
-      ).resolves.toBeNull();
+      ).resolves.toMatchObject({ path: await realpath(codexPath) });
       await expect(
         resolveAgentExecutable(specification, {
-          approvedRoot: workspace,
+          defaultWorkspace: workspace,
           environment: {
             MOBIUS_CODEX_PATH: codexPath,
             PATH: workspace,

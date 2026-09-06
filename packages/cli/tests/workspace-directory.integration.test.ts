@@ -1,30 +1,52 @@
 import { mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { WorkspaceDirectoryService } from "../src/authorization/workspace-directory.ts";
 
-describe("authorized workspace directory selection", () => {
-  it("Given an approved root, When the browser browses and selects a child directory, Then only canonical in-root directories can be resolved", async () => {
+describe("machine directory selection", () => {
+  it("Given a paired machine and a default workspace, When the browser browses Home and selects another project, Then accessible canonical directories are available without granting another workspace", async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-workspace-"),
     );
-    const approvedRoot = join(temporaryDirectory, "approved");
+    const defaultWorkspace = join(temporaryDirectory, "default");
     const outside = join(temporaryDirectory, "outside");
-    await mkdir(join(approvedRoot, "apps", "web"), { recursive: true });
+    await mkdir(join(defaultWorkspace, "apps", "web"), { recursive: true });
     await mkdir(outside);
-    await symlink(outside, join(approvedRoot, "escape"));
-    const service = new WorkspaceDirectoryService("workspace", approvedRoot);
+    await symlink(outside, join(defaultWorkspace, "escape"));
+    const service = new WorkspaceDirectoryService(
+      "workspace",
+      defaultWorkspace,
+    );
+    const signal = new AbortController().signal;
 
     try {
-      const root = await service.list("workspace", "root");
-      expect(root.entries.map((entry) => entry.name)).toEqual(["apps"]);
+      expect(
+        (await service.list("workspace", "home", signal)).directoryLabel,
+      ).toBe("~");
+      expect(await service.resolve("workspace", "home", signal)).toBe(
+        await realpath(homedir()),
+      );
+      const listing = await service.list("workspace", "default", signal);
+      expect(listing.entries.map((entry) => entry.name)).toEqual([
+        "apps",
+        "escape",
+      ]);
+      const linked = listing.entries.find((entry) => entry.name === "escape");
+      expect(
+        await service.resolve(
+          "workspace",
+          linked?.directoryId ?? "missing",
+          signal,
+        ),
+      ).toBe(await realpath(outside));
 
       const apps = await service.list(
         "workspace",
-        root.entries[0]?.directoryId ?? "missing",
+        listing.entries[0]?.directoryId ?? "missing",
+        signal,
       );
       expect(apps.directoryLabel).toContain("apps");
       expect(apps.entries.map((entry) => entry.name)).toEqual(["web"]);
@@ -32,10 +54,13 @@ describe("authorized workspace directory selection", () => {
       const selected = await service.resolve(
         "workspace",
         apps.entries[0]?.directoryId ?? "missing",
+        signal,
       );
-      expect(selected).toBe(await realpath(join(approvedRoot, "apps", "web")));
+      expect(selected).toBe(
+        await realpath(join(defaultWorkspace, "apps", "web")),
+      );
       await expect(
-        service.resolve("workspace", "dir-Li4vb3V0c2lkZQ"),
+        service.resolve("another-machine", "home", signal),
       ).rejects.toMatchObject({ code: "local_authorization_failed" });
     } finally {
       await rm(temporaryDirectory, { force: true, recursive: true });

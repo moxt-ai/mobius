@@ -1,5 +1,6 @@
 import type {
   AgentContentEvent,
+  NativeSessionHistory,
   PromptImage,
   PromptResource,
   SessionCapabilities,
@@ -36,6 +37,7 @@ const EMPTY_CAPABILITIES: SessionCapabilities = {
   listSessions: false,
   loadSession: false,
   resumeSession: false,
+  unstableForkSession: false,
 };
 
 export abstract class SessionUsageState {
@@ -254,6 +256,28 @@ export class SessionPreparationFailedState extends AgentSessionState {
       new UnknownSessionUsage(),
     );
     this.error = error;
+  }
+}
+
+export class DeletedSessionState extends AgentSessionState {
+  readonly autoPrepare = false;
+  readonly isPreparing = false;
+  readonly isReady = false;
+  readonly label = "Native session deleted";
+  readonly updatedAt = "";
+
+  constructor() {
+    super(
+      "",
+      "",
+      EMPTY_CAPABILITIES,
+      [],
+      [],
+      [],
+      [],
+      true,
+      new UnknownSessionUsage(),
+    );
   }
 }
 
@@ -679,6 +703,37 @@ export abstract class ChatMessage {
   }
 }
 
+export class NativeHistoryChatMessage extends ChatMessage {
+  readonly history: NativeSessionHistory;
+
+  constructor(sessionId: string, history: NativeSessionHistory) {
+    // ACP replay has no reliable message timestamps. History is ordered before live turns.
+    super(`${sessionId}:native-history`, new Date(0));
+    this.history = history;
+  }
+}
+
+function mergeNativeHistory(
+  sessionId: string,
+  history: NativeSessionHistory | null,
+  messages: readonly ChatMessage[],
+): readonly ChatMessage[] {
+  if (history === null) return messages;
+  const covered = new Set(
+    history.status === "available"
+      ? history.coveredCommandIds.flatMap((id) => [`${id}:user`, `${id}:agent`])
+      : [],
+  );
+  return [
+    new NativeHistoryChatMessage(sessionId, history),
+    ...messages.filter(
+      (message) =>
+        !(message instanceof NativeHistoryChatMessage) &&
+        !covered.has(message.id),
+    ),
+  ];
+}
+
 export class UserChatMessage extends ChatMessage {
   readonly images: readonly PromptImage[];
   readonly resources: readonly PromptResource[];
@@ -885,8 +940,8 @@ export class Conversation {
     draft: string,
     messages: readonly ChatMessage[],
     session: AgentSessionState = new UnpreparedSessionState(),
-    directoryId = "root",
-    directoryLabel = "Workspace",
+    directoryId = "default",
+    directoryLabel = "~/.mobius/workspace",
     additionalDirectories: readonly WorkspaceEntry[] = [],
     draftImages: readonly PromptImage[] = [],
     draftResources: readonly PromptResource[] = [],
@@ -918,6 +973,10 @@ export class Conversation {
       "",
       [],
     );
+  }
+
+  get contextLocked(): boolean {
+    return this.messages.length > 0 || this.session.restored;
   }
 
   readonly matchesPreparation = (
@@ -1024,7 +1083,9 @@ export class Conversation {
             recorded.sessionId,
             recorded.sessionId,
             "New chat",
-            "No messages yet",
+            recorded.nativeHistory === null
+              ? "No messages yet"
+              : "Previous Agent conversation",
             "",
             [],
           )
@@ -1037,8 +1098,14 @@ export class Conversation {
       recorded.title.length > 0 ? recorded.title : base.title,
       base.preview,
       base.draft,
-      base.messages,
-      ReadySessionState.fromRecorded(recorded),
+      mergeNativeHistory(
+        recorded.sessionId,
+        recorded.nativeHistory,
+        base.messages,
+      ),
+      recorded.status === "deleted"
+        ? new DeletedSessionState()
+        : ReadySessionState.fromRecorded(recorded),
       recorded.directoryId,
       recorded.directoryLabel,
       recorded.additionalDirectories,
@@ -1083,7 +1150,13 @@ export class Conversation {
       this.title,
       hasUnrecordedMessages ? this.preview : recorded.preview,
       this.draft,
-      messages,
+      mergeNativeHistory(
+        this.sessionId,
+        this.messages.find(
+          (message) => message instanceof NativeHistoryChatMessage,
+        )?.history ?? null,
+        messages,
+      ),
       this.session,
       this.directoryId,
       this.directoryLabel,
@@ -1104,11 +1177,35 @@ export class Conversation {
       recorded.title.length > 0 ? recorded.title : this.title,
       this.preview,
       this.draft,
-      this.messages,
-      ReadySessionState.fromRecorded(recorded),
+      mergeNativeHistory(
+        recorded.sessionId,
+        recorded.nativeHistory,
+        this.messages,
+      ),
+      recorded.status === "deleted"
+        ? new DeletedSessionState()
+        : ReadySessionState.fromRecorded(recorded),
       recorded.directoryId,
       recorded.directoryLabel,
       recorded.additionalDirectories,
+      this.draftImages,
+      this.draftResources,
+    );
+
+  readonly withNativeHistory = (history: NativeSessionHistory): Conversation =>
+    new Conversation(
+      this.agentId,
+      this.agentLabel,
+      this.id,
+      this.sessionId,
+      this.title,
+      this.preview,
+      this.draft,
+      mergeNativeHistory(this.sessionId, history, this.messages),
+      this.session,
+      this.directoryId,
+      this.directoryLabel,
+      this.additionalDirectories,
       this.draftImages,
       this.draftResources,
     );
@@ -1123,7 +1220,7 @@ export class Conversation {
       this.agentLabel,
       this.id,
       this.sessionId,
-      this.messages.length === 0
+      !this.contextLocked
         ? titleFromTurn(prompt, userMessage.images, userMessage.resources)
         : this.title,
       previewFromPrompt(prompt, userMessage.images, userMessage.resources),
@@ -1313,10 +1410,7 @@ export class Conversation {
   readonly selectPrimaryDirectory = (
     directory: WorkspaceEntry,
   ): Conversation => {
-    if (
-      this.messages.length > 0 ||
-      directory.directoryId === this.directoryId
-    ) {
+    if (this.contextLocked || directory.directoryId === this.directoryId) {
       return this;
     }
     return new Conversation(
@@ -1346,7 +1440,7 @@ export class Conversation {
       (entry) => entry.directoryId === directory.directoryId,
     );
     if (
-      this.messages.length > 0 ||
+      this.contextLocked ||
       directory.directoryId === this.directoryId ||
       (!selected && !this.session.capabilities.additionalDirectories)
     ) {
@@ -1376,7 +1470,7 @@ export class Conversation {
   };
 
   readonly selectAgent = (agent: AgentOption): Conversation => {
-    if (this.messages.length > 0) {
+    if (this.contextLocked) {
       return this;
     }
     return new Conversation(
@@ -1397,7 +1491,8 @@ export class Conversation {
     );
   };
 
-  readonly updateTitle = (title: string): Conversation => {
+  readonly updateTitle = (title: string | null): Conversation => {
+    if (title === null) return this;
     const firstPrompt = this.messages.find(
       (message) => message instanceof UserChatMessage,
     );

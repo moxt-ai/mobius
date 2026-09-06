@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 import * as acp from "@agentclientprotocol/sdk";
@@ -190,6 +197,54 @@ class FakeSessionState {
   };
 }
 
+const nativeHistory = new Map<
+  string,
+  {
+    readonly role: "user" | "assistant";
+    readonly text: string;
+    readonly images?: readonly {
+      readonly data: string;
+      readonly mimeType: string;
+    }[];
+  }[]
+>();
+
+const nativeMetadata = new Map<
+  string,
+  {
+    readonly cwd: string;
+    readonly additionalDirectories: readonly string[];
+    readonly title: string;
+  }
+>();
+
+// The real Codex writer cannot be shared safely or deterministically in tests.
+// Model its exclusive ownership at the external Agent boundary with real files.
+const writerFiles = new Map<string, string>();
+function acquireWriter(sessionId: string): void {
+  const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+  if (
+    directory === undefined ||
+    !process.argv.includes("--exclusive-writer") ||
+    writerFiles.has(sessionId)
+  )
+    return;
+  mkdirSync(directory, { recursive: true });
+  const path = join(directory, `${encodeURIComponent(sessionId)}.writer`);
+  writeFileSync(path, String(process.pid), { flag: "wx" });
+  writerFiles.set(sessionId, path);
+}
+function releaseWriter(sessionId: string): void {
+  const path = writerFiles.get(sessionId);
+  if (path === undefined) return;
+  unlinkSync(path);
+  writerFiles.delete(sessionId);
+}
+process.on("exit", () => {
+  for (const id of writerFiles.keys()) releaseWriter(id);
+});
+process.on("SIGTERM", () => process.exit(0));
+
 function readPersistedState(sessionId: string): FakeSessionState {
   const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
   if (directory === undefined) {
@@ -204,11 +259,58 @@ function readPersistedState(sessionId: string): FakeSessionState {
   ) {
     throw new Error("Invalid fake ACP state");
   }
+  const history = Reflect.get(decoded, "history");
+  if (Array.isArray(history)) {
+    nativeHistory.set(
+      sessionId,
+      history.map((message: unknown) => {
+        if (typeof message !== "object" || message === null)
+          throw new Error("Invalid saved message");
+        const role = Reflect.get(message, "role");
+        const text = Reflect.get(message, "text");
+        if (
+          (role !== "user" && role !== "assistant") ||
+          typeof text !== "string"
+        )
+          throw new Error("Invalid saved message");
+        const images: unknown = Reflect.get(message, "images");
+        if (images === undefined) return { role, text };
+        if (!Array.isArray(images)) throw new Error("Invalid saved images");
+        return {
+          role,
+          text,
+          images: images.map((image: unknown) => {
+            if (typeof image !== "object" || image === null)
+              throw new Error("Invalid saved image");
+            const data: unknown = Reflect.get(image, "data");
+            const mimeType: unknown = Reflect.get(image, "mimeType");
+            if (typeof data !== "string" || typeof mimeType !== "string")
+              throw new Error("Invalid saved image");
+            return { data, mimeType };
+          }),
+        };
+      }),
+    );
+  }
   const turnCount = Reflect.get(decoded, "turnCount");
   const model = Reflect.get(decoded, "model");
   const reasoningEffort = Reflect.get(decoded, "reasoningEffort");
   const fastMode = Reflect.get(decoded, "fastMode");
   const mode = Reflect.get(decoded, "mode");
+  const cwd = Reflect.get(decoded, "cwd");
+  const title = Reflect.get(decoded, "title");
+  const additional = Reflect.get(decoded, "additionalDirectories");
+  if (
+    typeof cwd === "string" &&
+    typeof title === "string" &&
+    Array.isArray(additional) &&
+    additional.every((value): value is string => typeof value === "string")
+  )
+    nativeMetadata.set(sessionId, {
+      cwd,
+      title,
+      additionalDirectories: additional,
+    });
   if (
     typeof turnCount !== "number" ||
     typeof model !== "string" ||
@@ -235,7 +337,11 @@ function persistState(sessionId: string, state: FakeSessionState): void {
   mkdirSync(directory, { recursive: true });
   writeFileSync(
     join(directory, `${encodeURIComponent(sessionId)}.json`),
-    JSON.stringify(state),
+    JSON.stringify({
+      ...state,
+      ...nativeMetadata.get(sessionId),
+      history: nativeHistory.get(sessionId) ?? [],
+    }),
   );
 }
 
@@ -316,14 +422,23 @@ acp
         additionalDirectories: {},
         close: {},
         resume: {},
+        ...(process.argv.includes("--no-native-sessions")
+          ? {}
+          : { list: {}, delete: {}, fork: {} }),
       },
     },
     agentInfo: { name: "Mobius test agent", version: "1.0.0" },
     protocolVersion: acp.PROTOCOL_VERSION,
   }))
-  .onRequest(acp.methods.agent.session.new, () => {
+  .onRequest(acp.methods.agent.session.new, (context) => {
     const sessionId = crypto.randomUUID();
+    acquireWriter(sessionId);
     const state = new FakeSessionState(0);
+    nativeMetadata.set(sessionId, {
+      cwd: context.params.cwd,
+      additionalDirectories: context.params.additionalDirectories ?? [],
+      title: "",
+    });
     sessions.set(sessionId, state);
     persistState(sessionId, state);
     if (exitsAfterSessionCreation()) {
@@ -336,13 +451,138 @@ acp
     };
   })
   .onRequest(acp.methods.agent.session.resume, (context) => {
+    acquireWriter(context.params.sessionId);
     const state = readPersistedState(context.params.sessionId);
     sessions.set(context.params.sessionId, state);
     return { configOptions: configOptions(state), modes: sessionModes(state) };
   })
-  .onRequest(acp.methods.agent.session.load, (context) => {
+  .onRequest(acp.methods.agent.session.list, (context) => {
+    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    const stored =
+      directory === undefined
+        ? [...sessions.entries()]
+        : readdirSync(directory)
+            .filter((name) => name.endsWith(".json"))
+            .map((name) => {
+              const id = decodeURIComponent(name.slice(0, -5));
+              return [id, readPersistedState(id)] satisfies readonly [
+                string,
+                FakeSessionState,
+              ];
+            });
+    const candidates = stored
+      .flatMap(([id, state]) => {
+        const metadata = nativeMetadata.get(id);
+        return state.turnCount === 0 ||
+          metadata === undefined ||
+          (context.params.cwd != null && context.params.cwd !== metadata.cwd)
+          ? []
+          : [
+              {
+                sessionId: id,
+                cwd: metadata.cwd,
+                additionalDirectories: [...metadata.additionalDirectories],
+                title: metadata.title,
+                updatedAt: "2026-09-05T00:00:00Z",
+              },
+            ];
+      })
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+    const start =
+      context.params.cursor == null ? 0 : Number(context.params.cursor);
+    if (!Number.isSafeInteger(start) || start < 0)
+      throw new Error("Invalid native session cursor");
+    return {
+      sessions: candidates.slice(start, start + 2),
+      ...(start + 2 < candidates.length
+        ? { nextCursor: String(start + 2) }
+        : {}),
+    };
+  })
+  .onRequest(acp.methods.agent.session.fork, (context) => {
+    const state = readPersistedState(context.params.sessionId);
+    const metadata = nativeMetadata.get(context.params.sessionId);
+    if (metadata === undefined) throw new Error("Unknown native session");
+    const sessionId = process.argv.includes("--reuse-session-on-fork")
+      ? context.params.sessionId
+      : crypto.randomUUID();
+    acquireWriter(sessionId);
+    nativeMetadata.set(sessionId, {
+      ...metadata,
+      cwd: context.params.cwd,
+      additionalDirectories: context.params.additionalDirectories ?? [],
+    });
+    nativeHistory.set(sessionId, [
+      ...(nativeHistory.get(context.params.sessionId) ?? []),
+    ]);
+    sessions.set(sessionId, state);
+    persistState(sessionId, state);
+    return {
+      sessionId,
+      configOptions: configOptions(state),
+      modes: sessionModes(state),
+    };
+  })
+  .onRequest(acp.methods.agent.session.delete, (context) => {
+    acquireWriter(context.params.sessionId);
+    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    if (directory !== undefined)
+      unlinkSync(
+        join(directory, `${encodeURIComponent(context.params.sessionId)}.json`),
+      );
+    sessions.delete(context.params.sessionId);
+    nativeMetadata.delete(context.params.sessionId);
+    releaseWriter(context.params.sessionId);
+    return {};
+  })
+  .onRequest(acp.methods.agent.session.load, async (context) => {
+    acquireWriter(context.params.sessionId);
+    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    if (directory !== undefined && existsSync(join(directory, "pause-load"))) {
+      await context.client.notify(acp.methods.client.session.update, {
+        sessionId: context.params.sessionId,
+        update: {
+          sessionUpdate: "session_info_update",
+          title: "Loading saved conversation",
+        },
+      });
+      await waitForAbort(context.signal);
+      context.signal.throwIfAborted();
+    }
     const state = readPersistedState(context.params.sessionId);
     sessions.set(context.params.sessionId, state);
+    for (const [index, message] of (
+      nativeHistory.get(context.params.sessionId) ?? []
+    ).entries()) {
+      await context.client.notify(acp.methods.client.session.update, {
+        sessionId: context.params.sessionId,
+        update: {
+          sessionUpdate:
+            message.role === "user"
+              ? "user_message_chunk"
+              : "agent_message_chunk",
+          content: { type: "text", text: message.text },
+          messageId: `saved-${index.toString()}`,
+        },
+      });
+      for (const image of message.images ?? []) {
+        await context.client.notify(acp.methods.client.session.update, {
+          sessionId: context.params.sessionId,
+          update: {
+            sessionUpdate: "user_message_chunk",
+            messageId: `saved-${index.toString()}`,
+            // Codex ACP replays persisted images as named text links.
+            content:
+              readAgentName() === "Codex"
+                ? {
+                    type: "text",
+                    text: `[@image](data:${image.mimeType};base64,${image.data})`,
+                  }
+                : { type: "image", ...image },
+          },
+        });
+      }
+    }
     return { configOptions: configOptions(state), modes: sessionModes(state) };
   })
   .onRequest(acp.methods.agent.session.setConfigOption, (context) => {
@@ -383,7 +623,31 @@ acp
 
     context.signal.throwIfAborted();
     const prompt = readPromptText(context.params.prompt);
+    const transcript = nativeHistory.get(context.params.sessionId) ?? [];
+    transcript.push({
+      role: "user",
+      text: prompt,
+      images: context.params.prompt.flatMap((block) =>
+        block.type === "image"
+          ? [{ data: block.data, mimeType: block.mimeType }]
+          : [],
+      ),
+    });
+    nativeHistory.set(context.params.sessionId, transcript);
+    await context.client.notify(acp.methods.client.session.update, {
+      sessionId: context.params.sessionId,
+      update: {
+        sessionUpdate: "session_info_update",
+        updatedAt: "2026-09-05T00:00:00Z",
+      },
+    });
     const turnNumber = previousState.turnCount + 1;
+    const metadata = nativeMetadata.get(context.params.sessionId);
+    if (turnNumber === 1 && metadata !== undefined)
+      nativeMetadata.set(context.params.sessionId, {
+        ...metadata,
+        title: prompt,
+      });
     const state = previousState.withTurnCount(turnNumber);
     sessions.set(context.params.sessionId, state);
     persistState(context.params.sessionId, state);
@@ -621,22 +885,28 @@ acp
         });
       }
 
+      const responseText =
+        prompt === "Report working directory"
+          ? process.cwd()
+          : prompt === "exercise ACP controls"
+            ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
+            : agentName.length === 0
+              ? "Echo from ACP: "
+              : `${agentName} turn ${turnNumber.toString()}: `;
       await context.client.notify(acp.methods.client.session.update, {
         sessionId: context.params.sessionId,
         update: {
           content: {
-            text:
-              prompt === "exercise ACP controls"
-                ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
-                : agentName.length === 0
-                  ? "Echo from ACP: "
-                  : `${agentName} turn ${turnNumber.toString()}: `,
+            text: responseText,
             type: "text",
           },
           sessionUpdate: "agent_message_chunk",
         },
       });
-      if (prompt !== "exercise ACP controls") {
+      if (
+        prompt !== "exercise ACP controls" &&
+        prompt !== "Report working directory"
+      ) {
         await context.client.notify(acp.methods.client.session.update, {
           sessionId: context.params.sessionId,
           update: {
@@ -648,6 +918,17 @@ acp
           },
         });
       }
+
+      transcript.push({
+        role: "assistant",
+        text:
+          responseText +
+          (prompt === "exercise ACP controls" ||
+          prompt === "Report working directory"
+            ? ""
+            : prompt),
+      });
+      persistState(context.params.sessionId, state);
 
       return (
         promptUsageResponse(prompt, turnNumber) ?? { stopReason: "end_turn" }
@@ -661,6 +942,7 @@ acp
   })
   .onRequest(acp.methods.agent.session.close, (context) => {
     sessions.delete(context.params.sessionId);
+    releaseWriter(context.params.sessionId);
     return {};
   })
   .connect(stream);

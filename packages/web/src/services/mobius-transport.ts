@@ -7,6 +7,8 @@ import {
   MOBIUS_PROTOCOL_VERSION,
   type MobiusClient,
   MobiusClientError,
+  type NativeSessionCommand,
+  type NativeSessionResult,
   type PermissionResponseRequest,
   type PromptRequest,
   type PromptResult,
@@ -23,6 +25,7 @@ import {
   RequestedAgentInstallationState,
 } from "@/domain/channel";
 import {
+  DeletedSessionState,
   OfflineRuntimeState,
   OnlineRuntimeState,
   UnavailableRuntimeState,
@@ -57,6 +60,10 @@ function boundaryFailure(error: unknown): BoundaryFailure {
 }
 
 abstract class TransportConnection {
+  abstract readonly nativeSession: (
+    command: NativeSessionCommand,
+    signal: AbortSignal,
+  ) => Promise<NativeSessionResult>;
   abstract readonly cancelAgentInstallation: (
     request: AgentInstallCancelRequest,
   ) => Promise<void>;
@@ -84,6 +91,8 @@ abstract class TransportConnection {
 }
 
 class DisconnectedTransport extends TransportConnection {
+  readonly nativeSession = (): Promise<NativeSessionResult> =>
+    this.notInitialized();
   readonly cancelAgentInstallation = (): Promise<void> => this.notInitialized();
   readonly cancel = (): Promise<void> =>
     Promise.reject(
@@ -165,6 +174,12 @@ class ConnectedTransport extends TransportConnection {
       onInfo: (event) => {
         useChatStore.getState().applySessionInfo(event);
       },
+      onNativeSessionResult: (event) => {
+        if (event.action === "delete")
+          useChatStore
+            .getState()
+            .applyNativeSessionDeletion(event.deletedSessionIds);
+      },
       onPermission: (event) => {
         useChatStore.getState().applySessionPermission(event);
       },
@@ -211,6 +226,16 @@ class ConnectedTransport extends TransportConnection {
     } catch {
       return;
     }
+  };
+
+  readonly nativeSession = async (
+    command: NativeSessionCommand,
+    signal: AbortSignal,
+  ): Promise<NativeSessionResult> => {
+    signal.throwIfAborted();
+    const client = await this.#client;
+    signal.throwIfAborted();
+    return await client.manageNativeSession(command, signal);
   };
 
   readonly cancel = async (request: CancelRequest): Promise<void> => {
@@ -301,6 +326,7 @@ export async function prepareActiveSession(
     (expectedSessionId.length > 0 &&
       conversation.sessionId !== expectedSessionId) ||
     !initialStore.runtime.canSend ||
+    conversation.session instanceof DeletedSessionState ||
     conversation.session.isReady ||
     conversation.session.isPreparing
   ) {
@@ -338,6 +364,45 @@ export async function listWorkspace(
     bindingId: "workspace",
     directoryId,
   });
+}
+
+type NativeSessionAction =
+  | { readonly action: "list"; readonly cursor: string | null }
+  | { readonly action: "import" | "fork"; readonly entryId: string }
+  | { readonly action: "delete"; readonly entryId: string };
+
+export interface NativeSessionScope {
+  readonly agentId: string;
+  readonly directoryId: string;
+  readonly sessionId: string;
+}
+
+export async function manageNativeSession(
+  scope: NativeSessionScope,
+  action: NativeSessionAction,
+  signal: AbortSignal,
+): Promise<NativeSessionResult> {
+  const identity = {
+    additionalDirectoryIds: [],
+    agentId: scope.agentId,
+    bindingId: "workspace",
+    directoryId: scope.directoryId,
+    sessionId: scope.sessionId,
+    requestId: crypto.randomUUID(),
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    kind: "native.session.request",
+  } satisfies Omit<NativeSessionCommand, "action">;
+  switch (action.action) {
+    case "import":
+    case "fork":
+      return await transport.nativeSession(
+        { ...identity, ...action, targetSessionId: crypto.randomUUID() },
+        signal,
+      );
+    case "list":
+    case "delete":
+      return await transport.nativeSession({ ...identity, ...action }, signal);
+  }
 }
 
 export type SessionConfigurationResult =

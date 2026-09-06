@@ -21,6 +21,7 @@ import { SessionConfigControls } from "@/components/session-config-controls";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkspacePicker } from "@/components/workspace-picker";
+import { DeletedSessionState } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
   AttachmentReadError,
@@ -293,6 +294,20 @@ export function ChatComposer({ placement }: ChatComposerProps) {
       )}
       data-composer-placement={placement}
     >
+      {conversation.session instanceof DeletedSessionState ? (
+        <p
+          className="mx-auto mb-3 max-w-[840px] text-sm text-muted-foreground"
+          role="status"
+        >
+          This native session was deleted. Start a new chat to continue.
+          Messages recorded here are retained.
+        </p>
+      ) : conversation.session.restored &&
+        conversation.messages.length === 0 ? (
+        <p className="mx-auto mb-3 max-w-[840px] text-sm text-muted-foreground">
+          Continue with the Agent’s saved context.
+        </p>
+      ) : null}
       {errorMessage.length > 0 && (
         <div
           className="mx-auto mb-2 w-full max-w-[840px] rounded-[9px] border-[0.5px] border-destructive/20 bg-destructive/5 px-[11px] py-[9px] text-xs leading-[18px] text-destructive"
@@ -321,7 +336,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                 <Button
                   aria-label={`Remove ${directory.name}`}
                   className="size-11 rounded-full text-success md:size-8"
-                  disabled={conversation.messages.length > 0}
+                  disabled={conversation.contextLocked}
                   onClick={() => toggleAdditionalDirectory(directory)}
                   size="icon"
                   variant="ghost"

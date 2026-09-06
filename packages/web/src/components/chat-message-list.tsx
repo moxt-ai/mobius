@@ -1,3 +1,8 @@
+import {
+  type NativeSessionHistory,
+  parseNativeHistoryText,
+  SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
+} from "@moxt-ai/mobius-web-sdk";
 import { ArrowDown, MoreHorizontal } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { AgentActivityList } from "@/components/agent-activity-list";
@@ -10,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import {
   AgentChatMessage,
   type ChatMessage,
+  NativeHistoryChatMessage,
   UserChatMessage,
 } from "@/domain/chat";
 import { cn } from "@/lib/utils";
@@ -46,7 +52,8 @@ function EmptyConversation() {
         What can I help you work on?
       </h2>
       <p className="empty-conversation-description mx-auto mt-2 max-w-[520px] text-sm leading-[22px] text-copy-secondary max-md:max-w-[420px] max-md:text-[13px] max-md:leading-5">
-        Plan, inspect, and make changes in your authorized local workspace.
+        Plan, inspect, and make changes in your conversation’s working
+        directory.
       </p>
       <ChatComposer placement="idle" />
       <fieldset className="empty-conversation-suggestions mx-auto mt-4 grid max-w-[720px] grid-cols-3 gap-2 border-0 p-0 text-left max-md:grid-cols-1 max-md:gap-1.5">
@@ -75,29 +82,38 @@ function EmptyConversation() {
   );
 }
 
-function UserMessage({ message }: { readonly message: UserChatMessage }) {
+function UserMessage({
+  message,
+}: {
+  readonly message: Pick<UserChatMessage, "text" | "images" | "resources">;
+}) {
   return (
     <article
       aria-label="Message from you"
       className="mb-4 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
     >
-      <div className="max-w-[85%] max-md:max-w-[92%]">
-        <div className="overflow-wrap-anywhere grid gap-2 rounded-md bg-black/[0.05] px-4 py-3 text-[15px] leading-6 whitespace-pre-wrap text-foreground">
+      <div className="min-w-0 max-w-[85%] max-md:max-w-[92%]">
+        <div className="grid min-w-0 gap-2 rounded-md bg-black/[0.05] px-4 py-3 text-[15px] leading-6 whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
           {message.images.length > 0 && (
-            <div className="grid grid-cols-2 gap-1.5">
-              {message.images.map((image) =>
+            <div
+              className={cn(
+                "grid min-w-0 gap-1.5",
+                message.images.length > 1 && "grid-cols-2",
+              )}
+            >
+              {message.images.map((image, index) =>
                 SAFE_IMAGE_MIME.test(image.mimeType) ? (
                   <img
                     alt={image.name}
-                    className="max-h-56 w-full rounded-lg object-cover"
-                    key={image.name}
+                    className="h-auto max-h-56 max-w-full rounded-lg object-contain object-left"
+                    key={`${index.toString()}:${image.name}`}
                     loading="lazy"
                     src={`data:${image.mimeType};base64,${image.data}`}
                   />
                 ) : (
                   <span
                     className="rounded-lg border-[0.5px] border-black/9 bg-white/70 p-2 text-[10px] text-muted-foreground"
-                    key={image.name}
+                    key={`${index.toString()}:${image.name}`}
                   >
                     {image.name}
                   </span>
@@ -222,6 +238,59 @@ function AgentMessage({
   );
 }
 
+export function NativeSessionHistoryView({
+  history,
+  agentLabel,
+}: {
+  readonly history: NativeSessionHistory;
+  readonly agentLabel: string;
+}) {
+  if (history.status === "unavailable")
+    return (
+      <p
+        className="mb-5 text-center text-xs text-muted-foreground"
+        role="status"
+      >
+        This Agent restores context but does not provide message history.
+      </p>
+    );
+  const messages = history.messages.slice(
+    -SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
+  );
+  const truncated =
+    history.truncated || messages.length < history.messages.length;
+  return (
+    <section aria-label="Previous conversation history">
+      <p className="mb-5 text-center text-xs text-muted-foreground">
+        {truncated
+          ? `Showing the last ${messages.length.toString()} messages. Earlier history is not shown.`
+          : "Previous conversation from the Agent"}
+      </p>
+      {messages.map((entry, index) => {
+        const parsed = parseNativeHistoryText(entry.text);
+        return entry.role === "user" ? (
+          <UserMessage
+            key={index.toString()}
+            message={{
+              text: parsed.text,
+              images: [...(entry.images ?? []), ...parsed.images],
+              resources: [],
+            }}
+          />
+        ) : (
+          <article
+            aria-label={`Previous message from ${agentLabel}`}
+            className="mb-6 text-[15px] leading-6"
+            key={index.toString()}
+          >
+            <AgentMarkdown markdown={entry.text} streaming={false} />
+          </article>
+        );
+      })}
+    </section>
+  );
+}
+
 function Message({
   agentLabel,
   message,
@@ -231,6 +300,14 @@ function Message({
   readonly message: ChatMessage;
   readonly sessionId: string;
 }) {
+  if (message instanceof NativeHistoryChatMessage) {
+    return (
+      <NativeSessionHistoryView
+        history={message.history}
+        agentLabel={agentLabel}
+      />
+    );
+  }
   if (message instanceof UserChatMessage) {
     return <UserMessage message={message} />;
   }

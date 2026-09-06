@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 const DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024;
 const PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS = 1_000;
@@ -80,14 +80,6 @@ export interface RunProcessOptions {
   readonly timeoutMilliseconds: number;
 }
 
-function isInside(root: string, candidate: string): boolean {
-  const difference = relative(root, candidate);
-  return (
-    difference.length === 0 ||
-    (!difference.startsWith("..") && !isAbsolute(difference))
-  );
-}
-
 function executableExtensions(
   executableName: string,
   environment: Readonly<NodeJS.ProcessEnv>,
@@ -142,12 +134,10 @@ export async function resolveExecutablePath(
 export async function findExecutableOnPath(
   executableName: string,
   environment: Readonly<NodeJS.ProcessEnv>,
-  approvedRoot: string,
   platform: NodeJS.Platform = process.platform,
 ): Promise<ResolvedExecutable | null> {
   const encodedPath = environment["PATH"] ?? "";
   const separator = platform === "win32" ? ";" : ":";
-  const approvedRealPath = await realpath(resolve(approvedRoot));
   const extensions = executableExtensions(
     executableName,
     environment,
@@ -162,11 +152,7 @@ export async function findExecutableOnPath(
         join(entry, `${executableName}${extension}`),
       );
       const executable = await resolveExecutablePath(requestedPath, platform);
-      if (
-        executable !== null &&
-        !isInside(approvedRealPath, requestedPath) &&
-        !isInside(approvedRealPath, executable.path)
-      ) {
+      if (executable !== null) {
         return executable;
       }
     }

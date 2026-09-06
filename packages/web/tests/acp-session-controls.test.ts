@@ -1,5 +1,6 @@
 import type {
   AgentContentEvent,
+  NativeSessionResult,
   SessionCommandsUpdatedEvent,
   SessionConfigUpdatedEvent,
   SessionElicitationRequestedEvent,
@@ -38,6 +39,7 @@ const ready: SessionReadyEvent = {
     listSessions: false,
     loadSession: true,
     resumeSession: true,
+    unstableForkSession: false,
   },
   commands: [],
   configOptions: [
@@ -60,8 +62,8 @@ const ready: SessionReadyEvent = {
       ],
     },
   ],
-  directoryId: "root",
-  directoryLabel: "mobius",
+  directoryId: "default",
+  directoryLabel: "~/.mobius/workspace",
   kind: "session.ready",
   protocolVersion: 1,
   requestId: "prepare-1",
@@ -84,6 +86,75 @@ function configure(): void {
 }
 
 describe("ACP session controls", () => {
+  it("Given an imported conversation without local messages, When the user changes context or opens it again, Then its Agent and workspace stay fixed and a new chat remains available", () => {
+    configure();
+    const imported = {
+      action: "import",
+      kind: "native.session.result",
+      protocolVersion: 1,
+      requestId: "native-import",
+      sessionId: "browser-draft",
+      ready,
+      title: "Saved Agent conversation",
+      history: { status: "unavailable" },
+    } satisfies NativeSessionResult;
+    useChatStore.getState().openNativeConversation(imported);
+    useChatStore.getState().selectPrimaryDirectory({
+      directoryId: "another",
+      name: "Other workspace",
+    });
+    useChatStore.getState().toggleAdditionalDirectory({
+      directoryId: "another",
+      name: "Other workspace",
+    });
+    const conversation = useChatStore.getState().conversations[0];
+    expect(conversation).toMatchObject({
+      title: imported.title,
+      sessionId: ready.sessionId,
+      directoryId: "default",
+      additionalDirectories: [],
+      messages: [expect.objectContaining({ history: imported.history })],
+      contextLocked: true,
+    });
+    useChatStore.getState().createConversation();
+    expect(useChatStore.getState().activeConversationId).not.toBe(
+      ready.sessionId,
+    );
+    const count = useChatStore.getState().conversations.length;
+    useChatStore.getState().openNativeConversation(imported);
+    expect(useChatStore.getState().conversations).toHaveLength(count);
+    expect(useChatStore.getState().activeConversationId).toBe(ready.sessionId);
+    const turn = useChatStore
+      .getState()
+      .beginTurn("Continue this conversation");
+    useChatStore.getState().completeTurn(turn, "native-turn", "end_turn");
+    useChatStore.getState().applySessionInfo({
+      kind: "session.info.updated",
+      protocolVersion: 1,
+      sessionId: ready.sessionId,
+      title: null,
+      updatedAt: "2026-09-05T00:00:00Z",
+    });
+    expect(
+      useChatStore
+        .getState()
+        .conversations.find((entry) => entry.sessionId === ready.sessionId)
+        ?.title,
+    ).toBe(imported.title);
+    useChatStore.getState().applyNativeSessionDeletion([ready.sessionId]);
+    expect(
+      useChatStore
+        .getState()
+        .conversations.find((entry) => entry.sessionId === ready.sessionId)
+        ?.session,
+    ).toMatchObject({
+      isReady: false,
+      autoPrepare: false,
+      restored: true,
+      label: "Native session deleted",
+    });
+  });
+
   it("Given final Agent usage with or without context measurements, When a browser receives or restores snapshots, Then token details remain separate from context and cost", () => {
     configure();
     const sessionId = useChatStore.getState().conversations[0]?.sessionId ?? "";
@@ -138,7 +209,7 @@ describe("ACP session controls", () => {
         ready.capabilities,
         [],
         [],
-        "root",
+        "default",
         "mobius",
         [],
         [],
@@ -183,7 +254,7 @@ describe("ACP session controls", () => {
       .setSessionPreparationFailed(
         sessionId,
         "codex",
-        "root",
+        "default",
         [],
         "operation_timeout",
       );
@@ -226,7 +297,9 @@ describe("ACP session controls", () => {
   it("Given agent capabilities were preloaded, When a directory is selected before the first turn, Then the conversation keeps its Mobius session identity", () => {
     configure();
     const sessionId = useChatStore.getState().conversations[0]?.sessionId ?? "";
-    useChatStore.getState().applySessionReady({ ...ready, sessionId });
+    useChatStore
+      .getState()
+      .applySessionReady({ ...ready, sessionId, restored: false });
 
     useChatStore.getState().toggleAdditionalDirectory({
       directoryId: "packages",
@@ -238,7 +311,7 @@ describe("ACP session controls", () => {
       .setSessionPreparationFailed(
         sessionId,
         "codex",
-        "root",
+        "default",
         [],
         "operation_timeout",
       );

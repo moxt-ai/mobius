@@ -4,7 +4,6 @@ import {
   mkdtemp,
   realpath,
   rm,
-  symlink,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -358,7 +357,7 @@ describe("local Agent installation authorization", () => {
           ),
         ).resolves.toBe(true);
         const inventory = await discoverLocalAgentInventory({
-          approvedRoot: stateDirectory,
+          defaultWorkspace: stateDirectory,
           environment: {
             MOBIUS_STATE_DIRECTORY: stateDirectory,
             PATH: "",
@@ -373,40 +372,6 @@ describe("local Agent installation authorization", () => {
         ).toMatchObject({ requiresLocalApproval: true });
       } finally {
         await rm(stateDirectory, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "Given an installation root symlink resolves inside the approved workspace, When Mobius prepares an installation, Then it rejects the target before any recipe can run",
-    async () => {
-      const directory = await mkdtemp(
-        join(tmpdir(), "mobius-install-root-boundary-"),
-      );
-      const workspace = join(directory, "workspace");
-      const stateDirectory = join(workspace, "managed-state");
-      const stateLink = join(directory, "state-link");
-      await mkdir(stateDirectory, { mode: 0o700, recursive: true });
-      await symlink(stateDirectory, stateLink, "dir");
-      try {
-        expect(
-          () =>
-            new FixedInstallationExecutor({
-              approvedRoot: workspace,
-              audit: new RecordingInstallationAudit(),
-              catalog: new LocalAgentCatalog(
-                [],
-                [new InstallableAgentDefinition("codex", "Codex")],
-              ),
-              environment: { MOBIUS_STATE_DIRECTORY: stateLink, PATH: "" },
-              publishCatalog: () => Promise.resolve(),
-              stateDirectory: stateLink,
-            }),
-        ).toThrow(
-          expect.objectContaining({ code: "unsafe_installation_root" }),
-        );
-      } finally {
-        await rm(directory, { force: true, recursive: true });
       }
     },
   );
@@ -452,7 +417,7 @@ describe("local Agent installation authorization", () => {
     try {
       const executor = new FixedInstallationExecutor(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: stateDirectory,
           audit,
           catalog,
           environment: { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: "" },
@@ -564,7 +529,7 @@ if (process.argv.includes("--version")) {
       await Promise.all([chmod(agentPath, 0o700), chmod(adapterPath, 0o700)]);
       const executor = new FixedInstallationExecutor(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit: new RecordingInstallationAudit(),
           catalog,
           environment: {
@@ -725,7 +690,7 @@ describe("automatic ACP adapter provisioning", () => {
       await writeExternalCodexAgent(agentPath);
       const inventory = await new AutomaticAdapterProvisioner(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit,
           catalog,
           environment: {
@@ -769,7 +734,7 @@ describe("automatic ACP adapter provisioning", () => {
     try {
       const inventory = await new AutomaticAdapterProvisioner(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit: new RecordingInstallationAudit(),
           catalog,
           environment: {
@@ -806,7 +771,7 @@ describe("automatic ACP adapter provisioning", () => {
       await writeExternalCodexAgent(agentPath);
       const inventory = await new AutomaticAdapterProvisioner(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit: new RecordingInstallationAudit(),
           catalog,
           environment: {
@@ -849,7 +814,7 @@ describe("automatic ACP adapter provisioning", () => {
       await writeExternalCodexAgent(agentPath);
       const inventory = await new AutomaticAdapterProvisioner(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit,
           catalog,
           environment: {
@@ -892,7 +857,7 @@ describe("automatic ACP adapter provisioning", () => {
       await writeExternalCodexAgent(agentPath);
       const provisioning = new AutomaticAdapterProvisioner(
         {
-          approvedRoot: repositoryRoot,
+          defaultWorkspace: repositoryRoot,
           audit,
           catalog,
           environment: {

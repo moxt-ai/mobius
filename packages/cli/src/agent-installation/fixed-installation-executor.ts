@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { AgentInstallationStage } from "@moxt-ai/mobius-protocol";
 
@@ -30,7 +30,7 @@ import {
 import { InstallerDownloadError } from "./verified-download.ts";
 
 export interface FixedInstallationExecutorOptions {
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly audit: InstallationAudit;
   readonly catalog: LocalAgentCatalog;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
@@ -68,25 +68,17 @@ function findRecipe(
   );
 }
 
-function isInside(root: string, candidate: string): boolean {
-  const difference = relative(resolve(root), resolve(candidate));
-  return (
-    difference.length === 0 ||
-    (!difference.startsWith("..") && !isAbsolute(difference))
-  );
-}
-
-function resolveApprovedRoot(path: string): string {
+function resolveDefaultWorkspace(path: string): string {
   try {
     const directory = realpathSync(resolve(path));
     if (!statSync(directory).isDirectory()) {
-      throw new Error("Approved root is not a directory");
+      throw new Error("Default workspace is not a directory");
     }
     return directory;
   } catch (error) {
     throw new InstallationManagerError(
       "unsafe_installation_root",
-      "The approved workspace is unavailable or unsafe",
+      "The default workspace is unavailable or unsafe",
       { cause: error },
     );
   }
@@ -152,7 +144,7 @@ function requiresAdapterReplacement(code: string): boolean {
 
 export class FixedInstallationExecutor implements InstallationExecutor {
   readonly #adapterInstaller: AdapterInstallationPort;
-  readonly #approvedRoot: string;
+  readonly #defaultWorkspace: string;
   readonly #audit: InstallationAudit;
   readonly #catalog: LocalAgentCatalog;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
@@ -167,17 +159,11 @@ export class FixedInstallationExecutor implements InstallationExecutor {
     recipes: readonly FixedAgentInstallRecipe[] = fixedAgentInstallRecipes(),
     adapterInstaller?: AdapterInstallationPort,
   ) {
-    const approvedRoot = resolveApprovedRoot(options.approvedRoot);
+    const defaultWorkspace = resolveDefaultWorkspace(options.defaultWorkspace);
     const stateDirectory = resolveUserInstallationDirectory(
       options.stateDirectory,
     );
-    if (isInside(approvedRoot, stateDirectory)) {
-      throw new InstallationManagerError(
-        "unsafe_installation_root",
-        "The Mobius state directory cannot be inside the approved workspace",
-      );
-    }
-    this.#approvedRoot = approvedRoot;
+    this.#defaultWorkspace = defaultWorkspace;
     this.#audit = options.audit;
     this.#catalog = options.catalog;
     this.#environment = Object.freeze({ ...options.environment });
@@ -188,7 +174,6 @@ export class FixedInstallationExecutor implements InstallationExecutor {
     this.#adapterInstaller =
       adapterInstaller ??
       new ManagedAdapterInstaller({
-        approvedRoot,
         environment: this.#environment,
         stateDirectory,
       });
@@ -213,7 +198,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
         },
       );
       const discoveryOptions = {
-        approvedRoot: this.#approvedRoot,
+        defaultWorkspace: this.#defaultWorkspace,
         environment: this.#environment,
         signal,
       };
@@ -249,7 +234,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
         environment[specification.agentOverrideVariable] = agent.path;
         environment[specification.adapterOverrideVariable] = adapter.path;
         const inventory = await discoverLocalAgentInventory({
-          approvedRoot: this.#approvedRoot,
+          defaultWorkspace: this.#defaultWorkspace,
           environment,
           signal,
           specifications: this.#specifications,

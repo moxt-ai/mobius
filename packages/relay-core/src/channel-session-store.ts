@@ -1,5 +1,6 @@
 import {
   MOBIUS_PROTOCOL_VERSION,
+  type NativeSessionHistory,
   type SessionCommandsUpdatedEvent,
   type SessionConfigOption,
   type SessionConfigUpdatedEvent,
@@ -24,6 +25,8 @@ export class RecordedSession {
   readonly directoryLabel: string;
   readonly pendingElicitations: readonly SessionElicitationRequestedEvent[];
   readonly pendingPermissions: readonly SessionPermissionRequestedEvent[];
+  readonly nativeHistory: NativeSessionHistory | null;
+  readonly status: "active" | "deleted";
   readonly restored: boolean;
   readonly sessionId: string;
   readonly title: string;
@@ -39,7 +42,11 @@ export class RecordedSession {
     usage: readonly SessionUsageUpdatedEvent[] = [],
     pendingPermissions: readonly SessionPermissionRequestedEvent[] = [],
     pendingElicitations: readonly SessionElicitationRequestedEvent[] = [],
+    nativeHistory: NativeSessionHistory | null = null,
+    status: "active" | "deleted" = "active",
   ) {
+    this.status = status;
+    this.nativeHistory = nativeHistory;
     this.additionalDirectories = ready.additionalDirectories;
     this.agentId = ready.agentId;
     this.agentName = ready.agentName;
@@ -57,6 +64,20 @@ export class RecordedSession {
     this.updatedAt = updatedAt;
     this.usage = usage;
   }
+
+  readonly withDeleted = (): RecordedSession =>
+    new RecordedSession(
+      this.readyEvent(),
+      this.configOptions,
+      this.commands,
+      this.title,
+      this.updatedAt,
+      this.usage,
+      [],
+      [],
+      this.nativeHistory,
+      "deleted",
+    );
 
   readonly readyEvent = (): SessionReadyEvent => ({
     additionalDirectories: this.additionalDirectories,
@@ -87,6 +108,8 @@ export class RecordedSession {
       this.usage,
       this.pendingPermissions,
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withCommands = (
@@ -101,18 +124,25 @@ export class RecordedSession {
       this.usage,
       this.pendingPermissions,
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
-  readonly withInfo = (title: string, updatedAt: string): RecordedSession =>
+  readonly withInfo = (
+    title: string | null,
+    updatedAt: string,
+  ): RecordedSession =>
     new RecordedSession(
       this.readyEvent(),
       this.configOptions,
       this.commands,
-      title,
+      title ?? this.title,
       updatedAt,
       this.usage,
       this.pendingPermissions,
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withUsage = (usage: SessionUsageUpdatedEvent): RecordedSession =>
@@ -125,6 +155,8 @@ export class RecordedSession {
       [...this.usage.filter((entry) => entry.source !== usage.source), usage],
       this.pendingPermissions,
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withPermission = (
@@ -144,6 +176,8 @@ export class RecordedSession {
         permission,
       ],
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withoutPermission = (interactionId: string): RecordedSession =>
@@ -158,6 +192,8 @@ export class RecordedSession {
         (entry) => entry.interactionId !== interactionId,
       ),
       this.pendingElicitations,
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withElicitation = (
@@ -177,6 +213,8 @@ export class RecordedSession {
         ),
         elicitation,
       ],
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withoutElicitation = (interactionId: string): RecordedSession =>
@@ -191,6 +229,8 @@ export class RecordedSession {
       this.pendingElicitations.filter(
         (entry) => entry.interactionId !== interactionId,
       ),
+      this.nativeHistory,
+      this.status,
     );
 
   readonly withoutInteractionsForCommands = (
@@ -209,6 +249,8 @@ export class RecordedSession {
       this.pendingElicitations.filter(
         (entry) => !commandIds.has(entry.commandId),
       ),
+      this.nativeHistory,
+      this.status,
     );
 
   readonly resolveElicitation = (
@@ -229,6 +271,7 @@ export class RecordedSession {
 }
 
 export interface ChannelSessionStore {
+  readonly removeSessions: (sessionIds: readonly string[]) => void;
   readonly clearInteractionsForCommands: (
     commandIds: readonly string[],
   ) => void;
@@ -238,7 +281,10 @@ export interface ChannelSessionStore {
   readonly recordElicitation: (event: SessionElicitationRequestedEvent) => void;
   readonly recordInfo: (event: SessionInfoUpdatedEvent) => void;
   readonly recordPermission: (event: SessionPermissionRequestedEvent) => void;
-  readonly recordReady: (event: SessionReadyEvent) => void;
+  readonly recordReady: (
+    event: SessionReadyEvent,
+    history?: NativeSessionHistory,
+  ) => void;
   readonly recordUsage: (event: SessionUsageUpdatedEvent) => void;
   readonly resolveElicitation: (event: SessionElicitationResolvedEvent) => void;
   readonly resolvePermission: (event: SessionPermissionResolvedEvent) => void;
@@ -246,6 +292,12 @@ export interface ChannelSessionStore {
 
 export class MemoryChannelSessionStore implements ChannelSessionStore {
   readonly #sessions = new Map<string, RecordedSession>();
+  readonly removeSessions = (sessionIds: readonly string[]): void => {
+    for (const id of sessionIds) {
+      const session = this.#sessions.get(id);
+      if (session !== undefined) this.#sessions.set(id, session.withDeleted());
+    }
+  };
 
   readonly clearInteractionsForCommands = (
     commandIds: readonly string[],
@@ -264,7 +316,10 @@ export class MemoryChannelSessionStore implements ChannelSessionStore {
       left.sessionId.localeCompare(right.sessionId),
     );
 
-  readonly recordReady = (event: SessionReadyEvent): void => {
+  readonly recordReady = (
+    event: SessionReadyEvent,
+    history?: NativeSessionHistory,
+  ): void => {
     const previous = this.#sessions.get(event.sessionId);
     this.#sessions.set(
       event.sessionId,
@@ -277,6 +332,8 @@ export class MemoryChannelSessionStore implements ChannelSessionStore {
         previous?.usage ?? [],
         previous?.pendingPermissions ?? [],
         previous?.pendingElicitations ?? [],
+        history ?? previous?.nativeHistory ?? null,
+        previous?.status ?? "active",
       ),
     );
   };

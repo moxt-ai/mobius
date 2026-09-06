@@ -80,7 +80,7 @@ const configOptionSchema = z
 
 export type SessionConfigOption = z.infer<typeof configOptionSchema>;
 
-const sessionCapabilitiesSchema = z
+export const sessionCapabilitiesSchema = z
   .strictObject({
     additionalDirectories: z.boolean(),
     audioPrompt: z.boolean(),
@@ -91,6 +91,7 @@ const sessionCapabilitiesSchema = z
     listSessions: z.boolean(),
     loadSession: z.boolean(),
     resumeSession: z.boolean(),
+    unstableForkSession: z.boolean().default(false),
   })
   .readonly();
 
@@ -253,7 +254,7 @@ const sessionPrepareCommandSchema = z
 
 export type SessionPrepareCommand = z.infer<typeof sessionPrepareCommandSchema>;
 
-const sessionReadyEventSchema = z
+export const sessionReadyEventSchema = z
   .strictObject({
     additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
     agentId: IDENTIFIER,
@@ -368,7 +369,7 @@ const sessionInfoUpdatedEventSchema = z
     kind: z.literal(SESSION_INFO_UPDATED_KIND),
     protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
-    title: z.string().max(500),
+    title: z.string().max(500).nullable(),
     updatedAt: z.string().max(128),
   })
   .readonly();

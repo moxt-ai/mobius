@@ -12,7 +12,7 @@ export function AgentPicker() {
   const agents = useChatStore((state) => state.agents);
   const conversation = useChatStore(selectActiveConversation);
   const selectAgent = useChatStore((state) => state.selectAgent);
-  const locked = conversation.messages.length > 0 || conversation.isRunning;
+  const locked = conversation.contextLocked || conversation.isRunning;
 
   return (
     <Select

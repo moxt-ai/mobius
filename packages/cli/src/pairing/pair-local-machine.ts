@@ -20,6 +20,7 @@ import {
   createDaemonConfig,
   type DaemonConfig,
   type LocalAgentDefinition,
+  loadDefaultWorkspace,
 } from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
@@ -31,7 +32,7 @@ const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const MAX_CONNECTION_FILE_LENGTH = 16 * 1024;
 const CLAIM_RESPONSE_KEYS: readonly string[] = ["channelId", "daemonToken"];
 const SAVED_CONNECTION_KEYS: readonly string[] = [
-  "approvedRoot",
+  "defaultWorkspace",
   "channelId",
   "daemonToken",
   "relayOrigin",
@@ -40,7 +41,7 @@ const SAVED_CONNECTION_KEYS: readonly string[] = [
 interface PairCommandOptions {
   readonly code: string;
   readonly relayOrigin: URL;
-  readonly root: string;
+  readonly workspace: string;
 }
 
 interface ClaimPairingResponse {
@@ -49,7 +50,7 @@ interface ClaimPairingResponse {
 }
 
 interface SavedConnection {
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly channelId: string;
   readonly daemonToken: string;
   readonly relayOrigin: URL;
@@ -117,7 +118,7 @@ function readSingleOption(
 function assertKnownArguments(arguments_: readonly string[]): void {
   for (let index = 0; index < arguments_.length; index += 2) {
     const option = arguments_[index];
-    if (option !== "--url" && option !== "--code" && option !== "--root") {
+    if (option !== "--url" && option !== "--code" && option !== "--workspace") {
       throw new PairingClientError(
         "invalid_arguments",
         `Unknown pairing option: ${option ?? "missing option"}`,
@@ -181,7 +182,9 @@ function parsePairCommand(arguments_: readonly string[]): PairCommandOptions {
   return {
     code: parsePairingCode(readSingleOption(arguments_, "--code")),
     relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
-    root: readSingleOption(arguments_, "--root"),
+    workspace: arguments_.includes("--workspace")
+      ? readSingleOption(arguments_, "--workspace")
+      : loadDefaultWorkspace(),
   };
 }
 
@@ -202,25 +205,26 @@ function parseChannelArgument(arguments_: readonly string[]): string {
   return channelId;
 }
 
-async function resolveApprovedRoot(path: string): Promise<string> {
-  const requestedRoot = resolve(path);
+async function resolveDefaultWorkspace(path: string): Promise<string> {
+  const requestedWorkspace = resolve(path);
   try {
-    const approvedRoot = await realpath(requestedRoot);
-    const metadata = await stat(approvedRoot);
+    await mkdir(requestedWorkspace, { recursive: true, mode: 0o700 });
+    const defaultWorkspace = await realpath(requestedWorkspace);
+    const metadata = await stat(defaultWorkspace);
     if (!metadata.isDirectory()) {
       throw new PairingClientError(
         "invalid_workspace",
-        "The approved workspace root is not a directory",
+        "The default workspace is not a directory",
       );
     }
-    return approvedRoot;
+    return defaultWorkspace;
   } catch (error) {
     if (error instanceof PairingClientError) {
       throw error;
     }
     throw new PairingClientError(
       "invalid_workspace",
-      "The approved workspace root cannot be resolved",
+      "The default workspace cannot be resolved",
       { cause: error },
     );
   }
@@ -287,7 +291,7 @@ function decodeClaimResponse(value: unknown): ClaimPairingResponse {
 
 async function claimPairing(
   options: PairCommandOptions,
-  approvedRoot: string,
+  defaultWorkspace: string,
   localAgents: readonly LocalAgentDefinition[],
   installableAgents: readonly InstallableAgentDefinition[],
   signal: AbortSignal,
@@ -309,7 +313,7 @@ async function claimPairing(
         })),
         machineName: hostname(),
         pairingCode: options.code,
-        workspaceName: basename(approvedRoot) || "Local workspace",
+        workspaceName: basename(defaultWorkspace) || "Local workspace",
       }),
       dispatcher: environmentProxyDispatcher,
       headers: { "content-type": "application/json" },
@@ -338,7 +342,7 @@ async function persistConnection(
   channelId: string,
   relayOrigin: URL,
   daemonToken: string,
-  approvedRoot: string,
+  defaultWorkspace: string,
 ): Promise<string> {
   const connectionsDirectory = join(readStateDirectory(), "connections");
   await mkdir(connectionsDirectory, { mode: 0o700, recursive: true });
@@ -351,7 +355,7 @@ async function persistConnection(
     temporaryPath,
     `${JSON.stringify(
       {
-        approvedRoot,
+        defaultWorkspace,
         channelId,
         daemonToken,
         relayOrigin: relayOrigin.toString(),
@@ -375,12 +379,12 @@ function decodeSavedConnection(
       "The saved connection is invalid",
     );
   }
-  const approvedRoot = value["approvedRoot"];
+  const defaultWorkspace = value["defaultWorkspace"];
   const channelId = value["channelId"];
   const daemonToken = value["daemonToken"];
   const relayOrigin = value["relayOrigin"];
   if (
-    typeof approvedRoot !== "string" ||
+    typeof defaultWorkspace !== "string" ||
     typeof channelId !== "string" ||
     channelId !== expectedChannelId ||
     !IDENTIFIER_PATTERN.test(channelId) ||
@@ -394,7 +398,7 @@ function decodeSavedConnection(
     );
   }
   return {
-    approvedRoot,
+    defaultWorkspace,
     channelId,
     daemonToken,
     relayOrigin: parseRelayOrigin(relayOrigin),
@@ -436,7 +440,9 @@ async function readSavedConnection(
   }
   const connection = decodeSavedConnection(value, channelId);
   return {
-    approvedRoot: await resolveApprovedRoot(connection.approvedRoot),
+    defaultWorkspace: await resolveDefaultWorkspace(
+      connection.defaultWorkspace,
+    ),
     channelId: connection.channelId,
     daemonToken: connection.daemonToken,
     relayOrigin: connection.relayOrigin,
@@ -477,7 +483,7 @@ function buildPairedDaemon(
     ).toString(),
     config: createDaemonConfig(
       {
-        approvedRoot: connection.approvedRoot,
+        defaultWorkspace: connection.defaultWorkspace,
         auditDatabasePath,
         channelId: connection.channelId,
         relayUrl,
@@ -494,9 +500,9 @@ export async function pairLocalMachine(
   signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
   const options = parsePairCommand(arguments_);
-  const approvedRoot = await resolveApprovedRoot(options.root);
+  const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
   const inventory = await discoverLocalAgentInventory({
-    approvedRoot,
+    defaultWorkspace,
     environment: process.env,
     signal,
   });
@@ -504,7 +510,7 @@ export async function pairLocalMachine(
   const agents = inventory.readyAgents();
   const claim = await claimPairing(
     options,
-    approvedRoot,
+    defaultWorkspace,
     agents,
     inventory.installable,
     signal,
@@ -513,11 +519,11 @@ export async function pairLocalMachine(
     claim.channelId,
     options.relayOrigin,
     claim.daemonToken,
-    approvedRoot,
+    defaultWorkspace,
   );
   return buildPairedDaemon(
     {
-      approvedRoot,
+      defaultWorkspace,
       channelId: claim.channelId,
       daemonToken: claim.daemonToken,
       relayOrigin: options.relayOrigin,
@@ -539,7 +545,7 @@ export async function resumeLocalMachine(
   );
   const connection = await readSavedConnection(channelId);
   const inventory = await discoverLocalAgentInventory({
-    approvedRoot: connection.approvedRoot,
+    defaultWorkspace: connection.defaultWorkspace,
     environment: process.env,
     signal,
   });

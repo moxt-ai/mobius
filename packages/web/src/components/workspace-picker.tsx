@@ -10,9 +10,9 @@ import {
   FolderOpen,
   FolderPlus,
   FolderSearch,
+  Home,
   LoaderCircle,
   Search,
-  ShieldCheck,
   X,
 } from "lucide-react";
 import {
@@ -140,7 +140,7 @@ export function WorkspacePicker() {
   const panelRef = useRef<HTMLElement>(null);
   const requestSequenceRef = useRef(0);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const locked = conversation.messages.length > 0 || conversation.isRunning;
+  const locked = conversation.contextLocked || conversation.isRunning;
 
   const load = (directoryId: string): void => {
     const requestSequence = requestSequenceRef.current + 1;
@@ -292,7 +292,7 @@ export function WorkspacePicker() {
             close();
           } else {
             setPanelLayout(PENDING_PANEL_LAYOUT);
-            load(conversation.directoryId);
+            load("home");
           }
         }}
         ref={triggerRef}
@@ -364,6 +364,27 @@ export function WorkspacePicker() {
                   <X className="size-4" />
                 </Button>
               </header>
+              <nav
+                aria-label="Directory shortcuts"
+                className="flex shrink-0 gap-1 border-b-[0.5px] border-black/7 px-3 py-1.5"
+              >
+                <Button
+                  className="min-h-11 gap-2 text-xs"
+                  onClick={() => load("home")}
+                  variant="ghost"
+                >
+                  <Home aria-hidden="true" className="size-3.5" />
+                  Home
+                </Button>
+                <Button
+                  className="min-h-11 gap-2 text-xs"
+                  onClick={() => load("default")}
+                  variant="ghost"
+                >
+                  <FolderOpen aria-hidden="true" className="size-3.5" />
+                  Default workspace
+                </Button>
+              </nav>
               {browser instanceof LoadingDirectoryBrowserState && (
                 <div
                   aria-live="polite"
@@ -426,10 +447,6 @@ export function WorkspacePicker() {
                             {browser.entries.directoryLabel}
                           </p>
                         </div>
-                        <ShieldCheck
-                          aria-label="Approved local folder"
-                          className="size-3.5 shrink-0 text-success"
-                        />
                       </div>
                     </div>
                     <label className="relative mt-2.5 block">

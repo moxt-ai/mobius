@@ -22,6 +22,9 @@ import {
   decodeAgentInstallStartedEvent,
   decodeAgentMessageDeltaEvent,
   decodeMessageKind,
+  decodeNativeSessionCancel,
+  decodeNativeSessionCommand,
+  decodeNativeSessionResult,
   decodeSessionCancelCommand,
   decodeSessionCommandsUpdatedEvent,
   decodeSessionCompletedEvent,
@@ -43,10 +46,14 @@ import {
   decodeSessionUsageUpdatedEvent,
   decodeWorkspaceEntriesEvent,
   decodeWorkspaceListCommand,
+  encodeNativeSessionResult,
   encodeRuntimeStatusEvent,
   encodeSessionFailedEvent,
   encodeSessionOperationFailedEvent,
   MOBIUS_PROTOCOL_VERSION,
+  NATIVE_SESSION_CANCEL_KIND,
+  NATIVE_SESSION_REQUEST_KIND,
+  NATIVE_SESSION_RESULT_KIND,
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
   SESSION_COMMANDS_UPDATED_KIND,
@@ -76,7 +83,11 @@ import {
   type ChannelSessionStore,
   MemoryChannelSessionStore,
 } from "./channel-session-store.ts";
-import { ChannelHistory, type ChannelTurnStore } from "./channel-turn-store.ts";
+import {
+  ChannelHistory,
+  type ChannelTurnStore,
+  CompletedRecordedTurn,
+} from "./channel-turn-store.ts";
 
 const MAX_MESSAGE_LENGTH = 8 * 1024 * 1024;
 const DAEMON_START_TIMEOUT_MILLISECONDS = 15_000;
@@ -173,13 +184,36 @@ export class ChannelActor {
       return;
     }
 
+    let recordedMessage = message;
     try {
-      this.recordDaemonMessage(message);
+      if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
+        const result = decodeNativeSessionResult(message);
+        if (
+          (result.action === "import" || result.action === "fork") &&
+          result.history.status === "available"
+        ) {
+          recordedMessage = encodeNativeSessionResult({
+            ...result,
+            history: {
+              ...result.history,
+              coveredCommandIds: this.turnStore
+                .readTurns()
+                .filter(
+                  (turn) =>
+                    turn.sessionId === result.ready.sessionId &&
+                    turn instanceof CompletedRecordedTurn,
+                )
+                .map((turn) => turn.commandId),
+            },
+          });
+        }
+      }
+      this.recordDaemonMessage(recordedMessage);
     } catch {
       socket.close(1008, "Invalid protocol message");
       return;
     }
-    this.broadcast(this.peers.hosts(), message);
+    this.broadcast(this.peers.hosts(), recordedMessage);
   };
 
   readonly receiveHostMessage = (
@@ -193,6 +227,16 @@ export class ChannelActor {
 
     try {
       const kind = decodeMessageKind(message);
+      if (kind === NATIVE_SESSION_REQUEST_KIND) {
+        const command = decodeNativeSessionCommand(message);
+        this.receiveControl(message, command.requestId, command.sessionId);
+        return;
+      }
+      if (kind === NATIVE_SESSION_CANCEL_KIND) {
+        const command = decodeNativeSessionCancel(message);
+        this.receiveControl(message, command.requestId, command.sessionId);
+        return;
+      }
       if (kind === SESSION_PROMPT_KIND) {
         this.receivePrompt(message);
         return;
@@ -373,6 +417,22 @@ export class ChannelActor {
   private recordDaemonMessage(message: string): void {
     const kind = decodeMessageKind(message);
     const now = this.clock.now();
+    if (kind === NATIVE_SESSION_RESULT_KIND) {
+      const result = decodeNativeSessionResult(message);
+      if (result.action === "import" || result.action === "fork") {
+        this.sessionStore.recordReady(result.ready, result.history);
+        this.sessionStore.recordInfo({
+          kind: SESSION_INFO_UPDATED_KIND,
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId: result.ready.sessionId,
+          title: result.title,
+          updatedAt: "",
+        });
+      } else if (result.action === "delete") {
+        this.sessionStore.removeSessions(result.deletedSessionIds);
+      }
+      return;
+    }
     if (kind === SESSION_STARTED_KIND) {
       this.turnStore.markStarted(decodeSessionStartedEvent(message), now);
       return;

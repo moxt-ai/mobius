@@ -1,6 +1,7 @@
 import { LoaderCircle, MessageSquare, Plus, Settings, X } from "lucide-react";
 
 import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
+import { NativeSessionBrowser } from "@/components/native-session-browser";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
@@ -51,7 +52,7 @@ export function ConversationSidebar({
   const selectConversation = useChatStore((state) => state.selectConversation);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
-  const workspaceName = useChatStore((state) => state.workspaceName);
+  const machineName = useChatStore((state) => state.machineName);
   const runningConversations = conversations.filter(
     (conversation) => conversation.isRunning,
   );
@@ -178,6 +179,7 @@ export function ConversationSidebar({
                 ⌘ N
               </kbd>
             </Button>
+            {!settingsOpen && <NativeSessionBrowser />}
           </div>
 
           <nav
@@ -232,7 +234,7 @@ export function ConversationSidebar({
 
           <div className="flex min-h-[56px] items-center justify-between gap-3 border-t-[0.5px] border-black/6 px-4 py-2.5">
             <strong className="min-w-0 flex-1 truncate text-xs leading-[18px] font-medium">
-              {workspaceName}
+              {machineName}
             </strong>
             <SidebarRuntimeStatus runtime={runtime} />
           </div>

@@ -1,5 +1,6 @@
 import {
   decodeAgentDisplayContentValue,
+  decodeNativeSessionHistory,
   decodePromptImagesValue,
   decodePromptResourcesValue,
   decodeSessionCommandsUpdatedEvent,
@@ -539,6 +540,12 @@ function decodeRecordedSession(value: unknown): RecordedSession {
   const elicitations = elicitationValue.map((entry) =>
     decodeSessionElicitationRequestedEvent(JSON.stringify(entry)),
   );
+  const status = value["status"] ?? "active";
+  if (status !== "active" && status !== "deleted")
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid session status.",
+    );
   return new RecordedSession(
     ready.additionalDirectories,
     ready.agentId,
@@ -556,6 +563,10 @@ function decodeRecordedSession(value: unknown): RecordedSession {
     readText(value["title"], "session title", 500),
     readText(value["updatedAt"], "session update time", 128),
     usage,
+    value["nativeHistory"] == null
+      ? null
+      : decodeNativeSessionHistory(value["nativeHistory"]),
+    status,
   );
 }
 
@@ -793,5 +804,5 @@ export async function readChannelHistoryForSynchronization(
 }
 
 export function pairingCommand(pairing: CreatedPairing): string {
-  return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --code ${pairing.pairingCode} --root "$PWD"`;
+  return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --code ${pairing.pairingCode}`;
 }

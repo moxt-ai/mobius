@@ -1,21 +1,22 @@
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-
 import {
   type InstallableAgentDefinition,
   LocalAgentCatalog,
   type LocalAgentDefinition,
 } from "./agent-catalog/local-agent.ts";
+import { readStateDirectory } from "./storage/state-directory.ts";
 
 export { LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
 
-export function loadApprovedRoot(): string {
-  // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-  return process.env["MOBIUS_APPROVED_ROOT"] ?? process.cwd();
+export function loadDefaultWorkspace(): string {
+  const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = process.env;
+  return configuredWorkspace ?? join(readStateDirectory(), "workspace");
 }
 
 export interface DaemonConfig {
   readonly agents: readonly LocalAgentDefinition[];
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly auditDatabasePath: string;
   readonly bindingId: string;
   readonly catalog: LocalAgentCatalog;
@@ -25,7 +26,7 @@ export interface DaemonConfig {
 }
 
 export interface DaemonConnectionConfig {
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly auditDatabasePath: string;
   readonly channelId: string;
   readonly relayUrl: URL;
@@ -38,7 +39,7 @@ export function createDaemonConfig(
 ): DaemonConfig {
   return {
     agents,
-    approvedRoot: connection.approvedRoot,
+    defaultWorkspace: connection.defaultWorkspace,
     auditDatabasePath: connection.auditDatabasePath,
     bindingId: "workspace",
     catalog: new LocalAgentCatalog(agents, installableAgents),
@@ -66,7 +67,7 @@ export function loadDaemonConfig(): DaemonConfig {
 
   return createDaemonConfig(
     {
-      approvedRoot: loadApprovedRoot(),
+      defaultWorkspace: loadDefaultWorkspace(),
       auditDatabasePath:
         // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
         process.env["MOBIUS_AUDIT_DATABASE"] ??

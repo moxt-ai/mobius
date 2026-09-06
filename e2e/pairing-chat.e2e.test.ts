@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  realpath,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -12,7 +13,8 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { AcpSessionManager } from "../packages/cli/src/acp/session-manager.ts";
 import { AuditStore } from "../packages/cli/src/audit/audit-store.ts";
 import {
   pairLocalMachine,
@@ -57,11 +59,16 @@ import {
   SESSION_USAGE_UPDATED_KIND,
   type SessionUsageUpdatedEvent,
 } from "../packages/protocol/src/index.ts";
+import { renderNativeHistory } from "../packages/web/tests/native-history-render.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const fakeAgentPath = fileURLToPath(
   new URL("./fixtures/fake-acp-agent/src/cli.ts", import.meta.url),
 );
+const fakeAppServerUrl = new URL(
+  "./fixtures/fake-acp-agent/src/app-server.ts",
+  import.meta.url,
+).toString();
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 function executableSource(source: string): string {
@@ -72,8 +79,14 @@ function agentExecutableSource(label: string, version: string): string {
   return executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write(${JSON.stringify(`${version}\n`)});
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(fakeAppServerUrl)});
 } else {
+  if (${JSON.stringify(label)} === "Claude Code" && process.env.MOBIUS_FAKE_ACP_STATE_DIRECTORY !== undefined) {
+    process.env.MOBIUS_FAKE_ACP_STATE_DIRECTORY += "/claude";
+  }
   process.argv.push("--agent-name", ${JSON.stringify(label)});
+  if (${JSON.stringify(label)} === "Codex") process.argv.push("--exclusive-writer");
   await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
 }
 `);
@@ -354,6 +367,7 @@ function startBrowserPrompt(
   agentId: string,
   sessionId: string,
   prompt: string,
+  directoryId = "default",
 ): ActiveBrowserPrompt {
   const commandId = crypto.randomUUID();
   const result = new Promise<BrowserPromptResult>((resolve, reject) => {
@@ -407,7 +421,7 @@ function startBrowserPrompt(
         agentId,
         bindingId: "workspace",
         commandId,
-        directoryId: "root",
+        directoryId,
         images: [],
         kind: SESSION_PROMPT_KIND,
         prompt,
@@ -425,9 +439,12 @@ async function runBrowserPrompt(
   agentId: string,
   sessionId: string,
   prompt: string,
+  directoryId = "default",
 ): Promise<string> {
-  return (await startBrowserPrompt(socket, agentId, sessionId, prompt).result)
-    .text;
+  return (
+    await startBrowserPrompt(socket, agentId, sessionId, prompt, directoryId)
+      .result
+  ).text;
 }
 
 async function verifyActiveTurnHistory(
@@ -465,7 +482,7 @@ async function verifyActiveTurnHistory(
         agentId: "codex",
         bindingId: "workspace",
         commandId: controlledCommandId,
-        directoryId: "root",
+        directoryId: "default",
         images: [],
         kind: SESSION_PROMPT_KIND,
         prompt: "controlled task",
@@ -606,6 +623,504 @@ async function verifyActiveTurnHistory(
 }
 
 describe("pairing and channel chat", () => {
+  it("Given a machine is paired and has an Agent conversation in another project with a selected image, When a browser chooses a directory and opens that conversation, Then new chats use the chosen directory and restored history retains its original project through fork refresh and deletion", {
+    timeout: 45_000,
+  }, async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-native-e2e-"),
+    );
+    const workspace = join(temporaryDirectory, "workspace");
+    await mkdir(workspace);
+    const port = await reservePort();
+    const origin = `http://127.0.0.1:${port.toString()}`;
+    const environment = {
+      MOBIUS_CODEX_PATH: join(temporaryDirectory, "codex"),
+      MOBIUS_CODEX_ACP_PATH: join(temporaryDirectory, "codex-acp"),
+      MOBIUS_CLAUDE_PATH: join(temporaryDirectory, "claude"),
+      MOBIUS_CLAUDE_ACP_PATH: join(temporaryDirectory, "claude-acp"),
+      MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "mobius"),
+      MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "native"),
+      NO_PROXY: "127.0.0.1,localhost",
+      no_proxy: "127.0.0.1,localhost",
+    };
+    const previous = Object.keys(environment).map(
+      (key) =>
+        [key, process.env[key]] satisfies readonly [string, string | undefined],
+    );
+    Object.assign(process.env, environment);
+    await writeFile(
+      environment.MOBIUS_CODEX_PATH,
+      agentExecutableSource("Codex", "codex 0.153.0"),
+      { mode: 0o700 },
+    );
+    await writeFile(
+      environment.MOBIUS_CODEX_ACP_PATH,
+      adapterExecutableSource("CODEX_PATH", "codex-acp 1.8.0"),
+      { mode: 0o700 },
+    );
+    await writeFile(
+      environment.MOBIUS_CLAUDE_PATH,
+      agentExecutableSource("Claude Code", "claude 2.1.0"),
+      { mode: 0o700 },
+    );
+    await writeFile(
+      environment.MOBIUS_CLAUDE_ACP_PATH,
+      adapterExecutableSource(
+        "CLAUDE_CODE_EXECUTABLE",
+        "claude-agent-acp 0.73.0",
+      ),
+      { mode: 0o700 },
+    );
+    const wrangler = spawn(
+      pnpmCommand,
+      [
+        "wrangler",
+        "dev",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        port.toString(),
+        "--persist-to",
+        join(temporaryDirectory, "relay"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const external = new AcpSessionManager();
+    try {
+      await waitForRelay(wrangler);
+      const pairing = decodeBrowserPairing(
+        await (
+          await fetch(new URL("/v1/pairings", origin), { method: "POST" })
+        ).json(),
+      );
+      const paired = await pairLocalMachine([
+        "--url",
+        origin,
+        "--code",
+        pairing.pairingCode,
+      ]);
+      expect(paired.config).toMatchObject({
+        defaultWorkspace: await realpath(
+          join(environment.MOBIUS_STATE_DIRECTORY, "workspace"),
+        ),
+      });
+      const selectedImage = {
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        mimeType: "image/png",
+        name: "selected.png",
+      };
+      const expectSelectedImage = (history: unknown): void => {
+        const html = renderNativeHistory(history);
+        expect(html).toContain(`<img`);
+        expect(html).toContain(
+          `src="data:image/png;base64,${selectedImage.data}"`,
+        );
+        expect(html).not.toContain("[@image]");
+      };
+      await external.runPrompt({
+        additionalDirectories: [],
+        agent: paired.config.catalog.find("codex"),
+        commandId: "external-turn",
+        cwd: workspace,
+        images: [selectedImage],
+        resources: [],
+        prompt: "Saved native conversation",
+        onActivity: async () => {},
+        onText: async () => {},
+        sessionId: "external-only",
+        signal: new AbortController().signal,
+      });
+      await external.runPrompt({
+        additionalDirectories: [],
+        agent: paired.config.catalog.find("claude"),
+        commandId: "claude-external-turn",
+        cwd: workspace,
+        images: [],
+        resources: [],
+        prompt: "Claude saved conversation",
+        onActivity: async () => {},
+        onText: async () => {},
+        sessionId: "claude-external",
+        signal: new AbortController().signal,
+      });
+      const audit = new AuditStore(paired.config.auditDatabasePath);
+      const controller = new AbortController();
+      const daemon = runDaemon(paired.config, audit, controller.signal);
+      const hostUrl = new URL(`/v1/channels/${pairing.channelId}/host`, origin);
+      hostUrl.protocol = "ws:";
+      const socket = new WebSocket(hostUrl);
+      void daemon.catch(() => socket.close());
+      try {
+        await waitForRuntimeOnline(socket);
+        const identity = {
+          additionalDirectoryIds: [],
+          agentId: "codex",
+          bindingId: "workspace",
+          directoryId: "default",
+          sessionId: "browser-draft",
+        };
+        const prepared = waitForProtocolKind(socket, SESSION_READY_KIND);
+        socket.send(
+          encodeSessionPrepareCommand({
+            ...identity,
+            kind: SESSION_PREPARE_KIND,
+            protocolVersion: 1,
+            requestId: "prepare-native-browser",
+          }),
+        );
+        await prepared;
+        const homeListing = waitForProtocolKind(socket, "workspace.entries");
+        socket.send(
+          JSON.stringify({
+            kind: "workspace.list",
+            protocolVersion: 1,
+            bindingId: "workspace",
+            directoryId: "home",
+            requestId: "browse-home",
+          }),
+        );
+        expect(JSON.parse(await homeListing)).toMatchObject({
+          directoryLabel: "~",
+        });
+        const request = async (
+          fields: Readonly<Record<string, unknown>>,
+          requestId = crypto.randomUUID(),
+        ): Promise<Readonly<Record<string, unknown>>> => {
+          const result = new Promise<Readonly<Record<string, unknown>>>(
+            (resolve, reject) => {
+              const cleanup = (): void => {
+                socket.removeEventListener("message", onMessage);
+                socket.removeEventListener("close", onClose);
+              };
+              const onClose = (): void => {
+                cleanup();
+                reject(
+                  new Error("The product rejected native session management"),
+                );
+              };
+              const onMessage = (event: MessageEvent<unknown>): void => {
+                if (typeof event.data !== "string") return;
+                const value: unknown = JSON.parse(event.data);
+                if (!isRecord(value) || value["requestId"] !== requestId)
+                  return;
+                if (
+                  value["kind"] === "native.session.result" ||
+                  value["kind"] === "session.operation.failed"
+                ) {
+                  cleanup();
+                  resolve(value);
+                }
+              };
+              socket.addEventListener("message", onMessage);
+              socket.addEventListener("close", onClose);
+            },
+          );
+          socket.send(
+            JSON.stringify({
+              ...identity,
+              ...fields,
+              kind: "native.session.request",
+              protocolVersion: 1,
+              requestId,
+            }),
+          );
+          return await result;
+        };
+        const listing = await request({ action: "list", cursor: null });
+        expect(listing).toMatchObject({
+          action: "list",
+          entries: [
+            expect.objectContaining({ title: "Saved native conversation" }),
+          ],
+        });
+        const entries = listing["entries"];
+        if (
+          !Array.isArray(entries) ||
+          !isRecord(entries[0]) ||
+          typeof entries[0]["entryId"] !== "string" ||
+          typeof entries[0]["directoryId"] !== "string"
+        )
+          throw new Error("Expected a listed native session");
+        const projectDirectoryId = entries[0]["directoryId"];
+        const projectListing = waitForProtocolKind(socket, "workspace.entries");
+        socket.send(
+          JSON.stringify({
+            kind: "workspace.list",
+            protocolVersion: 1,
+            bindingId: "workspace",
+            directoryId: projectDirectoryId,
+            requestId: "browse-other-project",
+          }),
+        );
+        expect(JSON.parse(await projectListing)).toMatchObject({
+          directoryId: projectDirectoryId,
+          directoryLabel: expect.stringContaining("workspace"),
+        });
+        const chosen = waitForProtocolKind(socket, SESSION_READY_KIND);
+        socket.send(
+          encodeSessionPrepareCommand({
+            ...identity,
+            sessionId: "chosen-directory-chat",
+            directoryId: projectDirectoryId,
+            requestId: "choose-directory",
+            kind: SESSION_PREPARE_KIND,
+            protocolVersion: 1,
+          }),
+        );
+        expect(JSON.parse(await chosen)).toMatchObject({
+          directoryId: projectDirectoryId,
+        });
+        expect(
+          await runBrowserPrompt(
+            socket,
+            "codex",
+            "chosen-directory-chat",
+            "Report working directory",
+            projectDirectoryId,
+          ),
+        ).toBe(await realpath(workspace));
+        const preview = await request({
+          action: "import",
+          entryId: entries[0]["entryId"],
+          targetSessionId: "read-only-preview",
+        });
+        expect(preview).toMatchObject({
+          action: "preview",
+          entryId: entries[0]["entryId"],
+          reason: "continuation_unavailable",
+          history: {
+            status: "available",
+            messages: [
+              { role: "user", text: "Saved native conversation" },
+              {
+                role: "assistant",
+                text: "Codex turn 1: Saved native conversation",
+              },
+            ],
+            truncated: false,
+          },
+        });
+        expect(preview).not.toHaveProperty("ready");
+        expectSelectedImage(preview["history"]);
+        const previewHistory = await fetch(
+          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+        );
+        expect(JSON.stringify(await previewHistory.json())).not.toContain(
+          "read-only-preview",
+        );
+        await external.close();
+        await writeFile(
+          join(environment.MOBIUS_FAKE_ACP_STATE_DIRECTORY, "pause-load"),
+          "",
+        );
+        const loading = waitForProtocolKind(socket, "session.info.updated");
+        const cancellationId = crypto.randomUUID();
+        const cancelledLoad = request(
+          {
+            action: "import",
+            entryId: entries[0]["entryId"],
+            targetSessionId: "cancelled-load",
+          },
+          cancellationId,
+        );
+        await loading;
+        const claudeListing = await request({
+          agentId: "claude",
+          sessionId: "claude-browser",
+          action: "list",
+          cursor: null,
+        });
+        await rm(
+          join(environment.MOBIUS_FAKE_ACP_STATE_DIRECTORY, "pause-load"),
+        );
+        socket.send(
+          JSON.stringify({
+            kind: "native.session.cancel",
+            protocolVersion: 1,
+            requestId: cancellationId,
+            sessionId: identity.sessionId,
+          }),
+        );
+        const nextImport = request({
+          action: "import",
+          entryId: entries[0]["entryId"],
+          targetSessionId: "imported-chat",
+        });
+        expect(await cancelledLoad).toMatchObject({
+          code: "native_session_cancelled",
+        });
+
+        expect(claudeListing).toMatchObject({
+          action: "list",
+          entries: [{ title: "Claude saved conversation" }],
+        });
+        const imported = await nextImport;
+        expectSelectedImage(imported["history"]);
+        expect(imported).toMatchObject({
+          action: "import",
+          ready: {
+            sessionId: "imported-chat",
+            restored: true,
+            directoryId: projectDirectoryId,
+          },
+          history: {
+            status: "available",
+            messages: [
+              { role: "user", text: "Saved native conversation" },
+              {
+                role: "assistant",
+                text: "Codex turn 1: Saved native conversation",
+              },
+            ],
+            truncated: false,
+          },
+        });
+        await expect(
+          runBrowserPrompt(
+            socket,
+            "codex",
+            "imported-chat",
+            "Continue native context",
+            projectDirectoryId,
+          ),
+        ).resolves.toBe("Codex turn 2: Continue native context");
+        const history = await fetch(
+          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+        );
+        const persisted = await history.json();
+        expect(persisted).toMatchObject({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              sessionId: "imported-chat",
+              restored: true,
+              title: "Saved native conversation",
+              nativeHistory: imported["history"],
+            }),
+          ]),
+        });
+        if (!isRecord(persisted) || !Array.isArray(persisted["sessions"]))
+          throw new Error("Expected persisted conversations");
+        const saved = persisted["sessions"].find(
+          (session: unknown) =>
+            isRecord(session) && session["sessionId"] === "imported-chat",
+        );
+        if (!isRecord(saved)) throw new Error("Expected imported history");
+        expectSelectedImage(saved["nativeHistory"]);
+        const forked = await request({
+          action: "fork",
+          entryId: entries[0]["entryId"],
+          targetSessionId: "forked-chat",
+        });
+        expect(forked).toMatchObject({
+          action: "fork",
+          ready: { sessionId: "forked-chat", directoryId: projectDirectoryId },
+          history: {
+            status: "available",
+            messages: [
+              { role: "user", text: "Saved native conversation" },
+              {
+                role: "assistant",
+                text: "Codex turn 1: Saved native conversation",
+              },
+              { role: "user", text: "Continue native context" },
+              {
+                role: "assistant",
+                text: "Codex turn 2: Continue native context",
+              },
+            ],
+          },
+        });
+        await expect(
+          runBrowserPrompt(
+            socket,
+            "codex",
+            "forked-chat",
+            "Continue fork",
+            projectDirectoryId,
+          ),
+        ).resolves.toBe("Codex turn 3: Continue fork");
+        await expect(
+          runBrowserPrompt(
+            socket,
+            "codex",
+            "imported-chat",
+            "Continue original",
+            projectDirectoryId,
+          ),
+        ).resolves.toBe("Codex turn 3: Continue original");
+        const reopened = await request({
+          action: "import",
+          entryId: entries[0]["entryId"],
+          targetSessionId: "duplicate-import",
+        });
+        expect(reopened).toMatchObject({
+          ready: { sessionId: "imported-chat" },
+          history: {
+            messages: expect.arrayContaining([
+              { role: "assistant", text: "Codex turn 3: Continue original" },
+            ]),
+          },
+        });
+        const reopenedHistory = reopened["history"];
+        if (!isRecord(reopenedHistory))
+          throw new Error("Expected loaded history");
+        expect(reopenedHistory["coveredCommandIds"]).toHaveLength(2);
+        expect(
+          await request({ action: "delete", entryId: entries[0]["entryId"] }),
+        ).toMatchObject({
+          action: "delete",
+          deletedSessionIds: ["imported-chat"],
+        });
+        const deletedHistory = await fetch(
+          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+        );
+        await expect(deletedHistory.json()).resolves.toMatchObject({
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              sessionId: "imported-chat",
+              status: "deleted",
+              nativeHistory: reopenedHistory,
+            }),
+          ]),
+        });
+        await expect(
+          runBrowserPrompt(
+            socket,
+            "codex",
+            "imported-chat",
+            "Do not create another session",
+            projectDirectoryId,
+          ),
+        ).rejects.toThrow("deleted");
+        expect(
+          await request({
+            action: "import",
+            entryId: entries[0]["entryId"],
+            targetSessionId: "stale-import",
+          }),
+        ).toMatchObject({ code: "native_session_not_found" });
+      } finally {
+        socket.close();
+        controller.abort();
+        await daemon;
+        audit.close();
+      }
+    } finally {
+      await external.close();
+      await stopProcess(wrangler);
+      for (const [key, value] of previous)
+        restoreEnvironmentVariable(key, value);
+      vi.useRealTimers();
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("Given a liveness-capable daemon, When it checks the relay connection, Then the relay acknowledges the exact heartbeat", {
     timeout: 30_000,
   }, async () => {
@@ -651,7 +1166,7 @@ describe("pairing and channel chat", () => {
         origin,
         "--code",
         pairing.pairingCode,
-        "--root",
+        "--workspace",
         repositoryRoot,
       ]);
       const daemonUrl = new URL(paired.config.relayUrl);
@@ -741,7 +1256,7 @@ describe("pairing and channel chat", () => {
         origin,
         "--code",
         pairing.pairingCode,
-        "--root",
+        "--workspace",
         repositoryRoot,
       ]);
       staleDaemon = new WebSocket(paired.config.relayUrl);
@@ -766,7 +1281,7 @@ describe("pairing and channel chat", () => {
           agentId: "codex",
           bindingId: "workspace",
           commandId: stalledCommandId,
-          directoryId: "root",
+          directoryId: "default",
           images: [],
           kind: SESSION_PROMPT_KIND,
           prompt: "stalled task",
@@ -812,7 +1327,7 @@ describe("pairing and channel chat", () => {
           agentId: "codex",
           bindingId: "workspace",
           commandId: nextCommandId,
-          directoryId: "root",
+          directoryId: "default",
           images: [],
           kind: SESSION_PROMPT_KIND,
           prompt: "continue after recovery",
@@ -875,7 +1390,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given supported Agents on a paired machine, When a browser sends prompts, Then adapters are installed and responses and usage persist without double-counting", {
+  it("Given supported Agents and a paired machine, When the connection resumes and a browser sends prompts, Then responses and usage persist", {
     timeout: 45_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -976,16 +1491,25 @@ describe("pairing and channel chat", () => {
         origin,
         "--code",
         pairing.pairingCode,
-        "--root",
+        "--workspace",
         repositoryRoot,
       ]);
+      const initiallyResumed = await resumeLocalMachine([
+        "--channel",
+        pairing.channelId,
+      ]);
+      expect(initiallyResumed.channelUrl).toBe(paired.channelUrl);
+      expect(initiallyResumed.config.defaultWorkspace).toBe(
+        paired.config.defaultWorkspace,
+      );
+      const savedConnection = await readFile(paired.connectionPath, "utf8");
       const resumed = await resumeLocalMachine([
         "--channel",
         pairing.channelId,
       ]);
-      expect(resumed.channelUrl).toBe(paired.channelUrl);
-      expect(resumed.config.approvedRoot).toBe(paired.config.approvedRoot);
-      const savedConnection = await readFile(paired.connectionPath, "utf8");
+      expect(resumed.config.defaultWorkspace).toBe(
+        await realpath(repositoryRoot),
+      );
       await writeFile(
         paired.connectionPath,
         savedConnection.replace("\n}\n", ',\n  "unexpected": true\n}\n'),
@@ -994,7 +1518,9 @@ describe("pairing and channel chat", () => {
       await expect(
         resumeLocalMachine(["--channel", pairing.channelId]),
       ).rejects.toMatchObject({ code: "invalid_connection" });
-      await writeFile(paired.connectionPath, savedConnection, { mode: 0o600 });
+      await writeFile(paired.connectionPath, savedConnection, {
+        mode: 0o600,
+      });
       const repeatedClaimResponse = await fetch(
         new URL("/v1/pairings/claim", origin),
         {
@@ -1071,7 +1597,7 @@ describe("pairing and channel chat", () => {
       const audit = new AuditStore(paired.config.auditDatabasePath);
       const daemonController = new AbortController();
       const daemonRun = runDaemon(
-        paired.config,
+        resumed.config,
         audit,
         daemonController.signal,
       );
@@ -1133,7 +1659,7 @@ describe("pairing and channel chat", () => {
                 additionalDirectoryIds: [],
                 agentId: agent,
                 bindingId: "workspace",
-                directoryId: "root",
+                directoryId: "default",
                 kind: SESSION_PREPARE_KIND,
                 protocolVersion: MOBIUS_PROTOCOL_VERSION,
                 requestId: crypto.randomUUID(),

@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
-import { realpath } from "node:fs/promises";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 import {
   type CompleteElicitationNotification,
@@ -243,7 +242,7 @@ export class LocalAgentInventory {
 
 export interface DiscoverLocalAgentInventoryOptions {
   readonly architecture?: NodeJS.Architecture;
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly platform?: NodeJS.Platform;
   readonly signal: AbortSignal;
@@ -281,36 +280,14 @@ class DiscoveryAcpHandler implements AcpClientHandler {
     Promise.resolve();
 }
 
-async function authorizeManagedExecutable(
-  managed: ResolvedExecutable,
-  options: DiscoverLocalAgentInventoryOptions,
-): Promise<ResolvedExecutable | null> {
-  const approvedRoot = await realpath(resolve(options.approvedRoot));
-  const requestedDifference = relative(
-    approvedRoot,
-    managed.identity.requestedPath,
-  );
-  const resolvedDifference = relative(approvedRoot, managed.path);
-  const requestedInside =
-    requestedDifference.length === 0 ||
-    (!requestedDifference.startsWith("..") && !isAbsolute(requestedDifference));
-  const resolvedInside =
-    resolvedDifference.length === 0 ||
-    (!resolvedDifference.startsWith("..") && !isAbsolute(resolvedDifference));
-  return requestedInside || resolvedInside ? null : managed;
-}
-
 async function resolveManagedExecutable(
   managedExecutablePath: readonly string[],
   options: DiscoverLocalAgentInventoryOptions,
 ): Promise<ResolvedExecutable | null> {
-  const managed = await resolveExecutablePath(
+  return await resolveExecutablePath(
     join(readStateDirectory(options.environment), ...managedExecutablePath),
     options.platform,
   );
-  return managed === null
-    ? null
-    : await authorizeManagedExecutable(managed, options);
 }
 
 async function resolveManagedAdapterExecutable(
@@ -331,7 +308,7 @@ async function resolveManagedAdapterExecutable(
   } catch {
     return null;
   }
-  return await authorizeManagedExecutable(managed, options);
+  return managed;
 }
 
 async function resolveSpecificationExecutables(
@@ -351,7 +328,6 @@ async function resolveSpecificationExecutables(
   const external = await findExecutableOnPath(
     executableName,
     options.environment,
-    options.approvedRoot,
     options.platform,
   );
   const managed = await resolveManaged();
@@ -415,13 +391,13 @@ function normalizedVersion(output: string): string {
 async function probeVersion(
   executable: ResolvedExecutable,
   environment: Readonly<NodeJS.ProcessEnv>,
-  approvedRoot: string,
+  defaultWorkspace: string,
   signal: AbortSignal,
 ): Promise<string> {
   const result = await runBoundedProcess({
     arguments: ["--version"],
     command: executable.path,
-    cwd: approvedRoot,
+    cwd: defaultWorkspace,
     environment,
     signal,
     timeoutMilliseconds: VERSION_PROBE_TIMEOUT_MILLISECONDS,
@@ -456,7 +432,7 @@ export async function findVerifiedAgentExecutable(
       const version = await probeVersion(
         executable,
         options.environment,
-        options.approvedRoot,
+        options.defaultWorkspace,
         options.signal,
       );
       return new VerifiedAgentExecutable(executable, version);
@@ -533,7 +509,7 @@ function writableAcpStream(
 async function probeAcp(
   agent: LocalAgentDefinition,
   environment: Readonly<NodeJS.ProcessEnv>,
-  approvedRoot: string,
+  defaultWorkspace: string,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted();
@@ -549,11 +525,18 @@ async function probeAcp(
     abort();
   }
   const child = spawn(agent.adapterPath, [...agent.arguments], {
-    cwd: approvedRoot,
+    cwd: defaultWorkspace,
     detached: process.platform !== "win32",
     env: { ...environment, ...agent.environment },
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
+  });
+  const processExit = new Promise<never>((_resolve, reject) => {
+    const rejectExit = (): void =>
+      reject(new Error("ACP adapter exited during initialization"));
+    child.once("error", reject);
+    child.once("exit", rejectExit);
+    if (child.exitCode !== null || child.signalCode !== null) rejectExit();
   });
   const stdin = child.stdin;
   const stdout = child.stdout;
@@ -576,12 +559,6 @@ async function probeAcp(
   const connection = createAcpClient(new DiscoveryAcpHandler()).connect(
     ndJsonStream(writableAcpStream(stdin), readableAcpStream(stdout)),
   );
-  const processExit = new Promise<never>((_resolve, reject) => {
-    child.once("error", (error) => reject(error));
-    child.once("exit", () =>
-      reject(new Error("ACP adapter exited during initialization")),
-    );
-  });
 
   try {
     const initialized = await Promise.race([
@@ -682,7 +659,7 @@ async function discoverSpecification(
       agentVersion = await probeVersion(
         agent,
         options.environment,
-        options.approvedRoot,
+        options.defaultWorkspace,
         options.signal,
       );
     } catch (error) {
@@ -702,7 +679,7 @@ async function discoverSpecification(
             ...options.environment,
             [specification.adapterEnvironmentVariable]: agent.path,
           },
-          options.approvedRoot,
+          options.defaultWorkspace,
           options.signal,
         );
       } catch (error) {
@@ -728,7 +705,7 @@ async function discoverSpecification(
         await probeAcp(
           definition,
           options.environment,
-          options.approvedRoot,
+          options.defaultWorkspace,
           options.signal,
         );
         return new AvailableAgent(specification, definition);

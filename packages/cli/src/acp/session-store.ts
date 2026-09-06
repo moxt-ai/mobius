@@ -45,7 +45,19 @@ export class FoundAcpStoredSession extends AcpStoredSessionLookup {
   }
 }
 
+export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
+  readonly found = false;
+}
+
 export interface AcpSessionStore {
+  readonly findNative: (
+    agentId: string,
+    nativeSessionId: string,
+  ) => readonly AcpStoredSession[];
+  readonly markDeleted: (
+    agentId: string,
+    nativeSessionId: string,
+  ) => readonly string[];
   readonly read: (sessionId: string) => AcpStoredSessionLookup;
   readonly remove: (sessionId: string) => void;
   readonly write: (session: AcpStoredSession) => void;
@@ -98,8 +110,34 @@ function decodeSessionRow(row: unknown): AcpStoredSession {
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
   readonly #sessions = new Map<string, AcpStoredSession>();
+  readonly #deleted = new Set<string>();
+
+  readonly findNative = (
+    agentId: string,
+    nativeSessionId: string,
+  ): readonly AcpStoredSession[] =>
+    [...this.#sessions.values()].filter(
+      (session) =>
+        session.agentId === agentId &&
+        session.nativeSessionId === nativeSessionId,
+    );
+
+  readonly markDeleted = (
+    agentId: string,
+    nativeSessionId: string,
+  ): readonly string[] => {
+    const ids = this.findNative(agentId, nativeSessionId).map(
+      (session) => session.sessionId,
+    );
+    for (const id of ids) {
+      this.#sessions.delete(id);
+      this.#deleted.add(id);
+    }
+    return ids;
+  };
 
   readonly read = (sessionId: string): AcpStoredSessionLookup => {
+    if (this.#deleted.has(sessionId)) return new DeletedAcpStoredSession();
     const session = this.#sessions.get(sessionId);
     return session === undefined
       ? new MissingAcpStoredSession()
@@ -122,6 +160,7 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
     mkdirSync(dirname(path), { recursive: true });
     this.#database = new DatabaseSync(path);
     this.#database.exec(`
+      CREATE TABLE IF NOT EXISTS acp_deleted_sessions (session_id TEXT PRIMARY KEY) STRICT;
       CREATE TABLE IF NOT EXISTS acp_sessions (
         session_id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
@@ -150,6 +189,14 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
   }
 
   readonly read = (sessionId: string): AcpStoredSessionLookup => {
+    if (
+      this.#database
+        .prepare(
+          "SELECT session_id FROM acp_deleted_sessions WHERE session_id = ?",
+        )
+        .get(sessionId) !== undefined
+    )
+      return new DeletedAcpStoredSession();
     const row = this.#database
       .prepare(
         `
@@ -174,6 +221,42 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
     this.#database
       .prepare("DELETE FROM acp_sessions WHERE session_id = ?")
       .run(sessionId);
+  };
+
+  readonly findNative = (
+    agentId: string,
+    nativeSessionId: string,
+  ): readonly AcpStoredSession[] =>
+    this.#database
+      .prepare(
+        "SELECT * FROM acp_sessions WHERE agent_id = ? AND native_session_id = ?",
+      )
+      .all(agentId, nativeSessionId)
+      .map(decodeSessionRow);
+
+  readonly markDeleted = (
+    agentId: string,
+    nativeSessionId: string,
+  ): readonly string[] => {
+    const ids = this.findNative(agentId, nativeSessionId).map(
+      (session) => session.sessionId,
+    );
+    this.#database.exec("BEGIN");
+    try {
+      for (const id of ids) {
+        this.#database
+          .prepare(
+            "INSERT OR IGNORE INTO acp_deleted_sessions (session_id) VALUES (?)",
+          )
+          .run(id);
+        this.remove(id);
+      }
+      this.#database.exec("COMMIT");
+      return ids;
+    } catch (error) {
+      this.#database.exec("ROLLBACK");
+      throw error;
+    }
   };
 
   readonly write = (session: AcpStoredSession): void => {

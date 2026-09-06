@@ -127,15 +127,16 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787). The default page creates a
 short-lived pairing code and displays a command like this:
 
 ```bash
-npx --yes @moxt-ai/mobius pair --url http://127.0.0.1:8787 --code XXXX-XXXX-XXXX-XXXX-XXXX --root "$PWD"
+npx --yes @moxt-ai/mobius pair --url http://127.0.0.1:8787 --code XXXX-XXXX-XXXX-XXXX-XXXX
 ```
 
-Run that command from the workspace that Mobius may access. The published
+Run that command anywhere on the machine. The published
 `@moxt-ai/mobius` package is the extensible Mobius CLI; pairing and the long-lived
-daemon are capabilities within that package. The command resolves and approves
-the supplied root, claims the one-time code, starts the daemon, and keeps the
-terminal open. When developing the CLI from this checkout, the equivalent
-workspace command is `pnpm mobius pair ...`.
+daemon are capabilities within that package. The command prepares the default
+`~/.mobius/workspace`, claims the one-time code, starts the daemon, and keeps the
+terminal open. Pass `--workspace <directory>` to choose a different default.
+When developing the CLI from this checkout, the equivalent command is
+`pnpm mobius pair ...`.
 The browser then moves to an independent `/channels/<channel-id>` route. Every new
 conversation can select a locally verified Codex or Claude Code integration; the
 selection is locked after its first message so the ACP session remains coherent
@@ -152,7 +153,8 @@ expose local paths, versions, credentials, or a remote uninstall action.
 The channel URL can be opened directly in any browser while its local daemon is
 running. During this early phase, the high-entropy channel identifier is the only
 browser-side access boundary: anyone who receives the URL can submit agent work
-to the paired workspace and read its persisted history. Add user or team
+using the paired machine's current user permissions and read its persisted
+history. Add user or team
 authentication before exposing a channel beyond trusted collaborators.
 
 Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
@@ -177,10 +179,10 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 - `MOBIUS_CODEX_PATH` and `MOBIUS_CODEX_ACP_PATH`
 - `MOBIUS_CLAUDE_PATH` and `MOBIUS_CLAUDE_ACP_PATH`
 
-Automatic lookup will not select an executable inside the approved workspace.
-An explicit override is authoritative and fails closed; an automatically found
-external executable must pass the full probe before Mobius may fall back to a
-previously verified private cache entry.
+Automatic lookup uses the `PATH` inherited by the Mobius process. An explicit
+override is authoritative and fails closed; an automatically found executable
+must pass the full probe before Mobius may fall back to a previously verified
+private cache entry. The default working directory does not affect discovery.
 Executable paths, versions, identities, probe output, and adapter environment
 stay on the local machine. The Relay receives only stable Agent identifiers,
 labels, and sanitized ready/installable metadata.
@@ -228,8 +230,10 @@ mode-`0600` `~/.mobius/installation-grants.json` file:
 The grant is disabled by default, is scoped to the listed built-in Agent IDs,
 and is revoked by removing an ID or the file. It cannot change a release
 channel, command, URL, arguments, or installation target. Local provider
-credentials remain with Codex or Claude Code. Only the resolved root approved
-by the pairing command can be used as the `workspace` binding.
+credentials remain with Codex or Claude Code. Pairing authorizes this channel to
+request work within the operating-system permissions of the user running Mobius.
+Agent-specific sandbox and approval behavior remains under the Agent's own
+configuration.
 
 Each conversation negotiates its available ACP capabilities with the selected
 agent. When provided by that agent, the Web chat exposes session mode, model,
@@ -237,6 +241,46 @@ reasoning effort, boolean options such as fast mode, context-window usage and
 cost, slash commands, permission requests, form or URL elicitation, image and
 embedded-resource prompts, rich agent content, and structured tool details.
 Unsupported controls are omitted instead of being simulated by Mobius.
+
+Open **Local sessions** in the sidebar, then choose an installed Agent to see
+its saved conversations across projects on the paired machine. This works before starting a chat
+and does not change the current conversation's Agent. Switching Agents cancels the
+previous load and only shows sessions from the selected Agent. The list supports
+filtering loaded titles and pagination; each row opens a session, with fork and
+delete available from its actions menu when supported.
+**Open** imports a conversation and continues its saved Agent context; opening
+the same native session again refreshes history in its existing Mobius conversation.
+**Fork** creates an independent continuation when the Agent advertises the
+experimental fork capability. An imported or forked conversation keeps its Agent
+and workspace fixed. Agents that support ACP `session/load` replay their previous
+user and assistant messages into Mobius. The transcript is retained across page
+reloads, and reopening does not duplicate turns already recorded in Mobius. The
+most recent 10 messages are displayed when history exceeds the preview limits.
+Attachment placeholders are shown; historical tool execution and
+reasoning are not replayed as live activity. Agents that only support resuming
+context show a notice that message history is unavailable.
+
+Loading restores saved context and history; it does not attach to an Agent process
+running in another app or stream that process's future output. When Codex cannot
+resume a session, Mobius tries its read-only history API and shows a saved-history
+preview. The preview creates no executable conversation and leaves the original
+writer alone. **Continue original** retries restoration, and **Fork session**
+creates an independent continuation when supported. If another app owns the
+session, release it there before continuing the original. Failures appear beside
+the selected session with an operation-specific retry or a list refresh.
+Mobius rejects management actions while its own daemon is running a turn for that
+session. ACP does not standardize cross-process ownership or live takeover; see
+[the protocol findings and proposed concurrency behavior](docs/native-session-concurrency.md).
+
+Native session deletion requires Agent support and one confirmation in the web
+interface. No second terminal confirmation is needed. The local daemon re-resolves
+the selected session and its working directories with the paired machine identity
+immediately before deletion. Cancel or close the browser
+dialog to cancel the request; operations time out after 90 seconds. Sessions running
+in this Mobius daemon cannot be deleted. Messages recorded in Mobius are retained, while the deleted
+native session cannot be resumed through its old Mobius conversation, even after
+a daemon restart. Native IDs and Agent pagination cursors stay on the paired
+machine; the browser receives the directory labels needed for project selection.
 
 After a prompt completes, users can open the Agent usage indicator to see the
 latest reported token breakdown and supported Agent quota metadata, including
@@ -249,10 +293,10 @@ Missing measurements stay unavailable. Unknown metadata is discarded, while
 malformed supported fields fail with a sanitized `acp_invalid_prompt_response`
 error at the local ACP boundary.
 
-The workspace picker never sends local paths to the browser. It uses opaque
-directory identifiers, and the daemon resolves and authorizes every primary or
-additional directory against the root approved during pairing immediately
-before starting or configuring an ACP session.
+New conversations use `~/.mobius/workspace` by default. The workspace picker
+starts at the user's Home directory and can navigate to any directory available
+to that local user. The daemon validates and resolves every selected primary or
+additional directory immediately before starting or configuring an ACP session.
 
 For Web hot reload, run the relay and Vite together, then open
 [http://127.0.0.1:5190](http://127.0.0.1:5190):

@@ -11,6 +11,7 @@ import {
   decodeAgentContentEvent,
   decodeAgentInstallAwaitingApprovalEvent,
   decodeAgentInstallRequestCommand,
+  decodeNativeSessionHistory,
   decodeSessionConfigureCommand,
   decodeSessionElicitationRequestedEvent,
   decodeSessionPermissionRequestedEvent,
@@ -65,6 +66,23 @@ const modelOption: SessionConfigOption = {
     },
   ],
 };
+
+it("Given incoming saved history contains an unsafe or oversized image, When the history is decoded, Then the protocol rejects it with a typed failure", () => {
+  for (const image of [
+    { name: "Image", mimeType: "image/svg+xml", data: "PHN2Zz4=" },
+    { name: "Image", mimeType: "image/png", data: "invalid data" },
+    { name: "Image", mimeType: "image/png", data: "AAAA".repeat(1_000_001) },
+  ]) {
+    expect(() =>
+      decodeNativeSessionHistory({
+        status: "available",
+        truncated: false,
+        coveredCommandIds: [],
+        messages: [{ role: "user", text: "Selected image", images: [image] }],
+      }),
+    ).toThrow(ProtocolMessageError);
+  }
+});
 
 describe("ACP session control protocol", () => {
   it("Given older context history, When a current client decodes it, Then it remains a context snapshot", () => {
@@ -225,7 +243,7 @@ describe("ACP session control protocol", () => {
       additionalDirectoryIds: [],
       agentId: "codex",
       bindingId: "workspace",
-      directoryId: "root",
+      directoryId: "default",
       kind: SESSION_PREPARE_KIND,
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-1",
@@ -246,10 +264,11 @@ describe("ACP session control protocol", () => {
         listSessions: true,
         loadSession: true,
         resumeSession: true,
+        unstableForkSession: false,
       },
       commands: [],
       configOptions: [modelOption],
-      directoryId: "root",
+      directoryId: "default",
       directoryLabel: "mobius",
       kind: SESSION_READY_KIND,
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
@@ -272,7 +291,7 @@ describe("ACP session control protocol", () => {
       agentId: "codex",
       bindingId: "workspace",
       cwd: "/tmp/untrusted",
-      directoryId: "root",
+      directoryId: "default",
       kind: SESSION_PREPARE_KIND,
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-1",
@@ -291,7 +310,7 @@ describe("ACP session control protocol", () => {
       bindingId: "workspace",
       booleanValue: false,
       configId: "model",
-      directoryId: "root",
+      directoryId: "default",
       kind: SESSION_CONFIGURE_KIND,
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-2",
@@ -412,10 +431,10 @@ describe("ACP session control protocol", () => {
 });
 
 describe("workspace directory protocol", () => {
-  it("Given a paired workspace, When the browser requests its root, Then it sends an opaque handle instead of a local path", () => {
+  it("Given a paired machine, When the browser requests Home, Then it sends a directory handle instead of a local path", () => {
     const command: WorkspaceListCommand = {
       bindingId: "workspace",
-      directoryId: "root",
+      directoryId: "home",
       kind: WORKSPACE_LIST_KIND,
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "directory-request-1",

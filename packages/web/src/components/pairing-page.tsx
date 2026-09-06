@@ -203,12 +203,12 @@ function PairingInstructions({
           Waiting for your machine
         </div>
         <h1 className="mt-5 max-w-md text-[clamp(28px,4vw,40px)] leading-[1.12] font-semibold tracking-[-0.045em]">
-          Pair your local workspace
+          Pair your machine
         </h1>
         <p className="mt-4 max-w-[520px] text-sm leading-6 text-[#5f6673]">
-          Run one command from the folder you want Mobius to access. The daemon
-          keeps Codex and Claude Code on your machine while this browser
-          receives streamed responses.
+          Run one command to connect this browser to your machine. Mobius uses
+          your local user account’s permissions, and each conversation can have
+          its own working directory.
         </p>
 
         <ol className="mt-8 space-y-6 p-0">
@@ -219,8 +219,8 @@ function PairingInstructions({
             <div>
               <h2 className="text-sm font-semibold">Open your terminal</h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                Change into the workspace that the local execution boundary may
-                access.
+                Run the command from any folder. New conversations start in
+                ~/.mobius/workspace, and you can choose another folder later.
               </p>
             </div>
           </li>
@@ -298,10 +298,10 @@ function PairingInstructions({
           <div className="flex items-start gap-2.5 rounded-xl bg-white px-3 py-3 shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.07)]">
             <ShieldCheck className="mt-0.5 size-4 shrink-0 text-[#218854]" />
             <div>
-              <p className="text-xs font-semibold">Local approval boundary</p>
+              <p className="text-xs font-semibold">Machine access</p>
               <p className="mt-0.5 text-[11px] leading-[17px] text-muted-foreground">
-                The browser can request work only inside the folder approved by
-                this command.
+                Pairing lets this channel work with files available to your
+                local user account.
               </p>
             </div>
           </div>

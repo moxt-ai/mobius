@@ -1,0 +1,114 @@
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createInterface } from "node:readline";
+
+// Read the same persisted conversations as the stateful ACP Agent, without
+// acquiring its writer. No provider credentials or canned transcripts are used.
+const input = createInterface({ input: process.stdin });
+const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+const readerPath =
+  directory === undefined
+    ? null
+    : join(directory, `${process.pid.toString()}.reader`);
+process.on("exit", () => {
+  if (readerPath !== null && existsSync(readerPath)) unlinkSync(readerPath);
+});
+process.on("SIGTERM", () => process.exit(0));
+let initialized = false;
+input.on("line", (line) => {
+  const value: unknown = JSON.parse(line);
+  if (typeof value !== "object" || value === null) return;
+  const id: unknown = Reflect.get(value, "id");
+  const method: unknown = Reflect.get(value, "method");
+  const reply = (result: unknown): void => {
+    process.stdout.write(`${JSON.stringify({ id, result })}\n`);
+  };
+  if (method === "initialize") {
+    reply({ userAgent: "stateful-codex" });
+  } else if (method === "initialized") {
+    initialized = true;
+  } else if (
+    (method === "thread/read" || method === "thread/turns/list") &&
+    initialized
+  ) {
+    const params: unknown = Reflect.get(value, "params");
+    if (typeof params !== "object" || params === null) return;
+    const threadId: unknown = Reflect.get(params, "threadId");
+    if (typeof threadId !== "string" || directory === undefined) return;
+    if (readerPath !== null) writeFileSync(readerPath, threadId);
+    // Model an unavailable history store to exercise bounded read cancellation.
+    if (existsSync(join(directory, "pause-read"))) return;
+    const saved: unknown = JSON.parse(
+      readFileSync(
+        join(directory, `${encodeURIComponent(threadId)}.json`),
+        "utf8",
+      ),
+    );
+    if (typeof saved !== "object" || saved === null) return;
+    const history: unknown = Reflect.get(saved, "history");
+    if (!Array.isArray(history)) return;
+    const turns: { readonly items: unknown[] }[] = [];
+    for (const message of history) {
+      if (typeof message !== "object" || message === null)
+        throw new Error("Invalid saved message");
+      const text: unknown = Reflect.get(message, "text");
+      const images: unknown = Reflect.get(message, "images");
+      if (Reflect.get(message, "role") === "user") {
+        turns.push({
+          items: [
+            {
+              type: "userMessage",
+              content: [
+                { type: "text", text },
+                ...(Array.isArray(images)
+                  ? images.map((image: unknown) => {
+                      if (typeof image !== "object" || image === null)
+                        throw new Error("Invalid saved image");
+                      return {
+                        type: "image",
+                        url: `data:${String(Reflect.get(image, "mimeType"))};base64,${String(Reflect.get(image, "data"))}`,
+                      };
+                    })
+                  : []),
+              ],
+            },
+          ],
+        });
+      } else
+        turns
+          .at(-1)
+          ?.items.push({ type: "agentMessage", text, phase: "final_answer" });
+    }
+    if (method === "thread/read") {
+      reply({
+        thread: {
+          id: threadId,
+          cwd: Reflect.get(saved, "cwd"),
+          turns: Reflect.get(params, "includeTurns") === false ? [] : turns,
+        },
+      });
+    } else {
+      const limit: unknown = Reflect.get(params, "limit");
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1)
+        throw new Error("Invalid page size");
+      const cursor: unknown = Reflect.get(params, "cursor");
+      const offset = typeof cursor === "string" ? Number(cursor) : 0;
+      const ordered =
+        Reflect.get(params, "sortDirection") === "asc"
+          ? turns
+          : turns.toReversed();
+      const data = ordered.slice(offset, offset + limit);
+      reply({
+        data,
+        nextCursor:
+          offset + data.length < turns.length
+            ? String(offset + data.length)
+            : null,
+      });
+    }
+  } else {
+    process.stdout.write(
+      `${JSON.stringify({ id, error: { code: -32601, message: "Unsupported method" } })}\n`,
+    );
+  }
+});

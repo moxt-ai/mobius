@@ -71,7 +71,7 @@ describe("session prompt protocol", () => {
       agentId: "codex",
       bindingId: "workspace",
       commandId: "command-1",
-      directoryId: "root",
+      directoryId: "default",
       images: [
         {
           data: "aW1hZ2U=",
@@ -106,7 +106,7 @@ describe("session prompt protocol", () => {
       bindingId: "workspace",
       commandId: "command-1",
       cwd: "/tmp/untrusted",
-      directoryId: "root",
+      directoryId: "default",
       images: [],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello from browser",

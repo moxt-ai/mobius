@@ -40,7 +40,6 @@ interface AgentSettingsViewProps {
   readonly runtimeCanSend: boolean;
   readonly runtimeLabel: string;
   readonly sidebarOpen: boolean;
-  readonly workspaceName: string;
 }
 
 function AgentSettingsView({
@@ -57,7 +56,6 @@ function AgentSettingsView({
   runtimeCanSend,
   runtimeLabel,
   sidebarOpen,
-  workspaceName,
 }: AgentSettingsViewProps) {
   const channelPath = `/channels/${encodeURIComponent(channelId)}`;
 
@@ -133,10 +131,10 @@ function AgentSettingsView({
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
               <div className="rounded-xl border-[0.5px] border-black/10 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
                 <span className="text-[11px] font-medium text-muted-foreground">
-                  Workspace
+                  Access
                 </span>
-                <strong className="mt-1 block truncate text-sm font-semibold">
-                  {workspaceName}
+                <strong className="mt-1 block text-sm font-semibold">
+                  Current user account
                 </strong>
               </div>
               <div className="rounded-xl border-[0.5px] border-black/10 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
@@ -302,7 +300,6 @@ export function AgentSettingsPage({
   const runtime = useChatStore((state) => state.runtime);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
-  const workspaceName = useChatStore((state) => state.workspaceName);
   return (
     <AgentSettingsView
       agents={agents}
@@ -320,7 +317,6 @@ export function AgentSettingsPage({
       runtimeCanSend={runtime.canSend}
       runtimeLabel={runtime.label}
       sidebarOpen={sidebarOpen}
-      workspaceName={workspaceName}
     />
   );
 }

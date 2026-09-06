@@ -131,7 +131,6 @@ export async function validateManagedAdapter(
 }
 
 export interface ManagedAdapterInstallerOptions {
-  readonly approvedRoot: string;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly stateDirectory: string;
 }
@@ -144,12 +143,10 @@ export interface AdapterInstallationPort {
 }
 
 export class ManagedAdapterInstaller implements AdapterInstallationPort {
-  readonly #approvedRoot: string;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #stateDirectory: string;
 
   constructor(options: ManagedAdapterInstallerOptions) {
-    this.#approvedRoot = options.approvedRoot;
     this.#environment = options.environment;
     this.#stateDirectory = options.stateDirectory;
   }
@@ -184,7 +181,6 @@ export class ManagedAdapterInstaller implements AdapterInstallationPort {
       const npm = await findExecutableOnPath(
         process.platform === "win32" ? "npm.cmd" : "npm",
         this.#environment,
-        this.#approvedRoot,
       );
       if (npm === null) {
         throw new ManagedAdapterInstallError(

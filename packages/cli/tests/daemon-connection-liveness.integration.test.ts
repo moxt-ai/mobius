@@ -153,8 +153,8 @@ describe("daemon relay connection liveness", () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-daemon-heartbeat-"),
     );
-    const approvedRoot = join(stateDirectory, "workspace");
-    await mkdir(approvedRoot);
+    const defaultWorkspace = join(stateDirectory, "workspace");
+    await mkdir(defaultWorkspace);
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
@@ -227,7 +227,7 @@ describe("daemon relay connection liveness", () => {
     process.env["NO_PROXY"] = "127.0.0.1,localhost";
     process.env["no_proxy"] = "127.0.0.1,localhost";
     const config = createDaemonConfig({
-      approvedRoot,
+      defaultWorkspace,
       auditDatabasePath,
       channelId: "heartbeat-channel",
       relayUrl: new URL(
@@ -268,7 +268,7 @@ describe("daemon relay connection liveness", () => {
         firstSocket,
         encodeWorkspaceListCommand({
           bindingId: "workspace",
-          directoryId: "root",
+          directoryId: "default",
           kind: WORKSPACE_LIST_KIND,
           protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: "acknowledgement-barrier",
@@ -327,8 +327,8 @@ describe("daemon relay connection liveness", () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-daemon-liveness-"),
     );
-    const approvedRoot = join(stateDirectory, "workspace");
-    await mkdir(approvedRoot);
+    const defaultWorkspace = join(stateDirectory, "workspace");
+    await mkdir(defaultWorkspace);
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
@@ -376,7 +376,7 @@ describe("daemon relay connection liveness", () => {
         socket,
         encodeWorkspaceListCommand({
           bindingId: "workspace",
-          directoryId: "root",
+          directoryId: "default",
           kind: WORKSPACE_LIST_KIND,
           protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: `connection-${clientFrames.length.toString()}`,
@@ -401,7 +401,7 @@ describe("daemon relay connection liveness", () => {
     process.env["NO_PROXY"] = "127.0.0.1,localhost";
     process.env["no_proxy"] = "127.0.0.1,localhost";
     const config = createDaemonConfig({
-      approvedRoot,
+      defaultWorkspace,
       auditDatabasePath,
       channelId: "liveness-channel",
       relayUrl: new URL(

@@ -30,6 +30,9 @@ import {
   decodeAgentInstallStartedEvent,
   decodeAgentMessageDeltaEvent,
   decodeMessageKind,
+  decodeNativeSessionCancel,
+  decodeNativeSessionCommand,
+  decodeNativeSessionResult,
   decodeRuntimeStatusEvent,
   decodeSessionCancelCommand,
   decodeSessionCommandsUpdatedEvent,
@@ -54,6 +57,8 @@ import {
   decodeWorkspaceListCommand,
   encodeAgentInstallCancelCommand,
   encodeAgentInstallRequestCommand,
+  encodeNativeSessionCancel,
+  encodeNativeSessionCommand,
   encodeSessionCancelCommand,
   encodeSessionConfigureCommand,
   encodeSessionElicitationRespondCommand,
@@ -62,6 +67,11 @@ import {
   encodeSessionPromptCommand,
   encodeWorkspaceListCommand,
   MOBIUS_PROTOCOL_VERSION,
+  NATIVE_SESSION_CANCEL_KIND,
+  NATIVE_SESSION_REQUEST_KIND,
+  NATIVE_SESSION_RESULT_KIND,
+  type NativeSessionCommand,
+  type NativeSessionResult,
   type PromptImage,
   type PromptResource,
   RUNTIME_STATUS_KIND,
@@ -104,6 +114,7 @@ const OPERATION_TIMEOUT_MILLISECONDS = 120_000;
 const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
 
 export interface ConnectMobiusClientOptions {
+  readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
   readonly onActivity?: () => void;
   readonly onCommands?: (event: SessionCommandsUpdatedEvent) => void;
   readonly onConfig?: (event: SessionConfigUpdatedEvent) => void;
@@ -358,6 +369,36 @@ export class MobiusClient {
       SESSION_READY_KIND,
       decodeSessionReadyEvent,
       (event) => event.requestId,
+    );
+  };
+
+  readonly manageNativeSession = async (
+    command: NativeSessionCommand,
+    signal: AbortSignal,
+  ): Promise<NativeSessionResult> => {
+    signal.throwIfAborted();
+    return await this.#requestReply(
+      command.requestId,
+      encodeOutboundMessage(() => encodeNativeSessionCommand(command)),
+      NATIVE_SESSION_RESULT_KIND,
+      decodeNativeSessionResult,
+      (event) => event.requestId,
+      signal,
+      () => {
+        try {
+          if (this.#socket.readyState === WebSocket.OPEN)
+            this.#socket.send(
+              encodeNativeSessionCancel({
+                kind: NATIVE_SESSION_CANCEL_KIND,
+                protocolVersion: MOBIUS_PROTOCOL_VERSION,
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+              }),
+            );
+        } catch {
+          // The local runtime also cancels requests when the connection closes.
+        }
+      },
     );
   };
 
@@ -711,7 +752,7 @@ export class MobiusClient {
             agentId: request.agentId,
             bindingId: request.bindingId,
             commandId,
-            directoryId: request.directoryId ?? "root",
+            directoryId: request.directoryId ?? "default",
             images: request.images ?? [],
             kind: SESSION_PROMPT_KIND,
             prompt: request.prompt,
@@ -739,7 +780,10 @@ export class MobiusClient {
     expectedKind: string,
     decode: (encoded: string) => T,
     identify: (event: T) => string,
+    signal?: AbortSignal,
+    cancel?: () => void,
   ): Promise<T> => {
+    signal?.throwIfAborted();
     if (this.#socket.readyState !== WebSocket.OPEN) {
       throw new MobiusClientError(
         "runtime_offline",
@@ -750,6 +794,7 @@ export class MobiusClient {
     const result = new Promise<T>((resolve, reject) => {
       const timeout = window.setTimeout(() => {
         cleanup();
+        cancel?.();
         reject(
           new MobiusClientError(
             "operation_timeout",
@@ -761,6 +806,18 @@ export class MobiusClient {
         window.clearTimeout(timeout);
         this.#socket.removeEventListener("message", handleMessage);
         this.#socket.removeEventListener("close", handleClose);
+        signal?.removeEventListener("abort", handleAbort);
+      };
+      const handleAbort = (): void => {
+        cleanup();
+        cancel?.();
+        reject(
+          signal?.reason ??
+            new MobiusClientError(
+              "operation_cancelled",
+              "Native session operation cancelled",
+            ),
+        );
       };
       cleanupRequest = cleanup;
       const handleClose = (): void => {
@@ -805,6 +862,7 @@ export class MobiusClient {
       };
       this.#socket.addEventListener("message", handleMessage);
       this.#socket.addEventListener("close", handleClose, { once: true });
+      signal?.addEventListener("abort", handleAbort, { once: true });
     });
     try {
       this.#socket.send(outbound);
@@ -839,6 +897,14 @@ export class MobiusClient {
       }
       if (kind === SESSION_PROMPT_KIND) {
         decodeSessionPromptCommand(encoded);
+      } else if (kind === NATIVE_SESSION_REQUEST_KIND) {
+        decodeNativeSessionCommand(encoded);
+      } else if (kind === NATIVE_SESSION_CANCEL_KIND) {
+        decodeNativeSessionCancel(encoded);
+      } else if (kind === NATIVE_SESSION_RESULT_KIND) {
+        this.#options.onNativeSessionResult?.(
+          decodeNativeSessionResult(encoded),
+        );
       } else if (kind === SESSION_CANCEL_KIND) {
         decodeSessionCancelCommand(encoded);
       } else if (kind === WORKSPACE_LIST_KIND) {

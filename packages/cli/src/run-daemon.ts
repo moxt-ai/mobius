@@ -16,6 +16,8 @@ import {
   decodeAgentInstallCancelCommand,
   decodeAgentInstallRequestCommand,
   decodeMessageKind,
+  decodeNativeSessionCancel,
+  decodeNativeSessionCommand,
   decodeRuntimeHeartbeatAckEvent,
   decodeRuntimeLivenessReadyEvent,
   decodeSessionCancelCommand,
@@ -34,6 +36,7 @@ import {
   encodeAgentInstallProgressEvent,
   encodeAgentInstallStartedEvent,
   encodeAgentMessageDeltaEvent,
+  encodeNativeSessionResult,
   encodeSessionCommandsUpdatedEvent,
   encodeSessionCompletedEvent,
   encodeSessionConfigUpdatedEvent,
@@ -49,6 +52,8 @@ import {
   encodeSessionUsageUpdatedEvent,
   encodeWorkspaceEntriesEvent,
   MOBIUS_PROTOCOL_VERSION,
+  NATIVE_SESSION_CANCEL_KIND,
+  NATIVE_SESSION_REQUEST_KIND,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_LIVENESS_READY_KIND,
   SESSION_CANCEL_KIND,
@@ -104,9 +109,10 @@ import { FixedInstallationExecutor } from "./agent-installation/fixed-installati
 import { ConsoleInstallationAuthorizer } from "./agent-installation/local-installation-authorizer.ts";
 import { ManagedAdapterInstaller } from "./agent-installation/managed-adapter-installer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
-import { LocalAuthorizationError } from "./authorization/authorize-binding.ts";
+import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
+import { NativeSessionService } from "./native-sessions/service.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import {
@@ -511,8 +517,9 @@ async function resolveSessionDirectories(
   bindingId: string,
   directoryId: string,
   additionalDirectoryIds: readonly string[],
+  signal: AbortSignal,
 ): Promise<ResolvedSessionDirectories> {
-  const cwd = await directories.resolve(bindingId, directoryId);
+  const cwd = await directories.resolve(bindingId, directoryId, signal);
   const additionalDirectories: string[] = [];
   const additionalDirectoryEntries: {
     readonly directoryId: string;
@@ -523,6 +530,7 @@ async function resolveSessionDirectories(
     const directory = await directories.resolve(
       bindingId,
       additionalDirectoryId,
+      signal,
     );
     if (unique.has(directory)) {
       throw new LocalAuthorizationError(
@@ -548,11 +556,13 @@ async function executeWorkspaceList(
   command: WorkspaceListCommand,
   directories: WorkspaceDirectoryService,
   audit: AuditStore,
+  signal: AbortSignal,
 ): Promise<void> {
   try {
     const listing = await directories.list(
       command.bindingId,
       command.directoryId,
+      signal,
     );
     audit.record({
       commandId: command.requestId,
@@ -592,6 +602,7 @@ async function executeSessionPrepare(
       command.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
+      signal,
     );
     const agent = config.catalog.find(command.agentId);
     const prepared = await sessions.prepareSession({
@@ -604,6 +615,7 @@ async function executeSessionPrepare(
     const listing = await directories.list(
       command.bindingId,
       command.directoryId,
+      signal,
     );
     audit.record({
       commandId: command.requestId,
@@ -649,6 +661,7 @@ async function executeSessionConfigure(
       command.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
+      signal,
     );
     const configOptions = await sessions.configureSession({
       additionalDirectories: resolved.additionalDirectories,
@@ -697,6 +710,7 @@ async function executePrompt(
       command.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
+      signal,
     );
     const agent = config.catalog.find(command.agentId);
     const processAttemptId = randomUUID();
@@ -829,6 +843,7 @@ async function runRelayConnection(
   sessions: AcpSessionManager,
   installations: AgentInstallationManager,
   installationObserver: DaemonInstallationObserver,
+  nativeSessions: NativeSessionService,
   signal: AbortSignal,
   timer: DaemonTimer,
 ): Promise<void> {
@@ -837,263 +852,402 @@ async function runRelayConnection(
   const socket = await connectRelay(relayUrl, signal);
   const activeTurns = new Map<string, ActiveDaemonTurn>();
   const connectionController = new AbortController();
+  const nativeRequests = new Map<
+    string,
+    {
+      readonly agentId: string;
+      readonly sessionId: string;
+      readonly controller: AbortController;
+      readonly completion: Promise<void>;
+    }
+  >();
   sessions.setObserver(new DaemonAcpObserver(socket));
   installationObserver.connect(socket);
 
-  await new Promise<void>((resolve, reject) => {
-    let finished = false;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let finished = false;
 
-    const cleanup = (): void => {
-      connectionRefresh.close();
-      connectionLiveness.close();
-      signal.removeEventListener("abort", stop);
-      socket.removeEventListener("close", handleClose);
-      socket.removeEventListener("error", handleError);
-      socket.removeEventListener("message", handleMessage);
-      installationObserver.disconnect(socket);
-      connectionController.abort();
-      for (const turn of activeTurns.values()) {
-        turn.abortConnection();
-      }
-      activeTurns.clear();
-    };
+      const cleanup = (): void => {
+        connectionRefresh.close();
+        connectionLiveness.close();
+        signal.removeEventListener("abort", stop);
+        socket.removeEventListener("close", handleClose);
+        socket.removeEventListener("error", handleError);
+        socket.removeEventListener("message", handleMessage);
+        installationObserver.disconnect(socket);
+        connectionController.abort();
+        for (const turn of activeTurns.values()) {
+          turn.abortConnection();
+        }
+        activeTurns.clear();
+      };
 
-    const resolveConnection = (): void => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      cleanup();
-      resolve();
-    };
+      const resolveConnection = (): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        resolve();
+      };
 
-    const rejectConnection = (): void => {
-      if (finished) {
-        return;
-      }
-      finished = true;
-      cleanup();
-      reject(new Error("Relay WebSocket failed"));
-    };
+      const rejectConnection = (): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        cleanup();
+        reject(new Error("Relay WebSocket failed"));
+      };
 
-    const stop = (): void => {
-      socket.close(1000, "Daemon stopped");
-      resolveConnection();
-    };
-
-    const refreshConnection = (): void => {
-      socket.close(1000, "Refreshing idle relay connection");
-      resolveConnection();
-    };
-
-    const connectionLiveness = new RelayConnectionLiveness(timer, {
-      send: (message) => send(socket, message),
-      unresponsive: () => {
-        socket.close(4001, "Relay liveness check timed out");
+      const stop = (): void => {
+        socket.close(1000, "Daemon stopped");
         resolveConnection();
-      },
-    });
+      };
 
-    const connectionRefresh = new RelayConnectionRefresh(
-      timer,
-      () => activeTurns.size === 0,
-      refreshConnection,
-    );
+      const refreshConnection = (): void => {
+        socket.close(1000, "Refreshing idle relay connection");
+        resolveConnection();
+      };
 
-    signal.addEventListener("abort", stop, { once: true });
-    const handleClose = (): void => {
-      resolveConnection();
-    };
-    const handleError = (): void => {
+      const connectionLiveness = new RelayConnectionLiveness(timer, {
+        send: (message) => send(socket, message),
+        unresponsive: () => {
+          socket.close(4001, "Relay liveness check timed out");
+          resolveConnection();
+        },
+      });
+
+      const connectionRefresh = new RelayConnectionRefresh(
+        timer,
+        () => activeTurns.size === 0,
+        refreshConnection,
+      );
+
+      signal.addEventListener("abort", stop, { once: true });
+      const handleClose = (): void => {
+        resolveConnection();
+      };
+      const handleError = (): void => {
+        if (signal.aborted) {
+          resolveConnection();
+          return;
+        }
+        rejectConnection();
+      };
+      const handleMessage = (event: MessageEvent<unknown>): void => {
+        const encoded: unknown = event.data;
+        if (typeof encoded !== "string") {
+          socket.close(4003, "Text message required");
+          rejectConnection();
+          return;
+        }
+
+        try {
+          const kind = decodeMessageKind(encoded);
+          if (kind === NATIVE_SESSION_CANCEL_KIND) {
+            const command = decodeNativeSessionCancel(encoded);
+            const pending = nativeRequests.get(command.requestId);
+            if (pending?.sessionId === command.sessionId)
+              pending.controller.abort(
+                new AcpExecutionError(
+                  "Native session operation cancelled",
+                  {},
+                  "native_session_cancelled",
+                ),
+              );
+            return;
+          }
+          if (kind === NATIVE_SESSION_REQUEST_KIND) {
+            const command = decodeNativeSessionCommand(encoded);
+            const previous = [...nativeRequests.values()].filter(
+              (request) => request.agentId === command.agentId,
+            );
+            if (
+              nativeRequests.has(command.requestId) ||
+              nativeRequests.size >= 4 ||
+              previous.some((request) => !request.controller.signal.aborted)
+            ) {
+              reportOperationFailure(
+                socket,
+                command.requestId,
+                command.sessionId,
+                new AcpExecutionError(
+                  "Another native session operation is running",
+                  {},
+                  "native_session_busy",
+                ),
+              );
+              return;
+            }
+            const controller = new AbortController();
+            const operationSignal = AbortSignal.any([
+              connectionController.signal,
+              controller.signal,
+            ]);
+            const timeout = timer.schedule(
+              () =>
+                controller.abort(
+                  new AcpExecutionError(
+                    "Native session operation timed out",
+                    {},
+                    "native_session_timeout",
+                  ),
+                ),
+              90_000,
+            );
+            const completion = (async (): Promise<void> => {
+              try {
+                operationSignal.throwIfAborted();
+                if (previous.length > 0) {
+                  await new Promise<void>((resolve, reject) => {
+                    const cancel = (): void => reject(operationSignal.reason);
+                    operationSignal.addEventListener("abort", cancel, {
+                      once: true,
+                    });
+                    void Promise.all(
+                      previous.map((request) => request.completion),
+                    ).then(
+                      () => {
+                        operationSignal.removeEventListener("abort", cancel);
+                        resolve();
+                      },
+                      (error: unknown) => {
+                        operationSignal.removeEventListener("abort", cancel);
+                        reject(error);
+                      },
+                    );
+                  });
+                }
+                operationSignal.throwIfAborted();
+                const result = await nativeSessions.execute(
+                  command,
+                  operationSignal,
+                );
+                if (socket.readyState === WebSocket.OPEN)
+                  send(socket, encodeNativeSessionResult(result));
+              } catch (error) {
+                const failure: unknown = operationSignal.aborted
+                  ? (controller.signal.reason ??
+                    new AcpExecutionError(
+                      "Native session operation cancelled",
+                      {},
+                      "native_session_cancelled",
+                    ))
+                  : error;
+                audit.record({
+                  commandId: command.requestId,
+                  sessionId: command.sessionId,
+                  event: "native_session_operation_failed",
+                  details: { code: operationErrorCode(failure) },
+                });
+                reportOperationFailure(
+                  socket,
+                  command.requestId,
+                  command.sessionId,
+                  failure,
+                );
+              } finally {
+                timeout.cancel();
+                nativeRequests.delete(command.requestId);
+              }
+            })();
+            nativeRequests.set(command.requestId, {
+              agentId: command.agentId,
+              sessionId: command.sessionId,
+              controller,
+              completion,
+            });
+            return;
+          }
+          if (kind === RUNTIME_LIVENESS_READY_KIND) {
+            decodeRuntimeLivenessReadyEvent(encoded);
+            connectionLiveness.start();
+            return;
+          }
+          if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
+            connectionLiveness.acknowledge(
+              decodeRuntimeHeartbeatAckEvent(encoded),
+            );
+            return;
+          }
+          if (kind === SESSION_CANCEL_KIND) {
+            const cancellation = decodeSessionCancelCommand(encoded);
+            const turn = activeTurns.get(cancellation.commandId);
+            if (turn === undefined || !turn.matches(cancellation)) {
+              console.warn(
+                "Mobius daemon ignored cancellation for an inactive turn",
+              );
+              return;
+            }
+            if (!turn.requestCancellation()) {
+              return;
+            }
+            audit.record({
+              commandId: cancellation.commandId,
+              event: "session_cancellation_requested",
+              sessionId: cancellation.sessionId,
+            });
+            void sessions
+              .cancelPrompt(cancellation.sessionId)
+              .catch((error) => {
+                console.error(
+                  "Mobius daemon could not cancel the agent turn",
+                  error,
+                );
+              });
+            return;
+          }
+          if (kind === WORKSPACE_LIST_KIND) {
+            const command = decodeWorkspaceListCommand(encoded);
+            void executeWorkspaceList(
+              socket,
+              command,
+              directories,
+              audit,
+              connectionController.signal,
+            );
+            return;
+          }
+          if (kind === SESSION_PREPARE_KIND) {
+            const command = decodeSessionPrepareCommand(encoded);
+            void executeSessionPrepare(
+              socket,
+              command,
+              config,
+              directories,
+              audit,
+              sessions,
+              connectionController.signal,
+            );
+            return;
+          }
+          if (kind === SESSION_CONFIGURE_KIND) {
+            const command = decodeSessionConfigureCommand(encoded);
+            void executeSessionConfigure(
+              socket,
+              command,
+              config,
+              directories,
+              audit,
+              sessions,
+              connectionController.signal,
+            );
+            return;
+          }
+          if (kind === SESSION_PERMISSION_RESPOND_KIND) {
+            const command = decodeSessionPermissionRespondCommand(encoded);
+            void sessions
+              .respondPermission(command)
+              .then(() => {
+                audit.record({
+                  commandId: command.interactionId,
+                  event: "session_permission_resolved",
+                  sessionId: command.sessionId,
+                });
+              })
+              .catch((error: unknown) => {
+                reportOperationFailure(
+                  socket,
+                  command.interactionId,
+                  command.sessionId,
+                  error,
+                );
+              });
+            return;
+          }
+          if (kind === SESSION_ELICITATION_RESPOND_KIND) {
+            const command = decodeSessionElicitationRespondCommand(encoded);
+            void sessions
+              .respondElicitation(command)
+              .then(() => {
+                audit.record({
+                  commandId: command.interactionId,
+                  event: "session_elicitation_resolved",
+                  sessionId: command.sessionId,
+                });
+              })
+              .catch((error: unknown) => {
+                reportOperationFailure(
+                  socket,
+                  command.interactionId,
+                  command.sessionId,
+                  error,
+                );
+              });
+            return;
+          }
+          if (kind === AGENT_INSTALL_REQUEST_KIND) {
+            const command = decodeAgentInstallRequestCommand(encoded);
+            void installations
+              .request(command, signal)
+              .catch((error: unknown) => {
+                console.error("Mobius Agent installation failed", error);
+              });
+            return;
+          }
+          if (kind === AGENT_INSTALL_CANCEL_KIND) {
+            const command = decodeAgentInstallCancelCommand(encoded);
+            void installations
+              .cancel(command.requestId)
+              .catch((error: unknown) => {
+                reportOperationFailure(socket, command.requestId, "", error);
+              });
+            return;
+          }
+          if (kind !== SESSION_PROMPT_KIND) {
+            throw new Error("Unsupported protocol message");
+          }
+          const command = decodeSessionPromptCommand(encoded);
+          if (activeTurns.has(command.commandId)) {
+            reportFailure(
+              socket,
+              command,
+              "duplicate_command",
+              "The command is already running",
+            );
+            return;
+          }
+
+          const turn = new ActiveDaemonTurn(command, new AbortController());
+          activeTurns.set(command.commandId, turn);
+          void executePrompt(
+            socket,
+            command,
+            config,
+            directories,
+            audit,
+            sessions,
+            turn.signal,
+          )
+            .catch((error: unknown) => {
+              console.error("Mobius daemon turn failed", error);
+            })
+            .finally(() => {
+              activeTurns.delete(command.commandId);
+              connectionRefresh.afterTurnFinished();
+            });
+        } catch (error) {
+          console.error("Mobius daemon rejected a message", error);
+          socket.close(4008, "Invalid protocol message");
+          rejectConnection();
+        }
+      };
+      socket.addEventListener("close", handleClose);
+      socket.addEventListener("error", handleError);
+      socket.addEventListener("message", handleMessage);
+
       if (signal.aborted) {
-        resolveConnection();
-        return;
+        stop();
       }
-      rejectConnection();
-    };
-    const handleMessage = (event: MessageEvent<unknown>): void => {
-      const encoded: unknown = event.data;
-      if (typeof encoded !== "string") {
-        socket.close(4003, "Text message required");
-        rejectConnection();
-        return;
-      }
-
-      try {
-        const kind = decodeMessageKind(encoded);
-        if (kind === RUNTIME_LIVENESS_READY_KIND) {
-          decodeRuntimeLivenessReadyEvent(encoded);
-          connectionLiveness.start();
-          return;
-        }
-        if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
-          connectionLiveness.acknowledge(
-            decodeRuntimeHeartbeatAckEvent(encoded),
-          );
-          return;
-        }
-        if (kind === SESSION_CANCEL_KIND) {
-          const cancellation = decodeSessionCancelCommand(encoded);
-          const turn = activeTurns.get(cancellation.commandId);
-          if (turn === undefined || !turn.matches(cancellation)) {
-            console.warn(
-              "Mobius daemon ignored cancellation for an inactive turn",
-            );
-            return;
-          }
-          if (!turn.requestCancellation()) {
-            return;
-          }
-          audit.record({
-            commandId: cancellation.commandId,
-            event: "session_cancellation_requested",
-            sessionId: cancellation.sessionId,
-          });
-          void sessions.cancelPrompt(cancellation.sessionId).catch((error) => {
-            console.error(
-              "Mobius daemon could not cancel the agent turn",
-              error,
-            );
-          });
-          return;
-        }
-        if (kind === WORKSPACE_LIST_KIND) {
-          const command = decodeWorkspaceListCommand(encoded);
-          void executeWorkspaceList(socket, command, directories, audit);
-          return;
-        }
-        if (kind === SESSION_PREPARE_KIND) {
-          const command = decodeSessionPrepareCommand(encoded);
-          void executeSessionPrepare(
-            socket,
-            command,
-            config,
-            directories,
-            audit,
-            sessions,
-            connectionController.signal,
-          );
-          return;
-        }
-        if (kind === SESSION_CONFIGURE_KIND) {
-          const command = decodeSessionConfigureCommand(encoded);
-          void executeSessionConfigure(
-            socket,
-            command,
-            config,
-            directories,
-            audit,
-            sessions,
-            connectionController.signal,
-          );
-          return;
-        }
-        if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-          const command = decodeSessionPermissionRespondCommand(encoded);
-          void sessions
-            .respondPermission(command)
-            .then(() => {
-              audit.record({
-                commandId: command.interactionId,
-                event: "session_permission_resolved",
-                sessionId: command.sessionId,
-              });
-            })
-            .catch((error: unknown) => {
-              reportOperationFailure(
-                socket,
-                command.interactionId,
-                command.sessionId,
-                error,
-              );
-            });
-          return;
-        }
-        if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-          const command = decodeSessionElicitationRespondCommand(encoded);
-          void sessions
-            .respondElicitation(command)
-            .then(() => {
-              audit.record({
-                commandId: command.interactionId,
-                event: "session_elicitation_resolved",
-                sessionId: command.sessionId,
-              });
-            })
-            .catch((error: unknown) => {
-              reportOperationFailure(
-                socket,
-                command.interactionId,
-                command.sessionId,
-                error,
-              );
-            });
-          return;
-        }
-        if (kind === AGENT_INSTALL_REQUEST_KIND) {
-          const command = decodeAgentInstallRequestCommand(encoded);
-          void installations
-            .request(command, signal)
-            .catch((error: unknown) => {
-              console.error("Mobius Agent installation failed", error);
-            });
-          return;
-        }
-        if (kind === AGENT_INSTALL_CANCEL_KIND) {
-          const command = decodeAgentInstallCancelCommand(encoded);
-          void installations
-            .cancel(command.requestId)
-            .catch((error: unknown) => {
-              reportOperationFailure(socket, command.requestId, "", error);
-            });
-          return;
-        }
-        if (kind !== SESSION_PROMPT_KIND) {
-          throw new Error("Unsupported protocol message");
-        }
-        const command = decodeSessionPromptCommand(encoded);
-        if (activeTurns.has(command.commandId)) {
-          reportFailure(
-            socket,
-            command,
-            "duplicate_command",
-            "The command is already running",
-          );
-          return;
-        }
-
-        const turn = new ActiveDaemonTurn(command, new AbortController());
-        activeTurns.set(command.commandId, turn);
-        void executePrompt(
-          socket,
-          command,
-          config,
-          directories,
-          audit,
-          sessions,
-          turn.signal,
-        )
-          .catch((error: unknown) => {
-            console.error("Mobius daemon turn failed", error);
-          })
-          .finally(() => {
-            activeTurns.delete(command.commandId);
-            connectionRefresh.afterTurnFinished();
-          });
-      } catch (error) {
-        console.error("Mobius daemon rejected a message", error);
-        socket.close(4008, "Invalid protocol message");
-        rejectConnection();
-      }
-    };
-    socket.addEventListener("close", handleClose);
-    socket.addEventListener("error", handleError);
-    socket.addEventListener("message", handleMessage);
-
-    if (signal.aborted) {
-      stop();
-    }
-  });
+    });
+  } finally {
+    connectionController.abort();
+    await Promise.all(
+      [...nativeRequests.values()].map((request) => request.completion),
+    );
+  }
 }
 
 export async function runDaemon(
@@ -1106,7 +1260,7 @@ export async function runDaemon(
   const stateDirectory = readStateDirectory();
   const specifications = supportedLocalAgentSpecifications();
   const installationExecutor = new FixedInstallationExecutor({
-    approvedRoot: config.approvedRoot,
+    defaultWorkspace: config.defaultWorkspace,
     audit: installationAudit,
     catalog: config.catalog,
     environment: process.env,
@@ -1116,13 +1270,12 @@ export async function runDaemon(
   });
   await new AutomaticAdapterProvisioner(
     {
-      approvedRoot: config.approvedRoot,
+      defaultWorkspace: config.defaultWorkspace,
       audit: installationAudit,
       catalog: config.catalog,
       environment: process.env,
     },
     new ManagedAdapterInstaller({
-      approvedRoot: config.approvedRoot,
       environment: process.env,
       stateDirectory,
     }),
@@ -1136,9 +1289,15 @@ export async function runDaemon(
   );
   const directories = new WorkspaceDirectoryService(
     config.bindingId,
-    config.approvedRoot,
+    config.defaultWorkspace,
   );
   const installationObserver = new DaemonInstallationObserver();
+  const nativeSessions = new NativeSessionService(
+    config,
+    directories,
+    sessions,
+    audit,
+  );
   const installations = new AgentInstallationManager(
     specifications,
     new ConsoleInstallationAuthorizer(stateDirectory),
@@ -1159,6 +1318,7 @@ export async function runDaemon(
           sessions,
           installations,
           installationObserver,
+          nativeSessions,
           signal,
           timer,
         );

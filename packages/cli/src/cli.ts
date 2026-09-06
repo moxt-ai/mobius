@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { mkdir } from "node:fs/promises";
+
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
-import { type DaemonConfig, loadApprovedRoot } from "./config.ts";
+import { type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
 import {
   pairLocalMachine,
   resumeLocalMachine,
@@ -17,7 +19,7 @@ process.once("SIGTERM", () => shutdown.abort());
 const USAGE = `Mobius CLI
 
 Usage:
-  mobius pair --url <relay-url> --code <pairing-code> --root <workspace>
+  mobius pair --url <relay-url> --code <pairing-code> [--workspace <directory>]
   mobius start --channel <channel-id>
   mobius agents [--json]
 
@@ -25,6 +27,9 @@ Commands:
   pair   Pair this machine and start its local daemon
   start  Start the local daemon for a saved channel
   agents Show locally available and installable Agents
+
+Pairing grants this browser access to the machine with your user account's permissions.
+New conversations default to ~/.mobius/workspace; choose other directories in the browser.
 `;
 
 async function main(): Promise<void> {
@@ -42,8 +47,9 @@ async function main(): Promise<void> {
     ) {
       throw new Error("Usage: mobius agents [--json]");
     }
+    await mkdir(loadDefaultWorkspace(), { recursive: true, mode: 0o700 });
     const inventory = await discoverLocalAgentInventory({
-      approvedRoot: loadApprovedRoot(),
+      defaultWorkspace: loadDefaultWorkspace(),
       environment: process.env,
       signal: shutdown.signal,
     });
@@ -84,6 +90,10 @@ async function main(): Promise<void> {
   process.stdout.write(
     "Starting the local daemon. Keep this terminal open.\n\n",
   );
+  process.stdout.write(
+    "This paired browser can use the machine with your user account's permissions.\n",
+  );
+  process.stdout.write(`Default workspace: ${config.defaultWorkspace}\n\n`);
   const audit = new AuditStore(config.auditDatabasePath);
   try {
     await runDaemon(config, audit, shutdown.signal);

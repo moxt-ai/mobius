@@ -1,4 +1,5 @@
 import { readdir, realpath, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import {
   basename,
   dirname,
@@ -7,21 +8,14 @@ import {
   normalize,
   relative,
 } from "node:path";
-
 import type { WorkspaceEntry } from "@moxt-ai/mobius-protocol";
-
-import { LocalAuthorizationError } from "./authorize-binding.ts";
-
-const ROOT_DIRECTORY_ID = "root";
-const DIRECTORY_ID_PREFIX = "dir-";
-const DIRECTORY_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+import { LocalAuthorizationError } from "./local-authorization-error.ts";
 
 export class WorkspaceDirectoryListing {
   readonly directoryId: string;
   readonly directoryLabel: string;
   readonly entries: readonly WorkspaceEntry[];
   readonly parentDirectoryId: string;
-
   constructor(
     directoryId: string,
     directoryLabel: string,
@@ -35,192 +29,191 @@ export class WorkspaceDirectoryListing {
   }
 }
 
-function directoryId(relativePath: string): string {
-  if (relativePath.length === 0) {
-    return ROOT_DIRECTORY_ID;
+function encodePath(path: string): string {
+  const encoded = Buffer.from(path, "utf8").toString("base64url");
+  if (encoded.length === 0 || encoded.length > 2_000) {
+    throw new LocalAuthorizationError(
+      "The local directory path is too long to select",
+    );
   }
-  return `${DIRECTORY_ID_PREFIX}${Buffer.from(relativePath, "utf8").toString("base64url")}`;
+  return `path-${encoded}`;
 }
 
-function decodeDirectoryId(value: string): string {
-  if (value === ROOT_DIRECTORY_ID) {
-    return "";
-  }
-  if (!value.startsWith(DIRECTORY_ID_PREFIX)) {
-    throw new LocalAuthorizationError("The workspace directory is invalid");
-  }
-  const encoded = value.slice(DIRECTORY_ID_PREFIX.length);
+function decodePath(value: string, prefix: string): string {
+  const encoded = value.slice(prefix.length);
   if (
     encoded.length === 0 ||
     encoded.length > 2_000 ||
-    !DIRECTORY_ID_PATTERN.test(encoded)
-  ) {
-    throw new LocalAuthorizationError("The workspace directory is invalid");
-  }
+    !/^[a-zA-Z0-9_-]+$/.test(encoded)
+  )
+    throw new LocalAuthorizationError("The directory identifier is invalid");
   const decoded = Buffer.from(encoded, "base64url").toString("utf8");
-  if (Buffer.from(decoded, "utf8").toString("base64url") !== encoded) {
-    throw new LocalAuthorizationError("The workspace directory is invalid");
-  }
-  const normalized = normalize(decoded);
   if (
+    Buffer.from(decoded, "utf8").toString("base64url") !== encoded ||
     decoded.includes("\0") ||
-    isAbsolute(decoded) ||
-    normalized === ".." ||
-    normalized.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) ||
-    normalized !== decoded
-  ) {
-    throw new LocalAuthorizationError("The workspace directory is invalid");
-  }
-  return normalized;
+    normalize(decoded) !== decoded
+  )
+    throw new LocalAuthorizationError("The directory identifier is invalid");
+  return decoded;
 }
 
-function isContained(root: string, target: string): boolean {
-  const remainder = relative(root, target);
-  return (
-    remainder.length === 0 ||
-    (!isAbsolute(remainder) &&
-      remainder !== ".." &&
-      !remainder.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))
-  );
-}
-
+/** Pairing authorizes the machine. Directory identifiers select a working
+ * directory; they do not grant additional filesystem capabilities. */
 export class WorkspaceDirectoryService {
-  readonly #approvedBindingId: string;
-  readonly #approvedRoot: string;
+  readonly #bindingId: string;
+  readonly #defaultWorkspace: string;
 
-  constructor(approvedBindingId: string, approvedRoot: string) {
-    this.#approvedBindingId = approvedBindingId;
-    this.#approvedRoot = approvedRoot;
+  constructor(bindingId: string, defaultWorkspace: string) {
+    this.#bindingId = bindingId;
+    this.#defaultWorkspace = defaultWorkspace;
   }
 
-  readonly resolve = async (
-    requestedBindingId: string,
-    requestedDirectoryId: string,
-  ): Promise<string> => {
-    if (requestedBindingId !== this.#approvedBindingId) {
+  private readonly authorizeMachine = (bindingId: string): void => {
+    if (bindingId !== this.#bindingId)
       throw new LocalAuthorizationError(
         "The runtime binding is not authorized",
       );
+  };
+
+  private readonly requestedPath = (id: string): string => {
+    if (id === "default") return this.#defaultWorkspace;
+    if (id === "home") return homedir();
+    if (id.startsWith("path-")) {
+      const path = decodePath(id, "path-");
+      if (isAbsolute(path)) return path;
     }
-    const root = await this.resolveRoot();
-    const relativePath = decodeDirectoryId(requestedDirectoryId);
+    throw new LocalAuthorizationError("The directory identifier is invalid");
+  };
+
+  private readonly resolvePath = async (
+    requested: string,
+    signal: AbortSignal,
+  ): Promise<string> => {
+    signal.throwIfAborted();
+    if (
+      !isAbsolute(requested) ||
+      requested.includes("\0") ||
+      normalize(requested) !== requested
+    )
+      throw new LocalAuthorizationError("The local directory path is invalid");
     try {
-      const target = await realpath(join(root, relativePath));
+      const target = await realpath(requested);
+      signal.throwIfAborted();
       const metadata = await stat(target);
-      if (!metadata.isDirectory() || !isContained(root, target)) {
+      signal.throwIfAborted();
+      if (
+        !isAbsolute(target) ||
+        normalize(target) !== target ||
+        !metadata.isDirectory()
+      )
         throw new LocalAuthorizationError(
-          "The workspace directory is not authorized",
+          "The selected location is not a directory",
         );
-      }
       return target;
-    } catch (error) {
-      if (error instanceof LocalAuthorizationError) {
-        throw error;
-      }
+    } catch (cause) {
+      signal.throwIfAborted();
+      if (cause instanceof LocalAuthorizationError) throw cause;
       throw new LocalAuthorizationError(
-        "The workspace directory cannot be resolved",
-        { cause: error },
+        "This directory is missing or unavailable to your user account",
+        { cause },
       );
     }
   };
 
+  private readonly label = (path: string): string => {
+    const suffix = relative(homedir(), path);
+    return suffix === ""
+      ? "~"
+      : !isAbsolute(suffix) &&
+          suffix !== ".." &&
+          !suffix.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)
+        ? `~/${suffix.replaceAll("\\", "/")}`
+        : path;
+  };
+
+  readonly identify = async (
+    bindingId: string,
+    requestedPath: string,
+    signal: AbortSignal,
+  ): Promise<{
+    readonly path: string;
+    readonly directoryId: string;
+    readonly name: string;
+    readonly label: string;
+  }> => {
+    this.authorizeMachine(bindingId);
+    const path = await this.resolvePath(requestedPath, signal);
+    return {
+      path,
+      directoryId: encodePath(path),
+      name: basename(path) || path,
+      label: this.label(path),
+    };
+  };
+
+  readonly resolve = async (
+    bindingId: string,
+    id: string,
+    signal: AbortSignal,
+  ): Promise<string> => {
+    this.authorizeMachine(bindingId);
+    return await this.resolvePath(this.requestedPath(id), signal);
+  };
+
   readonly list = async (
-    requestedBindingId: string,
-    requestedDirectoryId: string,
+    bindingId: string,
+    id: string,
+    signal: AbortSignal,
   ): Promise<WorkspaceDirectoryListing> => {
-    const root = await this.resolveRoot();
-    const logicalRelativePath = decodeDirectoryId(requestedDirectoryId);
-    const target = await this.resolve(requestedBindingId, requestedDirectoryId);
+    const target = await this.resolve(bindingId, id, signal);
     try {
-      const entries: WorkspaceEntry[] = [];
       const children = await readdir(target, { withFileTypes: true });
+      signal.throwIfAborted();
+      const entries: WorkspaceEntry[] = [];
       for (const child of children) {
-        if (entries.length === 500) {
-          break;
+        if (entries.length === 500) break;
+        if (
+          child.isFile() ||
+          child.isBlockDevice() ||
+          child.isCharacterDevice() ||
+          child.isFIFO() ||
+          child.isSocket()
+        ) {
+          continue;
         }
-        const logicalChild =
-          logicalRelativePath.length === 0
-            ? child.name
-            : join(logicalRelativePath, child.name);
         try {
-          const resolvedChild = await realpath(join(target, child.name));
-          const metadata = await stat(resolvedChild);
-          if (metadata.isDirectory() && isContained(root, resolvedChild)) {
-            entries.push({
-              directoryId: directoryId(logicalChild),
-              name: child.name,
-            });
-          }
-        } catch {
-          // Unreadable and broken directory entries are omitted.
+          const path = await this.resolvePath(join(target, child.name), signal);
+          entries.push({ directoryId: encodePath(path), name: child.name });
+        } catch (cause) {
+          signal.throwIfAborted();
+          if (!(cause instanceof LocalAuthorizationError)) throw cause;
         }
       }
-      entries.sort((left, right) => left.name.localeCompare(right.name));
-      const labelSuffix = logicalRelativePath.replaceAll("\\", "/");
-      const parentRelative =
-        logicalRelativePath.length === 0 || dirname(logicalRelativePath) === "."
-          ? ""
-          : dirname(logicalRelativePath);
+      entries.sort((a, b) => a.name.localeCompare(b.name));
+      const parent = dirname(target);
       return new WorkspaceDirectoryListing(
-        requestedDirectoryId,
-        labelSuffix.length === 0
-          ? basename(root)
-          : `${basename(root)}/${labelSuffix}`,
+        id,
+        this.label(target),
         entries,
-        requestedDirectoryId === ROOT_DIRECTORY_ID
-          ? ""
-          : directoryId(parentRelative),
+        parent === target ? "" : encodePath(parent),
       );
-    } catch (error) {
-      if (error instanceof LocalAuthorizationError) {
-        throw error;
-      }
+    } catch (cause) {
+      signal.throwIfAborted();
+      if (cause instanceof LocalAuthorizationError) throw cause;
       throw new LocalAuthorizationError(
-        "The workspace directory cannot be listed",
-        { cause: error },
+        "This directory cannot be browsed by your user account",
+        { cause },
       );
     }
   };
 
   readonly resolveMany = async (
-    requestedBindingId: string,
-    directoryIds: readonly string[],
+    bindingId: string,
+    ids: readonly string[],
+    signal: AbortSignal,
   ): Promise<readonly string[]> => {
-    const resolved: string[] = [];
-    const unique = new Set<string>();
-    for (const requestedDirectoryId of directoryIds) {
-      const directory = await this.resolve(
-        requestedBindingId,
-        requestedDirectoryId,
-      );
-      if (!unique.has(directory)) {
-        unique.add(directory);
-        resolved.push(directory);
-      }
-    }
-    return resolved;
-  };
-
-  readonly resolveRoot = async (): Promise<string> => {
-    try {
-      const root = await realpath(this.#approvedRoot);
-      const metadata = await stat(root);
-      if (!metadata.isDirectory()) {
-        throw new LocalAuthorizationError(
-          "The approved root is not a directory",
-        );
-      }
-      return root;
-    } catch (error) {
-      if (error instanceof LocalAuthorizationError) {
-        throw error;
-      }
-      throw new LocalAuthorizationError(
-        "The approved root cannot be resolved",
-        {
-          cause: error,
-        },
-      );
-    }
+    const paths = new Set<string>();
+    for (const id of ids) paths.add(await this.resolve(bindingId, id, signal));
+    return [...paths];
   };
 }

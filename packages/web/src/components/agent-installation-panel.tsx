@@ -160,7 +160,6 @@ export function AgentInstallationPage({
   readonly channelId: string;
 }) {
   const machineName = useChatStore((state) => state.machineName);
-  const workspaceName = useChatStore((state) => state.workspaceName);
   const runtime = useChatStore((state) => state.runtime);
   return (
     <main className="flex h-dvh items-center justify-center bg-background p-6">
@@ -172,9 +171,8 @@ export function AgentInstallationPage({
           Install a local Agent
         </h1>
         <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-          {machineName} is paired to {workspaceName}, but no verified Agent is
-          ready yet. Installation runs on that machine only after local
-          authorization.
+          {machineName} is paired, but no verified Agent is ready yet.
+          Installation runs on that machine only after local authorization.
         </p>
         {!runtime.canSend && (
           <p className="mt-3 text-xs font-medium text-[#a85d00]">

@@ -159,7 +159,7 @@ describe("CLI environment proxy", () => {
         `http://127.0.0.1:${pairingPort}`,
         "--code",
         "ABCD-EFGH-JKLM-NPQR-STUV",
-        "--root",
+        "--workspace",
         process.cwd(),
       ]);
 

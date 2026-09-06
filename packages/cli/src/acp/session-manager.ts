@@ -21,6 +21,7 @@ import {
   type AgentPromptResponse,
   decodeAgentPromptResponse,
   MOBIUS_PROTOCOL_VERSION,
+  type NativeSessionHistory,
   type PromptImage,
   type PromptResource,
   SESSION_COMMANDS_UPDATED_KIND,
@@ -61,8 +62,16 @@ import {
 } from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
 import {
+  type NativeSessionOrigin,
+  type NativeSessionPage,
+  nativeSessionIdSchema,
+  nativeSessionPageSchema,
+} from "./native-session.ts";
+import { AcpHistoryReplay } from "./session-history.ts";
+import {
   type AcpSessionStore,
   AcpStoredSession,
+  DeletedAcpStoredSession,
   FoundAcpStoredSession,
   MemoryAcpSessionStore,
 } from "./session-store.ts";
@@ -76,6 +85,7 @@ export interface AcpPrepareOptions {
   readonly cwd: string;
   readonly sessionId: string;
   readonly signal: AbortSignal;
+  readonly origin?: NativeSessionOrigin;
 }
 
 export interface AcpConfigureOptions extends AcpPrepareOptions {
@@ -455,6 +465,7 @@ function normalizeCapabilities(
     listSessions: session?.list != null,
     loadSession: capabilities.loadSession === true,
     resumeSession: session?.resume != null,
+    unstableForkSession: session?.fork != null,
   };
 }
 
@@ -887,14 +898,19 @@ class AcpProcessSession implements AcpClientHandler {
     listSessions: false,
     loadSession: false,
     resumeSession: false,
+    unstableForkSession: false,
   };
   #commands: readonly SessionCommand[] = [];
   #configOptions: readonly SessionConfigOption[] = [];
   #nativeSessionId = "";
   #prompted = false;
-  #replaying = false;
+  #replay:
+    | { readonly kind: "idle" | "discard" }
+    | { readonly kind: "capture"; readonly history: AcpHistoryReplay } = {
+    kind: "idle",
+  };
   #restored = false;
-  #sessionTitle = "";
+  #sessionTitle: string | null = null;
   #sessionUpdatedAt = "";
   #turn: AcpTurnState = new IdleAcpTurn();
   #updateTail: Promise<void> = Promise.resolve();
@@ -969,10 +985,11 @@ class AcpProcessSession implements AcpClientHandler {
       store,
     );
     try {
-      await runtime.initialize(options.signal);
+      await runtime.initialize(options.signal, options.origin);
       return runtime;
     } catch (error) {
       await runtime.closeProcess();
+      options.signal.throwIfAborted();
       if (error instanceof AcpExecutionError) {
         throw error;
       }
@@ -1003,7 +1020,39 @@ class AcpProcessSession implements AcpClientHandler {
       this.#restored,
     );
 
-  readonly initialize = async (signal: AbortSignal): Promise<void> => {
+  readonly loadHistory = async (
+    signal: AbortSignal,
+  ): Promise<NativeSessionHistory> => {
+    if (!this.#capabilities.loadSession) return { status: "unavailable" };
+    const history = new AcpHistoryReplay();
+    this.#replay = { kind: "capture", history };
+    try {
+      await this.race(
+        this.#connection.agent.request(
+          methods.agent.session.load,
+          {
+            additionalDirectories: [...this.#additionalDirectories],
+            cwd: this.#cwd,
+            mcpServers: [],
+            sessionId: this.#nativeSessionId,
+          },
+          { cancellationSignal: signal },
+        ),
+        "ACP agent exited while loading history",
+        signal,
+      );
+      await this.#updateTail;
+      signal.throwIfAborted();
+      return history.snapshot();
+    } finally {
+      this.#replay = { kind: "idle" };
+    }
+  };
+
+  readonly initialize = async (
+    signal: AbortSignal,
+    origin?: NativeSessionOrigin,
+  ): Promise<void> => {
     const initialized = await this.race(
       this.#connection.agent.request(
         methods.agent.initialize,
@@ -1037,9 +1086,62 @@ class AcpProcessSession implements AcpClientHandler {
       255,
     );
     this.#agentVersion = truncate(initialized.agentInfo?.version ?? "", 128);
-    const stored = this.#store.read(this.#mobiusSessionId);
+    const stored =
+      origin?.kind === "import"
+        ? new FoundAcpStoredSession(
+            new AcpStoredSession(
+              this.#mobiusSessionId,
+              this.#agentId,
+              nativeSessionIdSchema.parse(origin.nativeSessionId),
+              this.#cwd,
+              this.#additionalDirectories,
+              true,
+            ),
+          )
+        : this.#store.read(this.#mobiusSessionId);
+    if (stored instanceof DeletedAcpStoredSession)
+      throw new AcpExecutionError(
+        "The native Agent session was deleted. Start a new chat.",
+        {},
+        "native_session_deleted",
+      );
     let lifecycleResponse: unknown;
-    if (
+    if (origin?.kind === "fork") {
+      if (!this.#capabilities.unstableForkSession)
+        throw new AcpExecutionError(
+          "This Agent does not support session forking",
+          {},
+          "native_session_unsupported",
+        );
+      const forked = await this.race(
+        this.#connection.agent.request(
+          methods.agent.session.fork,
+          {
+            sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
+            cwd: this.#cwd,
+            additionalDirectories: [...this.#additionalDirectories],
+            mcpServers: [],
+          },
+          { cancellationSignal: signal },
+        ),
+        "ACP agent exited while forking a session",
+        signal,
+      );
+      this.#nativeSessionId = nativeSessionIdSchema.parse(forked.sessionId);
+      if (
+        this.#nativeSessionId === origin.nativeSessionId ||
+        this.#store.findNative(this.#agentId, this.#nativeSessionId).length > 0
+      ) {
+        throw new AcpExecutionError(
+          "The Agent did not create an independent fork",
+          {},
+          "invalid_native_session_response",
+        );
+      }
+      this.#prompted = true;
+      this.#restored = true;
+      lifecycleResponse = forked;
+    } else if (
       stored instanceof FoundAcpStoredSession &&
       stored.session.agentId === this.#agentId &&
       stored.session.cwd === this.#cwd &&
@@ -1067,7 +1169,7 @@ class AcpProcessSession implements AcpClientHandler {
           signal,
         );
       } else if (this.#capabilities.loadSession) {
-        this.#replaying = true;
+        this.#replay = { kind: "discard" };
         try {
           lifecycleResponse = await this.race(
             this.#connection.agent.request(
@@ -1084,7 +1186,8 @@ class AcpProcessSession implements AcpClientHandler {
             signal,
           );
         } finally {
-          this.#replaying = false;
+          await this.#updateTail;
+          this.#replay = { kind: "idle" };
         }
       } else {
         throw new AcpExecutionError(
@@ -1139,7 +1242,69 @@ class AcpProcessSession implements AcpClientHandler {
     );
     await this.#updateTail;
     signal.throwIfAborted();
+    this.#store.write(
+      new AcpStoredSession(
+        this.#mobiusSessionId,
+        this.#agentId,
+        this.#nativeSessionId,
+        this.#cwd,
+        this.#additionalDirectories,
+        this.#prompted,
+      ),
+    );
   };
+
+  readonly listNativeSessions = async (
+    cursor: string | null,
+    signal: AbortSignal,
+  ): Promise<NativeSessionPage> => {
+    if (!this.#capabilities.listSessions)
+      throw new AcpExecutionError(
+        "This Agent does not support native session listing",
+        {},
+        "native_session_unsupported",
+      );
+    const response: unknown = await this.race(
+      this.#connection.agent.request(
+        methods.agent.session.list,
+        cursor === null ? {} : { cursor },
+        { cancellationSignal: signal },
+      ),
+      "ACP agent exited while listing sessions",
+      signal,
+    );
+    const decoded = nativeSessionPageSchema.safeParse(response);
+    if (!decoded.success)
+      throw new AcpExecutionError(
+        "The Agent returned an invalid native session list",
+        { cause: decoded.error },
+        "invalid_native_session_response",
+      );
+    return decoded.data;
+  };
+
+  readonly deleteNativeSession = async (
+    nativeSessionId: string,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (!this.#capabilities.deleteSession || !this.#capabilities.listSessions)
+      throw new AcpExecutionError(
+        "This Agent does not support native session deletion",
+        {},
+        "native_session_unsupported",
+      );
+    await this.race(
+      this.#connection.agent.request(
+        methods.agent.session.delete,
+        { sessionId: nativeSessionIdSchema.parse(nativeSessionId) },
+        { cancellationSignal: signal },
+      ),
+      "ACP agent exited while deleting a session",
+      signal,
+    );
+  };
+
+  readonly nativeSessionId = (): string => this.#nativeSessionId;
 
   readonly configure = async (
     options: AcpConfigureOptions,
@@ -1591,8 +1756,9 @@ class AcpProcessSession implements AcpClientHandler {
   ): Promise<void> => {
     this.assertNativeSession(notification.sessionId);
     const update = notification.update;
+    if (this.#replay.kind === "capture") this.#replay.history.record(update);
     if (
-      this.#replaying &&
+      this.#replay.kind !== "idle" &&
       (update.sessionUpdate === "user_message_chunk" ||
         update.sessionUpdate === "agent_message_chunk" ||
         update.sessionUpdate === "agent_thought_chunk" ||
@@ -1855,6 +2021,7 @@ class AcpProcessSession implements AcpClientHandler {
 }
 
 export class AcpSessionManager {
+  readonly #nativeOperations = new Set<string>();
   readonly #activeSessionIds = new Set<string>();
   readonly #cancellationRequests = new Set<string>();
   readonly #preparing = new Map<string, Promise<AcpProcessSession>>();
@@ -1921,6 +2088,24 @@ export class AcpSessionManager {
   readonly prepareSession = async (
     options: AcpPrepareOptions,
   ): Promise<AcpPreparedSession> => {
+    const stored = this.#store.read(options.sessionId);
+    if (stored instanceof DeletedAcpStoredSession)
+      throw new AcpExecutionError(
+        "The native Agent session was deleted. Start a new chat.",
+        {},
+        "native_session_deleted",
+      );
+    if (
+      stored instanceof FoundAcpStoredSession &&
+      this.#nativeOperations.has(
+        `${stored.session.agentId}:${stored.session.nativeSessionId}`,
+      )
+    )
+      throw new AcpExecutionError(
+        "The native session is being managed",
+        {},
+        "session_busy",
+      );
     const pending = this.#preparing.get(options.sessionId);
     if (pending !== undefined) {
       const runtime = await pending;
@@ -1978,6 +2163,19 @@ export class AcpSessionManager {
   readonly runPrompt = async (
     options: AcpTurnOptions,
   ): Promise<AcpPromptResult> => {
+    const stored = this.#store.read(options.sessionId);
+    if (
+      stored instanceof FoundAcpStoredSession &&
+      this.#nativeOperations.has(
+        `${stored.session.agentId}:${stored.session.nativeSessionId}`,
+      )
+    ) {
+      throw new AcpExecutionError(
+        "The native session is being managed",
+        {},
+        "session_busy",
+      );
+    }
     if (this.#activeSessionIds.has(options.sessionId)) {
       throw new AcpExecutionError(
         "Another prompt is already running in this conversation",
@@ -1991,6 +2189,16 @@ export class AcpSessionManager {
         return { stopReason: "cancelled" };
       }
       const runtime = await this.ensureSession(options);
+      if (
+        this.#nativeOperations.has(
+          `${options.agent.id}:${runtime.nativeSessionId()}`,
+        )
+      )
+        throw new AcpExecutionError(
+          "The native session is being managed",
+          {},
+          "session_busy",
+        );
       if (this.#cancellationRequests.has(options.sessionId)) {
         return { stopReason: "cancelled" };
       }
@@ -2073,5 +2281,157 @@ export class AcpSessionManager {
       throw new AcpExecutionError("ACP session did not start");
     }
     return started;
+  };
+
+  readonly listNativeSessions = async (
+    options: AcpPrepareOptions,
+    cursor: string | null,
+  ): Promise<NativeSessionPage> =>
+    await (await this.ensureSession(options)).listNativeSessions(
+      cursor,
+      options.signal,
+    );
+
+  readonly openNativeSession = async (
+    options: AcpPrepareOptions,
+    origin: NativeSessionOrigin,
+  ): Promise<{
+    readonly sessionId: string;
+    readonly prepared: AcpPreparedSession;
+    readonly history: NativeSessionHistory;
+  }> => {
+    const key = `${options.agent.id}:${origin.nativeSessionId}`;
+    if (this.#nativeOperations.has(key))
+      throw new AcpExecutionError(
+        "The native session is being managed",
+        {},
+        "session_busy",
+      );
+    const linked = this.#store.findNative(
+      options.agent.id,
+      origin.nativeSessionId,
+    );
+    if (
+      linked.some(
+        (entry) =>
+          this.#activeSessionIds.has(entry.sessionId) ||
+          this.#preparing.has(entry.sessionId),
+      )
+    )
+      throw new AcpExecutionError(
+        "Wait for the native session's running operation to finish",
+        {},
+        "session_busy",
+      );
+    const existing = linked[0];
+    if (origin.kind === "import" && existing !== undefined) {
+      const runtime = await this.ensureSession({
+        ...options,
+        sessionId: existing.sessionId,
+      });
+      if (
+        this.#activeSessionIds.has(existing.sessionId) ||
+        this.#nativeOperations.has(key)
+      )
+        throw new AcpExecutionError(
+          "Wait for the native session's running operation to finish",
+          {},
+          "session_busy",
+        );
+      this.#nativeOperations.add(key);
+      try {
+        const history = await runtime.loadHistory(options.signal);
+        return {
+          prepared: runtime.prepared(),
+          sessionId: existing.sessionId,
+          history,
+        };
+      } catch (error) {
+        this.#sessions.delete(existing.sessionId);
+        await runtime.closeProcess();
+        throw error;
+      } finally {
+        this.#nativeOperations.delete(key);
+      }
+    }
+    if (
+      this.#sessions.has(options.sessionId) ||
+      this.#preparing.has(options.sessionId) ||
+      this.#store.read(options.sessionId) instanceof FoundAcpStoredSession ||
+      this.#store.read(options.sessionId) instanceof DeletedAcpStoredSession
+    )
+      throw new AcpExecutionError(
+        "The destination conversation already exists",
+        {},
+        "session_identity_mismatch",
+      );
+    this.#nativeOperations.add(key);
+    try {
+      const runtime = await this.#startPreparation({ ...options, origin });
+      const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
+      this.#nativeOperations.add(openedKey);
+      try {
+        const history = await runtime.loadHistory(options.signal);
+        return {
+          sessionId: options.sessionId,
+          prepared: runtime.prepared(),
+          history,
+        };
+      } catch (error) {
+        this.#sessions.delete(options.sessionId);
+        this.#store.remove(options.sessionId);
+        await runtime.closeProcess();
+        throw error;
+      } finally {
+        this.#nativeOperations.delete(openedKey);
+      }
+    } finally {
+      this.#nativeOperations.delete(key);
+    }
+  };
+
+  readonly deleteNativeSession = async (
+    options: AcpPrepareOptions,
+    nativeSessionId: string,
+  ): Promise<readonly string[]> => {
+    const runtime = await this.ensureSession(options);
+    const key = `${options.agent.id}:${nativeSessionId}`;
+    const linked = this.#store.findNative(options.agent.id, nativeSessionId);
+    if (
+      this.#nativeOperations.has(key) ||
+      linked.some(
+        (entry) =>
+          this.#activeSessionIds.has(entry.sessionId) ||
+          this.#preparing.has(entry.sessionId),
+      )
+    )
+      throw new AcpExecutionError(
+        "Wait for the native session's running operation to finish",
+        {},
+        "session_busy",
+      );
+    this.#nativeOperations.add(key);
+    try {
+      for (const entry of linked) {
+        const active = this.#sessions.get(entry.sessionId);
+        if (active !== undefined && active !== runtime) {
+          this.#sessions.delete(entry.sessionId);
+          await active.close();
+        }
+      }
+      options.signal.throwIfAborted();
+      await runtime.deleteNativeSession(nativeSessionId, options.signal);
+      const deleted = this.#store.markDeleted(
+        options.agent.id,
+        nativeSessionId,
+      );
+      if (runtime.nativeSessionId() === nativeSessionId) {
+        this.#sessions.delete(options.sessionId);
+        await runtime.close();
+      }
+      return deleted;
+    } finally {
+      this.#nativeOperations.delete(key);
+    }
   };
 }

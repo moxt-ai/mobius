@@ -26,7 +26,7 @@ const AUTOMATIC_ADAPTER_FAILURE_CODES = new Set([
 
 export interface AutomaticAdapterProvisionerOptions {
   readonly architecture?: NodeJS.Architecture;
-  readonly approvedRoot: string;
+  readonly defaultWorkspace: string;
   readonly audit: InstallationAudit;
   readonly catalog: LocalAgentCatalog;
   readonly environment: Readonly<NodeJS.ProcessEnv>;
@@ -80,7 +80,7 @@ function discoveryOptions(
     ...(options.architecture === undefined
       ? {}
       : { architecture: options.architecture }),
-    approvedRoot: options.approvedRoot,
+    defaultWorkspace: options.defaultWorkspace,
     environment,
     ...(options.platform === undefined ? {} : { platform: options.platform }),
     signal,

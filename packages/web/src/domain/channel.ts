@@ -1,6 +1,7 @@
 import type {
   AgentDisplayContent,
   AgentInstallationStage,
+  NativeSessionHistory,
   PromptImage,
   PromptResource,
   SessionCapabilities,
@@ -252,6 +253,8 @@ export class RecordedSession {
   readonly directoryLabel: string;
   readonly pendingElicitations: readonly SessionElicitationRequestedEvent[];
   readonly pendingPermissions: readonly SessionPermissionRequestedEvent[];
+  readonly nativeHistory: NativeSessionHistory | null;
+  readonly status: "active" | "deleted";
   readonly restored: boolean;
   readonly sessionId: string;
   readonly title: string;
@@ -275,7 +278,11 @@ export class RecordedSession {
     title: string,
     updatedAt: string,
     usage: readonly SessionUsageUpdatedEvent[],
+    nativeHistory: NativeSessionHistory | null = null,
+    status: "active" | "deleted" = "active",
   ) {
+    this.status = status;
+    this.nativeHistory = nativeHistory;
     this.additionalDirectories = additionalDirectories;
     this.agentId = agentId;
     this.agentName = agentName;

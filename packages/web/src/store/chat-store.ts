@@ -6,6 +6,7 @@ import type {
   AgentInstallFailedEvent,
   AgentInstallProgressEvent,
   AgentInstallStartedEvent,
+  NativeSessionResult,
   PromptImage,
   PromptResource,
   SessionCommandsUpdatedEvent,
@@ -44,6 +45,7 @@ import {
   CompletedTurnState,
   ConnectingRuntimeState,
   Conversation,
+  DeletedSessionState,
   FailedTurnState,
   PendingTurn,
   ReadySessionState,
@@ -57,6 +59,13 @@ import {
 const HISTORY_SYNC_ERROR_PREFIX = "history_sync_failed:";
 
 export interface ChatStore {
+  readonly openNativeConversation: (
+    result: Extract<
+      NativeSessionResult,
+      { readonly action: "import" | "fork" }
+    >,
+  ) => void;
+  readonly applyNativeSessionDeletion: (sessionIds: readonly string[]) => void;
   readonly addDraftImage: (image: PromptImage) => void;
   readonly addDraftResource: (resource: PromptResource) => void;
   readonly applySessionCommands: (event: SessionCommandsUpdatedEvent) => void;
@@ -472,6 +481,61 @@ export function selectActiveConversation(state: ChatStore): Conversation {
 }
 
 export const useChatStore = create<ChatStore>()((set, get) => ({
+  openNativeConversation: (result) => {
+    set((state) => {
+      const { ready } = result;
+      const existing = findConversationBySession(
+        state.conversations,
+        ready.sessionId,
+      );
+      if (existing !== undefined) {
+        return {
+          conversations: replaceConversation(
+            state.conversations,
+            existing.withNativeHistory(result.history),
+          ),
+          activeConversationId: existing.id,
+          sidebarOpen: false,
+          errorMessage: "",
+        };
+      }
+      const agent = readAgent(state.agents, ready.agentId);
+      const conversation = new Conversation(
+        agent.id,
+        agent.label,
+        ready.sessionId,
+        ready.sessionId,
+        result.title,
+        "Continue Agent context",
+        "",
+        [],
+        ReadySessionState.fromReady(ready),
+        ready.directoryId,
+        ready.directoryLabel,
+        ready.additionalDirectories,
+      ).withNativeHistory(result.history);
+      return {
+        conversations: [conversation, ...state.conversations],
+        activeConversationId: conversation.id,
+        sidebarOpen: false,
+        errorMessage: "",
+        announcement:
+          "Agent conversation opened with its available message history.",
+      };
+    });
+  },
+  applyNativeSessionDeletion: (sessionIds) => {
+    const deleted = new Set(sessionIds);
+    set((state) => ({
+      conversations: state.conversations.map((conversation) =>
+        deleted.has(conversation.sessionId)
+          ? conversation.withSession(new DeletedSessionState())
+          : conversation,
+      ),
+      announcement:
+        "Native session deleted. Messages already recorded in Mobius are retained.",
+    }));
+  },
   activeConversationId: initialConversation.id,
   addDraftImage: (image) => {
     set((state) => {
@@ -809,7 +873,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       return;
     }
     const activeConversation = readActiveConversation(state);
-    if (activeConversation.messages.length === 0) {
+    if (!activeConversation.contextLocked) {
       set({ sidebarOpen: false });
       return;
     }
