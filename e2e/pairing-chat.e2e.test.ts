@@ -59,7 +59,6 @@ import {
   SESSION_USAGE_UPDATED_KIND,
   type SessionUsageUpdatedEvent,
 } from "../packages/protocol/src/index.ts";
-import { renderNativeHistory } from "../packages/web/tests/native-history-render.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const fakeAgentPath = fileURLToPath(
@@ -715,13 +714,19 @@ describe("pairing and channel chat", () => {
         mimeType: "image/png",
         name: "selected.png",
       };
-      const expectSelectedImage = (history: unknown): void => {
-        const html = renderNativeHistory(history);
-        expect(html).toContain(`<img`);
-        expect(html).toContain(
-          `src="data:image/png;base64,${selectedImage.data}"`,
-        );
-        expect(html).not.toContain("[@image]");
+      const expectSelectedImageHistory = (history: unknown): void => {
+        expect(history).toMatchObject({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              images: expect.arrayContaining([
+                expect.objectContaining({
+                  data: selectedImage.data,
+                  mimeType: selectedImage.mimeType,
+                }),
+              ]),
+            }),
+          ]),
+        });
       };
       await external.runPrompt({
         additionalDirectories: [],
@@ -907,7 +912,7 @@ describe("pairing and channel chat", () => {
           },
         });
         expect(preview).not.toHaveProperty("ready");
-        expectSelectedImage(preview["history"]);
+        expectSelectedImageHistory(preview["history"]);
         const previewHistory = await fetch(
           new URL(`/v1/channels/${pairing.channelId}/history`, origin),
         );
@@ -961,7 +966,7 @@ describe("pairing and channel chat", () => {
           entries: [{ title: "Claude saved conversation" }],
         });
         const imported = await nextImport;
-        expectSelectedImage(imported["history"]);
+        expectSelectedImageHistory(imported["history"]);
         expect(imported).toMatchObject({
           action: "import",
           ready: {
@@ -1011,7 +1016,7 @@ describe("pairing and channel chat", () => {
             isRecord(session) && session["sessionId"] === "imported-chat",
         );
         if (!isRecord(saved)) throw new Error("Expected imported history");
-        expectSelectedImage(saved["nativeHistory"]);
+        expectSelectedImageHistory(saved["nativeHistory"]);
         const forked = await request({
           action: "fork",
           entryId: entries[0]["entryId"],

@@ -65,7 +65,7 @@ describe("runtime liveness protocol", () => {
 });
 
 describe("session prompt protocol", () => {
-  it("round-trips a valid command", () => {
+  it("Given a valid browser prompt, When it crosses the daemon boundary, Then its complete command round-trips", () => {
     const command: SessionPromptCommand = {
       additionalDirectoryIds: [],
       agentId: "codex",
@@ -99,7 +99,7 @@ describe("session prompt protocol", () => {
     ).toEqual(command);
   });
 
-  it("rejects a remote working directory", () => {
+  it("Given a prompt contains a remote working directory, When it crosses the protocol boundary, Then the authority override is rejected", () => {
     const encoded = JSON.stringify({
       agentId: "codex",
       additionalDirectoryIds: [],

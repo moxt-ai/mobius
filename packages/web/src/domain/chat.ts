@@ -191,7 +191,7 @@ export abstract class AgentSessionState {
   }
 }
 
-export class UnpreparedSessionState extends AgentSessionState {
+class UnpreparedSessionState extends AgentSessionState {
   readonly autoPrepare = true;
   readonly isPreparing = false;
   readonly isReady = false;
@@ -570,7 +570,7 @@ class AuthorizingTurnState extends AgentTurnState {
   readonly stop = (): AgentTurnState => new StoppingTurnState("Pending");
 }
 
-export class PendingTurnState extends AgentTurnState {
+class PendingTurnState extends AgentTurnState {
   readonly appearance = "working";
   readonly canStop = true;
   readonly isStreaming = true;

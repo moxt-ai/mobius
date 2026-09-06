@@ -32,6 +32,62 @@ Critical user paths must use end-to-end tests. Protocols and external boundaries
 
 A lower-level test is not acceptance if the supported user path could break while the test still passes. Boundary tests may support a slice, but they cannot replace its user-visible acceptance scenario.
 
+Unit tests are prohibited by default. The default Vitest configuration only
+discovers `*.contract.test.ts`, `*.integration.test.ts`, and
+`*.e2e.test.ts`. Renaming an isolated helper or class test does not make it a
+boundary test: move the assertion to the owning protocol, runtime, or product
+entrypoint, or remove it when a stronger scenario already owns the behavior.
+
+## Web Integration Tests
+
+Run the Web boundary suite from the repository root:
+
+```bash
+pnpm test:integration:web
+```
+
+The dedicated configuration at `packages/web/vitest.integration.config.ts`
+mounts the complete `App` in Happy DOM. It does not use Vitest Browser Mode or
+launch a real browser. The suite uses Wrangler's programmatic Cloudflare test
+harness to start the production Worker on an isolated random local port, apply
+the D1 migrations, and exercise the production HTTP and WebSocket paths with a
+stateful local daemon. It does not spawn the Wrangler CLI, replace `fetch`,
+intercept requests, or patch production modules.
+
+The daemon is a stateful protocol peer at the external local-Agent boundary,
+so CI can drive deterministic Agent states without provider credentials or an
+interactive third-party process. It exchanges real Mobius messages over the
+real Relay WebSocket instead of returning per-test canned responses.
+
+Web scenarios belong in `packages/web/test/**/*.integration.test.tsx`. Assert
+through accessible DOM output and user events. Do not call Zustand actions,
+render isolated components, or import private presentation and form helpers in
+tests. Browser-specific layout and rendering remain manual verification unless
+a future behavior explicitly requires a real-browser end-to-end boundary.
+
+## Cloudflare Worker Integration Tests
+
+Run the relay's Worker-boundary suite from the repository root:
+
+```bash
+pnpm test:integration:worker
+```
+
+The dedicated configuration at `packages/relay-cloudflare/vitest.config.ts`
+loads the package's `wrangler.jsonc`, starts a local Workers runtime, and applies
+every migration in `packages/relay-cloudflare/migrations/d1` before the test
+file runs. The suite uses isolated local D1 and Durable Object bindings; it
+does not require Cloudflare credentials and never connects to production
+resources.
+
+Worker integration scenarios belong in
+`packages/relay-cloudflare/test/**/*.integration.test.ts`. Keep the
+`--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
+integration currently requires shared, serialized storage for Durable Object
+WebSocket tests. The repository's `pnpm check` command runs this suite in CI
+after the ordinary V8 coverage run. `pnpm test:integration` runs both the Web
+and Worker integration suites.
+
 Assert observable contracts, including returned results, emitted events, protocol messages, state transitions, filesystem effects, process exit status, and typed errors.
 
 Do not write isolated tests for private helpers, internal control flow, incidental ordering, or implementation details. Do not assert that an internal collaborator was called. A refactor that preserves the product contract should not break the test.

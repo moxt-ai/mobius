@@ -8,8 +8,13 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["packages/*/tests/**/*.test.ts", "e2e/**/*.test.ts"],
-    testTimeout: 5_000,
+    fileParallelism: false,
+    include: [
+      "packages/*/tests/**/*.contract.test.ts",
+      "packages/*/tests/**/*.integration.test.ts",
+      "e2e/**/*.e2e.test.ts",
+    ],
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],

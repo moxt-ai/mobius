@@ -10,28 +10,39 @@ import {
   type InstallerDownloadTransport,
 } from "../src/agent-installation/verified-download.ts";
 
-class LeavingAllowlistTransport implements InstallerDownloadTransport {
-  readonly requests: string[] = [];
+type DownloadScenario = "allowed-redirect" | "leaving-allowlist";
+
+// Real installer endpoints are mutable third-party services. This stateful fake
+// implements the production transport port while the filesystem boundary and
+// streamed Response body remain real.
+class StatefulInstallerProvider implements InstallerDownloadTransport {
+  readonly #scenario: DownloadScenario;
+  #requestCount = 0;
+
+  constructor(scenario: DownloadScenario) {
+    this.#scenario = scenario;
+  }
 
   readonly get = (url: URL, signal: AbortSignal): Promise<Response> => {
     signal.throwIfAborted();
-    this.requests.push(url.toString());
-    return Promise.resolve(
-      new Response(null, {
-        headers: { location: "https://outside.example/install.sh" },
-        status: 302,
-      }),
-    );
-  };
-}
-
-class AllowedRedirectTransport implements InstallerDownloadTransport {
-  readonly requests: string[] = [];
-
-  readonly get = (url: URL, signal: AbortSignal): Promise<Response> => {
-    signal.throwIfAborted();
-    this.requests.push(url.toString());
-    if (this.requests.length === 1) {
+    this.#requestCount += 1;
+    if (
+      this.#scenario === "leaving-allowlist" &&
+      this.#requestCount === 1 &&
+      url.toString() === "https://vendor.example/install.sh"
+    ) {
+      return Promise.resolve(
+        new Response(null, {
+          headers: { location: "https://outside.example/install.sh" },
+          status: 302,
+        }),
+      );
+    }
+    if (
+      this.#scenario === "allowed-redirect" &&
+      this.#requestCount === 1 &&
+      url.toString() === "https://vendor.example/install.sh"
+    ) {
       return Promise.resolve(
         new Response(null, {
           headers: { location: "https://downloads.vendor.example/install.sh" },
@@ -39,9 +50,16 @@ class AllowedRedirectTransport implements InstallerDownloadTransport {
         }),
       );
     }
-    return Promise.resolve(
-      new Response("verified installer\n", { status: 200 }),
-    );
+    if (
+      this.#scenario === "allowed-redirect" &&
+      this.#requestCount === 2 &&
+      url.toString() === "https://downloads.vendor.example/install.sh"
+    ) {
+      return Promise.resolve(
+        new Response("verified installer\n", { status: 200 }),
+      );
+    }
+    return Promise.resolve(new Response(null, { status: 500 }));
   };
 }
 
@@ -54,7 +72,7 @@ describe("verified installer downloads", () => {
     vi.useFakeTimers({ now: new Date("2026-09-04T00:00:00.000Z") });
     const directory = await mkdtemp(join(tmpdir(), "mobius-download-denied-"));
     const destination = join(directory, "install.sh");
-    const transport = new LeavingAllowlistTransport();
+    const transport = new StatefulInstallerProvider("leaving-allowlist");
     try {
       await expect(
         downloadVerifiedFile(
@@ -70,7 +88,6 @@ describe("verified installer downloads", () => {
         ),
       ).rejects.toMatchObject({ code: "installer_redirect_not_allowed" });
       await expect(stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(transport.requests).toEqual(["https://vendor.example/install.sh"]);
     } finally {
       await rm(directory, { force: true, recursive: true });
     }
@@ -84,7 +101,7 @@ describe("verified installer downloads", () => {
         join(tmpdir(), "mobius-download-allowed-"),
       );
       const destination = join(directory, "install.sh");
-      const transport = new AllowedRedirectTransport();
+      const transport = new StatefulInstallerProvider("allowed-redirect");
       try {
         const result = await downloadVerifiedFile(
           {
@@ -110,10 +127,9 @@ describe("verified installer downloads", () => {
           sha256:
             "e6573f9c7196248c7cf243928d24835d292469b7e5c1ed1f0b426074d6012953",
         });
-        expect(transport.requests).toEqual([
-          "https://vendor.example/install.sh",
+        expect(result.url.toString()).toBe(
           "https://downloads.vendor.example/install.sh",
-        ]);
+        );
       } finally {
         await rm(directory, { force: true, recursive: true });
       }

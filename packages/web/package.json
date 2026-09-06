@@ -6,7 +6,8 @@
   "scripts": {
     "build": "vite build",
     "dev": "vite",
-    "typecheck": "tsc --project tsconfig.json"
+    "test:integration": "pnpm build && vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --project tsconfig.json && tsc --project test/tsconfig.json"
   },
   "dependencies": {
     "@moxt-ai/mobius-web-sdk": "workspace:*",
@@ -21,11 +22,15 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@moxt-ai/mobius-protocol": "workspace:*",
     "@tailwindcss/vite": "^4.3.3",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.1",
     "tailwindcss": "^4.3.3",
-    "vite": "^8.2.2"
+    "vite": "^8.2.2",
+    "wrangler": "^4.129.0"
   }
 }

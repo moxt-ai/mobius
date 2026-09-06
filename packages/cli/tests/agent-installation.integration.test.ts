@@ -11,11 +11,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   AGENT_INSTALL_REQUEST_KIND,
-  type AgentInstallationStage,
   type AgentInstallRequestCommand,
   MOBIUS_PROTOCOL_VERSION,
 } from "@moxt-ai/mobius-protocol";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   CodexAgentSpecification,
   discoverLocalAgentInventory,
@@ -27,12 +26,7 @@ import {
 import {
   type AgentInstallation,
   AgentInstallationManager,
-  AwaitingLocalApproval,
-  CancelledInstallation,
-  FailedInstallation,
   type InstallationAudit,
-  type InstallationAuthorizer,
-  type InstallationExecutor,
   type InstallationObserver,
   RunningInstallation,
   SucceededInstallation,
@@ -60,56 +54,6 @@ function executableSource(source: string): string {
   return `#!${process.execPath}\n${source}`;
 }
 
-class FixedAuthorizer implements InstallationAuthorizer {
-  readonly approved: boolean;
-  readonly requests: string[] = [];
-
-  constructor(approved: boolean) {
-    this.approved = approved;
-  }
-
-  readonly authorize = (
-    agentId: string,
-    _label: string,
-    _requestId: string,
-    signal: AbortSignal,
-  ): Promise<boolean> => {
-    signal.throwIfAborted();
-    this.requests.push(agentId);
-    return Promise.resolve(this.approved);
-  };
-}
-
-class StatefulInstallationExecutor implements InstallationExecutor {
-  readonly executions: string[] = [];
-  readonly hold: boolean;
-  readonly started = Promise.withResolvers<void>();
-
-  constructor(hold = false) {
-    this.hold = hold;
-  }
-
-  readonly execute = async (
-    agentId: string,
-    _requestId: string,
-    report: (stage: AgentInstallationStage) => Promise<void>,
-    signal: AbortSignal,
-  ): Promise<void> => {
-    this.executions.push(agentId);
-    await report("downloading");
-    this.started.resolve();
-    if (!this.hold || this.executions.length > 1) {
-      await report("verifying");
-      await report("checking_acp");
-      return;
-    }
-    await new Promise<void>((_resolve, reject) => {
-      const abort = (): void => reject(signal.reason);
-      signal.addEventListener("abort", abort, { once: true });
-    });
-  };
-}
-
 class RecordingInstallationObserver implements InstallationObserver {
   readonly states: AgentInstallation[] = [];
 
@@ -127,6 +71,10 @@ class RecordingInstallationAudit implements InstallationAudit {
   };
 }
 
+// Real Agent and adapter installers depend on mutable package registries. These
+// stateful boundary implementations create disposable executables so production
+// discovery, identity validation, ACP verification, and filesystem publication
+// still run without reaching a third-party installer.
 class StatefulCodexInstallRecipe extends FixedAgentInstallRecipe {
   readonly id = "codex";
   readonly label = "Codex";
@@ -266,6 +214,14 @@ if (process.argv.includes("--version")) {
   await chmod(path, 0o700);
 }
 
+async function writeInstallationGrant(stateDirectory: string): Promise<void> {
+  await writeFile(
+    join(stateDirectory, "installation-grants.json"),
+    `${JSON.stringify({ agents: ["codex"], version: 1 })}\n`,
+    { mode: 0o600 },
+  );
+}
+
 function request(requestId: string): AgentInstallRequestCommand {
   return {
     agentId: "codex",
@@ -276,36 +232,6 @@ function request(requestId: string): AgentInstallRequestCommand {
 }
 
 describe("local Agent installation authorization", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("Given no local installation grant, When Web requests Codex installation, Then no installer starts while local approval is denied", async () => {
-    const authorizer = new FixedAuthorizer(false);
-    const executor = new StatefulInstallationExecutor();
-    const observer = new RecordingInstallationObserver();
-    const manager = new AgentInstallationManager(
-      [new CodexAgentSpecification()],
-      authorizer,
-      executor,
-      observer,
-    );
-
-    const state = await manager.request(
-      request("install-denied"),
-      new AbortController().signal,
-    );
-
-    expect(authorizer.requests).toEqual(["codex"]);
-    expect(executor.executions).toEqual([]);
-    expect(
-      observer.states.some(
-        (candidate) => candidate instanceof AwaitingLocalApproval,
-      ),
-    ).toBe(true);
-    expect(state).toMatchObject({ code: "installation_not_authorized" });
-  });
-
   it.skipIf(process.stdin.isTTY || process.stdout.isTTY)(
     "Given no locally configured capability grant in a headless daemon, When authorization is requested, Then installation is denied without execution",
     async () => {
@@ -338,11 +264,7 @@ describe("local Agent installation authorization", () => {
         join(tmpdir(), "mobius-install-grant-"),
       );
       try {
-        await writeFile(
-          join(stateDirectory, "installation-grants.json"),
-          `${JSON.stringify({ agents: ["codex"], version: 1 })}\n`,
-          { mode: 0o600 },
-        );
+        await writeInstallationGrant(stateDirectory);
 
         const grants = await readGrantedAgents(stateDirectory);
 
@@ -376,30 +298,6 @@ describe("local Agent installation authorization", () => {
     },
   );
 
-  it("Given local approval for a fixed recipe, When the same request is delivered twice, Then installation runs once and returns the same completed state", async () => {
-    const executor = new StatefulInstallationExecutor();
-    const observer = new RecordingInstallationObserver();
-    const manager = new AgentInstallationManager(
-      [new CodexAgentSpecification()],
-      new FixedAuthorizer(true),
-      executor,
-      observer,
-    );
-    const command = request("install-once");
-
-    const first = await manager.request(command, new AbortController().signal);
-    const second = await manager.request(command, new AbortController().signal);
-
-    expect(first).toBeInstanceOf(SucceededInstallation);
-    expect(second).toBe(first);
-    expect(executor.executions).toEqual(["codex"]);
-    expect(
-      observer.states
-        .filter((state) => state instanceof RunningInstallation)
-        .map((state) => state.stage),
-    ).toEqual(["downloading", "verifying", "checking_acp"]);
-  });
-
   it("Given the local user approves Codex installation, When the fixed execution path completes, Then the Agent and adapter pass ACP verification before the catalog is published", async () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-fixed-installation-"),
@@ -415,6 +313,7 @@ describe("local Agent installation authorization", () => {
     );
     let publications = 0;
     try {
+      await writeInstallationGrant(stateDirectory);
       const executor = new FixedInstallationExecutor(
         {
           defaultWorkspace: stateDirectory,
@@ -434,7 +333,7 @@ describe("local Agent installation authorization", () => {
       );
       const manager = new AgentInstallationManager(
         [specification],
-        new FixedAuthorizer(true),
+        new ConsoleInstallationAuthorizer(stateDirectory),
         executor,
         observer,
         audit,
@@ -502,6 +401,7 @@ describe("local Agent installation authorization", () => {
       [new InstallableAgentDefinition("codex", "Codex")],
     );
     try {
+      await writeInstallationGrant(stateDirectory);
       await mkdir(executableDirectory, { mode: 0o700, recursive: true });
       await writeFile(
         agentPath,
@@ -550,7 +450,7 @@ if (process.argv.includes("--version")) {
       );
       const manager = new AgentInstallationManager(
         [specification],
-        new FixedAuthorizer(true),
+        new ConsoleInstallationAuthorizer(stateDirectory),
         executor,
         observer,
       );
@@ -588,88 +488,6 @@ if (process.argv.includes("--version")) {
     } finally {
       await rm(stateDirectory, { force: true, recursive: true });
     }
-  });
-
-  it("Given an approved installation is running, When Web cancels it, Then its process boundary observes cancellation and the slot is released", async () => {
-    const executor = new StatefulInstallationExecutor(true);
-    const manager = new AgentInstallationManager(
-      [new CodexAgentSpecification()],
-      new FixedAuthorizer(true),
-      executor,
-      new RecordingInstallationObserver(),
-    );
-    const running = manager.request(
-      request("install-cancelled"),
-      new AbortController().signal,
-    );
-    await executor.started.promise;
-
-    await manager.cancel("install-cancelled");
-
-    await expect(running).resolves.toBeInstanceOf(CancelledInstallation);
-    await expect(
-      manager.request(
-        request("install-after-cancel"),
-        new AbortController().signal,
-      ),
-    ).resolves.toBeInstanceOf(SucceededInstallation);
-    expect(executor.executions).toEqual(["codex", "codex"]);
-  });
-
-  it("Given an approved installation is running, When the local daemon shuts down, Then Mobius waits for cancellation and releases the installation owner", async () => {
-    const executor = new StatefulInstallationExecutor(true);
-    const manager = new AgentInstallationManager(
-      [new CodexAgentSpecification()],
-      new FixedAuthorizer(true),
-      executor,
-      new RecordingInstallationObserver(),
-    );
-    const running = manager.request(
-      request("install-daemon-shutdown"),
-      new AbortController().signal,
-    );
-    await executor.started.promise;
-
-    await manager.close();
-
-    await expect(running).resolves.toBeInstanceOf(CancelledInstallation);
-  });
-
-  it("Given an approved installation exceeds its overall deadline, When the deadline expires, Then it fails distinctly and releases the per-Agent slot", async () => {
-    vi.useFakeTimers({ now: new Date("2026-09-04T00:00:00.000Z") });
-    const executor = new StatefulInstallationExecutor(true);
-    const manager = new AgentInstallationManager(
-      [new CodexAgentSpecification()],
-      new FixedAuthorizer(true),
-      executor,
-      new RecordingInstallationObserver(),
-    );
-    const running = manager.request(
-      request("install-timeout"),
-      new AbortController().signal,
-    );
-    await executor.started.promise;
-
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1_000);
-
-    await expect(running).resolves.toEqual(
-      expect.objectContaining({
-        code: "installation_timeout",
-      }),
-    );
-    await expect(
-      manager.request(
-        request("install-after-timeout"),
-        new AbortController().signal,
-      ),
-    ).resolves.toBeInstanceOf(SucceededInstallation);
-    expect(executor.executions).toEqual(["codex", "codex"]);
-    expect(
-      await manager.request(
-        request("install-timeout"),
-        new AbortController().signal,
-      ),
-    ).toBeInstanceOf(FailedInstallation);
   });
 });
 

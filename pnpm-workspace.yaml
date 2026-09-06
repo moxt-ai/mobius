@@ -5,6 +5,9 @@ packages:
 engineStrict: true
 minimumReleaseAge: 1440
 
+overrides:
+  happy-dom: 20.8.9
+
 allowBuilds:
   esbuild: true
   simple-git-hooks: true

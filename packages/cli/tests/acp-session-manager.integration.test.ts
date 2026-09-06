@@ -145,7 +145,7 @@ describe("ACP conversation sessions", () => {
     }
   });
 
-  it("keeps one ACP session alive across conversation turns", async () => {
+  it("Given an active ACP conversation, When a second turn is sent, Then the same Agent session remains alive", async () => {
     const manager = new AcpSessionManager();
     const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
       fakeAgentPath,
@@ -252,7 +252,7 @@ describe("ACP conversation sessions", () => {
     }
   });
 
-  it("rejects changing the agent inside an existing conversation", async () => {
+  it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
     const manager = new AcpSessionManager();
     const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
       fakeAgentPath,

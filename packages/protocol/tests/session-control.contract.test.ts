@@ -84,7 +84,7 @@ it("Given incoming saved history contains an unsafe or oversized image, When the
   }
 });
 
-describe("ACP session control protocol", () => {
+describe("ACP session control protocol contract", () => {
   it("Given older context history, When a current client decodes it, Then it remains a context snapshot", () => {
     expect(
       decodeSessionUsageUpdatedEvent(
