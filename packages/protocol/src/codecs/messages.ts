@@ -2,13 +2,17 @@ import {
   decodeAgentDisplayContentValue,
   decodePromptImagesValue,
   decodePromptResourcesValue,
+  decodeRecordedAgentContentValue,
 } from "../control-messages.ts";
 import {
   AGENT_ACTIVITY_DETAIL_LIMIT,
   AGENT_ACTIVITY_KIND,
   AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
   AGENT_ACTIVITY_LOCATION_LIMIT,
+  AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT,
+  AGENT_ACTIVITY_RECORDED_FIELD_LIMIT,
   AGENT_MESSAGE_DELTA_KIND,
+  type AgentActivityDetailCapture,
   type AgentActivityEvent,
   type AgentMessageDeltaEvent,
   RUNTIME_HEARTBEAT_ACK_KIND,
@@ -209,6 +213,56 @@ function readActivityContent(
     throw new ProtocolMessageError("Invalid activity content field");
   }
   return field.map((entry) => decodeAgentDisplayContentValue(entry));
+}
+
+function readActivityDetail(
+  value: Readonly<Record<string, unknown>>,
+): AgentActivityDetailCapture {
+  const field = value["detail"];
+  if (!isRecord(field)) {
+    throw new ProtocolMessageError("Invalid activity detail field");
+  }
+  const kind = readString(field, "kind", 32);
+  if (kind === "available") {
+    assertExactKeys(field, ["artifactId", "kind"]);
+    return {
+      artifactId: readIdentifier(field, "artifactId"),
+      kind,
+    };
+  }
+  if (kind === "unrecorded") {
+    assertExactKeys(field, ["kind"]);
+    return { kind };
+  }
+  if (kind === "truncated") {
+    assertExactKeys(field, ["capturedBytes", "kind", "originalBytes"]);
+    const capturedBytes = readSequence(field, "capturedBytes");
+    const originalBytes = readSequence(field, "originalBytes");
+    if (capturedBytes > originalBytes) {
+      throw new ProtocolMessageError("Invalid truncated activity detail size");
+    }
+    return { capturedBytes, kind, originalBytes };
+  }
+  if (kind === "recorded") {
+    assertExactKeys(field, ["content", "input", "kind", "output"]);
+    const contentValue = field["content"];
+    if (!Array.isArray(contentValue) || contentValue.length > 100) {
+      throw new ProtocolMessageError("Invalid recorded activity content");
+    }
+    const detail = {
+      content: contentValue.map((entry) =>
+        decodeRecordedAgentContentValue(entry),
+      ),
+      input: readText(field, "input", AGENT_ACTIVITY_RECORDED_FIELD_LIMIT),
+      kind,
+      output: readText(field, "output", AGENT_ACTIVITY_RECORDED_FIELD_LIMIT),
+    } as const;
+    if (JSON.stringify(detail).length > AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT) {
+      throw new ProtocolMessageError("Recorded activity detail is too large");
+    }
+    return detail;
+  }
+  throw new ProtocolMessageError("Invalid activity detail availability");
 }
 
 function readIdentifier(
@@ -450,6 +504,7 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     "activityType",
     "commandId",
     "content",
+    "detail",
     "input",
     "kind",
     "locations",
@@ -470,6 +525,7 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     activityType: readAllowedString(value, "activityType", ACTIVITY_TYPES),
     commandId: readIdentifier(value, "commandId"),
     content: readActivityContent(value),
+    detail: readActivityDetail(value),
     input: readText(value, "input", AGENT_ACTIVITY_DETAIL_LIMIT),
     kind: AGENT_ACTIVITY_KIND,
     locations: readLocations(value),

@@ -8,6 +8,8 @@ export const SESSION_STARTED_KIND = "session.started";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
 export const AGENT_ACTIVITY_KIND = "agent.activity";
 export const AGENT_ACTIVITY_DETAIL_LIMIT = 24_000;
+export const AGENT_ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
+export const AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
 export const AGENT_ACTIVITY_LOCATION_LIMIT = 12;
 export const AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT = 1_024;
 export const SESSION_COMPLETED_KIND = "session.completed";
@@ -79,6 +81,7 @@ export interface AgentActivityEvent {
   readonly activityType: string;
   readonly commandId: string;
   readonly content: readonly AgentDisplayContent[];
+  readonly detail: AgentActivityDetailCapture;
   readonly input: string;
   readonly kind: typeof AGENT_ACTIVITY_KIND;
   readonly locations: readonly string[];
@@ -91,6 +94,24 @@ export interface AgentActivityEvent {
   readonly title: string;
   readonly toolKind: string;
 }
+
+export type AgentActivityDetailCapture =
+  | {
+      readonly artifactId: string;
+      readonly kind: "available";
+    }
+  | {
+      readonly content: readonly AgentDisplayContent[];
+      readonly input: string;
+      readonly kind: "recorded";
+      readonly output: string;
+    }
+  | {
+      readonly capturedBytes: number;
+      readonly kind: "truncated";
+      readonly originalBytes: number;
+    }
+  | { readonly kind: "unrecorded" };
 
 export interface SessionCompletedEvent {
   readonly commandId: string;

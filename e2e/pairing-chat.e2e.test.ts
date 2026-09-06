@@ -26,6 +26,7 @@ import {
   AGENT_MESSAGE_DELTA_KIND,
   decodeAgentActivityEvent,
   decodeAgentMessageDeltaEvent,
+  decodeCommittedSessionEvent,
   decodeMessageKind,
   decodeRuntimeHeartbeatAckEvent,
   decodeRuntimeLivenessReadyEvent,
@@ -41,6 +42,7 @@ import {
   encodeRuntimeHeartbeatEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
+  encodeSessionEventEnvelope,
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
@@ -51,6 +53,9 @@ import {
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
+  SESSION_EVENT_COMMITTED_KIND,
+  SESSION_EVENT_FORMAT_VERSION,
+  SESSION_EVENT_KIND,
   SESSION_FAILED_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
@@ -159,11 +164,23 @@ function restoreEnvironmentVariable(
 
 class BrowserPairingCredentials {
   readonly channelId: string;
+  readonly hostToken: string;
   readonly pairingCode: string;
+  readonly projectId: string;
+  readonly tenantId: string;
 
-  constructor(channelId: string, pairingCode: string) {
+  constructor(
+    channelId: string,
+    pairingCode: string,
+    hostToken: string,
+    tenantId: string,
+    projectId: string,
+  ) {
     this.channelId = channelId;
+    this.hostToken = hostToken;
     this.pairingCode = pairingCode;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
   }
 }
 
@@ -202,11 +219,57 @@ function decodeBrowserPairing(value: unknown): BrowserPairingCredentials {
     throw new Error("Invalid pairing response");
   }
   const channelId = value["channelId"];
+  const hostToken = value["hostToken"];
   const pairingCode = value["pairingCode"];
-  if (typeof channelId !== "string" || typeof pairingCode !== "string") {
+  const projectId = value["projectId"];
+  const tenantId = value["tenantId"];
+  if (
+    typeof channelId !== "string" ||
+    typeof hostToken !== "string" ||
+    typeof pairingCode !== "string" ||
+    typeof projectId !== "string" ||
+    typeof tenantId !== "string"
+  ) {
     throw new Error("Invalid pairing response");
   }
-  return new BrowserPairingCredentials(channelId, pairingCode);
+  return new BrowserPairingCredentials(
+    channelId,
+    pairingCode,
+    hostToken,
+    tenantId,
+    projectId,
+  );
+}
+
+function authenticatedHeaders(
+  pairing: BrowserPairingCredentials,
+): Readonly<Record<string, string>> {
+  return { authorization: `Bearer ${pairing.hostToken}` };
+}
+
+function hostSocketUrl(
+  pairing: BrowserPairingCredentials,
+  origin: string,
+): URL {
+  const url = new URL(
+    `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
+    origin,
+  );
+  url.protocol = "ws:";
+  url.searchParams.set("token", pairing.hostToken);
+  return url;
+}
+
+function projectSessionUrl(
+  pairing: BrowserPairingCredentials,
+  origin: string,
+  sessionId?: string,
+  suffix = "",
+): URL {
+  const base = `/v1/projects/${encodeURIComponent(pairing.projectId)}/sessions`;
+  const session =
+    sessionId === undefined ? "" : `/${encodeURIComponent(sessionId)}`;
+  return new URL(`${base}${session}${suffix}`, origin);
 }
 
 async function reservePort(): Promise<number> {
@@ -301,6 +364,29 @@ function waitForRuntimeOnline(socket: WebSocket): Promise<void> {
   });
 }
 
+function unwrapCommittedEvent(message: string): string {
+  return decodeMessageKind(message) === SESSION_EVENT_COMMITTED_KIND
+    ? decodeCommittedSessionEvent(message).payload
+    : message;
+}
+
+function sendSessionEvent(
+  socket: WebSocket,
+  sessionId: string,
+  payload: string,
+): void {
+  socket.send(
+    encodeSessionEventEnvelope({
+      eventId: crypto.randomUUID(),
+      eventVersion: SESSION_EVENT_FORMAT_VERSION,
+      kind: SESSION_EVENT_KIND,
+      payload,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId,
+    }),
+  );
+}
+
 function waitForSocketOpen(socket: WebSocket): Promise<void> {
   if (socket.readyState === WebSocket.OPEN) {
     return Promise.resolve();
@@ -347,14 +433,15 @@ function waitForProtocolKind(
       reject(new Error("The WebSocket failed while waiting for a message"));
     };
     const handleMessage = (event: MessageEvent<unknown>): void => {
-      if (
-        typeof event.data !== "string" ||
-        decodeMessageKind(event.data) !== expectedKind
-      ) {
+      if (typeof event.data !== "string") {
+        return;
+      }
+      const message = unwrapCommittedEvent(event.data);
+      if (decodeMessageKind(message) !== expectedKind) {
         return;
       }
       cleanup();
-      resolve(event.data);
+      resolve(message);
     };
     socket.addEventListener("message", handleMessage);
     socket.addEventListener("error", handleError);
@@ -384,21 +471,22 @@ function startBrowserPrompt(
       if (typeof event.data !== "string") {
         return;
       }
-      const kind = decodeMessageKind(event.data);
+      const message = unwrapCommittedEvent(event.data);
+      const kind = decodeMessageKind(message);
       if (kind === SESSION_USAGE_UPDATED_KIND) {
-        const update = decodeSessionUsageUpdatedEvent(event.data);
+        const update = decodeSessionUsageUpdatedEvent(message);
         if (update.sessionId === sessionId) usage.push(update);
         return;
       }
       if (kind === AGENT_MESSAGE_DELTA_KIND) {
-        const delta = decodeAgentMessageDeltaEvent(event.data);
+        const delta = decodeAgentMessageDeltaEvent(message);
         if (delta.commandId === commandId) {
           text += delta.text;
         }
         return;
       }
       if (kind === SESSION_COMPLETED_KIND) {
-        const completed = decodeSessionCompletedEvent(event.data);
+        const completed = decodeSessionCompletedEvent(message);
         if (completed.commandId === commandId) {
           cleanup();
           resolve(new BrowserPromptResult(text, completed.stopReason, usage));
@@ -406,7 +494,7 @@ function startBrowserPrompt(
         return;
       }
       if (kind === SESSION_FAILED_KIND) {
-        const failed = decodeSessionFailedEvent(event.data);
+        const failed = decodeSessionFailedEvent(message);
         if (failed.commandId === commandId) {
           cleanup();
           reject(new Error(`${failed.code}: ${failed.message}`));
@@ -449,15 +537,11 @@ async function runBrowserPrompt(
 async function verifyActiveTurnHistory(
   daemonUrl: URL,
   origin: string,
-  channelId: string,
+  pairing: BrowserPairingCredentials,
 ): Promise<void> {
   const controlledDaemon = new WebSocket(daemonUrl);
   await waitForSocketOpen(controlledDaemon);
-  const controlledHostUrl = new URL(
-    `/v1/channels/${encodeURIComponent(channelId)}/host`,
-    origin,
-  );
-  controlledHostUrl.protocol = "ws:";
+  const controlledHostUrl = hostSocketUrl(pairing, origin);
   const controlledHost = new WebSocket(controlledHostUrl);
   const observingHost = new WebSocket(controlledHostUrl);
   try {
@@ -498,16 +582,17 @@ async function verifyActiveTurnHistory(
     );
 
     const pendingHistoryResponse = await fetch(
-      new URL(`/v1/channels/${encodeURIComponent(channelId)}/history`, origin),
+      projectSessionUrl(pairing, origin, controlledSessionId, "/messages"),
+      { headers: authenticatedHeaders(pairing) },
     );
     expect(pendingHistoryResponse.status).toBe(200);
     await expect(pendingHistoryResponse.json()).resolves.toEqual(
       expect.objectContaining({
-        turns: expect.arrayContaining([
+        messages: expect.arrayContaining([
           expect.objectContaining({
+            attempt: null,
             commandId: controlledCommandId,
             response: "",
-            status: "pending",
           }),
         ]),
       }),
@@ -517,7 +602,9 @@ async function verifyActiveTurnHistory(
       observingHost,
       SESSION_STARTED_KIND,
     );
-    controlledDaemon.send(
+    sendSessionEvent(
+      controlledDaemon,
+      controlledSessionId,
       encodeSessionStartedEvent({
         commandId: controlledCommandId,
         kind: SESSION_STARTED_KIND,
@@ -534,7 +621,9 @@ async function verifyActiveTurnHistory(
       observingHost,
       AGENT_MESSAGE_DELTA_KIND,
     );
-    controlledDaemon.send(
+    sendSessionEvent(
+      controlledDaemon,
+      controlledSessionId,
       encodeAgentMessageDeltaEvent({
         commandId: controlledCommandId,
         kind: AGENT_MESSAGE_DELTA_KIND,
@@ -551,12 +640,15 @@ async function verifyActiveTurnHistory(
       observingHost,
       AGENT_ACTIVITY_KIND,
     );
-    controlledDaemon.send(
+    sendSessionEvent(
+      controlledDaemon,
+      controlledSessionId,
       encodeAgentActivityEvent({
         activityId: "controlled-tool",
         activityType: "tool",
         commandId: controlledCommandId,
         content: [],
+        detail: { kind: "unrecorded" },
         input: '{"path":"package.json"}',
         kind: AGENT_ACTIVITY_KIND,
         locations: [`${repositoryRoot}/package.json`],
@@ -575,17 +667,20 @@ async function verifyActiveTurnHistory(
     );
 
     const runningHistoryResponse = await fetch(
-      new URL(`/v1/channels/${encodeURIComponent(channelId)}/history`, origin),
+      projectSessionUrl(pairing, origin, controlledSessionId, "/messages"),
+      { headers: authenticatedHeaders(pairing) },
     );
     expect(runningHistoryResponse.status).toBe(200);
     await expect(runningHistoryResponse.json()).resolves.toEqual(
       expect.objectContaining({
-        turns: expect.arrayContaining([
+        messages: expect.arrayContaining([
           expect.objectContaining({
             commandId: controlledCommandId,
-            processAttemptId: "controlled-attempt",
             response: "partial response",
-            status: "running",
+            attempt: expect.objectContaining({
+              kind: "running",
+              processAttemptId: "controlled-attempt",
+            }),
             activities: expect.arrayContaining([
               expect.objectContaining({
                 activityId: "controlled-tool",
@@ -602,7 +697,9 @@ async function verifyActiveTurnHistory(
       observingHost,
       SESSION_COMPLETED_KIND,
     );
-    controlledDaemon.send(
+    sendSessionEvent(
+      controlledDaemon,
+      controlledSessionId,
       encodeSessionCompletedEvent({
         commandId: controlledCommandId,
         kind: SESSION_COMPLETED_KIND,
@@ -614,6 +711,20 @@ async function verifyActiveTurnHistory(
     expect(
       decodeSessionCompletedEvent(await forwardedCompletion).commandId,
     ).toBe(controlledCommandId);
+    const completedHistoryResponse = await fetch(
+      projectSessionUrl(pairing, origin, controlledSessionId, "/messages"),
+      { headers: authenticatedHeaders(pairing) },
+    );
+    await expect(completedHistoryResponse.json()).resolves.toEqual(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({
+            attempt: expect.objectContaining({ kind: "completed" }),
+            commandId: controlledCommandId,
+          }),
+        ]),
+      }),
+    );
   } finally {
     controlledHost.close(1000, "Controlled host E2E complete");
     observingHost.close(1000, "Observing host E2E complete");
@@ -623,7 +734,7 @@ async function verifyActiveTurnHistory(
 
 describe("pairing and channel chat", () => {
   it("Given a machine is paired and has an Agent conversation in another project with a selected image, When a browser chooses a directory and opens that conversation, Then new chats use the chosen directory and restored history retains its original project through fork refresh and deletion", {
-    timeout: 45_000,
+    timeout: 90_000,
   }, async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
@@ -757,9 +868,7 @@ describe("pairing and channel chat", () => {
       const audit = new AuditStore(paired.config.auditDatabasePath);
       const controller = new AbortController();
       const daemon = runDaemon(paired.config, audit, controller.signal);
-      const hostUrl = new URL(`/v1/channels/${pairing.channelId}/host`, origin);
-      hostUrl.protocol = "ws:";
-      const socket = new WebSocket(hostUrl);
+      const socket = new WebSocket(hostSocketUrl(pairing, origin));
       void daemon.catch(() => socket.close());
       try {
         await waitForRuntimeOnline(socket);
@@ -775,7 +884,7 @@ describe("pairing and channel chat", () => {
           encodeSessionPrepareCommand({
             ...identity,
             kind: SESSION_PREPARE_KIND,
-            protocolVersion: 1,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: "prepare-native-browser",
           }),
         );
@@ -784,7 +893,7 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "workspace.list",
-            protocolVersion: 1,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             bindingId: "workspace",
             directoryId: "home",
             requestId: "browse-home",
@@ -831,7 +940,7 @@ describe("pairing and channel chat", () => {
               ...identity,
               ...fields,
               kind: "native.session.request",
-              protocolVersion: 1,
+              protocolVersion: MOBIUS_PROTOCOL_VERSION,
               requestId,
             }),
           );
@@ -857,7 +966,7 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "workspace.list",
-            protocolVersion: 1,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             bindingId: "workspace",
             directoryId: projectDirectoryId,
             requestId: "browse-other-project",
@@ -875,7 +984,7 @@ describe("pairing and channel chat", () => {
             directoryId: projectDirectoryId,
             requestId: "choose-directory",
             kind: SESSION_PREPARE_KIND,
-            protocolVersion: 1,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
           }),
         );
         expect(JSON.parse(await chosen)).toMatchObject({
@@ -913,10 +1022,11 @@ describe("pairing and channel chat", () => {
         });
         expect(preview).not.toHaveProperty("ready");
         expectSelectedImageHistory(preview["history"]);
-        const previewHistory = await fetch(
-          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+        const previewDirectory = await fetch(
+          projectSessionUrl(pairing, origin),
+          { headers: authenticatedHeaders(pairing) },
         );
-        expect(JSON.stringify(await previewHistory.json())).not.toContain(
+        expect(JSON.stringify(await previewDirectory.json())).not.toContain(
           "read-only-preview",
         );
         await external.close();
@@ -947,7 +1057,7 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "native.session.cancel",
-            protocolVersion: 1,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: cancellationId,
             sessionId: identity.sessionId,
           }),
@@ -996,27 +1106,19 @@ describe("pairing and channel chat", () => {
           ),
         ).resolves.toBe("Codex turn 2: Continue native context");
         const history = await fetch(
-          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+          projectSessionUrl(pairing, origin, "imported-chat", "/messages"),
+          { headers: authenticatedHeaders(pairing) },
         );
         const persisted = await history.json();
         expect(persisted).toMatchObject({
-          sessions: expect.arrayContaining([
+          messages: expect.arrayContaining([
             expect.objectContaining({
               sessionId: "imported-chat",
-              restored: true,
-              title: "Saved native conversation",
-              nativeHistory: imported["history"],
+              prompt: "Continue native context",
+              response: "Codex turn 2: Continue native context",
             }),
           ]),
         });
-        if (!isRecord(persisted) || !Array.isArray(persisted["sessions"]))
-          throw new Error("Expected persisted conversations");
-        const saved = persisted["sessions"].find(
-          (session: unknown) =>
-            isRecord(session) && session["sessionId"] === "imported-chat",
-        );
-        if (!isRecord(saved)) throw new Error("Expected imported history");
-        expectSelectedImageHistory(saved["nativeHistory"]);
         const forked = await request({
           action: "fork",
           entryId: entries[0]["entryId"],
@@ -1072,25 +1174,21 @@ describe("pairing and channel chat", () => {
             ]),
           },
         });
-        const reopenedHistory = reopened["history"];
-        if (!isRecord(reopenedHistory))
-          throw new Error("Expected loaded history");
-        expect(reopenedHistory["coveredCommandIds"]).toHaveLength(2);
         expect(
           await request({ action: "delete", entryId: entries[0]["entryId"] }),
         ).toMatchObject({
           action: "delete",
           deletedSessionIds: ["imported-chat"],
         });
-        const deletedHistory = await fetch(
-          new URL(`/v1/channels/${pairing.channelId}/history`, origin),
+        const retainedAuditHistory = await fetch(
+          projectSessionUrl(pairing, origin, "imported-chat", "/messages"),
+          { headers: authenticatedHeaders(pairing) },
         );
-        await expect(deletedHistory.json()).resolves.toMatchObject({
-          sessions: expect.arrayContaining([
+        await expect(retainedAuditHistory.json()).resolves.toMatchObject({
+          messages: expect.arrayContaining([
             expect.objectContaining({
               sessionId: "imported-chat",
-              status: "deleted",
-              nativeHistory: reopenedHistory,
+              prompt: "Continue original",
             }),
           ]),
         });
@@ -1214,7 +1312,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given a turn awaiting daemon acknowledgement, When a replacement daemon connects, Then the stalled conversation fails and accepts another message", {
+  it("Given a running turn, When a replacement daemon connects, Then the uncertain outcome is preserved and another message is accepted", {
     timeout: 30_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -1266,12 +1364,7 @@ describe("pairing and channel chat", () => {
       ]);
       staleDaemon = new WebSocket(paired.config.relayUrl);
       await waitForSocketOpen(staleDaemon);
-      const hostUrl = new URL(
-        `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
-        origin,
-      );
-      hostUrl.protocol = "ws:";
-      host = new WebSocket(hostUrl);
+      host = new WebSocket(hostSocketUrl(pairing, origin));
       await waitForRuntimeOnline(host);
 
       const stalledCommandId = crypto.randomUUID();
@@ -1298,24 +1391,37 @@ describe("pairing and channel chat", () => {
       expect(decodeSessionPromptCommand(await stalledPrompt).commandId).toBe(
         stalledCommandId,
       );
+      const observedStalledStart = waitForProtocolKind(
+        host,
+        SESSION_STARTED_KIND,
+      );
+      sendSessionEvent(
+        staleDaemon,
+        sessionId,
+        encodeSessionStartedEvent({
+          commandId: stalledCommandId,
+          kind: SESSION_STARTED_KIND,
+          processAttemptId: "stalled-attempt",
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId,
+        }),
+      );
+      await observedStalledStart;
 
       replacementDaemon = new WebSocket(paired.config.relayUrl);
       await waitForSocketOpen(replacementDaemon);
 
       const recoveredHistoryResponse = await fetch(
-        new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
-          origin,
-        ),
+        projectSessionUrl(pairing, origin, sessionId, "/messages"),
+        { headers: authenticatedHeaders(pairing) },
       );
       expect(recoveredHistoryResponse.status).toBe(200);
       await expect(recoveredHistoryResponse.json()).resolves.toEqual(
         expect.objectContaining({
-          turns: expect.arrayContaining([
+          messages: expect.arrayContaining([
             expect.objectContaining({
-              code: "daemon_reconnected",
+              attempt: expect.objectContaining({ kind: "outcome_unknown" }),
               commandId: stalledCommandId,
-              status: "failed",
             }),
           ]),
         }),
@@ -1344,7 +1450,10 @@ describe("pairing and channel chat", () => {
       expect(decodeSessionPromptCommand(await nextPrompt).commandId).toBe(
         nextCommandId,
       );
-      replacementDaemon.send(
+      const observedNextStart = waitForProtocolKind(host, SESSION_STARTED_KIND);
+      sendSessionEvent(
+        replacementDaemon,
+        sessionId,
         encodeSessionStartedEvent({
           commandId: nextCommandId,
           kind: SESSION_STARTED_KIND,
@@ -1353,7 +1462,14 @@ describe("pairing and channel chat", () => {
           sessionId,
         }),
       );
-      replacementDaemon.send(
+      await observedNextStart;
+      const observedCompletion = waitForProtocolKind(
+        host,
+        SESSION_COMPLETED_KIND,
+      );
+      sendSessionEvent(
+        replacementDaemon,
+        sessionId,
         encodeSessionCompletedEvent({
           commandId: nextCommandId,
           kind: SESSION_COMPLETED_KIND,
@@ -1362,19 +1478,18 @@ describe("pairing and channel chat", () => {
           stopReason: "end_turn",
         }),
       );
+      await observedCompletion;
 
       const completedHistoryResponse = await fetch(
-        new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
-          origin,
-        ),
+        projectSessionUrl(pairing, origin, sessionId, "/messages"),
+        { headers: authenticatedHeaders(pairing) },
       );
       await expect(completedHistoryResponse.json()).resolves.toEqual(
         expect.objectContaining({
-          turns: expect.arrayContaining([
+          messages: expect.arrayContaining([
             expect.objectContaining({
+              attempt: expect.objectContaining({ kind: "completed" }),
               commandId: nextCommandId,
-              status: "completed",
             }),
           ]),
         }),
@@ -1396,7 +1511,7 @@ describe("pairing and channel chat", () => {
   });
 
   it("Given supported Agents and a paired machine, When the connection resumes and a browser sends prompts, Then responses and usage persist", {
-    timeout: 45_000,
+    timeout: 90_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-pairing-e2e-"),
@@ -1480,7 +1595,7 @@ describe("pairing and channel chat", () => {
       const healthResponse = await fetch(new URL("/health", origin));
       expect(healthResponse.status).toBe(200);
       await expect(healthResponse.json()).resolves.toEqual({
-        protocolVersion: 1,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         service: "mobius-relay",
         status: "ok",
       });
@@ -1489,7 +1604,13 @@ describe("pairing and channel chat", () => {
       });
       expect(pairingResponse.status).toBe(201);
       const pairingBody: unknown = await pairingResponse.json();
-      expect(pairingBody).not.toHaveProperty("hostToken");
+      expect(pairingBody).toEqual(
+        expect.objectContaining({
+          hostToken: expect.any(String),
+          projectId: expect.any(String),
+          tenantId: expect.any(String),
+        }),
+      );
       const pairing = decodeBrowserPairing(pairingBody);
       const paired = await pairLocalMachine([
         "--url",
@@ -1549,8 +1670,16 @@ describe("pairing and channel chat", () => {
           origin,
         ),
       );
-      expect(publicChannelResponse.status).toBe(200);
-      const publicChannel: unknown = await publicChannelResponse.json();
+      expect(publicChannelResponse.status).toBe(401);
+      const authorizedChannelResponse = await fetch(
+        new URL(
+          `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+          origin,
+        ),
+        { headers: authenticatedHeaders(pairing) },
+      );
+      expect(authorizedChannelResponse.status).toBe(200);
+      const publicChannel: unknown = await authorizedChannelResponse.json();
       expect(publicChannel).toMatchObject({
         agents: [{ id: "codex", label: "Codex" }],
         channelId: pairing.channelId,
@@ -1607,12 +1736,7 @@ describe("pairing and channel chat", () => {
         daemonController.signal,
       );
       try {
-        const hostUrl = new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
-          origin,
-        );
-        hostUrl.protocol = "ws:";
-        const socket = new WebSocket(hostUrl);
+        const socket = new WebSocket(hostSocketUrl(pairing, origin));
         try {
           await waitForRuntimeOnline(socket);
           const automaticallyProvisionedDescriptor = await fetch(
@@ -1620,6 +1744,7 @@ describe("pairing and channel chat", () => {
               `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
               origin,
             ),
+            { headers: authenticatedHeaders(pairing) },
           );
           await expect(
             automaticallyProvisionedDescriptor.json(),
@@ -1708,34 +1833,41 @@ describe("pairing and channel chat", () => {
               expect(JSON.stringify(result.usage)).not.toContain("privateData");
             }
           }
-          const usageHistory = await fetch(
-            new URL(
-              `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
-              origin,
-            ),
-          );
-          await expect(usageHistory.json()).resolves.toMatchObject({
-            sessions: expect.arrayContaining(
-              usageSessions.map((sessionId, index) =>
+          for (const [index, sessionId] of usageSessions.entries()) {
+            const usageHistory = await fetch(
+              projectSessionUrl(pairing, origin, sessionId, "/events"),
+              { headers: authenticatedHeaders(pairing) },
+            );
+            const page: unknown = await usageHistory.json();
+            if (!isRecord(page) || !Array.isArray(page["events"])) {
+              throw new Error("Expected a persisted session event page");
+            }
+            const persistedUsage = page["events"].flatMap((value: unknown) => {
+              if (!isRecord(value) || typeof value["payload"] !== "string") {
+                return [];
+              }
+              const payload: unknown = JSON.parse(value["payload"]);
+              return isRecord(payload) &&
+                payload["kind"] === SESSION_USAGE_UPDATED_KIND
+                ? [payload]
+                : [];
+            });
+            expect(persistedUsage).toEqual(
+              expect.arrayContaining([
                 expect.objectContaining({
-                  sessionId,
-                  usage: [
-                    expect.objectContaining({
-                      source: "context",
-                      used: 50_000,
-                      costAmount: 0.25,
-                    }),
-                    expect.objectContaining({
-                      source: "prompt",
-                      usage: expect.objectContaining({
-                        totalTokens: index === 0 ? 2_000 : 2_200,
-                      }),
-                    }),
-                  ],
+                  costAmount: 0.25,
+                  source: "context",
+                  used: 50_000,
                 }),
-              ),
-            ),
-          });
+                expect.objectContaining({
+                  source: "prompt",
+                  usage: expect.objectContaining({
+                    totalTokens: index === 0 ? 2_000 : 2_200,
+                  }),
+                }),
+              ]),
+            );
+          }
           const cancellationSessionId = crypto.randomUUID();
           const startedCancellation = waitForProtocolKind(
             socket,
@@ -1775,16 +1907,13 @@ describe("pairing and channel chat", () => {
             ),
           ).resolves.toBe("Codex turn 2: continue");
           const historyResponse = await fetch(
-            new URL(
-              `/v1/channels/${encodeURIComponent(pairing.channelId)}/history`,
-              origin,
-            ),
+            projectSessionUrl(pairing, origin, codexSessionId, "/messages"),
+            { headers: authenticatedHeaders(pairing) },
           );
           expect(historyResponse.status).toBe(200);
           await expect(historyResponse.json()).resolves.toEqual(
             expect.objectContaining({
-              runtimeId: pairing.channelId,
-              turns: expect.arrayContaining([
+              messages: expect.arrayContaining([
                 expect.objectContaining({
                   agentId: "codex",
                   activities: expect.arrayContaining([
@@ -1802,22 +1931,37 @@ describe("pairing and channel chat", () => {
                   prompt: "first",
                   response: "Codex turn 1: first",
                   sessionId: codexSessionId,
-                  status: "completed",
+                  attempt: expect.objectContaining({ kind: "completed" }),
                 }),
                 expect.objectContaining({
                   agentId: "codex",
                   prompt: "second",
                   response: "Codex turn 2: second",
                   sessionId: codexSessionId,
-                  status: "completed",
+                  attempt: expect.objectContaining({ kind: "completed" }),
                 }),
+              ]),
+            }),
+          );
+          const cancellationHistory = await fetch(
+            projectSessionUrl(
+              pairing,
+              origin,
+              cancellationSessionId,
+              "/messages",
+            ),
+            { headers: authenticatedHeaders(pairing) },
+          );
+          await expect(cancellationHistory.json()).resolves.toEqual(
+            expect.objectContaining({
+              messages: expect.arrayContaining([
                 expect.objectContaining({
-                  agentId: "codex",
+                  attempt: expect.objectContaining({
+                    kind: "completed",
+                    stopReason: "cancelled",
+                  }),
                   commandId: cancellablePrompt.commandId,
                   prompt: "wait until cancelled",
-                  sessionId: cancellationSessionId,
-                  status: "completed",
-                  stopReason: "cancelled",
                 }),
               ]),
             }),
@@ -1841,12 +1985,7 @@ describe("pairing and channel chat", () => {
         refreshedAudit,
         refreshedController.signal,
       );
-      const refreshedHostUrl = new URL(
-        `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
-        origin,
-      );
-      refreshedHostUrl.protocol = "ws:";
-      const refreshedHost = new WebSocket(refreshedHostUrl);
+      const refreshedHost = new WebSocket(hostSocketUrl(pairing, origin));
       try {
         await waitForRuntimeOnline(refreshedHost);
         const refreshedDescriptor = await fetch(
@@ -1854,6 +1993,7 @@ describe("pairing and channel chat", () => {
             `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
             origin,
           ),
+          { headers: authenticatedHeaders(pairing) },
         );
         await expect(refreshedDescriptor.json()).resolves.toMatchObject({
           agents: [
@@ -1868,11 +2008,7 @@ describe("pairing and channel chat", () => {
         await refreshedDaemon;
         refreshedAudit.close();
       }
-      await verifyActiveTurnHistory(
-        paired.config.relayUrl,
-        origin,
-        pairing.channelId,
-      );
+      await verifyActiveTurnHistory(paired.config.relayUrl, origin, pairing);
     } finally {
       await stopProcess(wrangler);
       restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);

@@ -12,179 +12,221 @@ import {
   ChannelActor,
   type ChannelPeers,
   type ChannelSocket,
+  ProjectScope,
 } from "@moxt-ai/mobius-relay-core";
-import { DurableObjectSessionStore } from "./durable-object-session-store.ts";
-import { DurableObjectTurnStore } from "./durable-object-turn-store.ts";
+import {
+  INTERNAL_CHANNEL_ID_HEADER,
+  INTERNAL_PROJECT_ID_HEADER,
+  INTERNAL_TENANT_ID_HEADER,
+} from "../cloudflare-channel-runtime.ts";
+import { CloudflareSessionRuntime } from "../cloudflare-session-runtime.ts";
+import {
+  type SessionConfigurationEnvironment,
+  sessionQuotaFromEnvironment,
+} from "../session-configuration.ts";
 
 const DAEMON_TAG = "daemon";
 const HOST_TAG = "host";
 
-abstract class SocketAttachment {
-  readonly runtimeId: string;
-
-  protected constructor(runtimeId: string) {
-    this.runtimeId = runtimeId;
-  }
+interface RuntimeRelayEnvironment extends SessionConfigurationEnvironment {
+  readonly DIRECTORY_DATABASE: D1Database;
+  readonly SESSION_RELAY: DurableObjectNamespace;
 }
 
-class DaemonSocketAttachment extends SocketAttachment {
-  constructor(runtimeId: string) {
-    super(runtimeId);
-  }
-}
+type SocketAttachment =
+  | {
+      readonly projectId: string;
+      readonly role: "daemon" | "replaced-daemon";
+      readonly runtimeId: string;
+      readonly tenantId: string;
+    }
+  | {
+      readonly projectId: string;
+      readonly role: "host";
+      readonly runtimeId: string;
+      readonly tenantId: string;
+    };
 
-class HostSocketAttachment extends SocketAttachment {
-  constructor(runtimeId: string) {
-    super(runtimeId);
-  }
-}
-
-function decodeAttachment(value: unknown): SocketAttachment {
+function readAttachment(value: unknown): SocketAttachment {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error("Missing WebSocket attachment");
   }
-  if (!("role" in value) || !("runtimeId" in value)) {
+  const role = Reflect.get(value, "role");
+  const runtimeId = Reflect.get(value, "runtimeId");
+  const tenantId = Reflect.get(value, "tenantId");
+  const projectId = Reflect.get(value, "projectId");
+  if (
+    (role !== "daemon" && role !== "host" && role !== "replaced-daemon") ||
+    typeof runtimeId !== "string" ||
+    typeof tenantId !== "string" ||
+    typeof projectId !== "string"
+  ) {
     throw new Error("Invalid WebSocket attachment");
   }
-  if (typeof value.role !== "string" || typeof value.runtimeId !== "string") {
-    throw new Error("Invalid WebSocket attachment");
-  }
-  if (value.role === DAEMON_TAG) {
-    return new DaemonSocketAttachment(value.runtimeId);
-  }
-  if (value.role === HOST_TAG) {
-    return new HostSocketAttachment(value.runtimeId);
-  }
-  throw new Error("Invalid WebSocket attachment");
+  return { projectId, role, runtimeId, tenantId };
 }
 
-function runtimeIdFromPath(pathname: string): string {
-  const segments = pathname.split("/").filter((segment) => segment.length > 0);
-  const runtimeIndex = segments.indexOf("channels");
-  const runtimeId = segments[runtimeIndex + 1];
-  if (runtimeIndex < 0 || runtimeId === undefined) {
-    throw new Error("Missing runtime ID");
+function accessFromRequest(request: Request): {
+  readonly runtimeId: string;
+  readonly scope: ProjectScope;
+} {
+  const runtimeId = request.headers.get(INTERNAL_CHANNEL_ID_HEADER);
+  const tenantId = request.headers.get(INTERNAL_TENANT_ID_HEADER);
+  const projectId = request.headers.get(INTERNAL_PROJECT_ID_HEADER);
+  if (runtimeId === null || tenantId === null || projectId === null) {
+    throw new Error("Missing verified channel access");
   }
-  return runtimeId;
+  return { runtimeId, scope: new ProjectScope(tenantId, projectId) };
 }
 
 class CloudflareChannelSocket implements ChannelSocket {
-  private readonly socket: WebSocket;
+  readonly #socket: WebSocket;
 
   constructor(socket: WebSocket) {
-    this.socket = socket;
+    this.#socket = socket;
   }
 
   readonly close = (code: number, reason: string): void => {
-    this.socket.close(code, reason);
+    this.#socket.close(code, reason);
   };
 
-  readonly isOpen = (): boolean => this.socket.readyState === 1;
+  readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
 
   readonly isSame = (socket: ChannelSocket): boolean =>
-    socket instanceof CloudflareChannelSocket && socket.socket === this.socket;
+    socket instanceof CloudflareChannelSocket &&
+    socket.#socket === this.#socket;
 
   readonly send = (message: string): void => {
-    this.socket.send(message);
+    this.#socket.send(message);
   };
 }
 
 class CloudflareChannelPeers implements ChannelPeers {
-  private readonly state: DurableObjectState;
+  readonly #state: DurableObjectState;
 
   constructor(state: DurableObjectState) {
-    this.state = state;
+    this.#state = state;
   }
 
   readonly daemons = (): readonly ChannelSocket[] =>
-    this.state
+    this.#state
       .getWebSockets(DAEMON_TAG)
-      .map((socket) => new CloudflareChannelSocket(socket));
+      .flatMap((socket) =>
+        readAttachment(socket.deserializeAttachment()).role === "daemon"
+          ? [new CloudflareChannelSocket(socket)]
+          : [],
+      );
 
   readonly hosts = (): readonly ChannelSocket[] =>
-    this.state
+    this.#state
       .getWebSockets(HOST_TAG)
       .map((socket) => new CloudflareChannelSocket(socket));
 }
 
 export class RuntimeRelay {
-  private readonly peers: CloudflareChannelPeers;
-  private readonly sessionStore: DurableObjectSessionStore;
-  private readonly state: DurableObjectState;
-  private readonly turnStore: DurableObjectTurnStore;
+  readonly #peers: CloudflareChannelPeers;
+  readonly #sessions: CloudflareSessionRuntime;
+  readonly #state: DurableObjectState;
 
-  constructor(state: DurableObjectState) {
-    this.state = state;
-    this.peers = new CloudflareChannelPeers(state);
-    this.sessionStore = new DurableObjectSessionStore(state.storage);
-    this.turnStore = new DurableObjectTurnStore(state.storage);
+  constructor(state: DurableObjectState, environment: RuntimeRelayEnvironment) {
+    this.#peers = new CloudflareChannelPeers(state);
+    this.#sessions = new CloudflareSessionRuntime(
+      environment.SESSION_RELAY,
+      environment.DIRECTORY_DATABASE,
+      sessionQuotaFromEnvironment(environment),
+    );
+    this.#state = state;
   }
 
-  fetch(request: Request): Response {
-    const url = new URL(request.url);
-    const runtimeId = runtimeIdFromPath(url.pathname);
-    if (url.pathname.endsWith("/history")) {
-      return Response.json(this.actor(runtimeId).readHistory());
+  async fetch(request: Request): Promise<Response> {
+    let access: ReturnType<typeof accessFromRequest>;
+    try {
+      access = accessFromRequest(request);
+    } catch {
+      return Response.json(
+        {
+          error: {
+            code: "unauthorized",
+            message: "Verified channel access is required",
+          },
+        },
+        { status: 401 },
+      );
     }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket upgrade required", { status: 426 });
     }
-
-    if (url.pathname.endsWith("/daemon")) {
-      return this.acceptDaemonSocket(
-        runtimeId,
-        url.searchParams.get("liveness") === "1",
+    const pathname = new URL(request.url).pathname;
+    if (pathname.endsWith("/daemon")) {
+      return await this.acceptDaemonSocket(
+        access.runtimeId,
+        access.scope,
+        new URL(request.url).searchParams.get("liveness") === "1",
+        request.signal,
       );
     }
-    if (url.pathname.endsWith("/host")) {
-      return this.acceptHostSocket(runtimeId);
+    if (pathname.endsWith("/host")) {
+      return await this.acceptHostSocket(
+        access.runtimeId,
+        access.scope,
+        request.signal,
+      );
     }
     return new Response(null, { status: 404 });
   }
 
-  webSocketMessage(socket: WebSocket, message: unknown): void {
-    const attachment = decodeAttachment(socket.deserializeAttachment());
-    const channelSocket = new CloudflareChannelSocket(socket);
-    if (attachment instanceof DaemonSocketAttachment) {
-      if (typeof message === "string") {
-        try {
-          if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
-            const heartbeat = decodeRuntimeHeartbeatEvent(message);
-            socket.send(
-              encodeRuntimeHeartbeatAckEvent({
-                heartbeatId: heartbeat.heartbeatId,
-                kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                protocolVersion: MOBIUS_PROTOCOL_VERSION,
-              }),
-            );
+  async webSocketMessage(socket: WebSocket, message: unknown): Promise<void> {
+    await this.withSocketSignal(socket, async (signal) => {
+      const attachment = readAttachment(socket.deserializeAttachment());
+      const channelSocket = new CloudflareChannelSocket(socket);
+      const scope = new ProjectScope(attachment.tenantId, attachment.projectId);
+      if (attachment.role === "replaced-daemon") {
+        socket.close(1012, "Daemon connection replaced");
+        return;
+      }
+      if (attachment.role === "daemon") {
+        if (typeof message === "string") {
+          try {
+            if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
+              const heartbeat = decodeRuntimeHeartbeatEvent(message);
+              socket.send(
+                encodeRuntimeHeartbeatAckEvent({
+                  heartbeatId: heartbeat.heartbeatId,
+                  kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                  protocolVersion: MOBIUS_PROTOCOL_VERSION,
+                }),
+              );
+              return;
+            }
+          } catch {
+            socket.close(1008, "Invalid protocol message");
             return;
           }
-        } catch {
-          socket.close(1008, "Invalid protocol message");
-          return;
         }
+        await this.actor(attachment.runtimeId, scope).receiveDaemonMessage(
+          channelSocket,
+          message,
+          signal,
+        );
+        return;
       }
-      this.actor(attachment.runtimeId).receiveDaemonMessage(
+      await this.actor(attachment.runtimeId, scope).receiveHostMessage(
         channelSocket,
         message,
+        signal,
       );
-      return;
-    }
-    if (attachment instanceof HostSocketAttachment) {
-      this.actor(attachment.runtimeId).receiveHostMessage(
-        channelSocket,
-        message,
-      );
-      return;
-    }
-    socket.close(1008, "Invalid connection role");
+    });
   }
 
-  webSocketClose(socket: WebSocket): void {
-    const attachment = decodeAttachment(socket.deserializeAttachment());
-    if (attachment instanceof DaemonSocketAttachment) {
-      this.actor(attachment.runtimeId).detachDaemon(
+  async webSocketClose(socket: WebSocket): Promise<void> {
+    const attachment = readAttachment(socket.deserializeAttachment());
+    if (attachment.role === "daemon") {
+      await this.actor(
+        attachment.runtimeId,
+        new ProjectScope(attachment.tenantId, attachment.projectId),
+      ).detachDaemon(
         new CloudflareChannelSocket(socket),
+        new AbortController().signal,
       );
     }
   }
@@ -193,20 +235,32 @@ export class RuntimeRelay {
     socket.close(1011, "WebSocket error");
   }
 
-  private acceptDaemonSocket(
+  private readonly acceptDaemonSocket = async (
     runtimeId: string,
+    scope: ProjectScope,
     livenessRequested: boolean,
-  ): Response {
-    const previousSockets = this.state.getWebSockets(DAEMON_TAG);
+    signal: AbortSignal,
+  ): Promise<Response> => {
+    const previousSockets = this.#state.getWebSockets(DAEMON_TAG);
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    server.serializeAttachment({ role: DAEMON_TAG, runtimeId });
-    this.state.acceptWebSocket(server, [DAEMON_TAG]);
-    this.actor(runtimeId).attachDaemon();
+    await this.actor(runtimeId, scope).attachDaemon(signal);
     for (const socket of previousSockets) {
+      const attachment = readAttachment(socket.deserializeAttachment());
+      socket.serializeAttachment({
+        ...attachment,
+        role: "replaced-daemon",
+      });
       socket.close(1012, "Daemon connection replaced");
     }
+    server.serializeAttachment({
+      projectId: scope.projectId,
+      role: "daemon",
+      runtimeId,
+      tenantId: scope.tenantId,
+    });
+    this.#state.acceptWebSocket(server, [DAEMON_TAG]);
     if (livenessRequested) {
       server.send(
         encodeRuntimeLivenessReadyEvent({
@@ -216,25 +270,49 @@ export class RuntimeRelay {
       );
     }
     return new Response(null, { status: 101, webSocket: client });
-  }
+  };
 
-  private acceptHostSocket(runtimeId: string): Response {
+  private readonly acceptHostSocket = async (
+    runtimeId: string,
+    scope: ProjectScope,
+    signal: AbortSignal,
+  ): Promise<Response> => {
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    server.serializeAttachment({ role: HOST_TAG, runtimeId });
-    this.state.acceptWebSocket(server, [HOST_TAG]);
-    this.actor(runtimeId).attachHost(new CloudflareChannelSocket(server));
-    return new Response(null, { status: 101, webSocket: client });
-  }
-
-  private actor(runtimeId: string): ChannelActor {
-    return new ChannelActor(
+    server.serializeAttachment({
+      projectId: scope.projectId,
+      role: "host",
       runtimeId,
-      this.turnStore,
-      this.peers,
-      undefined,
-      this.sessionStore,
+      tenantId: scope.tenantId,
+    });
+    this.#state.acceptWebSocket(server, [HOST_TAG]);
+    await this.actor(runtimeId, scope).attachHost(
+      new CloudflareChannelSocket(server),
+      signal,
     );
-  }
+    return new Response(null, { status: 101, webSocket: client });
+  };
+
+  private readonly actor = (
+    runtimeId: string,
+    scope: ProjectScope,
+  ): ChannelActor =>
+    new ChannelActor(runtimeId, scope, this.#sessions, this.#peers);
+
+  private readonly withSocketSignal = async (
+    socket: WebSocket,
+    operation: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> => {
+    const controller = new AbortController();
+    const handleClose = (): void => {
+      controller.abort(new Error("The channel socket closed"));
+    };
+    socket.addEventListener("close", handleClose, { once: true });
+    try {
+      await operation(controller.signal);
+    } finally {
+      socket.removeEventListener("close", handleClose);
+    }
+  };
 }

@@ -15,8 +15,10 @@ import {
   PairingDirectoryError,
   type PairingStatus,
   PendingPairingStatus,
+  ProjectScopeAccess,
   parseAgents,
   parseInstallableAgents,
+  VerifiedChannelAccess,
   validateToken,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -26,8 +28,16 @@ interface PairingChannelRow {
   readonly expires_at: number;
   readonly installable_agents_json: string;
   readonly machine_name: string;
+  readonly project_id: string;
   readonly status: string;
+  readonly tenant_id: string;
   readonly workspace_name: string;
+}
+
+interface AuthorizedChannelRow {
+  readonly channel_id: string;
+  readonly project_id: string;
+  readonly tenant_id: string;
 }
 
 interface ClaimedChannelRow {
@@ -39,6 +49,8 @@ interface PublicChannelRow {
   readonly channel_id: string;
   readonly installable_agents_json: string;
   readonly machine_name: string;
+  readonly project_id: string;
+  readonly tenant_id: string;
   readonly workspace_name: string;
 }
 
@@ -53,17 +65,17 @@ export class D1PairingDirectory implements PairingDirectory {
     channelId: string,
     token: string,
     signal: AbortSignal,
-  ): Promise<void> => {
+  ): Promise<VerifiedChannelAccess> => {
     signal.throwIfAborted();
     const tokenHash = await hashSecret(validateToken(token));
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT channel_id FROM pairing_channels
+        `SELECT channel_id, tenant_id, project_id FROM pairing_channels
          WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`,
       )
       .bind(channelId, tokenHash)
-      .first<ClaimedChannelRow>();
+      .first<AuthorizedChannelRow>();
     signal.throwIfAborted();
     if (row === null) {
       throw new PairingDirectoryError(
@@ -77,13 +89,64 @@ export class D1PairingDirectory implements PairingDirectory {
         "The channel directory is invalid",
       );
     }
+    return new VerifiedChannelAccess(
+      row.channel_id,
+      row.tenant_id,
+      row.project_id,
+    );
   };
 
   readonly authorizeHost = async (
     channelId: string,
+    token: string,
     signal: AbortSignal,
-  ): Promise<void> => {
-    await this.readChannel(channelId, signal);
+  ): Promise<VerifiedChannelAccess> => {
+    signal.throwIfAborted();
+    const tokenHash = await hashSecret(validateToken(token));
+    signal.throwIfAborted();
+    const row = await this.database
+      .prepare(
+        `SELECT channel_id, tenant_id, project_id FROM pairing_channels
+         WHERE channel_id = ? AND host_token_hash = ? AND status = 'paired'`,
+      )
+      .bind(channelId, tokenHash)
+      .first<AuthorizedChannelRow>();
+    signal.throwIfAborted();
+    if (row === null) {
+      throw new PairingDirectoryError(
+        "unauthorized",
+        "A valid channel token is required",
+      );
+    }
+    return new VerifiedChannelAccess(
+      row.channel_id,
+      row.tenant_id,
+      row.project_id,
+    );
+  };
+
+  readonly authorizeProject = async (
+    projectId: string,
+    token: string,
+    signal: AbortSignal,
+  ): Promise<ProjectScopeAccess> => {
+    signal.throwIfAborted();
+    const tokenHash = await hashSecret(validateToken(token));
+    const row = await this.database
+      .prepare(
+        `SELECT channel_id, tenant_id, project_id FROM pairing_channels
+         WHERE project_id = ? AND host_token_hash = ? AND status = 'paired'`,
+      )
+      .bind(projectId, tokenHash)
+      .first<AuthorizedChannelRow>();
+    signal.throwIfAborted();
+    if (row === null) {
+      throw new PairingDirectoryError(
+        "unauthorized",
+        "A valid project token is required",
+      );
+    }
+    return new ProjectScopeAccess(row.tenant_id, row.project_id);
   };
 
   readonly claimPairing = async (
@@ -142,8 +205,10 @@ export class D1PairingDirectory implements PairingDirectory {
     const pairingId = crypto.randomUUID();
     const pairingCode = createRandomPairingCode();
     const pollToken = createRandomToken(32);
-    const disabledBrowserToken = createRandomToken(32);
+    const hostToken = createRandomToken(32);
     const channelId = `chn_${createRandomToken(18)}`;
+    const tenantId = `tnt_${createRandomToken(18)}`;
+    const projectId = `prj_${createRandomToken(18)}`;
     const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
 
     await this.database
@@ -153,18 +218,22 @@ export class D1PairingDirectory implements PairingDirectory {
           pairing_code_hash,
           poll_token_hash,
           channel_id,
+          tenant_id,
+          project_id,
           host_token_hash,
           status,
           created_at,
           expires_at
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .bind(
         pairingId,
         await hashSecret(pairingCode),
         await hashSecret(pollToken),
         channelId,
-        await hashSecret(disabledBrowserToken),
+        tenantId,
+        projectId,
+        await hashSecret(hostToken),
         now,
         expiresAt,
       )
@@ -174,31 +243,37 @@ export class D1PairingDirectory implements PairingDirectory {
     return {
       channelId,
       expiresAt: new Date(expiresAt).toISOString(),
+      hostToken,
       pairingCode,
       pairingId,
       pollToken,
+      projectId,
+      tenantId,
     };
   };
 
   readonly readChannel = async (
     channelId: string,
+    token: string,
     signal: AbortSignal,
   ): Promise<ChannelDescriptor> => {
+    signal.throwIfAborted();
+    const tokenHash = await hashSecret(validateToken(token));
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
         `SELECT channel_id, machine_name, workspace_name, agents_json,
-                installable_agents_json
+                installable_agents_json, tenant_id, project_id
          FROM pairing_channels
-         WHERE channel_id = ? AND status = 'paired'`,
+         WHERE channel_id = ? AND host_token_hash = ? AND status = 'paired'`,
       )
-      .bind(channelId)
+      .bind(channelId, tokenHash)
       .first<PublicChannelRow>();
     signal.throwIfAborted();
     if (row === null) {
       throw new PairingDirectoryError(
-        "channel_not_found",
-        "The channel was not found",
+        "unauthorized",
+        "A valid channel token is required",
       );
     }
     if (row.channel_id !== channelId) {
@@ -212,6 +287,8 @@ export class D1PairingDirectory implements PairingDirectory {
       row.channel_id,
       row.machine_name,
       row.workspace_name,
+      row.tenant_id,
+      row.project_id,
       parseInstallableAgents(row.installable_agents_json),
     );
   };
@@ -225,7 +302,7 @@ export class D1PairingDirectory implements PairingDirectory {
     const row = await this.database
       .prepare(
         `SELECT status, channel_id, expires_at, machine_name, workspace_name,
-                agents_json, installable_agents_json
+                agents_json, installable_agents_json, tenant_id, project_id
          FROM pairing_channels
          WHERE pairing_id = ? AND poll_token_hash = ?`,
       )
@@ -245,6 +322,8 @@ export class D1PairingDirectory implements PairingDirectory {
         row.channel_id,
         row.machine_name,
         row.workspace_name,
+        row.tenant_id,
+        row.project_id,
         parseInstallableAgents(row.installable_agents_json),
       );
     }

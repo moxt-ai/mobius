@@ -14,10 +14,18 @@ import {
   AGENT_ACTIVITY_DETAIL_LIMIT,
   AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
   AGENT_ACTIVITY_LOCATION_LIMIT,
+  AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT,
+  AGENT_ACTIVITY_RECORDED_FIELD_LIMIT,
+  type AgentActivityDetailCapture,
   type AgentDisplayContent,
 } from "@moxt-ai/mobius-protocol";
 
 const TRUNCATION_MARKER = "\n… output truncated by Mobius";
+
+type CapturedActivityDetail = Extract<
+  AgentActivityDetailCapture,
+  { readonly kind: "recorded" | "truncated" }
+>;
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -35,6 +43,7 @@ export class AcpActivity {
   readonly title: string;
   readonly toolKind: string;
   readonly content: readonly AgentDisplayContent[];
+  readonly detail: CapturedActivityDetail;
 
   constructor(
     activityId: string,
@@ -48,6 +57,11 @@ export class AcpActivity {
     title: string,
     toolKind: string,
     content: readonly AgentDisplayContent[] = [],
+    detail: CapturedActivityDetail = captureActivityDetail(
+      content,
+      input,
+      output,
+    ),
   ) {
     this.activityId = activityId;
     this.activityType = activityType;
@@ -60,6 +74,7 @@ export class AcpActivity {
     this.title = title;
     this.toolKind = toolKind;
     this.content = content;
+    this.detail = detail;
   }
 
   readonly complete = (): AcpActivity =>
@@ -77,6 +92,7 @@ export class AcpActivity {
           this.title,
           this.toolKind,
           this.content,
+          this.detail,
         )
       : this;
 }
@@ -110,11 +126,97 @@ function formatUnknown(value: unknown): string {
   }
 }
 
+function formatUnknownDetail(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2) ?? "";
+  } catch {
+    return String(value);
+  }
+}
+
 function readContentOutput(content: unknown): string {
   if (!Array.isArray(content) || content.length === 0) {
     return "";
   }
   return formatUnknown(content);
+}
+
+function readContentOutputDetail(content: unknown): string {
+  if (!Array.isArray(content) || content.length === 0) {
+    return "";
+  }
+  return formatUnknownDetail(content);
+}
+
+function summarizeDisplayContent(
+  content: AgentDisplayContent,
+): AgentDisplayContent {
+  return {
+    ...content,
+    data: truncate(content.data, AGENT_ACTIVITY_DETAIL_LIMIT),
+    mimeType: truncate(content.mimeType, 255),
+    name: truncate(content.name, 500),
+    newText: truncate(content.newText, AGENT_ACTIVITY_DETAIL_LIMIT),
+    oldText: truncate(content.oldText, AGENT_ACTIVITY_DETAIL_LIMIT),
+    path: truncate(content.path, 2_048),
+    terminalId: truncate(content.terminalId, 255),
+    text: truncate(content.text, AGENT_ACTIVITY_DETAIL_LIMIT),
+    uri: truncate(content.uri, 4_096),
+  };
+}
+
+function contentFitsRecordingEnvelope(content: AgentDisplayContent): boolean {
+  return (
+    content.data.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    content.mimeType.length <= 255 &&
+    content.name.length <= 500 &&
+    content.newText.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    content.oldText.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    content.path.length <= 2_048 &&
+    content.terminalId.length <= 255 &&
+    content.text.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    content.uri.length <= 4_096
+  );
+}
+
+function encodedByteLength(value: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+function captureActivityDetail(
+  content: readonly AgentDisplayContent[],
+  input: string,
+  output: string,
+): CapturedActivityDetail {
+  const recorded = { content, input, kind: "recorded", output } as const;
+  const originalBytes = encodedByteLength(recorded);
+  if (
+    content.length <= 100 &&
+    content.every(contentFitsRecordingEnvelope) &&
+    input.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    output.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
+    JSON.stringify(recorded).length <= AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT
+  ) {
+    return recorded;
+  }
+  return {
+    capturedBytes: encodedByteLength({
+      content: content.slice(0, 100).map(summarizeDisplayContent),
+      input: truncate(input, AGENT_ACTIVITY_DETAIL_LIMIT),
+      output: truncate(output, AGENT_ACTIVITY_DETAIL_LIMIT),
+    }),
+    kind: "truncated",
+    originalBytes,
+  };
+}
+
+function recordedDetail(
+  activity: AcpActivity | undefined,
+): Extract<AgentActivityDetailCapture, { readonly kind: "recorded" }> | null {
+  return activity?.detail.kind === "recorded" ? activity.detail : null;
 }
 
 function emptyDisplayContent(
@@ -306,17 +408,20 @@ export class AcpActivityTracker {
     }
     const previous = this.#activities.get(key);
     const identity = this.#identity(key);
+    const fullOutput = `${recordedDetail(previous)?.output ?? previous?.output ?? ""}${text}`;
     const activity = new AcpActivity(
       identity.id,
       activityType,
       "",
       [],
       "",
-      truncate(`${previous?.output ?? ""}${text}`, AGENT_ACTIVITY_DETAIL_LIMIT),
+      truncate(fullOutput, AGENT_ACTIVITY_DETAIL_LIMIT),
       identity.sequence,
       "running",
       activityType === "reasoning" ? "Reasoning" : "Progress update",
       activityType === "reasoning" ? "think" : "",
+      [],
+      captureActivityDetail([], "", fullOutput),
     );
     await this.#record(key, activity);
     this.#activeNarrativeKey = key;
@@ -374,6 +479,7 @@ export class AcpActivityTracker {
           previous.title,
           previous.toolKind,
           previous.content,
+          previous.detail,
         ),
       );
     }
@@ -387,6 +493,13 @@ export class AcpActivityTracker {
       update.rawOutput === undefined
         ? readContentOutput(update.content)
         : formatUnknown(update.rawOutput);
+    const detailInput =
+      update.rawInput === undefined ? "" : formatUnknownDetail(update.rawInput);
+    const detailOutput =
+      update.rawOutput === undefined
+        ? readContentOutputDetail(update.content)
+        : formatUnknownDetail(update.rawOutput);
+    const detailContent = normalizeToolContent(update.content ?? []);
     await this.#record(
       key,
       new AcpActivity(
@@ -400,7 +513,8 @@ export class AcpActivityTracker {
         normalizeToolStatus(update.status ?? "pending", "pending"),
         normalizeTitle(update.title, "Tool call"),
         update.kind ?? "other",
-        normalizeToolContent(update.content ?? []),
+        detailContent.slice(0, 100).map(summarizeDisplayContent),
+        captureActivityDetail(detailContent, detailInput, detailOutput),
       ),
     );
   };
@@ -412,6 +526,7 @@ export class AcpActivityTracker {
     const key = `tool:${update.toolCallId}`;
     const previous = this.#activities.get(key);
     const identity = this.#identity(key);
+    const previousDetail = recordedDetail(previous);
     const output =
       update.rawOutput !== undefined
         ? formatUnknown(update.rawOutput)
@@ -421,6 +536,20 @@ export class AcpActivityTracker {
     const content =
       update.content === undefined || update.content === null
         ? (previous?.content ?? [])
+        : normalizeToolContent(update.content);
+    const detailInput =
+      update.rawInput === undefined
+        ? (previousDetail?.input ?? previous?.input ?? "")
+        : formatUnknownDetail(update.rawInput);
+    const detailOutput =
+      update.rawOutput !== undefined
+        ? formatUnknownDetail(update.rawOutput)
+        : update.content !== undefined && update.content !== null
+          ? readContentOutputDetail(update.content)
+          : (previousDetail?.output ?? previous?.output ?? "");
+    const detailContent =
+      update.content === undefined || update.content === null
+        ? (previousDetail?.content ?? previous?.content ?? [])
         : normalizeToolContent(update.content);
     await this.#record(
       key,
@@ -447,7 +576,8 @@ export class AcpActivityTracker {
         update.kind === undefined || update.kind === null
           ? (previous?.toolKind ?? "other")
           : update.kind,
-        content,
+        content.slice(0, 100).map(summarizeDisplayContent),
+        captureActivityDetail(detailContent, detailInput, detailOutput),
       ),
     );
   };

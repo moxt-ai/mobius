@@ -36,6 +36,7 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 function createRelayUrl(connection: ChannelConnection): string {
   const relayUrl = new URL(window.location.origin);
   relayUrl.pathname = `/v1/channels/${encodeURIComponent(connection.channelId)}/host`;
+  relayUrl.searchParams.set("token", connection.hostToken);
   relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return relayUrl.toString();
 }
@@ -569,6 +570,9 @@ export async function sendPrompt(prompt: string): Promise<void> {
                 activity.title,
                 activity.toolKind,
                 activity.content,
+                activity.detail.kind === "recorded"
+                  ? "inline"
+                  : activity.detail.kind,
               ),
             );
         },

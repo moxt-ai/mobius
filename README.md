@@ -150,12 +150,11 @@ installation or recovery. Missing integrations use the same locally authorized
 install, retry, progress, and cancellation flow. The page intentionally does not
 expose local paths, versions, credentials, or a remote uninstall action.
 
-The channel URL can be opened directly in any browser while its local daemon is
-running. During this early phase, the high-entropy channel identifier is the only
-browser-side access boundary: anyone who receives the URL can submit agent work
-using the paired machine's current user permissions and read its persisted
-history. Add user or team
-authentication before exposing a channel beyond trusted collaborators.
+The pairing browser stores a separate high-entropy host credential for the
+channel. The URL contains only the channel address, so opening it in another
+browser without that credential cannot submit work or read persisted history.
+Treat exported browser storage as a bearer capability, and add user or team
+identity before sharing access beyond trusted collaborators.
 
 Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
 restart a previously paired daemon, use the channel identifier shown in its URL:
@@ -357,10 +356,11 @@ the Web URL. Open that URL and use the one-time command shown by the pairing pag
 The wrapper uses a dedicated temporary profile automatically, so an unrelated
 Wrangler login does not need to be removed or overwritten.
 
-The daemon receives a high-entropy channel token whose hash and channel metadata
-are stored in D1. The pairing code expires after ten minutes and can be claimed
-only once. Browser channel access is intentionally URL-based for now so a paired
-channel opens in any browser; application authentication is a separate follow-up.
+The daemon and browser receive separate high-entropy credentials whose hashes and
+channel metadata are stored in D1. The pairing code expires after ten minutes and
+can be claimed only once. A channel ID addresses a runtime but is not an access
+credential; the browser retains its host credential locally. Application identity
+and credential sharing remain separate concerns.
 
 Cloudflare may apply an abuse-prevention challenge to an unclaimed temporary
 preview. If that blocks the non-browser daemon, claim the deployment using the
@@ -369,11 +369,12 @@ private URL printed by Wrangler, or deploy from an authenticated account without
 does not run the local daemon or ACP agent; the pairing command starts it locally.
 
 The Web package uses Vite, TypeScript, React, Zustand, Tailwind CSS, and local
-shadcn/ui components. Zustand owns live page state, while each channel's Durable
-Object records pending, running, completed, and failed turns and restores them
-whenever the channel opens in another browser. Prompts and agent responses are
-therefore persisted in Cloudflare; local agent credentials remain only on the
-paired machine. Each conversation keeps one Mobius session across turns. The
+shadcn/ui components. Zustand owns live page state, while independent Session
+Durable Objects record accepted commands, concrete attempts, ordered events, and
+archive references. The Web opens one paginated message page and loads full tool
+details only when expanded. Prompts and agent responses are therefore persisted
+in Cloudflare; local agent credentials remain only on the paired machine. Each
+conversation keeps one Mobius session across turns. The
 daemon stores the corresponding native ACP session identifier in its local
 SQLite database and uses ACP resume or load after a daemon restart when the
 selected agent advertises that capability.
@@ -384,7 +385,7 @@ selected agent advertises that capability.
 packages/
   relay-core/        Portable Relay API, channel actor, state contracts, and ports
   relay-cloudflare/  Worker, Durable Objects, D1, and Worker Assets composition
-  relay-node/        Reserved for the future single-instance Node profile
+  relay-node/        Single-instance SQLite and filesystem Relay composition
   cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
@@ -398,8 +399,8 @@ docs/
 scripts/
 ```
 
-All runnable and importable product workspaces live under `packages/`. The empty
-`relay-node` and `deploy/docker` placeholders make the intended deployment
-boundary explicit without claiming Node or Docker support before those profiles
-exist. External boundary fixtures remain under `e2e/fixtures` because they are
-deterministic test dependencies rather than shipped product units.
+All runnable and importable product workspaces live under `packages/`. The Node
+profile is embeddable and expects the host process to provide its pairing/channel
+ports and HTTP listener; `deploy/docker` remains a placeholder for a packaged
+server image. External boundary fixtures remain under `e2e/fixtures` because
+they are deterministic test dependencies rather than shipped product units.

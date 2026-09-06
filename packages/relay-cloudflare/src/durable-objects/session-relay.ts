@@ -1,0 +1,525 @@
+import {
+  decodeSessionEventEnvelope,
+  decodeSessionPromptCommand,
+} from "@moxt-ai/mobius-protocol";
+import {
+  CreateSessionRequest,
+  ProjectScope,
+  RequestBodyError,
+  readBoundedUtf8Body,
+  SessionRecordingPolicy,
+  SessionRuntimeError,
+  type SessionSqlRow,
+  SqliteSessionRuntime,
+} from "@moxt-ai/mobius-relay-core";
+
+import { DurableObjectSqlDatabase } from "../durable-object-sql-database.ts";
+import { R2ContentStore } from "../r2-content-store.ts";
+import {
+  type SessionConfigurationEnvironment,
+  sessionQuotaFromEnvironment,
+} from "../session-configuration.ts";
+
+const MAX_INTERNAL_BODY_LENGTH = 96 * 1024 * 1024;
+
+export interface SessionRelayEnvironment
+  extends SessionConfigurationEnvironment {
+  readonly SESSION_ARCHIVES: R2Bucket;
+}
+
+class InternalRequestError extends Error {
+  readonly code: string;
+  readonly status: number;
+
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.code = code;
+    this.name = "InternalRequestError";
+    this.status = status;
+  }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  expected: readonly string[],
+): void {
+  const keys = Object.keys(value);
+  if (
+    keys.length !== expected.length ||
+    keys.some((key) => !expected.includes(key))
+  ) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The session operation is invalid",
+    );
+  }
+}
+
+function readString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+  maximumLength = 128,
+  allowEmpty = false,
+): string {
+  const field = value[key];
+  if (
+    typeof field !== "string" ||
+    field.length > maximumLength ||
+    (!allowEmpty && field.length === 0)
+  ) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      `The ${key} field is invalid`,
+    );
+  }
+  return field;
+}
+
+function readInteger(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): number {
+  const field = value[key];
+  if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      `The ${key} field is invalid`,
+    );
+  }
+  return field;
+}
+
+function readNullableString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string | null {
+  const field = value[key];
+  if (field === null) {
+    return null;
+  }
+  if (typeof field !== "string") {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      `The ${key} field is invalid`,
+    );
+  }
+  return field;
+}
+
+function readScope(value: Readonly<Record<string, unknown>>): ProjectScope {
+  const scope = value["scope"];
+  if (!isRecord(scope)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The project scope is invalid",
+    );
+  }
+  assertExactKeys(scope, ["projectId", "tenantId"]);
+  return new ProjectScope(
+    readString(scope, "tenantId"),
+    readString(scope, "projectId"),
+  );
+}
+
+function readCreateRequest(
+  value: Readonly<Record<string, unknown>>,
+): CreateSessionRequest {
+  const request = value["request"];
+  if (!isRecord(request)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The session creation request is invalid",
+    );
+  }
+  assertExactKeys(request, [
+    "agentId",
+    "bindingId",
+    "directoryId",
+    "policy",
+    "runtimeId",
+    "sessionId",
+    "title",
+  ]);
+  const policy = request["policy"];
+  if (!isRecord(policy)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The session policy is invalid",
+    );
+  }
+  assertExactKeys(policy, [
+    "contentLimitBytes",
+    "hotEventLimit",
+    "level",
+    "retentionMilliseconds",
+  ]);
+  const level = policy["level"];
+  if (level !== "full" && level !== "summary") {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The session recording level is invalid",
+    );
+  }
+  return new CreateSessionRequest(
+    readString(request, "sessionId"),
+    readString(request, "runtimeId"),
+    readString(request, "agentId"),
+    readString(request, "bindingId"),
+    readString(request, "directoryId"),
+    new SessionRecordingPolicy(
+      level,
+      readInteger(policy, "retentionMilliseconds"),
+      readInteger(policy, "hotEventLimit"),
+      readInteger(policy, "contentLimitBytes"),
+    ),
+    readString(request, "title", 500, true),
+  );
+}
+
+async function readBody(
+  request: Request,
+): Promise<Readonly<Record<string, unknown>>> {
+  let encoded: string;
+  try {
+    encoded = await readBoundedUtf8Body(request, MAX_INTERNAL_BODY_LENGTH);
+  } catch (cause) {
+    if (cause instanceof RequestBodyError) {
+      throw new InternalRequestError(
+        "invalid_session_operation",
+        cause.code === "body_too_large"
+          ? "The session operation is too large"
+          : "The session operation is invalid",
+        cause.code === "body_too_large" ? 413 : 400,
+      );
+    }
+    throw cause;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(encoded);
+  } catch (cause) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      cause instanceof Error
+        ? "The session operation is invalid"
+        : "Invalid JSON",
+    );
+  }
+  if (!isRecord(value)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The session operation must be an object",
+    );
+  }
+  return value;
+}
+
+function operationFromPath(pathname: string): string {
+  const segments = pathname.split("/").filter((segment) => segment.length > 0);
+  if (
+    segments.length !== 3 ||
+    segments[0] !== "internal" ||
+    segments[1] !== "sessions"
+  ) {
+    throw new InternalRequestError(
+      "session_not_found",
+      "The session operation does not exist",
+      404,
+    );
+  }
+  return segments[2] ?? "";
+}
+
+function errorResponse(
+  error: SessionRuntimeError | InternalRequestError,
+): Response {
+  if (error instanceof InternalRequestError) {
+    return Response.json(
+      { error: { code: error.code, message: error.message } },
+      { status: error.status },
+    );
+  }
+  const status =
+    error.code === "session_not_found" || error.code === "artifact_not_found"
+      ? 404
+      : error.code === "session_access_denied"
+        ? 403
+        : error.code === "session_deleted" || error.code === "cursor_expired"
+          ? 410
+          : error.code === "session_quota_exceeded"
+            ? 429
+            : error.code === "session_busy" || error.code === "session_conflict"
+              ? 409
+              : error.code === "content_too_large"
+                ? 413
+                : error.code === "invalid_cursor" ||
+                    error.code === "invalid_export" ||
+                    error.code === "invalid_page_size"
+                  ? 400
+                  : 503;
+  return Response.json(
+    { error: { code: error.code, message: error.message } },
+    { status },
+  );
+}
+
+export class SessionRelay {
+  readonly #database: DurableObjectSqlDatabase;
+  readonly #runtime: SqliteSessionRuntime;
+  readonly #state: DurableObjectState;
+
+  constructor(state: DurableObjectState, environment: SessionRelayEnvironment) {
+    this.#database = new DurableObjectSqlDatabase(state.storage);
+    this.#runtime = new SqliteSessionRuntime(
+      this.#database,
+      new R2ContentStore(environment.SESSION_ARCHIVES),
+      sessionQuotaFromEnvironment(environment),
+    );
+    this.#state = state;
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    try {
+      if (request.method !== "POST") {
+        return new Response(null, { status: 405 });
+      }
+      const operation = operationFromPath(new URL(request.url).pathname);
+      const body = await readBody(request);
+      const scope = readScope(body);
+      if (operation === "create") {
+        assertExactKeys(body, ["now", "request", "scope"]);
+        return Response.json(
+          await this.#runtime.createSession(
+            scope,
+            readCreateRequest(body),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "accept") {
+        assertExactKeys(body, ["command", "now", "runtimeId", "scope"]);
+        return Response.json(
+          await this.#runtime.acceptCommand(
+            scope,
+            readString(body, "runtimeId"),
+            decodeSessionPromptCommand(readString(body, "command", 8_000_000)),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "commit") {
+        assertExactKeys(body, ["envelope", "now", "runtimeId", "scope"]);
+        const envelope = decodeSessionEventEnvelope(
+          readString(body, "envelope", 8_500_000),
+        );
+        const result = await this.#runtime.commitEvent(
+          scope,
+          readString(body, "runtimeId"),
+          envelope,
+          readInteger(body, "now"),
+          request.signal,
+        );
+        const summary = await this.#runtime.readSession(
+          scope,
+          envelope.sessionId,
+          request.signal,
+        );
+        await this.#state.storage.setAlarm(Date.now());
+        return Response.json({ ...result, summary });
+      }
+      if (operation === "bind") {
+        assertExactKeys(body, ["runtimeId", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.bindSession(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "runtimeId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "read") {
+        assertExactKeys(body, ["scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readSession(
+            scope,
+            readString(body, "sessionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "messages") {
+        assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readMessages(
+            scope,
+            readString(body, "sessionId"),
+            readNullableString(body, "cursor"),
+            readInteger(body, "limit"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "events") {
+        assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readEvents(
+            scope,
+            readString(body, "sessionId"),
+            readNullableString(body, "cursor"),
+            readInteger(body, "limit"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "detail") {
+        assertExactKeys(body, ["activityId", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readActivityDetail(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "activityId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "export") {
+        assertExactKeys(body, ["scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.exportSession(
+            scope,
+            readString(body, "sessionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "import") {
+        assertExactKeys(body, ["exported", "now", "scope"]);
+        const summary = await this.#runtime.importSession(
+          scope,
+          body["exported"],
+          readInteger(body, "now"),
+          request.signal,
+        );
+        await this.#state.storage.setAlarm(Date.now());
+        return Response.json(summary);
+      }
+      if (operation === "delete") {
+        assertExactKeys(body, ["now", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.deleteSession(
+            scope,
+            readString(body, "sessionId"),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "disconnect") {
+        assertExactKeys(body, ["now", "runtimeId", "scope"]);
+        return Response.json(
+          await this.#runtime.markRuntimeDisconnected(
+            scope,
+            readString(body, "runtimeId"),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "archive") {
+        assertExactKeys(body, ["scope", "sessionId"]);
+        return Response.json({
+          completed: await this.#runtime.runArchiveWork(
+            scope,
+            readString(body, "sessionId"),
+            request.signal,
+          ),
+        });
+      }
+      throw new InternalRequestError(
+        "session_not_found",
+        "The session operation does not exist",
+        404,
+      );
+    } catch (error) {
+      if (request.signal.aborted) {
+        throw error;
+      }
+      if (
+        error instanceof SessionRuntimeError ||
+        error instanceof InternalRequestError
+      ) {
+        if (
+          error instanceof SessionRuntimeError &&
+          error.code === "session_deleted"
+        ) {
+          await this.#state.storage.setAlarm(Date.now());
+        }
+        return errorResponse(error);
+      }
+      console.error("Session Durable Object operation failed", error);
+      return Response.json(
+        {
+          error: {
+            code: "session_storage_unavailable",
+            message: "The session storage is unavailable",
+          },
+        },
+        { status: 503 },
+      );
+    }
+  }
+
+  async alarm(): Promise<void> {
+    const rows = this.#database.query(
+      `SELECT tenant_id, project_id, session_id, lifecycle
+       FROM session_records WHERE lifecycle <> 'deleted'`,
+    );
+    let pending = false;
+    for (const row of rows) {
+      const scope = new ProjectScope(
+        this.rowString(row, "tenant_id"),
+        this.rowString(row, "project_id"),
+      );
+      const sessionId = this.rowString(row, "session_id");
+      try {
+        if (this.rowString(row, "lifecycle") === "deleting") {
+          await this.#runtime.deleteSession(
+            scope,
+            sessionId,
+            Date.now(),
+            new AbortController().signal,
+          );
+        } else {
+          await this.#runtime.runArchiveWork(
+            scope,
+            sessionId,
+            new AbortController().signal,
+          );
+          pending =
+            this.#runtime.hasPendingArchiveWork(scope, sessionId) || pending;
+        }
+      } catch (error) {
+        console.error("Session archive recovery failed", error);
+        pending = true;
+      }
+    }
+    if (pending) {
+      await this.#state.storage.setAlarm(Date.now() + 30_000);
+    }
+  }
+
+  private readonly rowString = (row: SessionSqlRow, key: string): string => {
+    const value = row[key];
+    if (typeof value !== "string") {
+      throw new Error("The session record is invalid");
+    }
+    return value;
+  };
+}

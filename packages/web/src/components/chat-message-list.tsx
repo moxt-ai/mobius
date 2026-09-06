@@ -156,10 +156,12 @@ function ThinkingIndicator() {
 
 function AgentMessage({
   agentLabel,
+  channelId,
   message,
   sessionId,
 }: {
   readonly agentLabel: string;
+  readonly channelId: string;
   readonly message: AgentChatMessage;
   readonly sessionId: string;
 }) {
@@ -171,6 +173,8 @@ function AgentMessage({
       <div className="min-w-0">
         <AgentActivityList
           activities={message.activities}
+          channelId={channelId}
+          sessionId={sessionId}
           streaming={message.state.isStreaming}
         />
         {message.text.length > 0 && (
@@ -293,10 +297,12 @@ export function NativeSessionHistoryView({
 
 function Message({
   agentLabel,
+  channelId,
   message,
   sessionId,
 }: {
   readonly agentLabel: string;
+  readonly channelId: string;
   readonly message: ChatMessage;
   readonly sessionId: string;
 }) {
@@ -315,6 +321,7 @@ function Message({
     return (
       <AgentMessage
         agentLabel={agentLabel}
+        channelId={channelId}
         message={message}
         sessionId={sessionId}
       />
@@ -323,7 +330,7 @@ function Message({
   return null;
 }
 
-export function ChatMessageList() {
+export function ChatMessageList({ channelId }: { readonly channelId: string }) {
   const conversation = useChatStore(selectActiveConversation);
   const viewportRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
@@ -371,6 +378,7 @@ export function ChatMessageList() {
             {conversation.messages.map((message) => (
               <Message
                 agentLabel={conversation.agentLabel}
+                channelId={channelId}
                 key={message.id}
                 message={message}
                 sessionId={conversation.sessionId}

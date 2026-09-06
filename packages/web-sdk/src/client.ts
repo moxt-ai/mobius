@@ -29,10 +29,12 @@ import {
   decodeAgentInstallRequestCommand,
   decodeAgentInstallStartedEvent,
   decodeAgentMessageDeltaEvent,
+  decodeCommittedSessionEvent,
   decodeMessageKind,
   decodeNativeSessionCancel,
   decodeNativeSessionCommand,
   decodeNativeSessionResult,
+  decodeRecordedSessionEvent,
   decodeRuntimeStatusEvent,
   decodeSessionCancelCommand,
   decodeSessionCommandsUpdatedEvent,
@@ -83,6 +85,7 @@ import {
   SESSION_ELICITATION_REQUESTED_KIND,
   SESSION_ELICITATION_RESOLVED_KIND,
   SESSION_ELICITATION_RESPOND_KIND,
+  SESSION_EVENT_COMMITTED_KIND,
   SESSION_FAILED_KIND,
   SESSION_INFO_UPDATED_KIND,
   SESSION_OPERATION_FAILED_KIND,
@@ -238,6 +241,16 @@ function readMessageText(event: MessageEvent<unknown>): string {
   }
 
   return event.data;
+}
+
+function readInboundMessage(event: MessageEvent<unknown>): string {
+  const encoded = readMessageText(event);
+  if (decodeMessageKind(encoded) !== SESSION_EVENT_COMMITTED_KIND) {
+    return encoded;
+  }
+  const committed = decodeCommittedSessionEvent(encoded);
+  decodeRecordedSessionEvent(committed.payload);
+  return committed.payload;
 }
 
 function encodeOutboundMessage(encode: () => string): string {
@@ -564,7 +577,7 @@ export class MobiusClient {
         };
         const handleMessage = (message: MessageEvent<unknown>): void => {
           try {
-            const encoded = readMessageText(message);
+            const encoded = readInboundMessage(message);
             const kind = decodeMessageKind(encoded);
             if (kind === AGENT_INSTALL_COMPLETED_KIND) {
               const completed = decodeAgentInstallCompletedEvent(encoded);
@@ -674,7 +687,7 @@ export class MobiusClient {
 
       const handleMessage = (event: MessageEvent<unknown>): void => {
         try {
-          const encoded = readMessageText(event);
+          const encoded = readInboundMessage(event);
           const kind = decodeMessageKind(encoded);
 
           if (kind === SESSION_STARTED_KIND) {
@@ -831,7 +844,7 @@ export class MobiusClient {
       };
       const handleMessage = (message: MessageEvent<unknown>): void => {
         try {
-          const encoded = readMessageText(message);
+          const encoded = readInboundMessage(message);
           const kind = decodeMessageKind(encoded);
           if (kind === SESSION_OPERATION_FAILED_KIND) {
             const failure = decodeSessionOperationFailedEvent(encoded);
@@ -889,7 +902,7 @@ export class MobiusClient {
 
   readonly #handleChannelMessage = (event: MessageEvent<unknown>): void => {
     try {
-      const encoded = readMessageText(event);
+      const encoded = readInboundMessage(event);
       const kind = decodeMessageKind(encoded);
       if (kind === RUNTIME_STATUS_KIND) {
         this.#onStatus(decodeRuntimeStatusEvent(encoded).online);

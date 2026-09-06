@@ -215,7 +215,7 @@ function ChannelWorkspace({
                 aria-label="Agent conversation"
                 className="flex min-h-0 flex-1 flex-col"
               >
-                <ChatMessageList />
+                <ChatMessageList channelId={connection.channelId} />
                 {activeConversationMessageCount > 0 && (
                   <ChatComposer placement="active" />
                 )}

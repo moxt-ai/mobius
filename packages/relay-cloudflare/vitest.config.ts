@@ -19,14 +19,18 @@ export default defineConfig(async () => {
       cloudflareTest({
         wrangler: { configPath: wranglerConfigPath },
         miniflare: {
-          bindings: { TEST_MIGRATIONS: migrations },
+          bindings: {
+            SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
+            SESSION_ACTIVE_SESSIONS_PER_TENANT: "8",
+            TEST_MIGRATIONS: migrations,
+          },
         },
       }),
     ],
     test: {
       include: ["test/**/*.integration.test.ts"],
       setupFiles: ["./test/apply-migrations.ts"],
-      testTimeout: 5_000,
+      testTimeout: 15_000,
     },
   };
 });

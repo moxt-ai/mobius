@@ -8,13 +8,18 @@ import {
   decodeRuntimeHeartbeatEvent,
   decodeRuntimeLivenessReadyEvent,
   decodeSessionCancelCommand,
+  decodeSessionEventAcknowledgement,
+  decodeSessionEventEnvelope,
   decodeSessionPromptCommand,
   encodeAgentActivityEvent,
   encodeRuntimeHeartbeatAckEvent,
   encodeRuntimeHeartbeatEvent,
   encodeRuntimeLivenessReadyEvent,
   encodeSessionCancelCommand,
+  encodeSessionEventAcknowledgement,
+  encodeSessionEventEnvelope,
   encodeSessionPromptCommand,
+  encodeSessionStartedEvent,
   MOBIUS_PROTOCOL_VERSION,
   ProtocolMessageError,
   RUNTIME_HEARTBEAT_ACK_KIND,
@@ -24,10 +29,51 @@ import {
   type RuntimeHeartbeatEvent,
   type RuntimeLivenessReadyEvent,
   SESSION_CANCEL_KIND,
+  SESSION_EVENT_ACK_KIND,
+  SESSION_EVENT_FORMAT_VERSION,
+  SESSION_EVENT_KIND,
   SESSION_PROMPT_KIND,
   type SessionCancelCommand,
   type SessionPromptCommand,
 } from "../src/index.ts";
+
+describe("reliable session event protocol", () => {
+  it("Given a daemon event has a stable identity, When it is retransmitted and acknowledged, Then its identity and durable cursor round-trip exactly", () => {
+    const payload = encodeSessionStartedEvent({
+      commandId: "command-1",
+      kind: "session.started",
+      processAttemptId: "attempt-1",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId: "session-1",
+    });
+    const envelope = {
+      eventId: "event-1",
+      eventVersion: SESSION_EVENT_FORMAT_VERSION,
+      kind: SESSION_EVENT_KIND,
+      payload,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId: "session-1",
+    } as const;
+    const acknowledgement = {
+      cursor: "ZXZlbnQtY3Vyc29y",
+      duplicate: true,
+      eventId: envelope.eventId,
+      kind: SESSION_EVENT_ACK_KIND,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sequence: 12,
+      sessionId: envelope.sessionId,
+    } as const;
+
+    expect(
+      decodeSessionEventEnvelope(encodeSessionEventEnvelope(envelope)),
+    ).toEqual(envelope);
+    expect(
+      decodeSessionEventAcknowledgement(
+        encodeSessionEventAcknowledgement(acknowledgement),
+      ),
+    ).toEqual(acknowledgement);
+  });
+});
 
 describe("runtime liveness protocol", () => {
   it("Given a liveness-capable relay, When its readiness signal crosses the daemon boundary, Then the capability round-trips exactly", () => {
@@ -175,6 +221,12 @@ describe("agent activity protocol", () => {
           uri: "",
         },
       ],
+      detail: {
+        content: [],
+        input: '{"command":"pnpm test -- --reporter=verbose"}',
+        kind: "recorded",
+        output: "Complete test output",
+      },
       protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sequence: 2,
       sessionId: "session-1",
@@ -195,6 +247,7 @@ describe("agent activity protocol", () => {
       commandId: "command-1",
       input: "",
       content: [],
+      detail: { kind: "unrecorded" },
       kind: AGENT_ACTIVITY_KIND,
       locations: [],
       name: "read_file",

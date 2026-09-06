@@ -23,6 +23,7 @@ import {
   decodeSessionCancelCommand,
   decodeSessionConfigureCommand,
   decodeSessionElicitationRespondCommand,
+  decodeSessionEventAcknowledgement,
   decodeSessionPermissionRespondCommand,
   decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
@@ -60,6 +61,7 @@ import {
   SESSION_COMPLETED_KIND,
   SESSION_CONFIGURE_KIND,
   SESSION_ELICITATION_RESPOND_KIND,
+  SESSION_EVENT_ACK_KIND,
   SESSION_FAILED_KIND,
   SESSION_PERMISSION_RESPOND_KIND,
   SESSION_PREPARE_KIND,
@@ -115,6 +117,7 @@ import type { DaemonConfig } from "./config.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
+import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import {
   type DaemonScheduledTask,
   type DaemonTimer,
@@ -189,62 +192,65 @@ class RelayConnectionRefresh {
 }
 
 class DaemonAcpObserver implements AcpSessionObserver {
-  readonly #socket: WebSocket;
+  readonly #record: (sessionId: string, payload: string) => void;
 
-  constructor(socket: WebSocket) {
-    this.#socket = socket;
+  constructor(record: (sessionId: string, payload: string) => void) {
+    this.#record = record;
   }
 
   readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
-    send(this.#socket, encodeSessionCommandsUpdatedEvent(event));
+    this.#record(event.sessionId, encodeSessionCommandsUpdatedEvent(event));
     return Promise.resolve();
   };
 
   readonly onConfig = (event: SessionConfigUpdatedEvent): Promise<void> => {
-    send(this.#socket, encodeSessionConfigUpdatedEvent(event));
+    this.#record(event.sessionId, encodeSessionConfigUpdatedEvent(event));
     return Promise.resolve();
   };
 
   readonly onContent = (event: AgentContentEvent): Promise<void> => {
-    send(this.#socket, encodeAgentContentEvent(event));
+    this.#record(event.sessionId, encodeAgentContentEvent(event));
     return Promise.resolve();
   };
 
   readonly onElicitation = (
     event: SessionElicitationRequestedEvent,
   ): Promise<void> => {
-    send(this.#socket, encodeSessionElicitationRequestedEvent(event));
+    this.#record(
+      event.sessionId,
+      encodeSessionElicitationRequestedEvent(event),
+    );
     return Promise.resolve();
   };
 
   readonly onElicitationResolved = (
     event: SessionElicitationResolvedEvent,
   ): Promise<void> => {
-    send(this.#socket, encodeSessionElicitationResolvedEvent(event));
+    this.#record(event.sessionId, encodeSessionElicitationResolvedEvent(event));
     return Promise.resolve();
   };
 
   readonly onInfo = (event: SessionInfoUpdatedEvent): Promise<void> => {
-    send(this.#socket, encodeSessionInfoUpdatedEvent(event));
+    this.#record(event.sessionId, encodeSessionInfoUpdatedEvent(event));
     return Promise.resolve();
   };
 
   readonly onPermission = (
     event: SessionPermissionRequestedEvent,
   ): Promise<void> => {
-    send(this.#socket, encodeSessionPermissionRequestedEvent(event));
+    this.#record(event.sessionId, encodeSessionPermissionRequestedEvent(event));
     return Promise.resolve();
   };
 
   readonly onPermissionResolved = (
     event: SessionPermissionResolvedEvent,
   ): Promise<void> => {
-    send(this.#socket, encodeSessionPermissionResolvedEvent(event));
+    this.#record(event.sessionId, encodeSessionPermissionResolvedEvent(event));
     return Promise.resolve();
   };
 
   readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
-    send(this.#socket, encodeSessionUsageUpdatedEvent(event));
+    this.#record(event.sessionId, encodeSessionUsageUpdatedEvent(event));
     return Promise.resolve();
   };
 }
@@ -446,17 +452,29 @@ function send(socket: WebSocket, message: string): void {
   socket.send(message);
 }
 
+function recordSessionEvent(
+  outbox: SessionEventOutbox,
+  socket: WebSocket,
+  sessionId: string,
+  payload: string,
+): void {
+  const envelope = outbox.enqueue(sessionId, payload);
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(envelope);
+  }
+}
+
 function reportFailure(
+  outbox: SessionEventOutbox,
   socket: WebSocket,
   command: SessionPromptCommand,
   code: string,
   message: string,
 ): void {
-  if (socket.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  send(
+  recordSessionEvent(
+    outbox,
     socket,
+    command.sessionId,
     encodeSessionFailedEvent({
       code,
       commandId: command.commandId,
@@ -588,6 +606,7 @@ async function executeWorkspaceList(
 }
 
 async function executeSessionPrepare(
+  outbox: SessionEventOutbox,
   socket: WebSocket,
   command: SessionPrepareCommand,
   config: DaemonConfig,
@@ -622,8 +641,10 @@ async function executeSessionPrepare(
       event: "session_prepared",
       sessionId: command.sessionId,
     });
-    send(
+    recordSessionEvent(
+      outbox,
       socket,
+      command.sessionId,
       encodeSessionReadyEvent({
         additionalDirectories: resolved.additionalDirectoryEntries,
         agentId: command.agentId,
@@ -647,6 +668,7 @@ async function executeSessionPrepare(
 }
 
 async function executeSessionConfigure(
+  outbox: SessionEventOutbox,
   socket: WebSocket,
   command: SessionConfigureCommand,
   config: DaemonConfig,
@@ -680,8 +702,10 @@ async function executeSessionConfigure(
       event: "session_configured",
       sessionId: command.sessionId,
     });
-    send(
+    recordSessionEvent(
+      outbox,
       socket,
+      command.sessionId,
       encodeSessionConfigUpdatedEvent({
         configOptions,
         kind: "session.config.updated",
@@ -696,6 +720,7 @@ async function executeSessionConfigure(
 }
 
 async function executePrompt(
+  outbox: SessionEventOutbox,
   socket: WebSocket,
   command: SessionPromptCommand,
   config: DaemonConfig,
@@ -719,8 +744,10 @@ async function executePrompt(
       event: "session_authorized",
       sessionId: command.sessionId,
     });
-    send(
+    recordSessionEvent(
+      outbox,
       socket,
+      command.sessionId,
       encodeSessionStartedEvent({
         commandId: command.commandId,
         kind: SESSION_STARTED_KIND,
@@ -737,13 +764,16 @@ async function executePrompt(
       cwd: resolved.cwd,
       images: command.images,
       onActivity: (activity) => {
-        send(
+        recordSessionEvent(
+          outbox,
           socket,
+          command.sessionId,
           encodeAgentActivityEvent({
             activityId: activity.activityId,
             activityType: activity.activityType,
             commandId: command.commandId,
             content: activity.content,
+            detail: activity.detail,
             input: activity.input,
             kind: AGENT_ACTIVITY_KIND,
             locations: activity.locations,
@@ -760,8 +790,10 @@ async function executePrompt(
         return Promise.resolve();
       },
       onText: (text) => {
-        send(
+        recordSessionEvent(
+          outbox,
           socket,
+          command.sessionId,
           encodeAgentMessageDeltaEvent({
             commandId: command.commandId,
             kind: AGENT_MESSAGE_DELTA_KIND,
@@ -778,8 +810,10 @@ async function executePrompt(
       signal,
     });
 
-    send(
+    recordSessionEvent(
+      outbox,
       socket,
+      command.sessionId,
       encodeSessionCompletedEvent({
         commandId: command.commandId,
         kind: SESSION_COMPLETED_KIND,
@@ -804,6 +838,7 @@ async function executePrompt(
     });
     const code = operationErrorCode(error);
     reportFailure(
+      outbox,
       socket,
       command,
       code === "session_operation_failed" ? "agent_execution_failed" : code,
@@ -844,6 +879,7 @@ async function runRelayConnection(
   installations: AgentInstallationManager,
   installationObserver: DaemonInstallationObserver,
   nativeSessions: NativeSessionService,
+  outbox: SessionEventOutbox,
   signal: AbortSignal,
   timer: DaemonTimer,
 ): Promise<void> {
@@ -861,8 +897,14 @@ async function runRelayConnection(
       readonly completion: Promise<void>;
     }
   >();
-  sessions.setObserver(new DaemonAcpObserver(socket));
+  const record = (sessionId: string, payload: string): void => {
+    recordSessionEvent(outbox, socket, sessionId, payload);
+  };
+  sessions.setObserver(new DaemonAcpObserver(record));
   installationObserver.connect(socket);
+  for (const pending of outbox.pending()) {
+    send(socket, pending);
+  }
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -946,6 +988,10 @@ async function runRelayConnection(
 
         try {
           const kind = decodeMessageKind(encoded);
+          if (kind === SESSION_EVENT_ACK_KIND) {
+            outbox.acknowledge(decodeSessionEventAcknowledgement(encoded));
+            return;
+          }
           if (kind === NATIVE_SESSION_CANCEL_KIND) {
             const command = decodeNativeSessionCancel(encoded);
             const pending = nativeRequests.get(command.requestId);
@@ -1113,6 +1159,7 @@ async function runRelayConnection(
           if (kind === SESSION_PREPARE_KIND) {
             const command = decodeSessionPrepareCommand(encoded);
             void executeSessionPrepare(
+              outbox,
               socket,
               command,
               config,
@@ -1126,6 +1173,7 @@ async function runRelayConnection(
           if (kind === SESSION_CONFIGURE_KIND) {
             const command = decodeSessionConfigureCommand(encoded);
             void executeSessionConfigure(
+              outbox,
               socket,
               command,
               config,
@@ -1202,6 +1250,7 @@ async function runRelayConnection(
           const command = decodeSessionPromptCommand(encoded);
           if (activeTurns.has(command.commandId)) {
             reportFailure(
+              outbox,
               socket,
               command,
               "duplicate_command",
@@ -1213,6 +1262,7 @@ async function runRelayConnection(
           const turn = new ActiveDaemonTurn(command, new AbortController());
           activeTurns.set(command.commandId, turn);
           void executePrompt(
+            outbox,
             socket,
             command,
             config,
@@ -1283,6 +1333,7 @@ export async function runDaemon(
   ).prepare(signal);
 
   const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
+  const outbox = new SessionEventOutbox(config.auditDatabasePath);
   const sessions = new AcpSessionManager(
     new NullAcpSessionObserver(),
     sessionStore,
@@ -1319,6 +1370,7 @@ export async function runDaemon(
           installations,
           installationObserver,
           nativeSessions,
+          outbox,
           signal,
           timer,
         );
@@ -1342,7 +1394,11 @@ export async function runDaemon(
       try {
         await sessions.close();
       } finally {
-        sessionStore.close();
+        try {
+          sessionStore.close();
+        } finally {
+          outbox.close();
+        }
       }
     }
   }

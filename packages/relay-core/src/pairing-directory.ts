@@ -19,9 +19,12 @@ export interface InstallableAgentDescriptor {
 export interface CreatedPairing {
   readonly channelId: string;
   readonly expiresAt: string;
+  readonly hostToken: string;
   readonly pairingCode: string;
   readonly pairingId: string;
   readonly pollToken: string;
+  readonly projectId: string;
+  readonly tenantId: string;
 }
 
 export interface ClaimedPairing {
@@ -29,11 +32,25 @@ export interface ClaimedPairing {
   readonly daemonToken: string;
 }
 
+export class VerifiedChannelAccess {
+  readonly channelId: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+
+  constructor(channelId: string, tenantId: string, projectId: string) {
+    this.channelId = channelId;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
+  }
+}
+
 export class ChannelDescriptor {
   readonly agents: readonly AgentDescriptor[];
   readonly channelId: string;
   readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
+  readonly projectId: string;
+  readonly tenantId: string;
   readonly workspaceName: string;
 
   constructor(
@@ -41,12 +58,16 @@ export class ChannelDescriptor {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    tenantId: string,
+    projectId: string,
     installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     this.agents = agents;
     this.channelId = channelId;
     this.installableAgents = installableAgents;
     this.machineName = machineName;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }
 }
@@ -74,7 +95,9 @@ export class PairedPairingStatus extends PairingStatus {
   readonly channelId: string;
   readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
+  readonly projectId: string;
   readonly status = "paired";
+  readonly tenantId: string;
   readonly workspaceName: string;
 
   constructor(
@@ -82,6 +105,8 @@ export class PairedPairingStatus extends PairingStatus {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    tenantId: string,
+    projectId: string,
     installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     super();
@@ -89,6 +114,8 @@ export class PairedPairingStatus extends PairingStatus {
     this.channelId = channelId;
     this.installableAgents = installableAgents;
     this.machineName = machineName;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }
 }
@@ -108,11 +135,17 @@ export interface PairingDirectory {
     channelId: string,
     token: string,
     signal: AbortSignal,
-  ) => Promise<void>;
+  ) => Promise<VerifiedChannelAccess>;
   readonly authorizeHost: (
     channelId: string,
+    token: string,
     signal: AbortSignal,
-  ) => Promise<void>;
+  ) => Promise<VerifiedChannelAccess>;
+  readonly authorizeProject: (
+    projectId: string,
+    token: string,
+    signal: AbortSignal,
+  ) => Promise<ProjectScopeAccess>;
   readonly claimPairing: (
     pairingCode: string,
     machineName: string,
@@ -124,6 +157,7 @@ export interface PairingDirectory {
   readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
   readonly readChannel: (
     channelId: string,
+    token: string,
     signal: AbortSignal,
   ) => Promise<ChannelDescriptor>;
   readonly readPairingStatus: (
@@ -138,6 +172,16 @@ export interface PairingDirectory {
     installableAgents: readonly InstallableAgentDescriptor[],
     signal: AbortSignal,
   ) => Promise<void>;
+}
+
+export class ProjectScopeAccess {
+  readonly projectId: string;
+  readonly tenantId: string;
+
+  constructor(tenantId: string, projectId: string) {
+    this.projectId = projectId;
+    this.tenantId = tenantId;
+  }
 }
 
 export function createRandomToken(byteLength: number): string {

@@ -90,6 +90,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
     .strictObject({
       ...resultEnvelope,
       action: z.enum(["import", "fork"]),
+      targetSessionId: identifier,
       ready: sessionReadyEventSchema,
       history: sessionHistorySchema,
       title: z.string().max(500),
@@ -100,6 +101,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
       ...resultEnvelope,
       action: z.literal("preview"),
       entryId: identifier,
+      targetSessionId: identifier,
       reason: z.literal("continuation_unavailable"),
       history: sessionHistorySchema,
       title: z.string().max(500),

@@ -194,6 +194,11 @@ export class RecordedActivity {
   readonly title: string;
   readonly toolKind: string;
   readonly content: readonly AgentDisplayContent[];
+  readonly detailAvailability:
+    | "available"
+    | "inline"
+    | "truncated"
+    | "unrecorded";
 
   constructor(
     activityId: string,
@@ -207,6 +212,7 @@ export class RecordedActivity {
     title: string,
     toolKind: string,
     content: readonly AgentDisplayContent[] = [],
+    detailAvailability: RecordedActivity["detailAvailability"] = "inline",
   ) {
     this.activityId = activityId;
     this.activityType = activityType;
@@ -219,6 +225,7 @@ export class RecordedActivity {
     this.title = title;
     this.toolKind = toolKind;
     this.content = content;
+    this.detailAvailability = detailAvailability;
   }
 }
 
@@ -307,6 +314,9 @@ export class ChannelConnection {
   readonly channelId: string;
   readonly installableAgents: readonly InstallableAgentOption[];
   readonly machineName: string;
+  readonly hostToken: string;
+  readonly projectId: string;
+  readonly tenantId: string;
   readonly workspaceName: string;
 
   constructor(
@@ -314,12 +324,18 @@ export class ChannelConnection {
     channelId: string,
     machineName: string,
     workspaceName: string,
+    hostToken: string,
+    tenantId: string,
+    projectId: string,
     installableAgents: readonly InstallableAgentOption[] = [],
   ) {
     this.agents = agents;
     this.channelId = channelId;
     this.installableAgents = installableAgents;
     this.machineName = machineName;
+    this.hostToken = hostToken;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }
 }
@@ -516,6 +532,9 @@ export class CreatedPairing {
   readonly pairingCode: string;
   readonly pairingId: string;
   readonly pollToken: string;
+  readonly hostToken: string;
+  readonly projectId: string;
+  readonly tenantId: string;
 
   constructor(
     pairingId: string,
@@ -523,12 +542,18 @@ export class CreatedPairing {
     pollToken: string,
     channelId: string,
     expiresAt: Date,
+    hostToken: string,
+    tenantId: string,
+    projectId: string,
   ) {
     this.pairingId = pairingId;
     this.pairingCode = pairingCode;
     this.pollToken = pollToken;
     this.channelId = channelId;
     this.expiresAt = expiresAt;
+    this.hostToken = hostToken;
+    this.projectId = projectId;
+    this.tenantId = tenantId;
   }
 }
 

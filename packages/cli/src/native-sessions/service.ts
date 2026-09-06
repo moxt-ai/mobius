@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type {
-  NativeSessionCommand,
-  NativeSessionEntry,
-  NativeSessionResult,
-  SessionReadyEvent,
-  WorkspaceEntry,
+import {
+  MOBIUS_PROTOCOL_VERSION,
+  type NativeSessionCommand,
+  type NativeSessionEntry,
+  type NativeSessionResult,
+  type SessionReadyEvent,
+  type WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import {
@@ -95,7 +96,7 @@ export class NativeSessionService {
     ]);
     const envelope = {
       kind: "native.session.result",
-      protocolVersion: 1,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: command.requestId,
       sessionId: command.sessionId,
     } satisfies Pick<
@@ -262,6 +263,7 @@ export class NativeSessionService {
         action: "preview",
         entryId: command.entryId,
         reason: "continuation_unavailable",
+        targetSessionId: command.targetSessionId,
         title: target.info.title ?? "Untitled session",
         history: opened.history,
       };
@@ -277,7 +279,7 @@ export class NativeSessionService {
       directoryId: target.directoryId,
       directoryLabel: target.directoryLabel,
       kind: "session.ready",
-      protocolVersion: 1,
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: command.requestId,
       restored: true,
       sessionId: opened.sessionId,
@@ -292,6 +294,7 @@ export class NativeSessionService {
       ...envelope,
       action: command.action,
       ready,
+      targetSessionId: command.targetSessionId,
       title: target.info.title ?? "Untitled session",
       history: opened.history,
     };

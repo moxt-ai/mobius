@@ -1,6 +1,4 @@
 import {
-  AGENT_ACTIVITY_KIND,
-  AGENT_CONTENT_KIND,
   AGENT_INSTALL_AWAITING_APPROVAL_KIND,
   AGENT_INSTALL_CANCEL_KIND,
   AGENT_INSTALL_CANCELLED_KIND,
@@ -9,9 +7,6 @@ import {
   AGENT_INSTALL_PROGRESS_KIND,
   AGENT_INSTALL_REQUEST_KIND,
   AGENT_INSTALL_STARTED_KIND,
-  AGENT_MESSAGE_DELTA_KIND,
-  decodeAgentActivityEvent,
-  decodeAgentContentEvent,
   decodeAgentInstallAwaitingApprovalEvent,
   decodeAgentInstallCancelCommand,
   decodeAgentInstallCancelledEvent,
@@ -20,77 +15,69 @@ import {
   decodeAgentInstallProgressEvent,
   decodeAgentInstallRequestCommand,
   decodeAgentInstallStartedEvent,
-  decodeAgentMessageDeltaEvent,
   decodeMessageKind,
   decodeNativeSessionCancel,
   decodeNativeSessionCommand,
   decodeNativeSessionResult,
   decodeSessionCancelCommand,
-  decodeSessionCommandsUpdatedEvent,
-  decodeSessionCompletedEvent,
-  decodeSessionConfigUpdatedEvent,
   decodeSessionConfigureCommand,
-  decodeSessionElicitationRequestedEvent,
-  decodeSessionElicitationResolvedEvent,
   decodeSessionElicitationRespondCommand,
-  decodeSessionFailedEvent,
-  decodeSessionInfoUpdatedEvent,
+  decodeSessionEventEnvelope,
   decodeSessionOperationFailedEvent,
-  decodeSessionPermissionRequestedEvent,
-  decodeSessionPermissionResolvedEvent,
   decodeSessionPermissionRespondCommand,
   decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
-  decodeSessionReadyEvent,
-  decodeSessionStartedEvent,
-  decodeSessionUsageUpdatedEvent,
   decodeWorkspaceEntriesEvent,
   decodeWorkspaceListCommand,
-  encodeNativeSessionResult,
+  encodeCommittedSessionEvent,
   encodeRuntimeStatusEvent,
+  encodeSessionEventAcknowledgement,
   encodeSessionFailedEvent,
-  encodeSessionOperationFailedEvent,
   MOBIUS_PROTOCOL_VERSION,
   NATIVE_SESSION_CANCEL_KIND,
   NATIVE_SESSION_REQUEST_KIND,
   NATIVE_SESSION_RESULT_KIND,
+  ProtocolMessageError,
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
-  SESSION_COMMANDS_UPDATED_KIND,
-  SESSION_COMPLETED_KIND,
-  SESSION_CONFIG_UPDATED_KIND,
   SESSION_CONFIGURE_KIND,
-  SESSION_ELICITATION_REQUESTED_KIND,
-  SESSION_ELICITATION_RESOLVED_KIND,
   SESSION_ELICITATION_RESPOND_KIND,
+  SESSION_EVENT_ACK_KIND,
+  SESSION_EVENT_KIND,
   SESSION_FAILED_KIND,
-  SESSION_INFO_UPDATED_KIND,
   SESSION_OPERATION_FAILED_KIND,
-  SESSION_PERMISSION_REQUESTED_KIND,
-  SESSION_PERMISSION_RESOLVED_KIND,
   SESSION_PERMISSION_RESPOND_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
-  SESSION_READY_KIND,
-  SESSION_STARTED_KIND,
-  SESSION_USAGE_UPDATED_KIND,
-  type SessionFailedEvent,
-  type SessionOperationFailedEvent,
   WORKSPACE_ENTRIES_KIND,
   WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-import {
-  type ChannelSessionStore,
-  MemoryChannelSessionStore,
-} from "./channel-session-store.ts";
-import {
-  ChannelHistory,
-  type ChannelTurnStore,
-  CompletedRecordedTurn,
-} from "./channel-turn-store.ts";
 
-const MAX_MESSAGE_LENGTH = 8 * 1024 * 1024;
-const DAEMON_START_TIMEOUT_MILLISECONDS = 15_000;
+import {
+  CreateSessionRequest,
+  type ProjectScope,
+  SessionRecordingPolicy,
+  type SessionRuntime,
+  SessionRuntimeError,
+} from "./session-runtime.ts";
+
+const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
+
+function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
+  if (
+    error.code === "session_busy" ||
+    error.code === "session_quota_exceeded"
+  ) {
+    return 1013;
+  }
+  if (
+    error.code === "session_storage_timeout" ||
+    error.code === "session_storage_unavailable"
+  ) {
+    return 1011;
+  }
+  return 1008;
+}
 
 export interface RelayClock {
   readonly now: () => number;
@@ -113,428 +100,432 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
-  private readonly clock: RelayClock;
-  private readonly peers: ChannelPeers;
-  private readonly runtimeId: string;
-  private readonly sessionStore: ChannelSessionStore;
-  private readonly turnStore: ChannelTurnStore;
+  readonly #clock: RelayClock;
+  readonly #peers: ChannelPeers;
+  readonly #runtime: SessionRuntime;
+  readonly #runtimeId: string;
+  readonly #scope: ProjectScope;
 
   constructor(
     runtimeId: string,
-    turnStore: ChannelTurnStore,
+    scope: ProjectScope,
+    runtime: SessionRuntime,
     peers: ChannelPeers,
     clock: RelayClock = new SystemRelayClock(),
-    sessionStore: ChannelSessionStore = new MemoryChannelSessionStore(),
   ) {
-    this.clock = clock;
-    this.peers = peers;
-    this.runtimeId = runtimeId;
-    this.sessionStore = sessionStore;
-    this.turnStore = turnStore;
+    this.#clock = clock;
+    this.#peers = peers;
+    this.#runtime = runtime;
+    this.#runtimeId = runtimeId;
+    this.#scope = scope;
   }
 
-  readonly attachDaemon = (): void => {
-    this.failActiveTurns(
-      "daemon_reconnected",
-      "The local runtime reconnected before this request finished. Send it again.",
-    );
+  readonly attachDaemon = async (signal: AbortSignal): Promise<void> => {
+    if (this.#peers.daemons().some((socket) => socket.isOpen())) {
+      await this.#runtime.markRuntimeDisconnected(
+        this.#scope,
+        this.#runtimeId,
+        this.#clock.now(),
+        signal,
+      );
+    }
     this.broadcastRuntimeStatus(true);
   };
 
-  readonly attachHost = (socket: ChannelSocket): void => {
-    this.failExpiredPendingTurns();
+  readonly attachHost = (
+    socket: ChannelSocket,
+    _signal: AbortSignal,
+  ): Promise<void> => {
     socket.send(
       encodeRuntimeStatusEvent({
         kind: RUNTIME_STATUS_KIND,
         online: this.hasOnlineDaemon(),
         protocolVersion: MOBIUS_PROTOCOL_VERSION,
-        runtimeId: this.runtimeId,
+        runtimeId: this.#runtimeId,
       }),
     );
+    return Promise.resolve();
   };
 
-  readonly detachDaemon = (socket: ChannelSocket): void => {
-    const anotherDaemonOnline = this.peers
+  readonly detachDaemon = async (
+    socket: ChannelSocket,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const anotherDaemonOnline = this.#peers
       .daemons()
       .some((candidate) => !candidate.isSame(socket) && candidate.isOpen());
-    if (!anotherDaemonOnline) {
-      this.failActiveTurns(
-        "daemon_disconnected",
-        "The local runtime disconnected before this request finished. Send it again.",
-      );
-      this.broadcastRuntimeStatus(false);
+    if (anotherDaemonOnline) {
+      return;
     }
-  };
-
-  readonly readHistory = (): ChannelHistory => {
-    this.failExpiredPendingTurns();
-    return new ChannelHistory(
-      this.runtimeId,
-      this.turnStore.readTurns(),
-      this.sessionStore.readSessions(),
+    await this.#runtime.markRuntimeDisconnected(
+      this.#scope,
+      this.#runtimeId,
+      this.#clock.now(),
+      signal,
     );
+    this.broadcastRuntimeStatus(false);
   };
 
-  readonly receiveDaemonMessage = (
+  readonly receiveDaemonMessage = async (
     socket: ChannelSocket,
     message: unknown,
-  ): void => {
-    if (!this.isValidMessage(message)) {
-      socket.close(1003, "Text message required");
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
+      socket.close(1003, "Bounded text message required");
       return;
     }
-
-    let recordedMessage = message;
-    try {
-      if (decodeMessageKind(message) === NATIVE_SESSION_RESULT_KIND) {
-        const result = decodeNativeSessionResult(message);
-        if (
-          (result.action === "import" || result.action === "fork") &&
-          result.history.status === "available"
-        ) {
-          recordedMessage = encodeNativeSessionResult({
-            ...result,
-            history: {
-              ...result.history,
-              coveredCommandIds: this.turnStore
-                .readTurns()
-                .filter(
-                  (turn) =>
-                    turn.sessionId === result.ready.sessionId &&
-                    turn instanceof CompletedRecordedTurn,
-                )
-                .map((turn) => turn.commandId),
-            },
-          });
-        }
-      }
-      this.recordDaemonMessage(recordedMessage);
-    } catch {
-      socket.close(1008, "Invalid protocol message");
-      return;
-    }
-    this.broadcast(this.peers.hosts(), recordedMessage);
-  };
-
-  readonly receiveHostMessage = (
-    socket: ChannelSocket,
-    message: unknown,
-  ): void => {
-    if (!this.isValidMessage(message)) {
-      socket.close(1003, "Text message required");
-      return;
-    }
-
     try {
       const kind = decodeMessageKind(message);
-      if (kind === NATIVE_SESSION_REQUEST_KIND) {
-        const command = decodeNativeSessionCommand(message);
-        this.receiveControl(message, command.requestId, command.sessionId);
+      if (kind === SESSION_EVENT_KIND) {
+        const envelope = decodeSessionEventEnvelope(message);
+        const result = await this.#runtime.commitEvent(
+          this.#scope,
+          this.#runtimeId,
+          envelope,
+          this.#clock.now(),
+          signal,
+        );
+        socket.send(
+          encodeSessionEventAcknowledgement({
+            cursor: result.committed.cursor,
+            duplicate: result.duplicate,
+            eventId: result.committed.eventId,
+            kind: SESSION_EVENT_ACK_KIND,
+            protocolVersion: MOBIUS_PROTOCOL_VERSION,
+            sequence: result.committed.sequence,
+            sessionId: result.committed.sessionId,
+          }),
+        );
+        if (!result.duplicate) {
+          this.broadcast(
+            this.#peers.hosts(),
+            encodeCommittedSessionEvent(result.committed),
+          );
+        }
         return;
       }
-      if (kind === NATIVE_SESSION_CANCEL_KIND) {
-        const command = decodeNativeSessionCancel(message);
-        this.receiveControl(message, command.requestId, command.sessionId);
+      if (kind === NATIVE_SESSION_RESULT_KIND) {
+        const result = decodeNativeSessionResult(message);
+        if (
+          result.action === "preview" ||
+          ((result.action === "import" || result.action === "fork") &&
+            result.ready.sessionId !== result.targetSessionId)
+        ) {
+          await this.#runtime.deleteSession(
+            this.#scope,
+            result.targetSessionId,
+            this.#clock.now(),
+            signal,
+          );
+        }
+        this.broadcast(this.#peers.hosts(), message);
         return;
       }
+      this.validateDaemonControl(kind, message);
+      this.broadcast(this.#peers.hosts(), message);
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+      if (error instanceof SessionRuntimeError) {
+        socket.close(sessionErrorCloseCode(error), error.code);
+        return;
+      }
+      socket.close(
+        error instanceof ProtocolMessageError ? 1008 : 1011,
+        error instanceof ProtocolMessageError
+          ? "Invalid protocol message"
+          : "Session storage unavailable",
+      );
+    }
+  };
+
+  readonly receiveHostMessage = async (
+    socket: ChannelSocket,
+    message: unknown,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
+      socket.close(1003, "Bounded text message required");
+      return;
+    }
+    try {
+      const kind = decodeMessageKind(message);
       if (kind === SESSION_PROMPT_KIND) {
-        this.receivePrompt(message);
-        return;
-      }
-      if (kind === SESSION_CANCEL_KIND) {
-        this.receiveCancellation(message);
-        return;
-      }
-      if (kind === WORKSPACE_LIST_KIND) {
-        const command = decodeWorkspaceListCommand(message);
-        this.receiveControl(message, command.requestId, "");
+        const command = decodeSessionPromptCommand(message);
+        if (!this.hasOnlineDaemon()) {
+          socket.send(
+            encodeSessionFailedEvent({
+              code: "runtime_offline",
+              commandId: command.commandId,
+              kind: SESSION_FAILED_KIND,
+              message:
+                "The local runtime is offline; the command was not accepted",
+              protocolVersion: MOBIUS_PROTOCOL_VERSION,
+              sessionId: command.sessionId,
+            }),
+          );
+          return;
+        }
+        const acceptance = await this.#runtime.acceptCommand(
+          this.#scope,
+          this.#runtimeId,
+          command,
+          this.#clock.now(),
+          signal,
+        );
+        if (acceptance.kind === "duplicate") {
+          socket.send(
+            encodeSessionFailedEvent({
+              code: `duplicate_${acceptance.state}`,
+              commandId: command.commandId,
+              kind: SESSION_FAILED_KIND,
+              message:
+                "The command was already accepted and was not executed again",
+              protocolVersion: MOBIUS_PROTOCOL_VERSION,
+              sessionId: command.sessionId,
+            }),
+          );
+          return;
+        }
+        if (!this.sendToDaemon(message)) {
+          socket.send(
+            encodeSessionFailedEvent({
+              code: "runtime_offline",
+              commandId: command.commandId,
+              kind: SESSION_FAILED_KIND,
+              message:
+                "The local runtime disconnected before the accepted command could be forwarded",
+              protocolVersion: MOBIUS_PROTOCOL_VERSION,
+              sessionId: command.sessionId,
+            }),
+          );
+          return;
+        }
+        this.broadcast(this.#peers.hosts(), message);
         return;
       }
       if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(message);
-        this.receiveControl(message, command.requestId, command.sessionId);
+        await this.#runtime.createSession(
+          this.#scope,
+          new CreateSessionRequest(
+            command.sessionId,
+            this.#runtimeId,
+            command.agentId,
+            command.bindingId,
+            command.directoryId,
+            new SessionRecordingPolicy(
+              "full",
+              DEFAULT_RETENTION_MILLISECONDS,
+              1_000,
+              6_000_000,
+            ),
+          ),
+          this.#clock.now(),
+          signal,
+        );
+        this.forwardControl(
+          socket,
+          message,
+          command.requestId,
+          command.sessionId,
+        );
         return;
       }
-      if (kind === SESSION_CONFIGURE_KIND) {
-        const command = decodeSessionConfigureCommand(message);
-        this.receiveControl(message, command.requestId, command.sessionId);
+      if (kind === NATIVE_SESSION_REQUEST_KIND) {
+        const command = decodeNativeSessionCommand(message);
+        if (command.action === "import" || command.action === "fork") {
+          await this.#runtime.createSession(
+            this.#scope,
+            new CreateSessionRequest(
+              command.targetSessionId,
+              this.#runtimeId,
+              command.agentId,
+              command.bindingId,
+              command.directoryId,
+              new SessionRecordingPolicy(
+                "full",
+                DEFAULT_RETENTION_MILLISECONDS,
+                1_000,
+                6_000_000,
+              ),
+            ),
+            this.#clock.now(),
+            signal,
+          );
+        }
+        this.forwardControl(
+          socket,
+          message,
+          command.requestId,
+          command.sessionId,
+        );
         return;
       }
-      if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-        const command = decodeSessionPermissionRespondCommand(message);
-        this.receiveControl(message, command.interactionId, command.sessionId);
+      const control = this.validateHostControl(kind, message);
+      this.forwardControl(
+        socket,
+        message,
+        control.requestId,
+        control.sessionId,
+      );
+    } catch (error) {
+      if (signal.aborted) {
+        throw error;
+      }
+      if (error instanceof SessionRuntimeError) {
+        socket.close(sessionErrorCloseCode(error), error.code);
         return;
       }
-      if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-        const command = decodeSessionElicitationRespondCommand(message);
-        this.receiveControl(message, command.interactionId, command.sessionId);
-        return;
-      }
-      if (kind === AGENT_INSTALL_REQUEST_KIND) {
-        const command = decodeAgentInstallRequestCommand(message);
-        this.receiveControl(message, command.requestId, "");
-        return;
-      }
-      if (kind === AGENT_INSTALL_CANCEL_KIND) {
-        const command = decodeAgentInstallCancelCommand(message);
-        this.receiveControl(message, command.requestId, "");
-        return;
-      }
-      throw new Error("Unsupported host message");
-    } catch {
       socket.close(1008, "Invalid protocol message");
     }
   };
 
-  private receivePrompt(message: string): void {
-    const command = decodeSessionPromptCommand(message);
-    this.failExpiredPendingTurns();
-    this.turnStore.recordPrompt(command, this.clock.now());
-    this.broadcast(this.peers.hosts(), message);
-
-    if (this.forwardToDaemon(message)) {
-      return;
+  private readonly validateDaemonControl = (
+    kind: string,
+    message: string,
+  ): void => {
+    switch (kind) {
+      case NATIVE_SESSION_RESULT_KIND:
+        decodeNativeSessionResult(message);
+        return;
+      case WORKSPACE_ENTRIES_KIND:
+        decodeWorkspaceEntriesEvent(message);
+        return;
+      case SESSION_OPERATION_FAILED_KIND:
+        decodeSessionOperationFailedEvent(message);
+        return;
+      case AGENT_INSTALL_AWAITING_APPROVAL_KIND:
+        decodeAgentInstallAwaitingApprovalEvent(message);
+        return;
+      case AGENT_INSTALL_STARTED_KIND:
+        decodeAgentInstallStartedEvent(message);
+        return;
+      case AGENT_INSTALL_PROGRESS_KIND:
+        decodeAgentInstallProgressEvent(message);
+        return;
+      case AGENT_INSTALL_COMPLETED_KIND:
+        decodeAgentInstallCompletedEvent(message);
+        return;
+      case AGENT_INSTALL_FAILED_KIND:
+        decodeAgentInstallFailedEvent(message);
+        return;
+      case AGENT_INSTALL_CANCELLED_KIND:
+        decodeAgentInstallCancelledEvent(message);
+        return;
+      default:
+        throw new ProtocolMessageError("Unsupported daemon message");
     }
+  };
 
-    this.reportRuntimeOffline(command.commandId, command.sessionId);
-  }
-
-  private receiveCancellation(message: string): void {
-    const command = decodeSessionCancelCommand(message);
-    this.failExpiredPendingTurns();
-    this.broadcast(this.peers.hosts(), message);
-
-    if (this.forwardToDaemon(message)) {
-      return;
+  private readonly validateHostControl = (
+    kind: string,
+    message: string,
+  ): { readonly requestId: string; readonly sessionId: string } => {
+    switch (kind) {
+      case NATIVE_SESSION_REQUEST_KIND: {
+        const command = decodeNativeSessionCommand(message);
+        return { requestId: command.requestId, sessionId: command.sessionId };
+      }
+      case NATIVE_SESSION_CANCEL_KIND: {
+        const command = decodeNativeSessionCancel(message);
+        return { requestId: command.requestId, sessionId: command.sessionId };
+      }
+      case SESSION_CANCEL_KIND: {
+        const command = decodeSessionCancelCommand(message);
+        return { requestId: command.commandId, sessionId: command.sessionId };
+      }
+      case WORKSPACE_LIST_KIND: {
+        const command = decodeWorkspaceListCommand(message);
+        return { requestId: command.requestId, sessionId: "" };
+      }
+      case SESSION_CONFIGURE_KIND: {
+        const command = decodeSessionConfigureCommand(message);
+        return { requestId: command.requestId, sessionId: command.sessionId };
+      }
+      case SESSION_PERMISSION_RESPOND_KIND: {
+        const command = decodeSessionPermissionRespondCommand(message);
+        return {
+          requestId: command.interactionId,
+          sessionId: command.sessionId,
+        };
+      }
+      case SESSION_ELICITATION_RESPOND_KIND: {
+        const command = decodeSessionElicitationRespondCommand(message);
+        return {
+          requestId: command.interactionId,
+          sessionId: command.sessionId,
+        };
+      }
+      case AGENT_INSTALL_REQUEST_KIND: {
+        const command = decodeAgentInstallRequestCommand(message);
+        return { requestId: command.requestId, sessionId: "" };
+      }
+      case AGENT_INSTALL_CANCEL_KIND: {
+        const command = decodeAgentInstallCancelCommand(message);
+        return { requestId: command.requestId, sessionId: "" };
+      }
+      default:
+        throw new ProtocolMessageError("Unsupported host message");
     }
+  };
 
-    this.reportRuntimeOffline(command.commandId, command.sessionId);
-  }
-
-  private receiveControl(
+  private readonly forwardControl = (
+    socket: ChannelSocket,
     message: string,
     requestId: string,
     sessionId: string,
-  ): void {
-    this.broadcast(this.peers.hosts(), message);
-    if (this.forwardToDaemon(message)) {
+  ): void => {
+    if (!this.sendToDaemon(message)) {
+      socket.send(
+        encodeSessionFailedEvent({
+          code: "runtime_offline",
+          commandId: requestId,
+          kind: SESSION_FAILED_KIND,
+          message: "The local runtime is offline",
+          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          sessionId: sessionId.length === 0 ? "runtime" : sessionId,
+        }),
+      );
       return;
     }
-    const failure: SessionOperationFailedEvent = {
-      code: "runtime_offline",
-      kind: SESSION_OPERATION_FAILED_KIND,
-      message: "The local runtime is offline",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
-      requestId,
-      sessionId,
-    };
+    this.broadcast(this.#peers.hosts(), message);
+  };
+
+  private readonly sendToDaemon = (message: string): boolean => {
+    const daemon = this.#peers.daemons().find((socket) => socket.isOpen());
+    if (daemon === undefined) {
+      return false;
+    }
+    daemon.send(message);
+    return true;
+  };
+
+  private readonly hasOnlineDaemon = (): boolean =>
+    this.#peers.daemons().some((socket) => socket.isOpen());
+
+  private readonly broadcastRuntimeStatus = (online: boolean): void => {
     this.broadcast(
-      this.peers.hosts(),
-      encodeSessionOperationFailedEvent(failure),
+      this.#peers.hosts(),
+      encodeRuntimeStatusEvent({
+        kind: RUNTIME_STATUS_KIND,
+        online,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        runtimeId: this.#runtimeId,
+      }),
     );
-  }
+  };
 
-  private forwardToDaemon(message: string): boolean {
-    for (const daemon of this.peers.daemons()) {
-      if (daemon.isOpen()) {
-        daemon.send(message);
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private failActiveTurns(code: string, message: string): void {
-    const failures = this.turnStore.failActive(code, message, this.clock.now());
-    this.publishFailures(failures);
-  }
-
-  private failExpiredPendingTurns(): void {
-    const now = this.clock.now();
-    const failures = this.turnStore.failPendingBefore(
-      now - DAEMON_START_TIMEOUT_MILLISECONDS,
-      "daemon_start_timeout",
-      "The local runtime did not acknowledge this request in time. Send it again.",
-      now,
-    );
-    this.publishFailures(failures);
-  }
-
-  private publishFailures(failures: readonly SessionFailedEvent[]): void {
-    this.sessionStore.clearInteractionsForCommands(
-      failures.map((failure) => failure.commandId),
-    );
-    for (const failure of failures) {
-      this.broadcast(this.peers.hosts(), encodeSessionFailedEvent(failure));
-    }
-  }
-
-  private reportRuntimeOffline(commandId: string, sessionId: string): void {
-    const failure: SessionFailedEvent = {
-      code: "runtime_offline",
-      commandId,
-      kind: SESSION_FAILED_KIND,
-      message: "The local runtime is offline",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
-      sessionId,
-    };
-    try {
-      this.turnStore.fail(failure, this.clock.now());
-    } catch {
-      // A stale cancellation must not affect another or already-finished turn.
-    }
-    this.broadcast(this.peers.hosts(), encodeSessionFailedEvent(failure));
-  }
-
-  private broadcast(sockets: readonly ChannelSocket[], message: string): void {
+  private readonly broadcast = (
+    sockets: readonly ChannelSocket[],
+    message: string,
+  ): void => {
     for (const socket of sockets) {
       if (socket.isOpen()) {
         socket.send(message);
       }
     }
-  }
-
-  private broadcastRuntimeStatus(online: boolean): void {
-    this.broadcast(
-      this.peers.hosts(),
-      encodeRuntimeStatusEvent({
-        kind: RUNTIME_STATUS_KIND,
-        online,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
-        runtimeId: this.runtimeId,
-      }),
-    );
-  }
-
-  private hasOnlineDaemon(): boolean {
-    return this.peers.daemons().some((socket) => socket.isOpen());
-  }
-
-  private isValidMessage(message: unknown): message is string {
-    return typeof message === "string" && message.length <= MAX_MESSAGE_LENGTH;
-  }
-
-  private recordDaemonMessage(message: string): void {
-    const kind = decodeMessageKind(message);
-    const now = this.clock.now();
-    if (kind === NATIVE_SESSION_RESULT_KIND) {
-      const result = decodeNativeSessionResult(message);
-      if (result.action === "import" || result.action === "fork") {
-        this.sessionStore.recordReady(result.ready, result.history);
-        this.sessionStore.recordInfo({
-          kind: SESSION_INFO_UPDATED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
-          sessionId: result.ready.sessionId,
-          title: result.title,
-          updatedAt: "",
-        });
-      } else if (result.action === "delete") {
-        this.sessionStore.removeSessions(result.deletedSessionIds);
-      }
-      return;
-    }
-    if (kind === SESSION_STARTED_KIND) {
-      this.turnStore.markStarted(decodeSessionStartedEvent(message), now);
-      return;
-    }
-    if (kind === AGENT_MESSAGE_DELTA_KIND) {
-      this.turnStore.appendDelta(decodeAgentMessageDeltaEvent(message), now);
-      return;
-    }
-    if (kind === AGENT_ACTIVITY_KIND) {
-      this.turnStore.recordActivity(decodeAgentActivityEvent(message), now);
-      return;
-    }
-    if (kind === AGENT_CONTENT_KIND) {
-      this.turnStore.recordContent(decodeAgentContentEvent(message), now);
-      return;
-    }
-    if (kind === SESSION_COMPLETED_KIND) {
-      this.turnStore.complete(decodeSessionCompletedEvent(message), now);
-      return;
-    }
-    if (kind === SESSION_FAILED_KIND) {
-      this.turnStore.fail(decodeSessionFailedEvent(message), now);
-      return;
-    }
-    if (kind === SESSION_READY_KIND) {
-      this.sessionStore.recordReady(decodeSessionReadyEvent(message));
-      return;
-    }
-    if (kind === SESSION_CONFIG_UPDATED_KIND) {
-      this.sessionStore.recordConfig(decodeSessionConfigUpdatedEvent(message));
-      return;
-    }
-    if (kind === SESSION_COMMANDS_UPDATED_KIND) {
-      this.sessionStore.recordCommands(
-        decodeSessionCommandsUpdatedEvent(message),
-      );
-      return;
-    }
-    if (kind === SESSION_INFO_UPDATED_KIND) {
-      this.sessionStore.recordInfo(decodeSessionInfoUpdatedEvent(message));
-      return;
-    }
-    if (kind === SESSION_USAGE_UPDATED_KIND) {
-      this.sessionStore.recordUsage(decodeSessionUsageUpdatedEvent(message));
-      return;
-    }
-    if (kind === SESSION_PERMISSION_REQUESTED_KIND) {
-      this.sessionStore.recordPermission(
-        decodeSessionPermissionRequestedEvent(message),
-      );
-      return;
-    }
-    if (kind === SESSION_PERMISSION_RESOLVED_KIND) {
-      this.sessionStore.resolvePermission(
-        decodeSessionPermissionResolvedEvent(message),
-      );
-      return;
-    }
-    if (kind === SESSION_ELICITATION_REQUESTED_KIND) {
-      this.sessionStore.recordElicitation(
-        decodeSessionElicitationRequestedEvent(message),
-      );
-      return;
-    }
-    if (kind === SESSION_ELICITATION_RESOLVED_KIND) {
-      this.sessionStore.resolveElicitation(
-        decodeSessionElicitationResolvedEvent(message),
-      );
-      return;
-    }
-    if (kind === WORKSPACE_ENTRIES_KIND) {
-      decodeWorkspaceEntriesEvent(message);
-      return;
-    }
-    if (kind === SESSION_OPERATION_FAILED_KIND) {
-      decodeSessionOperationFailedEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_AWAITING_APPROVAL_KIND) {
-      decodeAgentInstallAwaitingApprovalEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_STARTED_KIND) {
-      decodeAgentInstallStartedEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_PROGRESS_KIND) {
-      decodeAgentInstallProgressEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_COMPLETED_KIND) {
-      decodeAgentInstallCompletedEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_FAILED_KIND) {
-      decodeAgentInstallFailedEvent(message);
-      return;
-    }
-    if (kind === AGENT_INSTALL_CANCELLED_KIND) {
-      decodeAgentInstallCancelledEvent(message);
-      return;
-    }
-    throw new Error("Unsupported daemon message");
-  }
+  };
 }

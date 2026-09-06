@@ -14,6 +14,7 @@ import type {
   NativeSessionCommand,
   NativeSessionEntry,
 } from "@moxt-ai/mobius-protocol";
+import { MOBIUS_PROTOCOL_VERSION } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpSessionManager,
@@ -93,7 +94,7 @@ async function fixture(
     bindingId: "workspace",
     directoryId: "default",
     kind: "native.session.request",
-    protocolVersion: 1,
+    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     requestId: "native-operation",
     sessionId: "browser",
   } satisfies Omit<NativeSessionCommand, "action">;

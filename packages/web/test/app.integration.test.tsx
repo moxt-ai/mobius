@@ -2,6 +2,7 @@ import {
   decodeMessageKind,
   decodeNativeSessionCommand,
   decodeSessionElicitationRespondCommand,
+  decodeSessionEventAcknowledgement,
   decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
   encodeAgentActivityEvent,
@@ -10,12 +11,16 @@ import {
   encodeSessionCompletedEvent,
   encodeSessionElicitationRequestedEvent,
   encodeSessionElicitationResolvedEvent,
+  encodeSessionEventEnvelope,
   encodeSessionReadyEvent,
   encodeSessionStartedEvent,
   encodeSessionUsageUpdatedEvent,
   MOBIUS_PROTOCOL_VERSION,
   NATIVE_SESSION_REQUEST_KIND,
   SESSION_ELICITATION_RESPOND_KIND,
+  SESSION_EVENT_ACK_KIND,
+  SESSION_EVENT_FORMAT_VERSION,
+  SESSION_EVENT_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
   type SessionPrepareCommand,
@@ -35,7 +40,11 @@ import { closeMobiusTransport } from "@/services/mobius-transport";
 import { type LocalRelay, startLocalRelay } from "./relay-harness.ts";
 
 interface CreatedPairing {
+  readonly channelId: string;
+  readonly hostToken: string;
   readonly pairingCode: string;
+  readonly projectId: string;
+  readonly tenantId: string;
 }
 
 interface ClaimedPairing {
@@ -54,10 +63,23 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 }
 
 function decodeCreatedPairing(value: unknown): CreatedPairing {
-  if (!isRecord(value) || typeof value["pairingCode"] !== "string") {
+  if (
+    !isRecord(value) ||
+    typeof value["channelId"] !== "string" ||
+    typeof value["hostToken"] !== "string" ||
+    typeof value["pairingCode"] !== "string" ||
+    typeof value["projectId"] !== "string" ||
+    typeof value["tenantId"] !== "string"
+  ) {
     throw new Error("The relay returned invalid browser pairing credentials");
   }
-  return { pairingCode: value["pairingCode"] };
+  return {
+    channelId: value["channelId"],
+    hostToken: value["hostToken"],
+    pairingCode: value["pairingCode"],
+    projectId: value["projectId"],
+    tenantId: value["tenantId"],
+  };
 }
 
 function decodeClaimedPairing(value: unknown): ClaimedPairing {
@@ -187,10 +209,40 @@ class StatefulDaemon {
   readonly send = (message: string): void => {
     this.#socket.send(message);
   };
+
+  readonly sendSessionEvent = async (
+    sessionId: string,
+    payload: string,
+  ): Promise<void> => {
+    const eventId = crypto.randomUUID();
+    this.#socket.send(
+      encodeSessionEventEnvelope({
+        eventId,
+        eventVersion: SESSION_EVENT_FORMAT_VERSION,
+        kind: SESSION_EVENT_KIND,
+        payload,
+        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        sessionId,
+      }),
+    );
+    const acknowledgement = decodeSessionEventAcknowledgement(
+      await this.receive(SESSION_EVENT_ACK_KIND),
+    );
+    if (
+      acknowledgement.eventId !== eventId ||
+      acknowledgement.sessionId !== sessionId ||
+      acknowledgement.duplicate
+    ) {
+      throw new Error(
+        "The relay returned an invalid session event acknowledgement",
+      );
+    }
+  };
 }
 
 async function pairDaemon(): Promise<{
   readonly channelId: string;
+  readonly credential: CreatedPairing;
   readonly daemon: StatefulDaemon;
 }> {
   const createdResponse = await fetch(
@@ -223,15 +275,32 @@ async function pairDaemon(): Promise<{
   daemonUrl.searchParams.set("token", claimed.daemonToken);
   return {
     channelId: claimed.channelId,
+    credential: created,
     daemon: await StatefulDaemon.connect(daemonUrl),
   };
 }
 
-function sendReadySession(
+function saveBrowserCredential(
+  channelId: string,
+  credential: CreatedPairing,
+): void {
+  expect(credential.channelId).toBe(channelId);
+  window.localStorage.setItem(
+    `mobius:channel-credential:${channelId}`,
+    JSON.stringify({
+      hostToken: credential.hostToken,
+      projectId: credential.projectId,
+      tenantId: credential.tenantId,
+    }),
+  );
+}
+
+async function sendReadySession(
   daemon: StatefulDaemon,
   prepare: SessionPrepareCommand,
-): void {
-  daemon.send(
+): Promise<void> {
+  await daemon.sendSessionEvent(
+    prepare.sessionId,
     encodeSessionReadyEvent({
       additionalDirectories: [],
       agentId: prepare.agentId,
@@ -260,6 +329,57 @@ function sendReadySession(
       sessionId: prepare.sessionId,
     }),
   );
+}
+
+async function completeRenderedPrompt(
+  daemon: StatefulDaemon,
+  promptText: string,
+  responseText: string,
+): Promise<void> {
+  const promptInput = await screen.findByRole("textbox", {
+    name: "Message the local agent",
+  });
+  await waitFor(() => {
+    expect(promptInput.getAttribute("placeholder")).toContain(
+      "Ask the local agent",
+    );
+  });
+  fireEvent.change(promptInput, { target: { value: promptText } });
+  fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+  const prompt = decodeSessionPromptCommand(
+    await daemon.receive(SESSION_PROMPT_KIND),
+  );
+  await daemon.sendSessionEvent(
+    prompt.sessionId,
+    encodeSessionStartedEvent({
+      commandId: prompt.commandId,
+      kind: "session.started",
+      processAttemptId: crypto.randomUUID(),
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId: prompt.sessionId,
+    }),
+  );
+  await daemon.sendSessionEvent(
+    prompt.sessionId,
+    encodeAgentMessageDeltaEvent({
+      commandId: prompt.commandId,
+      kind: "agent.message.delta",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId: prompt.sessionId,
+      text: responseText,
+    }),
+  );
+  await daemon.sendSessionEvent(
+    prompt.sessionId,
+    encodeSessionCompletedEvent({
+      commandId: prompt.commandId,
+      kind: "session.completed",
+      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      sessionId: prompt.sessionId,
+      stopReason: "end_turn",
+    }),
+  );
+  await screen.findByText(responseText);
 }
 
 type RelayState =
@@ -291,13 +411,14 @@ describe.sequential("Web application boundaries", () => {
       `/channels/${encodeURIComponent(paired.channelId)}`,
     );
     window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
     render(<App />);
 
     try {
       const prepare = decodeSessionPrepareCommand(
         await paired.daemon.receive(SESSION_PREPARE_KIND),
       );
-      sendReadySession(paired.daemon, prepare);
+      await sendReadySession(paired.daemon, prepare);
 
       const promptInput = await screen.findByRole("textbox", {
         name: "Message the local agent",
@@ -319,7 +440,8 @@ describe.sequential("Web application boundaries", () => {
         prompt: "Review the integration boundary",
         sessionId: prepare.sessionId,
       });
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeSessionStartedEvent({
           commandId: prompt.commandId,
           kind: "session.started",
@@ -329,7 +451,8 @@ describe.sequential("Web application boundaries", () => {
         }),
       );
 
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeSessionElicitationRequestedEvent({
           accepted: false,
           commandId: prompt.commandId,
@@ -409,7 +532,8 @@ describe.sequential("Web application boundaries", () => {
         interactionId: "form-interaction",
         sessionId: prepare.sessionId,
       });
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        response.sessionId,
         encodeSessionElicitationResolvedEvent({
           action: "accept",
           interactionId: response.interactionId,
@@ -423,12 +547,14 @@ describe.sequential("Web application boundaries", () => {
           screen.queryByRole("dialog", { name: "Agent information request" }),
         ).toBeNull();
       });
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeAgentActivityEvent({
           activityId: "tool-1",
           activityType: "tool",
           commandId: prompt.commandId,
           content: [],
+          detail: { kind: "unrecorded" },
           input: '{"path":"package.json"}',
           kind: "agent.activity",
           locations: ["package.json"],
@@ -442,7 +568,8 @@ describe.sequential("Web application boundaries", () => {
           toolKind: "read",
         }),
       );
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeAgentMessageDeltaEvent({
           commandId: prompt.commandId,
           kind: "agent.message.delta",
@@ -451,7 +578,8 @@ describe.sequential("Web application boundaries", () => {
           text: "Completed **safely**. [unsafe](javascript:alert(1)) <script>alert(1)</script>",
         }),
       );
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeSessionUsageUpdatedEvent({
           costAmount: 0.25,
           costCurrency: "USD",
@@ -464,7 +592,8 @@ describe.sequential("Web application boundaries", () => {
           used: 50_000,
         }),
       );
-      paired.daemon.send(
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
         encodeSessionCompletedEvent({
           commandId: prompt.commandId,
           kind: "session.completed",
@@ -503,13 +632,14 @@ describe.sequential("Web application boundaries", () => {
       `/channels/${encodeURIComponent(paired.channelId)}`,
     );
     window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
     render(<App />);
 
     try {
       const prepare = decodeSessionPrepareCommand(
         await paired.daemon.receive(SESSION_PREPARE_KIND),
       );
-      sendReadySession(paired.daemon, prepare);
+      await sendReadySession(paired.daemon, prepare);
       await screen.findByRole("textbox", {
         name: "Message the local agent",
       });
@@ -575,6 +705,9 @@ describe.sequential("Web application boundaries", () => {
         action: "import",
         entryId: "saved-session",
       });
+      if (previewRequest.action !== "import") {
+        throw new Error("Expected an import request for session preview");
+      }
       const imageData =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
       paired.daemon.send(
@@ -602,6 +735,7 @@ describe.sequential("Web application boundaries", () => {
           reason: "continuation_unavailable",
           requestId: previewRequest.requestId,
           sessionId: previewRequest.sessionId,
+          targetSessionId: previewRequest.targetSessionId,
           title: "Saved integration conversation",
         }),
       );
@@ -621,6 +755,77 @@ describe.sequential("Web application boundaries", () => {
         `data:image/png;base64,${imageData}`,
       );
       expect(history.querySelector('img[src^="http"]')).toBeNull();
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given several persisted conversations, When the Web app reloads, Then the newest conversation stays first and active", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const olderPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, olderPreparation);
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Older persisted prompt",
+        "OLDER-RESPONSE",
+      );
+
+      fireEvent.click(
+        within(
+          screen.getByRole("complementary", {
+            name: "Conversation sidebar",
+          }),
+        ).getByRole("button", { name: /New chat.*⌘ N/ }),
+      );
+      const newerPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, newerPreparation);
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Newest persisted prompt",
+        "NEWEST-RESPONSE",
+      );
+
+      cleanup();
+      await closeMobiusTransport();
+      render(<App />);
+      const resumedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, resumedPreparation);
+
+      const conversations = await screen.findByRole("navigation", {
+        name: "Conversations",
+      });
+      await waitFor(() => {
+        const conversationButtons =
+          within(conversations).getAllByRole("button");
+        expect(conversationButtons).toHaveLength(2);
+        expect(conversationButtons[0]?.textContent).toContain(
+          "Newest persisted prompt",
+        );
+        expect(conversationButtons[1]?.textContent).toContain(
+          "Older persisted prompt",
+        );
+      });
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toContain(
+        "Newest persisted prompt",
+      );
     } finally {
       cleanup();
       await closeMobiusTransport();

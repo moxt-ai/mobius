@@ -14,12 +14,28 @@ import {
   Terminal,
   Wrench,
 } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { AgentRichContent } from "@/components/agent-rich-content";
 import type { RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
 import { describeAgentActivities } from "@/services/activity-presentation";
+import {
+  type ActivityDetailResult,
+  readActivityDetail,
+} from "@/services/pairing-api";
+
+type ActivityDetailLoadState =
+  | { readonly kind: "idle" }
+  | { readonly kind: "loading" }
+  | { readonly detail: ActivityDetailResult; readonly kind: "loaded" }
+  | { readonly kind: "failed"; readonly message: string };
 
 function activityIcon(activity: RecordedActivity): ReactNode {
   if (activity.activityType === "reasoning") {
@@ -92,7 +108,17 @@ function ActivityText({ children }: { readonly children: string }) {
   );
 }
 
-function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
+function ToolDetails({
+  activity,
+  detail,
+}: {
+  readonly activity: RecordedActivity;
+  readonly detail: ActivityDetailResult | null;
+}) {
+  const available = detail?.kind === "available" ? detail : null;
+  const input = available?.input ?? activity.input;
+  const output = available?.output ?? activity.output;
+  const content = available?.content ?? activity.content;
   return (
     <div className="mt-1 ml-[7px] grid gap-2 border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
       {activity.locations.length > 0 && (
@@ -109,63 +135,185 @@ function ToolDetails({ activity }: { readonly activity: RecordedActivity }) {
           </ul>
         </div>
       )}
-      {activity.input.length > 0 && (
+      {input.length > 0 && (
         <div>
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Input
           </p>
-          <ActivityText>{activity.input}</ActivityText>
+          <ActivityText>{input}</ActivityText>
         </div>
       )}
-      {activity.output.length > 0 && (
+      {output.length > 0 && (
         <div>
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Output
           </p>
-          <ActivityText>{activity.output}</ActivityText>
+          <ActivityText>{output}</ActivityText>
         </div>
       )}
-      <AgentRichContent contents={activity.content} />
+      <AgentRichContent contents={content} />
     </div>
   );
 }
 
 function NarrativeDetails({
   activity,
+  detail,
 }: {
   readonly activity: RecordedActivity;
+  readonly detail: ActivityDetailResult | null;
 }) {
-  if (activity.output.length === 0 && activity.content.length === 0) {
+  const available = detail?.kind === "available" ? detail : null;
+  const output = available?.output ?? activity.output;
+  const content = available?.content ?? activity.content;
+  if (output.length === 0 && content.length === 0) {
     return null;
   }
   return (
     <div className="mt-1 ml-[7px] border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
-      {activity.output.length > 0 && (
-        <ActivityText>{activity.output}</ActivityText>
-      )}
-      <AgentRichContent contents={activity.content} />
+      {output.length > 0 && <ActivityText>{output}</ActivityText>}
+      <AgentRichContent contents={content} />
     </div>
+  );
+}
+
+function DetailAvailability({
+  load,
+  onRetry,
+}: {
+  readonly load: ActivityDetailLoadState;
+  readonly onRetry: () => void;
+}) {
+  if (load.kind === "idle") {
+    return null;
+  }
+  if (load.kind === "loading") {
+    return (
+      <p
+        aria-live="polite"
+        className="mt-2 ml-[29px] inline-flex items-center gap-1.5 text-[11px] text-copy-tertiary"
+        role="status"
+      >
+        <LoaderCircle className="size-3 animate-spin motion-reduce:animate-none" />
+        Loading full details…
+      </p>
+    );
+  }
+  if (load.kind === "failed") {
+    return (
+      <div
+        className="mt-2 ml-[29px] flex items-center gap-2 text-[11px] text-destructive"
+        role="alert"
+      >
+        <span>{load.message}</span>
+        <button
+          className="min-h-11 rounded px-2 font-medium underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
+          onClick={onRetry}
+          type="button"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  const detail = load.detail;
+  if (detail.kind === "available") {
+    return null;
+  }
+  const message =
+    detail.kind === "truncated"
+      ? `Full details were truncated at capture time (${detail.capturedBytes.toLocaleString()} of ${detail.originalBytes.toLocaleString()} bytes retained).`
+      : detail.kind === "unrecorded"
+        ? "Full details were not recorded for this activity."
+        : `Full details were deleted on ${detail.deletedAt.toLocaleString()}.`;
+  return (
+    <p
+      className="mt-2 ml-[29px] text-[11px] leading-[18px] text-copy-tertiary"
+      role="status"
+    >
+      {message}
+    </p>
   );
 }
 
 function ActivityLine({
   activity,
+  channelId,
+  sessionId,
   streaming,
 }: {
   readonly activity: RecordedActivity;
+  readonly channelId: string;
+  readonly sessionId: string;
   readonly streaming: boolean;
 }) {
   const [open, setOpen] = useState(activity.status === "failed");
+  const [detailLoad, setDetailLoad] = useState<ActivityDetailLoadState>({
+    kind: "idle",
+  });
+  const detailController = useRef<AbortController | null>(null);
+  const detailLoadKind = useRef<ActivityDetailLoadState["kind"]>("idle");
+  const loadDetails = useCallback((): void => {
+    if (
+      activity.detailAvailability === "inline" ||
+      detailLoadKind.current === "loading" ||
+      detailLoadKind.current === "loaded"
+    ) {
+      return;
+    }
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    detailLoadKind.current = "loading";
+    setDetailLoad({ kind: "loading" });
+    void readActivityDetail(
+      channelId,
+      sessionId,
+      activity.activityId,
+      controller.signal,
+    ).then(
+      (detail) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        detailLoadKind.current = "loaded";
+        setDetailLoad({ detail, kind: "loaded" });
+      },
+      (error: unknown) => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        detailLoadKind.current = "failed";
+        setDetailLoad({
+          kind: "failed",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Full details could not be loaded.",
+        });
+      },
+    );
+  }, [activity.activityId, activity.detailAvailability, channelId, sessionId]);
+  useEffect(() => {
+    return () => detailController.current?.abort();
+  }, []);
   useEffect(() => {
     if (activity.status === "failed") {
       setOpen(true);
     }
   }, [activity.status]);
+  useEffect(() => {
+    if (open) {
+      loadDetails();
+    }
+  }, [loadDetails, open]);
   const hasDetails =
     activity.input.length > 0 ||
     activity.output.length > 0 ||
     activity.locations.length > 0 ||
-    activity.content.length > 0;
+    activity.content.length > 0 ||
+    activity.detailAvailability !== "inline";
+  const loadedDetail = detailLoad.kind === "loaded" ? detailLoad.detail : null;
   const summary = (
     <span className="flex min-w-0 flex-1 items-center gap-2">
       <span
@@ -224,19 +372,24 @@ function ActivityLine({
         <ChevronRight className="size-3 shrink-0 text-copy-tertiary transition-transform duration-150 motion-reduce:transition-none group-open/activity:rotate-90" />
       </summary>
       {activity.activityType === "tool" ? (
-        <ToolDetails activity={activity} />
+        <ToolDetails activity={activity} detail={loadedDetail} />
       ) : (
-        <NarrativeDetails activity={activity} />
+        <NarrativeDetails activity={activity} detail={loadedDetail} />
       )}
+      <DetailAvailability load={detailLoad} onRetry={loadDetails} />
     </details>
   );
 }
 
 export function AgentActivityList({
   activities,
+  channelId,
+  sessionId,
   streaming,
 }: {
   readonly activities: readonly RecordedActivity[];
+  readonly channelId: string;
+  readonly sessionId: string;
   readonly streaming: boolean;
 }) {
   const initialPresentation = describeAgentActivities(activities, streaming);
@@ -286,7 +439,9 @@ export function AgentActivityList({
         {activities.map((activity) => (
           <ActivityLine
             activity={activity}
-            key={activity.activityId}
+            channelId={channelId}
+            key={`${sessionId}:${activity.activityId}`}
+            sessionId={sessionId}
             streaming={streaming}
           />
         ))}
