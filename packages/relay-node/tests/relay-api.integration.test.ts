@@ -5,6 +5,8 @@ import { join } from "node:path";
 import {
   AGENT_ACTIVITY_KIND,
   AGENT_MESSAGE_DELTA_KIND,
+  MOBIUS_API_PREFIX,
+  MobiusApiConfigurationError,
   type RecordedSessionEvent,
   SESSION_COMPLETED_KIND,
   SESSION_EVENT_KIND,
@@ -213,7 +215,7 @@ async function createSession(
   sessionId: string,
 ): Promise<Response> {
   return await relay.fetch(
-    authorized(`/mobius/api/projects/${scope.projectId}/sessions`, {
+    authorized(`${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions`, {
       body: JSON.stringify({
         agentId: "codex",
         bindingId: "workspace",
@@ -249,22 +251,25 @@ afterEach(async () => {
 });
 
 describe("Node public Relay API", () => {
-  it("Given a host-provided Mobius environment, When the host resolves the application, Then it can serve Relay requests", async () => {
+  it("Given a host-provided API prefix, When the host resolves the application, Then it serves Relay requests below that prefix", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-node-application-"));
     createdDirectories.push(directory);
     const sessionRuntime = new NodeSessionRuntime(
       join(directory, "relay.sqlite"),
       join(directory, "content"),
     );
-    const injector = createMobiusApplication({
-      channelRuntime: new InertChannelRuntime(),
-      pairingDirectory: new ScopedPairingDirectory(),
-      sessionRuntime,
-    });
+    const injector = createMobiusApplication(
+      {
+        channelRuntime: new InertChannelRuntime(),
+        pairingDirectory: new ScopedPairingDirectory(),
+        sessionRuntime,
+      },
+      "/configured/api",
+    );
     const application = injector.resolve("application");
 
     const response = await application.fetch(
-      new Request("https://node.relay.test/mobius/api/health"),
+      new Request("https://node.relay.test/configured/api/health"),
     );
 
     expect(response.status).toBe(200);
@@ -272,6 +277,33 @@ describe("Node public Relay API", () => {
       service: "mobius-relay",
       status: "ok",
     });
+    expect(
+      (
+        await application.fetch(
+          new Request(`https://node.relay.test${MOBIUS_API_PREFIX}/health`),
+        )
+      ).status,
+    ).toBe(404);
+    sessionRuntime.close();
+  });
+
+  it("Given an invalid API prefix, When the host configures the application, Then it rejects the configuration before serving requests", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-node-application-"));
+    createdDirectories.push(directory);
+    const sessionRuntime = new NodeSessionRuntime(
+      join(directory, "relay.sqlite"),
+      join(directory, "content"),
+    );
+    expect(() =>
+      createMobiusApplication(
+        {
+          channelRuntime: new InertChannelRuntime(),
+          pairingDirectory: new ScopedPairingDirectory(),
+          sessionRuntime,
+        },
+        "configured/api",
+      ),
+    ).toThrowError(MobiusApiConfigurationError);
     sessionRuntime.close();
   });
 
@@ -351,7 +383,9 @@ describe("Node public Relay API", () => {
     await relay.sessionRuntime.runArchiveWork(scope, sessionId, signal);
 
     const directoryPage = await relay.fetch(
-      authorized(`/mobius/api/projects/${scope.projectId}/sessions?limit=1`),
+      authorized(
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions?limit=1`,
+      ),
     );
     await expect(directoryPage.json()).resolves.toMatchObject({
       nextCursor: expect.any(String),
@@ -359,7 +393,7 @@ describe("Node public Relay API", () => {
     });
     const messages = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/messages?limit=1`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/messages?limit=1`,
       ),
     );
     await expect(messages.json()).resolves.toMatchObject({
@@ -376,7 +410,7 @@ describe("Node public Relay API", () => {
 
     const firstEvents = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/events?limit=1`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/events?limit=1`,
       ),
     );
     const firstPage: unknown = await firstEvents.json();
@@ -394,7 +428,7 @@ describe("Node public Relay API", () => {
     }
     const catchup = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/events?limit=10&cursor=${encodeURIComponent(firstPage.cursor)}`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/events?limit=10&cursor=${encodeURIComponent(firstPage.cursor)}`,
       ),
     );
     await expect(catchup.json()).resolves.toMatchObject({
@@ -407,7 +441,7 @@ describe("Node public Relay API", () => {
     });
     const detail = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/attempts/node-attempt/tool-calls/node-activity`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/attempts/node-attempt/tool-calls/node-activity`,
       ),
     );
     await expect(detail.json()).resolves.toMatchObject({
@@ -418,14 +452,14 @@ describe("Node public Relay API", () => {
 
     const unauthorized = await relay.fetch(
       new Request(
-        `https://node.relay.test/mobius/api/projects/${scope.projectId}/sessions`,
+        `https://node.relay.test${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions`,
         { headers: { authorization: `Bearer ${"z".repeat(32)}` } },
       ),
     );
     expect(unauthorized.status).toBe(401);
     const invalidCursor = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/events?cursor=invalid`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/events?cursor=invalid`,
       ),
     );
     expect(invalidCursor.status).toBe(400);
@@ -433,7 +467,7 @@ describe("Node public Relay API", () => {
       error: { code: "invalid_cursor" },
     });
     const oversizedBody = await relay.fetch(
-      authorized(`/mobius/api/projects/${scope.projectId}/sessions`, {
+      authorized(`${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions`, {
         body: JSON.stringify({ padding: "😀".repeat(5_000) }),
         headers: { "content-type": "application/json" },
         method: "POST",
@@ -449,7 +483,7 @@ describe("Node public Relay API", () => {
 
     const deleted = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}`,
         {
           method: "DELETE",
         },
@@ -458,7 +492,7 @@ describe("Node public Relay API", () => {
     expect(deleted.status).toBe(200);
     const afterDelete = await relay.fetch(
       authorized(
-        `/mobius/api/projects/${scope.projectId}/sessions/${sessionId}/messages`,
+        `${MOBIUS_API_PREFIX}/projects/${scope.projectId}/sessions/${sessionId}/messages`,
       ),
     );
     expect(afterDelete.status).toBe(410);

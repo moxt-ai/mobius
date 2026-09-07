@@ -6,6 +6,7 @@ import {
   decodePromptResourcesValue,
   decodeRecordedAgentContentValue,
   type Interaction,
+  mobiusApiUrl,
   type SessionElicitationRequestedEvent,
   type SessionPermissionRequestedEvent,
 } from "@moxt-ai/mobius-web-sdk";
@@ -840,9 +841,9 @@ async function hasUsableChannelCredential(
     }
     throw error;
   }
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}`,
   );
   try {
     await requestJson(
@@ -1016,7 +1017,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
 
 export async function createBrowserPairing(): Promise<CreatedPairing> {
   const pairing = decodeCreatedPairing(
-    await requestJson(new URL("/mobius/api/pairings", window.location.origin), {
+    await requestJson(mobiusApiUrl(window.location.origin, "/pairings"), {
       method: "POST",
     }),
   );
@@ -1027,9 +1028,9 @@ export async function createBrowserPairing(): Promise<CreatedPairing> {
 export async function readBrowserPairingStatus(
   pairing: CreatedPairing,
 ): Promise<BrowserPairingStatus> {
-  const endpoint = new URL(
-    `/mobius/api/pairings/${encodeURIComponent(pairing.pairingId)}`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/pairings/${encodeURIComponent(pairing.pairingId)}`,
   );
   endpoint.searchParams.set("token", pairing.pollToken);
   const value = await requestJson(endpoint, { method: "GET" });
@@ -1067,9 +1068,9 @@ export async function createChannelAccessGrant(
   cancellationSignal: AbortSignal,
 ): Promise<CreatedChannelAccessGrant> {
   const credential = readChannelCredential(channelId);
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}/access-grants`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}/access-grants`,
   );
   return decodeCreatedChannelAccessGrant(
     await requestJson(
@@ -1088,9 +1089,9 @@ export async function readLinkedChannelDevices(
   cancellationSignal: AbortSignal,
 ): Promise<readonly LinkedChannelDevice[]> {
   const credential = readChannelCredential(channelId);
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}/linked-devices`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}/linked-devices`,
   );
   return decodeLinkedChannelDevices(
     await requestJson(
@@ -1121,9 +1122,9 @@ export async function redeemChannelAccessGrantFromLocation(
   if (await hasUsableChannelCredential(channelId, cancellationSignal)) {
     return;
   }
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
   );
   const credential = decodeRedeemedChannelCredential(
     await requestJson(
@@ -1154,9 +1155,9 @@ export async function revokeLinkedChannelDevice(
   cancellationSignal: AbortSignal,
 ): Promise<void> {
   const credential = readChannelCredential(channelId);
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
   );
   await requestEmpty(
     endpoint,
@@ -1172,9 +1173,9 @@ export async function readChannelConnection(
   channelId: string,
 ): Promise<ChannelConnection> {
   const credential = readChannelCredential(channelId);
-  const endpoint = new URL(
-    `/mobius/api/channels/${encodeURIComponent(channelId)}`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/channels/${encodeURIComponent(channelId)}`,
   );
   return decodeChannelConnection(
     await requestJson(endpoint, {
@@ -1324,9 +1325,9 @@ async function readChannelHistoryWithSignal(
 ): Promise<ChannelHistory> {
   const credential = readChannelCredential(channelId);
   const headers = { authorization: `Bearer ${credential.hostToken}` };
-  const directoryEndpoint = new URL(
-    `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions`,
+  const directoryEndpoint = mobiusApiUrl(
     window.location.origin,
+    `/projects/${encodeURIComponent(credential.projectId)}/sessions`,
   );
   directoryEndpoint.searchParams.set("limit", "100");
   const directory = await requestJson(
@@ -1347,18 +1348,18 @@ async function readChannelHistoryWithSignal(
   await Promise.all(
     summaries.map(async ({ hasNativeHistory, session }) => {
       try {
-        const messagesEndpoint = new URL(
-          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+        const messagesEndpoint = mobiusApiUrl(
           window.location.origin,
+          `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
         );
         messagesEndpoint.searchParams.set("limit", "100");
-        const historyEndpoint = new URL(
-          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
+        const historyEndpoint = mobiusApiUrl(
           window.location.origin,
+          `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
         );
-        const interactionsEndpoint = new URL(
-          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
+        const interactionsEndpoint = mobiusApiUrl(
           window.location.origin,
+          `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
         );
         const [page, nativeHistoryValue, interactionPage] = await Promise.all([
           requestJson(messagesEndpoint, { headers, method: "GET" }, signal),
@@ -1624,9 +1625,9 @@ export async function readToolCallDetail(
   signal: AbortSignal,
 ): Promise<ActivityDetailResult> {
   const credential = readChannelCredential(channelId);
-  const endpoint = new URL(
-    `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
+  const endpoint = mobiusApiUrl(
     window.location.origin,
+    `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
   );
   return decodeActivityDetail(
     await requestJson(

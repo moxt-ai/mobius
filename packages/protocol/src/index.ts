@@ -1,6 +1,7 @@
 export * from "./codecs/messages.ts";
 export * from "./control-messages.ts";
 export * from "./messages.ts";
+export * from "./mobius-api.ts";
 export * from "./native-sessions.ts";
 export * from "./prompt-usage.ts";
 export * from "./resource-model.ts";

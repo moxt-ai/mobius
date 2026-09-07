@@ -45,7 +45,12 @@ export {
   decodeSessionPermissionRequestedEvent,
   decodeSessionReadyEvent,
   decodeSessionUsageUpdatedEvent,
+  MOBIUS_API_PREFIX,
+  MobiusApiConfigurationError,
+  mobiusApiPath,
+  mobiusApiUrl,
   type NativeSessionHistory,
+  parseMobiusApiPrefix,
   parseNativeHistoryText,
   SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";

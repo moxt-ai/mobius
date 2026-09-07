@@ -11,6 +11,7 @@ import {
   decodeRuntimeHeartbeatEvent,
   encodeRuntimeHeartbeatAckEvent,
   encodeWorkspaceListCommand,
+  MOBIUS_API_PREFIX,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_HEARTBEAT_KIND,
   RUNTIME_LIVENESS_READY_KIND,
@@ -157,7 +158,8 @@ describe("daemon relay connection liveness", () => {
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
-        request.url === "/mobius/api/channels/heartbeat-channel/catalog"
+        request.url ===
+          `${MOBIUS_API_PREFIX}/channels/heartbeat-channel/catalog`
       ) {
         request.resume();
         response.writeHead(204);
@@ -229,7 +231,7 @@ describe("daemon relay connection liveness", () => {
       auditDatabasePath,
       channelId: "heartbeat-channel",
       relayUrl: new URL(
-        `ws://127.0.0.1:${readPort(relay)}/mobius/api/channels/heartbeat-channel/daemon`,
+        `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/heartbeat-channel/daemon`,
       ),
     });
 
@@ -333,7 +335,7 @@ describe("daemon relay connection liveness", () => {
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
-        request.url === "/mobius/api/channels/liveness-channel/catalog"
+        request.url === `${MOBIUS_API_PREFIX}/channels/liveness-channel/catalog`
       ) {
         catalogRequestCount += 1;
         request.resume();
@@ -409,7 +411,7 @@ describe("daemon relay connection liveness", () => {
       auditDatabasePath,
       channelId: "liveness-channel",
       relayUrl: new URL(
-        `ws://127.0.0.1:${readPort(relay)}/mobius/api/channels/liveness-channel/daemon`,
+        `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon`,
       ),
     });
 
@@ -446,8 +448,8 @@ describe("daemon relay connection liveness", () => {
         catalogRequestCount: 2,
         connectionCount: 2,
         requestedUrls: [
-          "/mobius/api/channels/liveness-channel/daemon?liveness=1",
-          "/mobius/api/channels/liveness-channel/daemon?liveness=1",
+          `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`,
+          `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`,
         ],
       });
     } finally {

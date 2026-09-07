@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
 const executeFile = promisify(execFile);
@@ -67,7 +68,7 @@ describe("Mobius CLI", () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (
         request.method === "PUT" &&
-        url.pathname === `/mobius/api/channels/${channelId}/catalog` &&
+        url.pathname === `${MOBIUS_API_PREFIX}/channels/${channelId}/catalog` &&
         url.searchParams.get("token") === daemonToken
       ) {
         request.resume();
@@ -89,7 +90,7 @@ describe("Mobius CLI", () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (
         typeof key !== "string" ||
-        url.pathname !== `/mobius/api/channels/${channelId}/daemon` ||
+        url.pathname !== `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon` ||
         url.searchParams.get("token") !== daemonToken
       ) {
         socket.destroy();

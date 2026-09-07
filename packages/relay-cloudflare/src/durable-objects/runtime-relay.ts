@@ -361,7 +361,11 @@ export class RuntimeRelay {
 
   async webSocketClose(socket: WebSocket): Promise<void> {
     const attachment = readAttachment(socket.deserializeAttachment());
-    if (attachment.role === "daemon" && this.isCurrentConnection(attachment)) {
+    if (attachment.role === "daemon") {
+      await this.#daemonMessageTail;
+      if (!this.isCurrentConnection(attachment)) {
+        return;
+      }
       this.#state.storage.sql.exec(
         `UPDATE runtime_connection_state
          SET state = 'offline', disconnected_at = ?

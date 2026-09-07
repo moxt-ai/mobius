@@ -10,6 +10,7 @@ import {
 import { hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 
+import { mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
 import {
   discoverLocalAgentInventory,
@@ -308,7 +309,7 @@ async function claimPairing(
     id: agent.id,
     label: agent.label,
   }));
-  const endpoint = new URL("/mobius/api/pairings/claim", options.relayOrigin);
+  const endpoint = mobiusApiUrl(options.relayOrigin, "/pairings/claim");
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -472,9 +473,9 @@ function buildPairedDaemon(
   inventory: LocalAgentInventory,
 ): PairedDaemon {
   assertInventoryUsable(inventory);
-  const relayUrl = new URL(
-    `/mobius/api/channels/${encodeURIComponent(connection.channelId)}/daemon`,
+  const relayUrl = mobiusApiUrl(
     connection.relayOrigin,
+    `/channels/${encodeURIComponent(connection.channelId)}/daemon`,
   );
   relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
   relayUrl.searchParams.set("token", connection.daemonToken);

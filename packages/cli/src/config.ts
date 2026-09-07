@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import {
   type InstallableAgentDefinition,
   LocalAgentCatalog,
@@ -53,7 +54,7 @@ export function loadDaemonConfig(): DaemonConfig {
   const relayUrl = new URL(
     // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
     process.env["MOBIUS_RELAY_URL"] ??
-      "ws://127.0.0.1:8787/mobius/api/channels/local/daemon",
+      `ws://127.0.0.1:8787${mobiusApiPath("/channels/local/daemon")}`,
   );
   relayUrl.searchParams.set(
     "token",

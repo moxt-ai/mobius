@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
@@ -47,7 +48,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: webPort,
     proxy: {
-      "/mobius/api": {
+      [MOBIUS_API_PREFIX]: {
         changeOrigin: true,
         target: `http://127.0.0.1:${relayPort.toString()}`,
         ws: true,

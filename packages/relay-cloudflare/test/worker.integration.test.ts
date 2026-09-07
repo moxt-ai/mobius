@@ -27,6 +27,7 @@ import {
   encodeSessionEventEnvelope,
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
+  MOBIUS_API_PREFIX,
   type NativeSessionResult,
   type RecordedSessionEvent,
   RUNTIME_HEARTBEAT_ACK_KIND,
@@ -214,7 +215,7 @@ interface OpenSocket {
 
 async function createPairing(): Promise<CreatedPairingResponse> {
   const response = await exports.default.fetch(
-    `${relayOrigin}/mobius/api/pairings`,
+    `${relayOrigin}${MOBIUS_API_PREFIX}/pairings`,
     {
       method: "POST",
     },
@@ -227,7 +228,7 @@ async function claimPairing(
   created: CreatedPairingResponse,
 ): Promise<ClaimedPairingResponse> {
   const response = await exports.default.fetch(
-    `${relayOrigin}/mobius/api/pairings/claim`,
+    `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`,
     {
       body: JSON.stringify({
         agents: readyAgents,
@@ -282,7 +283,7 @@ async function createSession(
   } = {},
 ): Promise<Response> {
   return await exports.default.fetch(
-    `${relayOrigin}/mobius/api/projects/${pairing.projectId}/sessions`,
+    `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/sessions`,
     {
       body: JSON.stringify({
         agentId: "codex",
@@ -511,7 +512,7 @@ describe.sequential("Cloudflare session deployment", () => {
   it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
     const created = await createPairing();
     const pending = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/pairings/${created.pairingId}?token=${created.pollToken}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/${created.pairingId}?token=${created.pollToken}`,
     );
     await expect(pending.json()).resolves.toEqual({
       expiresAt: created.expiresAt,
@@ -523,7 +524,7 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(claimed.runtimeId).toBe(created.runtimeId);
     expect(created.runtimeId).not.toBe(created.channelId);
     const paired = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/pairings/${created.pairingId}?token=${created.pollToken}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/${created.pairingId}?token=${created.pollToken}`,
     );
     await expect(paired.json()).resolves.toMatchObject({
       channelId: created.channelId,
@@ -534,7 +535,7 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     const channel = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${created.channelId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}`,
       { headers: authorization(created) },
     );
     expect(channel.status).toBe(200);
@@ -545,7 +546,7 @@ describe.sequential("Cloudflare session deployment", () => {
       tenantId: created.tenantId,
     });
     const unauthorizedHost = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${created.channelId}/host?token=${"x".repeat(43)}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}/host?token=${"x".repeat(43)}`,
       { headers: { Upgrade: "websocket" } },
     );
     expect(unauthorizedHost.status).toBe(401);
@@ -583,7 +584,7 @@ describe.sequential("Cloudflare session deployment", () => {
   it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {
     const pairing = await pairChannel();
     const createGrantResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
       { headers: authorization(pairing.created), method: "POST" },
     );
     expect(createGrantResponse.status).toBe(201);
@@ -604,7 +605,7 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(storedGrant?.secret_hash).not.toBe(grant.grantSecret);
 
     const wrongSecretResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
       {
         body: JSON.stringify({ grantSecret: "x".repeat(43) }),
         headers: { "content-type": "application/json" },
@@ -617,7 +618,7 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     const redeemResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
       {
         body: JSON.stringify({ grantSecret: grant.grantSecret }),
         headers: { "content-type": "application/json" },
@@ -635,7 +636,7 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(redeemed.hostToken).not.toBe(grant.grantSecret);
 
     const replayResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
       {
         body: JSON.stringify({ grantSecret: grant.grantSecret }),
         headers: { "content-type": "application/json" },
@@ -651,17 +652,17 @@ describe.sequential("Cloudflare session deployment", () => {
       authorization: `Bearer ${redeemed.hostToken}`,
     };
     const linkedChannel = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
       { headers: linkedAuthorization },
     );
     expect(linkedChannel.status).toBe(200);
     const linkedProject = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions`,
       { headers: linkedAuthorization },
     );
     expect(linkedProject.status).toBe(200);
     const linkedHost = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${redeemed.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${redeemed.hostToken}`,
     );
     const linkedHostClosed = new Promise<number>((resolve) => {
       linkedHost.socket.addEventListener(
@@ -671,7 +672,7 @@ describe.sequential("Cloudflare session deployment", () => {
       );
     });
     const delegationAttempt = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
       { headers: linkedAuthorization, method: "POST" },
     );
     expect(delegationAttempt.status).toBe(403);
@@ -680,7 +681,7 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     const devicePageResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/linked-devices`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/linked-devices`,
       { headers: authorization(pairing.created) },
     );
     expect(devicePageResponse.status).toBe(200);
@@ -699,24 +700,24 @@ describe.sequential("Cloudflare session deployment", () => {
     );
 
     const revokeResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/linked-devices/${linkedCredentialId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/linked-devices/${linkedCredentialId}`,
       { headers: authorization(pairing.created), method: "DELETE" },
     );
     expect(revokeResponse.status).toBe(204);
     expect(await linkedHostClosed).toBe(1008);
     const revokedChannel = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
       { headers: linkedAuthorization },
     );
     expect(revokedChannel.status).toBe(401);
     const ownerChannel = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
       { headers: authorization(pairing.created) },
     );
     expect(ownerChannel.status).toBe(200);
 
     const expiringGrantResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
       { headers: authorization(pairing.created), method: "POST" },
     );
     const expiringGrant = decodeCreatedAccessGrant(
@@ -724,7 +725,7 @@ describe.sequential("Cloudflare session deployment", () => {
     );
     vi.setSystemTime(Date.parse(expiringGrant.expiresAt));
     const expiredResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/access-grants/${expiringGrant.grantId}/redeem`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${expiringGrant.grantId}/redeem`,
       {
         body: JSON.stringify({ grantSecret: expiringGrant.grantSecret }),
         headers: { "content-type": "application/json" },
@@ -740,7 +741,7 @@ describe.sequential("Cloudflare session deployment", () => {
   it("Given a stable Channel targets a distinct Runtime, When a daemon connection is replaced, Then its durable epoch advances and the stale connection is fenced", async () => {
     const pairing = await pairChannel();
     const first = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const staleClosed = new Promise<number>((resolve) => {
       first.socket.addEventListener("close", (event) => resolve(event.code), {
@@ -748,7 +749,7 @@ describe.sequential("Cloudflare session deployment", () => {
       });
     });
     const replacement = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     expect(await staleClosed).toBe(1012);
 
@@ -779,13 +780,13 @@ describe.sequential("Cloudflare session deployment", () => {
     const sessionId = "heartbeat-backlog-session";
     expect((await createSession(pairing.created, sessionId)).status).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}&liveness=1`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}&liveness=1`,
     );
     expect(
       decodeRuntimeLivenessReadyEvent(await daemon.messages.next()),
     ).toEqual({ kind: RUNTIME_LIVENESS_READY_KIND });
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
       true,
@@ -878,10 +879,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const pairing = await pairChannel();
     const { channelId } = pairing.created;
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next())).toMatchObject({
       online: true,
@@ -943,7 +944,7 @@ describe.sequential("Cloudflare session deployment", () => {
       const firstLive = await commit(host, daemon, startedEnvelope);
 
       const messages = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2`,
         { headers: authorization(pairing.created) },
       );
       expect(messages.status).toBe(200);
@@ -960,7 +961,7 @@ describe.sequential("Cloudflare session deployment", () => {
       }
       const nextCursor = requiredString(firstPage, "nextCursor");
       const older = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2&cursor=${encodeURIComponent(nextCursor)}`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2&cursor=${encodeURIComponent(nextCursor)}`,
         { headers: authorization(pairing.created) },
       );
       await expect(older.json()).resolves.toMatchObject({
@@ -1003,7 +1004,7 @@ describe.sequential("Cloudflare session deployment", () => {
       expect(BigInt(nextLive.sequence)).toBe(BigInt(firstLive.sequence) + 1n);
 
       const catchup = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/session-b/events?limit=10&cursor=${encodeURIComponent(firstLive.cursor)}`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-b/events?limit=10&cursor=${encodeURIComponent(firstLive.cursor)}`,
         { headers: authorization(pairing.created) },
       );
       await expect(catchup.json()).resolves.toMatchObject({
@@ -1032,7 +1033,7 @@ describe.sequential("Cloudflare session deployment", () => {
       );
       await evictDurableObject(sessionStub);
       const recovered = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=1`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=1`,
         { headers: authorization(pairing.created) },
       );
       await expect(recovered.json()).resolves.toMatchObject({
@@ -1048,10 +1049,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const pairing = await pairChannel();
     const { channelId } = pairing.created;
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const firstHost = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(
       decodeRuntimeStatusEvent(await firstHost.messages.next()).online,
@@ -1079,7 +1080,7 @@ describe.sequential("Cloudflare session deployment", () => {
     firstHost.socket.close(1000, "Browser reload");
 
     const secondHost = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(
       decodeRuntimeStatusEvent(await secondHost.messages.next()).online,
@@ -1107,10 +1108,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const pairing = await pairChannel();
     const { channelId } = pairing.created;
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
       true,
@@ -1139,7 +1140,7 @@ describe.sequential("Cloudflare session deployment", () => {
     );
 
     const response = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/selectable-session`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/selectable-session`,
       { headers: authorization(pairing.created) },
     );
     expect(response.status).toBe(200);
@@ -1159,10 +1160,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const pairing = await pairChannel();
     const { channelId } = pairing.created;
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
       true,
@@ -1251,7 +1252,7 @@ describe.sequential("Cloudflare session deployment", () => {
       );
 
       const existing = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/existing-native-session`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session`,
         { headers: authorization(pairing.created) },
       );
       expect(existing.status).toBe(200);
@@ -1260,13 +1261,13 @@ describe.sequential("Cloudflare session deployment", () => {
         title: "Existing native session",
       });
       const nativeHistory = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/existing-native-session/native-history`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/native-history`,
         { headers: authorization(pairing.created) },
       );
       expect(nativeHistory.status).toBe(200);
       await expect(nativeHistory.json()).resolves.toEqual(result.history);
       const exported = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/existing-native-session/export`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/export`,
         { headers: authorization(pairing.created) },
       );
       expect(exported.status).toBe(200);
@@ -1275,7 +1276,7 @@ describe.sequential("Cloudflare session deployment", () => {
         session: { hasNativeHistory: true },
       });
       const provisional = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/provisional-native-session`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/provisional-native-session`,
         { headers: authorization(pairing.created) },
       );
       expect(provisional.status).toBe(410);
@@ -1290,10 +1291,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const sessionId = "daemon-restart-session";
     expect((await createSession(pairing.created, sessionId)).status).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
       true,
@@ -1321,7 +1322,7 @@ describe.sequential("Cloudflare session deployment", () => {
     );
 
     const interruptedHistory = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
       { headers: authorization(pairing.created) },
     );
     await expect(interruptedHistory.json()).resolves.toMatchObject({
@@ -1337,14 +1338,14 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     const replacement = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
       true,
     );
     try {
       const deniedReconciliation = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.created.hostToken)}`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.created.hostToken)}`,
         {
           body: JSON.stringify({ outcome: { kind: "cancelled" } }),
           headers: { "content-type": "application/json" },
@@ -1360,7 +1361,7 @@ describe.sequential("Cloudflare session deployment", () => {
       });
 
       const reconciliation = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
         {
           body: JSON.stringify({
             outcome: {
@@ -1388,7 +1389,7 @@ describe.sequential("Cloudflare session deployment", () => {
       );
       await completeTurn(host, replacement, recovered, "recovered response");
       const recoveredHistory = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
         { headers: authorization(pairing.created) },
       );
       await expect(recoveredHistory.json()).resolves.toMatchObject({
@@ -1421,10 +1422,10 @@ describe.sequential("Cloudflare session deployment", () => {
       ).status,
     ).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await host.messages.next();
 
@@ -1512,7 +1513,7 @@ describe.sequential("Cloudflare session deployment", () => {
           );
         });
       });
-      const detailPath = `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/large-attempt/tool-calls/activity-large`;
+      const detailPath = `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/large-attempt/tool-calls/activity-large`;
       const availableBeforeRecovery = await exports.default.fetch(detailPath, {
         headers: authorization(pairing.created),
       });
@@ -1567,10 +1568,10 @@ describe.sequential("Cloudflare session deployment", () => {
       ).status,
     ).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await host.messages.next();
 
@@ -1657,7 +1658,7 @@ describe.sequential("Cloudflare session deployment", () => {
       });
 
       const detail = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/quota-attempt/tool-calls/activity-quota`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/quota-attempt/tool-calls/activity-quota`,
         { headers: authorization(pairing.created) },
       );
       await expect(detail.json()).resolves.toMatchObject({
@@ -1678,24 +1679,24 @@ describe.sequential("Cloudflare session deployment", () => {
     expect((await createSession(source.created, sessionId)).status).toBe(201);
 
     const unauthorized = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${source.created.projectId}/sessions`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions`,
       { headers: authorization(destination.created) },
     );
     expect(unauthorized.status).toBe(401);
     const invisible = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${destination.created.projectId}/sessions/${sessionId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}`,
       { headers: authorization(destination.created) },
     );
     expect(invisible.status).toBe(404);
 
     const exportedResponse = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${source.created.projectId}/sessions/${sessionId}/export`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions/${sessionId}/export`,
       { headers: authorization(source.created) },
     );
     expect(exportedResponse.status).toBe(200);
     const exported: unknown = await exportedResponse.json();
     const imported = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${destination.created.projectId}/session-imports`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/session-imports`,
       {
         body: JSON.stringify({ export: exported }),
         headers: {
@@ -1713,7 +1714,7 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     const deleted = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${destination.created.projectId}/sessions/${sessionId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}`,
       {
         headers: authorization(destination.created),
         method: "DELETE",
@@ -1722,7 +1723,7 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(deleted.status).toBe(200);
     await expect(deleted.json()).resolves.toMatchObject({ kind: "deleted" });
     const afterDelete = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${destination.created.projectId}/sessions/${sessionId}/messages`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}/messages`,
       { headers: authorization(destination.created) },
     );
     expect(afterDelete.status).toBe(410);
@@ -1737,7 +1738,7 @@ describe.sequential("Cloudflare session deployment", () => {
     ).toBe(201);
     vi.setSystemTime(new Date("2026-09-06T00:01:00.000Z"));
     const expired = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${source.created.projectId}/sessions/${expiringId}`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions/${expiringId}`,
       { headers: authorization(source.created) },
     );
     expect(expired.status).toBe(410);
@@ -1751,13 +1752,13 @@ describe.sequential("Cloudflare session deployment", () => {
     const sessionId = "busy-session";
     expect((await createSession(pairing.created, sessionId)).status).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const firstHost = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     const secondHost = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await Promise.all([firstHost.messages.next(), secondHost.messages.next()]);
     try {
@@ -1822,10 +1823,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const sessionId = "ordered-burst-session";
     expect((await createSession(pairing.created, sessionId)).status).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await host.messages.next();
     try {
@@ -1884,10 +1885,10 @@ describe.sequential("Cloudflare session deployment", () => {
     const sessionId = "ordered-close-session";
     expect((await createSession(pairing.created, sessionId)).status).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await host.messages.next();
     const command = prompt(sessionId, "ordered-close-command", "run once");
@@ -1949,7 +1950,7 @@ describe.sequential("Cloudflare session deployment", () => {
       );
       expect(decodeRuntimeStatusEvent(offlineMessage).online).toBe(false);
       const history = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
         { headers: authorization(pairing.created) },
       );
       await expect(history.json()).resolves.toMatchObject({
@@ -1976,10 +1977,10 @@ describe.sequential("Cloudflare session deployment", () => {
       ).status,
     ).toBe(201);
     const daemon = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
     );
     const host = await openChannelSocket(
-      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+      `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
     );
     await host.messages.next();
     try {
@@ -2024,7 +2025,7 @@ describe.sequential("Cloudflare session deployment", () => {
         await instance.alarm();
       });
       const resumed = await exports.default.fetch(
-        `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/${sessionId}/events?cursor=${encodeURIComponent(first.cursor)}`,
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/events?cursor=${encodeURIComponent(first.cursor)}`,
         { headers: authorization(pairing.created) },
       );
       expect(resumed.status).toBe(200);
@@ -2066,7 +2067,7 @@ describe.sequential("Cloudflare session deployment", () => {
   it("Given a configured project session quota, When public callers exhaust and release it, Then admission returns an explicit retryable outcome", async () => {
     const pairing = await pairChannel();
     const invalidImport = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/session-imports`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/session-imports`,
       {
         body: JSON.stringify({
           export: { session: { sessionId: "invalid-import" } },
@@ -2099,7 +2100,7 @@ describe.sequential("Cloudflare session deployment", () => {
     );
 
     const deleted = await exports.default.fetch(
-      `${relayOrigin}/mobius/api/projects/${pairing.created.projectId}/sessions/quota-first`,
+      `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/quota-first`,
       { headers: authorization(pairing.created), method: "DELETE" },
     );
     expect(deleted.status).toBe(200);

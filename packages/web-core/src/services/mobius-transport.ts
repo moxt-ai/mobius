@@ -6,6 +6,7 @@ import {
   type ElicitationResponseRequest,
   type MobiusClient,
   MobiusClientError,
+  mobiusApiUrl,
   type NativeSessionCommand,
   type NativeSessionResult,
   type PermissionResponseRequest,
@@ -39,8 +40,10 @@ import {
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
-  const relayUrl = new URL(window.location.origin);
-  relayUrl.pathname = `/mobius/api/channels/${encodeURIComponent(connection.channelId)}/host`;
+  const relayUrl = mobiusApiUrl(
+    window.location.origin,
+    `/channels/${encodeURIComponent(connection.channelId)}/host`,
+  );
   relayUrl.searchParams.set("token", connection.hostToken);
   relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return relayUrl.toString();
