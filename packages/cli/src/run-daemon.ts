@@ -654,6 +654,15 @@ async function executeSessionPrepare(
       }),
     );
   } catch (error) {
+    audit.record({
+      commandId: command.requestId,
+      details: {
+        agentId: command.agentId,
+        code: operationErrorCode(error),
+      },
+      event: "session_prepare_failed",
+      sessionId: command.sessionId,
+    });
     reportOperationFailure(socket, command.requestId, command.sessionId, error);
   }
 }

@@ -88,7 +88,11 @@ if (process.argv.includes("--version")) {
     process.env.MOBIUS_FAKE_ACP_STATE_DIRECTORY += "/claude";
   }
   process.argv.push("--agent-name", ${JSON.stringify(label)});
-  if (${JSON.stringify(label)} === "Codex") process.argv.push("--exclusive-writer");
+  if (${JSON.stringify(label)} === "Codex") {
+    process.argv.push("--exclusive-writer");
+    process.argv.push("--oversized-native-session-title");
+  }
+  if (${JSON.stringify(label)} === "Claude Code") process.argv.push("--announce-commands-while-listing");
   await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
 }
 `);
@@ -474,6 +478,53 @@ function waitForProtocolKind(
   });
 }
 
+function waitForSessionReady(
+  socket: WebSocket,
+  requestId: string,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      socket.removeEventListener("message", handleMessage);
+      socket.removeEventListener("error", handleError);
+      socket.removeEventListener("close", handleClose);
+    };
+    const handleError = (): void => {
+      cleanup();
+      reject(new Error("The WebSocket failed while preparing the session"));
+    };
+    const handleClose = (): void => {
+      cleanup();
+      reject(new Error("The WebSocket closed while preparing the session"));
+    };
+    const handleMessage = (event: MessageEvent<unknown>): void => {
+      if (typeof event.data !== "string") {
+        return;
+      }
+      const message = unwrapCommittedEvent(event.data);
+      const value: unknown = JSON.parse(message);
+      if (!isRecord(value) || value["requestId"] !== requestId) {
+        return;
+      }
+      if (value["kind"] === SESSION_READY_KIND) {
+        cleanup();
+        resolve(message);
+        return;
+      }
+      if (value["kind"] === "session.operation.failed") {
+        cleanup();
+        reject(
+          new Error(
+            `Session preparation failed: ${String(value["code"])}: ${String(value["message"])}`,
+          ),
+        );
+      }
+    };
+    socket.addEventListener("message", handleMessage);
+    socket.addEventListener("error", handleError);
+    socket.addEventListener("close", handleClose);
+  });
+}
+
 function startBrowserPrompt(
   socket: WebSocket,
   agentId: string,
@@ -753,7 +804,7 @@ async function verifyActiveTurnHistory(
 }
 
 describe("pairing and channel chat", () => {
-  it("Given a machine is paired and has an Agent conversation in another project with a selected image, When a browser chooses a directory and opens that conversation, Then new chats use the chosen directory and restored history retains its original project through fork refresh and deletion", {
+  it("Given a machine is paired with saved Agent conversations and the first runtime handshake fails, When a browser prepares and manages those conversations, Then initialization recovers and restored history retains its original project through fork refresh and deletion", {
     timeout: 90_000,
   }, async () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -771,6 +822,7 @@ describe("pairing and channel chat", () => {
       MOBIUS_CLAUDE_PATH: join(temporaryDirectory, "claude"),
       MOBIUS_CLAUDE_ACP_PATH: join(temporaryDirectory, "claude-acp"),
       MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "mobius"),
+      MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION: "",
       MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "native"),
       NO_PROXY: "127.0.0.1,localhost",
       no_proxy: "127.0.0.1,localhost",
@@ -885,6 +937,7 @@ describe("pairing and channel chat", () => {
         sessionId: "claude-external",
         signal: new AbortController().signal,
       });
+      process.env["MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION"] = "Codex";
       const audit = new AuditStore(paired.config.auditDatabasePath);
       const controller = new AbortController();
       const daemon = runDaemon(paired.config, audit, controller.signal);
@@ -899,7 +952,7 @@ describe("pairing and channel chat", () => {
           directoryId: "default",
           sessionId: "browser-draft",
         };
-        const prepared = waitForProtocolKind(socket, SESSION_READY_KIND);
+        const prepared = waitForSessionReady(socket, "prepare-native-browser");
         socket.send(
           encodeSessionPrepareCommand({
             ...identity,
@@ -939,8 +992,20 @@ describe("pairing and channel chat", () => {
               const onMessage = (event: MessageEvent<unknown>): void => {
                 if (typeof event.data !== "string") return;
                 const value: unknown = JSON.parse(event.data);
-                if (!isRecord(value) || value["requestId"] !== requestId)
+                if (!isRecord(value)) return;
+                if (
+                  value["kind"] === RUNTIME_STATUS_KIND &&
+                  decodeRuntimeStatusEvent(event.data).online === false
+                ) {
+                  cleanup();
+                  reject(
+                    new Error(
+                      "The local Runtime disconnected during native session management",
+                    ),
+                  );
                   return;
+                }
+                if (value["requestId"] !== requestId) return;
                 if (
                   value["kind"] === "native.session.result" ||
                   value["kind"] === "session.operation.failed"
@@ -967,7 +1032,9 @@ describe("pairing and channel chat", () => {
         expect(listing).toMatchObject({
           action: "list",
           entries: [
-            expect.objectContaining({ title: "Saved native conversation" }),
+            expect.objectContaining({
+              title: "Saved native conversation".padEnd(500, "x"),
+            }),
           ],
         });
         const entries = listing["entries"];

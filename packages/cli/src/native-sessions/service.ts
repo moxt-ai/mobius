@@ -80,7 +80,7 @@ export class NativeSessionService {
       sessionId: command.sessionId,
       signal,
     };
-    const prepared = await this.#sessions.prepareSession(options);
+    const prepared = await this.#sessions.prepareNativeSessionBrowser(options);
     if (!prepared.capabilities.listSessions)
       throw new AcpExecutionError(
         "This Agent does not support native session listing",

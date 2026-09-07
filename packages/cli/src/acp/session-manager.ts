@@ -191,6 +191,13 @@ export class AcpExecutionError extends Error {
   }
 }
 
+class RetryableAcpInitializationError extends AcpExecutionError {
+  constructor(cause: unknown) {
+    super("ACP agent initialization failed", { cause });
+    this.name = "RetryableAcpInitializationError";
+  }
+}
+
 function readableWebStream(
   input: NodeJS.ReadableStream,
 ): ReadableStream<Uint8Array> {
@@ -957,46 +964,81 @@ class AcpProcessSession implements AcpClientHandler {
     this.#connection = createAcpClient(this).connect(stream);
   }
 
+  static async #start(
+    options: AcpPrepareOptions,
+    getObserver: () => AcpSessionObserver,
+    store: AcpSessionStore,
+    initialize: (runtime: AcpProcessSession) => Promise<void>,
+  ): Promise<AcpProcessSession> {
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      options.signal.throwIfAborted();
+      const [adapterUnchanged, agentUnchanged] = await Promise.all([
+        revalidateExecutable(options.agent.adapterIdentity),
+        revalidateExecutable(options.agent.agentIdentity),
+      ]);
+      options.signal.throwIfAborted();
+      if (!adapterUnchanged || !agentUnchanged) {
+        throw new AcpExecutionError(
+          "The local Agent runtime changed; restart Mobius before starting a new conversation",
+          {},
+          "agent_runtime_changed",
+        );
+      }
+      const runtime = new AcpProcessSession(
+        options.agent,
+        options.cwd,
+        options.additionalDirectories,
+        options.sessionId,
+        getObserver,
+        store,
+      );
+      try {
+        await initialize(runtime);
+        return runtime;
+      } catch (error) {
+        await runtime.closeProcess();
+        options.signal.throwIfAborted();
+        if (error instanceof RetryableAcpInitializationError && attempt === 1) {
+          console.warn(
+            `[${options.agent.id}-acp] ACP agent initialization failed; retrying once`,
+          );
+          continue;
+        }
+        if (error instanceof AcpExecutionError) {
+          throw error;
+        }
+        throw new AcpExecutionError("ACP agent initialization failed", {
+          cause: error,
+        });
+      }
+    }
+    throw new AcpExecutionError("ACP agent initialization failed");
+  }
+
   static readonly start = async (
     options: AcpPrepareOptions,
     getObserver: () => AcpSessionObserver,
     store: AcpSessionStore,
-  ): Promise<AcpProcessSession> => {
-    options.signal.throwIfAborted();
-    const [adapterUnchanged, agentUnchanged] = await Promise.all([
-      revalidateExecutable(options.agent.adapterIdentity),
-      revalidateExecutable(options.agent.agentIdentity),
-    ]);
-    options.signal.throwIfAborted();
-    if (!adapterUnchanged || !agentUnchanged) {
-      throw new AcpExecutionError(
-        "The local Agent runtime changed; restart Mobius before starting a new conversation",
-        {},
-        "agent_runtime_changed",
-      );
-    }
-    const runtime = new AcpProcessSession(
-      options.agent,
-      options.cwd,
-      options.additionalDirectories,
-      options.sessionId,
+  ): Promise<AcpProcessSession> =>
+    await AcpProcessSession.#start(
+      options,
       getObserver,
       store,
+      async (runtime) =>
+        await runtime.initialize(options.signal, options.origin),
     );
-    try {
-      await runtime.initialize(options.signal, options.origin);
-      return runtime;
-    } catch (error) {
-      await runtime.closeProcess();
-      options.signal.throwIfAborted();
-      if (error instanceof AcpExecutionError) {
-        throw error;
-      }
-      throw new AcpExecutionError("ACP agent initialization failed", {
-        cause: error,
-      });
-    }
-  };
+
+  static readonly startNativeSessionBrowser = async (
+    options: AcpPrepareOptions,
+    getObserver: () => AcpSessionObserver,
+    store: AcpSessionStore,
+  ): Promise<AcpProcessSession> =>
+    await AcpProcessSession.#start(
+      options,
+      getObserver,
+      store,
+      async (runtime) => await runtime.#initializeAgent(options.signal),
+    );
 
   readonly belongsTo = (
     agentId: string,
@@ -1048,10 +1090,7 @@ class AcpProcessSession implements AcpClientHandler {
     }
   };
 
-  readonly initialize = async (
-    signal: AbortSignal,
-    origin?: NativeSessionOrigin,
-  ): Promise<void> => {
+  async #initializeAgent(signal: AbortSignal): Promise<void> {
     const initialized = await this.race(
       this.#connection.agent.request(
         methods.agent.initialize,
@@ -1068,7 +1107,10 @@ class AcpProcessSession implements AcpClientHandler {
       ),
       "ACP agent exited during initialization",
       signal,
-    );
+    ).catch((cause: unknown) => {
+      signal.throwIfAborted();
+      throw new RetryableAcpInitializationError(cause);
+    });
     if (initialized.protocolVersion !== PROTOCOL_VERSION) {
       throw new AcpExecutionError(
         "ACP agent selected an unsupported protocol version",
@@ -1085,6 +1127,13 @@ class AcpProcessSession implements AcpClientHandler {
       255,
     );
     this.#agentVersion = truncate(initialized.agentInfo?.version ?? "", 128);
+  }
+
+  readonly initialize = async (
+    signal: AbortSignal,
+    origin?: NativeSessionOrigin,
+  ): Promise<void> => {
+    await this.#initializeAgent(signal);
     const stored =
       origin?.kind === "import"
         ? new FoundAcpStoredSession(
@@ -2007,6 +2056,13 @@ class AcpProcessSession implements AcpClientHandler {
 
 export class AcpSessionManager {
   readonly #nativeOperations = new Set<string>();
+  readonly #nativeBrowserObserver = new NullAcpSessionObserver();
+  readonly #nativeBrowserPreparing = new Map<
+    string,
+    Promise<AcpProcessSession>
+  >();
+  readonly #nativeBrowserSessions = new Map<string, AcpProcessSession>();
+  readonly #nativeBrowserStore = new MemoryAcpSessionStore();
   readonly #activeSessionIds = new Set<string>();
   readonly #cancellationRequests = new Set<string>();
   readonly #preparing = new Map<string, Promise<AcpProcessSession>>();
@@ -2025,6 +2081,50 @@ export class AcpSessionManager {
   readonly setObserver = (observer: AcpSessionObserver): void => {
     this.#observer = observer;
   };
+
+  async #startNativeBrowserPreparation(
+    options: AcpPrepareOptions,
+  ): Promise<AcpProcessSession> {
+    const operation = (async () => {
+      try {
+        const runtime = await AcpProcessSession.startNativeSessionBrowser(
+          options,
+          () => this.#nativeBrowserObserver,
+          this.#nativeBrowserStore,
+        );
+        this.#nativeBrowserSessions.set(options.sessionId, runtime);
+        return runtime;
+      } finally {
+        this.#nativeBrowserPreparing.delete(options.sessionId);
+      }
+    })();
+    this.#nativeBrowserPreparing.set(options.sessionId, operation);
+    return await operation;
+  }
+
+  async #replaceNativeBrowserPreparation(
+    existing: AcpProcessSession,
+    options: AcpPrepareOptions,
+  ): Promise<AcpProcessSession> {
+    const operation = (async () => {
+      try {
+        this.#nativeBrowserSessions.delete(options.sessionId);
+        await existing.close();
+        this.#nativeBrowserStore.remove(options.sessionId);
+        const runtime = await AcpProcessSession.startNativeSessionBrowser(
+          options,
+          () => this.#nativeBrowserObserver,
+          this.#nativeBrowserStore,
+        );
+        this.#nativeBrowserSessions.set(options.sessionId, runtime);
+        return runtime;
+      } finally {
+        this.#nativeBrowserPreparing.delete(options.sessionId);
+      }
+    })();
+    this.#nativeBrowserPreparing.set(options.sessionId, operation);
+    return await operation;
+  }
 
   async #startPreparation(
     options: AcpPrepareOptions,
@@ -2127,6 +2227,51 @@ export class AcpSessionManager {
       return runtime.prepared();
     }
     const runtime = await this.#startPreparation(options);
+    return runtime.prepared();
+  };
+
+  readonly prepareNativeSessionBrowser = async (
+    options: AcpPrepareOptions,
+  ): Promise<AcpPreparedSession> => {
+    const pending = this.#nativeBrowserPreparing.get(options.sessionId);
+    if (pending !== undefined) {
+      const runtime = await pending;
+      if (
+        runtime.belongsTo(
+          options.agent.id,
+          options.cwd,
+          options.additionalDirectories,
+        )
+      ) {
+        return runtime.prepared();
+      }
+      return await this.prepareNativeSessionBrowser(options);
+    }
+    const existing = this.#nativeBrowserSessions.get(options.sessionId);
+    if (existing !== undefined) {
+      if (
+        existing.belongsTo(
+          options.agent.id,
+          options.cwd,
+          options.additionalDirectories,
+        )
+      ) {
+        return existing.prepared();
+      }
+      if (!existing.canRebind()) {
+        throw new AcpExecutionError(
+          "The agent or workspace cannot change after a conversation has started",
+          {},
+          "session_identity_mismatch",
+        );
+      }
+      const runtime = await this.#replaceNativeBrowserPreparation(
+        existing,
+        options,
+      );
+      return runtime.prepared();
+    }
+    const runtime = await this.#startNativeBrowserPreparation(options);
     return runtime.prepared();
   };
 
@@ -2236,8 +2381,14 @@ export class AcpSessionManager {
 
   readonly close = async (): Promise<void> => {
     const sessions = [...this.#sessions.values()];
+    const nativeBrowserSessions = [...this.#nativeBrowserSessions.values()];
     this.#sessions.clear();
-    await Promise.all(sessions.map(async (session) => await session.close()));
+    this.#nativeBrowserSessions.clear();
+    await Promise.all(
+      [...sessions, ...nativeBrowserSessions].map(
+        async (session) => await session.close(),
+      ),
+    );
   };
 
   readonly ensureSession = async (
@@ -2268,11 +2419,39 @@ export class AcpSessionManager {
     return started;
   };
 
+  async #ensureNativeSessionBrowser(
+    options: AcpPrepareOptions,
+  ): Promise<AcpProcessSession> {
+    const existing = this.#nativeBrowserSessions.get(options.sessionId);
+    if (existing !== undefined) {
+      if (
+        !existing.belongsTo(
+          options.agent.id,
+          options.cwd,
+          options.additionalDirectories,
+        )
+      ) {
+        throw new AcpExecutionError(
+          "The agent or workspace cannot change after a conversation has started",
+          {},
+          "session_identity_mismatch",
+        );
+      }
+      return existing;
+    }
+    await this.prepareNativeSessionBrowser(options);
+    const started = this.#nativeBrowserSessions.get(options.sessionId);
+    if (started === undefined) {
+      throw new AcpExecutionError("ACP native session browser did not start");
+    }
+    return started;
+  }
+
   readonly listNativeSessions = async (
     options: AcpPrepareOptions,
     cursor: string | null,
   ): Promise<NativeSessionPage> =>
-    await (await this.ensureSession(options)).listNativeSessions(
+    await (await this.#ensureNativeSessionBrowser(options)).listNativeSessions(
       cursor,
       options.signal,
     );
@@ -2379,7 +2558,7 @@ export class AcpSessionManager {
     options: AcpPrepareOptions,
     nativeSessionId: string,
   ): Promise<readonly string[]> => {
-    const runtime = await this.ensureSession(options);
+    const runtime = await this.#ensureNativeSessionBrowser(options);
     const key = `${options.agent.id}:${nativeSessionId}`;
     const linked = this.#store.findNative(options.agent.id, nativeSessionId);
     if (
@@ -2411,7 +2590,8 @@ export class AcpSessionManager {
         nativeSessionId,
       );
       if (runtime.nativeSessionId() === nativeSessionId) {
-        this.#sessions.delete(options.sessionId);
+        this.#nativeBrowserSessions.delete(options.sessionId);
+        this.#nativeBrowserStore.remove(options.sessionId);
         await runtime.close();
       }
       return deleted;

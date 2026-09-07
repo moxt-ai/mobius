@@ -277,7 +277,7 @@ describe("native Agent session boundary", () => {
       ).rejects.toMatchObject({ code: "native_session_target_changed" });
       expect(
         (await readdir(f.native)).filter((name) => name.endsWith(".json")),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
       expect((await f.list()).entries).toEqual([
         expect.objectContaining({ title: "Moving roots" }),
       ]);
@@ -402,7 +402,7 @@ describe("native Agent session boundary", () => {
       ).toMatchObject({ deletedSessionIds: ["deleted-chat"] });
       expect(
         (await readdir(f.native)).filter((name) => name.endsWith(".json")),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       await f.sessions.close();
       const reopenedStore = new SqliteAcpSessionStore(f.storePath);
       const restarted = new AcpSessionManager(undefined, reopenedStore);

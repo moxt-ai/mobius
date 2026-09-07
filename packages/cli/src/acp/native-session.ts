@@ -5,6 +5,7 @@ const path = z
   .min(1)
   .max(2_048)
   .refine((value) => !value.includes("\0"));
+const title = z.string().transform((value) => value.slice(0, 500));
 export const nativeSessionIdSchema = z
   .string()
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/);
@@ -13,7 +14,7 @@ const nativeSessionInfoSchema = z
     sessionId: nativeSessionIdSchema,
     cwd: path,
     additionalDirectories: z.array(path).max(16).default([]).readonly(),
-    title: z.string().max(500).nullish(),
+    title: title.nullish(),
     updatedAt: z.iso.datetime({ offset: true }).nullish(),
   })
   .readonly();

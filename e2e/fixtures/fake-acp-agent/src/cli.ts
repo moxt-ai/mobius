@@ -51,6 +51,37 @@ function exitsAfterSessionCreation(): boolean {
   return process.argv.includes("--exit-after-session-creation");
 }
 
+function failFirstRuntimeInitialization(
+  clientCapabilities: unknown,
+  selectedAgentName: string,
+): void {
+  if (
+    process.env["MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION"] !==
+      selectedAgentName ||
+    !isRecord(clientCapabilities) ||
+    !Reflect.has(clientCapabilities, "plan")
+  ) {
+    return;
+  }
+  const stateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+  if (stateDirectory === undefined) {
+    throw new Error("Fake ACP state directory is required");
+  }
+  mkdirSync(stateDirectory, { recursive: true });
+  const markerPath = join(
+    stateDirectory,
+    `${selectedAgentName.toLowerCase().replaceAll(" ", "-")}.runtime-initialization-failed`,
+  );
+  if (existsSync(markerPath)) {
+    return;
+  }
+  writeFileSync(markerPath, `${process.pid.toString()}\n`, {
+    flag: "wx",
+    mode: 0o600,
+  });
+  throw new Error("Transient fake ACP initialization failure");
+}
+
 function countPromptBlock(
   prompt: readonly acp.ContentBlock[],
   type: string,
@@ -403,6 +434,7 @@ function sessionModes(state: FakeSessionState): acp.SessionModeState {
 
 const sessions = new Map<string, FakeSessionState>();
 const turnCancellations = new Map<string, AbortController>();
+let listCommandsAnnounced = false;
 const agentName = readAgentName();
 const stream = acp.ndJsonStream(
   writableWebStream(process.stdout),
@@ -411,25 +443,31 @@ const stream = acp.ndJsonStream(
 
 acp
   .agent({ name: FAKE_ACP_AGENT_NAME })
-  .onRequest(acp.methods.agent.initialize, () => ({
-    agentCapabilities: {
-      loadSession: true,
-      promptCapabilities: {
-        embeddedContext: true,
-        image: true,
+  .onRequest(acp.methods.agent.initialize, (context) => {
+    failFirstRuntimeInitialization(
+      context.params.clientCapabilities,
+      agentName,
+    );
+    return {
+      agentCapabilities: {
+        loadSession: true,
+        promptCapabilities: {
+          embeddedContext: true,
+          image: true,
+        },
+        sessionCapabilities: {
+          additionalDirectories: {},
+          close: {},
+          resume: {},
+          ...(process.argv.includes("--no-native-sessions")
+            ? {}
+            : { list: {}, delete: {}, fork: {} }),
+        },
       },
-      sessionCapabilities: {
-        additionalDirectories: {},
-        close: {},
-        resume: {},
-        ...(process.argv.includes("--no-native-sessions")
-          ? {}
-          : { list: {}, delete: {}, fork: {} }),
-      },
-    },
-    agentInfo: { name: "Mobius test agent", version: "1.0.0" },
-    protocolVersion: acp.PROTOCOL_VERSION,
-  }))
+      agentInfo: { name: "Mobius test agent", version: "1.0.0" },
+      protocolVersion: acp.PROTOCOL_VERSION,
+    };
+  })
   .onRequest(acp.methods.agent.session.new, (context) => {
     const sessionId = crypto.randomUUID();
     acquireWriter(sessionId);
@@ -456,7 +494,28 @@ acp
     sessions.set(context.params.sessionId, state);
     return { configOptions: configOptions(state), modes: sessionModes(state) };
   })
-  .onRequest(acp.methods.agent.session.list, (context) => {
+  .onRequest(acp.methods.agent.session.list, async (context) => {
+    if (
+      process.argv.includes("--announce-commands-while-listing") &&
+      !listCommandsAnnounced
+    ) {
+      const activeSessionId =
+        sessions.keys().next().value ?? "native-browser-notification";
+      listCommandsAnnounced = true;
+      await context.client.notify(acp.methods.client.session.update, {
+        sessionId: activeSessionId,
+        update: {
+          availableCommands: [
+            {
+              description: "Inspect the current workspace",
+              input: { hint: "optional focus" },
+              name: "inspect",
+            },
+          ],
+          sessionUpdate: "available_commands_update",
+        },
+      });
+    }
     const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     const stored =
       directory === undefined
@@ -482,7 +541,9 @@ acp
                 sessionId: id,
                 cwd: metadata.cwd,
                 additionalDirectories: [...metadata.additionalDirectories],
-                title: metadata.title,
+                title: process.argv.includes("--oversized-native-session-title")
+                  ? `${metadata.title}${"x".repeat(600)}`
+                  : metadata.title,
                 updatedAt: "2026-09-05T00:00:00Z",
               },
             ];
