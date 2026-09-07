@@ -15,6 +15,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import {
   type ChannelRuntime,
+  createMobiusApplication,
   type PairingDirectory,
   PairingDirectoryError,
   ProjectScope,
@@ -23,6 +24,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createNodeRelay, type NodeRelay } from "../src/node-relay.ts";
+import { NodeSessionRuntime } from "../src/node-session-runtime.ts";
 
 const fixedTime = Date.parse("2026-09-06T00:00:00.000Z");
 const token = "node-test-token-abcdefghijklmnopqrstuvwxyz";
@@ -247,6 +249,32 @@ afterEach(async () => {
 });
 
 describe("Node public Relay API", () => {
+  it("Given a host-provided Mobius environment, When the host resolves the application, Then it can serve Relay requests", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-node-application-"));
+    createdDirectories.push(directory);
+    const sessionRuntime = new NodeSessionRuntime(
+      join(directory, "relay.sqlite"),
+      join(directory, "content"),
+    );
+    const injector = createMobiusApplication({
+      channelRuntime: new InertChannelRuntime(),
+      pairingDirectory: new ScopedPairingDirectory(),
+      sessionRuntime,
+    });
+    const application = injector.resolve("application");
+
+    const response = await application.fetch(
+      new Request("https://node.relay.test/health"),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({
+      service: "mobius-relay",
+      status: "ok",
+    });
+    sessionRuntime.close();
+  });
+
   it("Given the shared public API scenario, When it uses SQLite and filesystem storage, Then pagination, catch-up, archives, authorization, and lifecycle errors match the cloud contract", async () => {
     const directory = await mkdtemp(join(tmpdir(), "mobius-node-relay-"));
     createdDirectories.push(directory);

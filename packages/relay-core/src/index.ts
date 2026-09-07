@@ -2,6 +2,7 @@ export * from "./bounded-request-body.ts";
 export * from "./channel-actor.ts";
 export * from "./channel-runtime.ts";
 export * from "./content-storage.ts";
+export * from "./create-application.ts";
 export * from "./pairing-directory.ts";
 export * from "./relay-api.ts";
 export * from "./session-runtime.ts";

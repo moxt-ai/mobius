@@ -377,9 +377,28 @@ function reconciliationOutcome(
   );
 }
 
-export function createRelayApp(dependencies: RelayDependencies): Hono {
-  const app = new Hono();
+export class MobiusApplication extends Hono {
+  static readonly inject = [
+    "channelRuntime",
+    "pairingDirectory",
+    "sessionRuntime",
+  ] satisfies readonly ["channelRuntime", "pairingDirectory", "sessionRuntime"];
 
+  constructor(
+    channelRuntime: ChannelRuntime,
+    pairingDirectory: PairingDirectory,
+    sessionRuntime: SessionRuntime,
+  ) {
+    super();
+    registerRelayRoutes(this, {
+      channelRuntime,
+      pairingDirectory,
+      sessionRuntime,
+    });
+  }
+}
+
+function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   app.get("/health", (context) =>
     context.json({
       service: "mobius-relay",
@@ -1009,6 +1028,12 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
       }
     },
   );
+}
 
-  return app;
+export function createRelayApp(dependencies: RelayDependencies): Hono {
+  return new MobiusApplication(
+    dependencies.channelRuntime,
+    dependencies.pairingDirectory,
+    dependencies.sessionRuntime,
+  );
 }

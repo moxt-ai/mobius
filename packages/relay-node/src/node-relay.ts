@@ -1,6 +1,6 @@
 import {
   type ChannelRuntime,
-  createRelayApp,
+  createMobiusApplication,
   type PairingDirectory,
   type SessionQuotaPolicy,
 } from "@moxt-ai/mobius-relay-core";
@@ -27,11 +27,11 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
     options.contentRoot,
     options.quota,
   );
-  const app = createRelayApp({
+  const app = createMobiusApplication({
     channelRuntime: options.channelRuntime,
     pairingDirectory: options.pairingDirectory,
     sessionRuntime,
-  });
+  }).resolve("application");
   return {
     close: sessionRuntime.close,
     fetch: async (request) => await app.fetch(request),
