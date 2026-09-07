@@ -145,6 +145,81 @@ describe("ACP conversation sessions", () => {
     }
   });
 
+  it("Given an Agent only persists a conversation after its first prompt, When an unprompted Mobius conversation prepares after a daemon restart, Then the local runtime replaces the empty native session without an agent toggle", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-acp-empty-restart-"),
+    );
+    const databasePath = join(temporaryDirectory, "sessions.sqlite");
+    const nativeStateDirectory = join(temporaryDirectory, "native");
+    const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
+    const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [
+      fakeAgentPath,
+      "--agent-name",
+      "Codex",
+      "--persist-after-first-prompt",
+    ]);
+    const signal = new AbortController().signal;
+
+    try {
+      const firstStore = new SqliteAcpSessionStore(databasePath);
+      const first = new AcpSessionManager(undefined, firstStore);
+      await first.prepareSession({
+        additionalDirectories: [],
+        agent: codex,
+        cwd: temporaryDirectory,
+        sessionId: "empty-codex-conversation",
+        signal,
+      });
+      await first.close();
+      firstStore.close();
+
+      const secondStore = new SqliteAcpSessionStore(databasePath);
+      const second = new AcpSessionManager(undefined, secondStore);
+      try {
+        await expect(
+          second.prepareSession({
+            additionalDirectories: [],
+            agent: codex,
+            cwd: temporaryDirectory,
+            sessionId: "empty-codex-conversation",
+            signal,
+          }),
+        ).resolves.toMatchObject({ restored: false });
+        const chunks: string[] = [];
+        await second.runPrompt({
+          additionalDirectories: [],
+          agent: codex,
+          commandId: "first-command-after-restart",
+          cwd: temporaryDirectory,
+          images: [],
+          onActivity: () => Promise.resolve(),
+          onText: (text) => {
+            chunks.push(text);
+            return Promise.resolve();
+          },
+          prompt: "continue without switching agents",
+          resources: [],
+          sessionId: "empty-codex-conversation",
+          signal,
+        });
+        expect(chunks.join("")).toBe(
+          "Codex turn 1: continue without switching agents",
+        );
+      } finally {
+        await second.close();
+        secondStore.close();
+      }
+    } finally {
+      if (previousState === undefined) {
+        delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+      } else {
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
+      }
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("Given an active ACP conversation, When a second turn is sent, Then the same Agent session remains alive", async () => {
     const manager = new AcpSessionManager();
     const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [

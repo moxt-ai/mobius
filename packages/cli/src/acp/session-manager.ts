@@ -1134,7 +1134,7 @@ class AcpProcessSession implements AcpClientHandler {
     origin?: NativeSessionOrigin,
   ): Promise<void> => {
     await this.#initializeAgent(signal);
-    const stored =
+    let stored =
       origin?.kind === "import"
         ? new FoundAcpStoredSession(
             new AcpStoredSession(
@@ -1147,6 +1147,10 @@ class AcpProcessSession implements AcpClientHandler {
             ),
           )
         : this.#store.read(this.#mobiusSessionId);
+    if (stored instanceof FoundAcpStoredSession && !stored.session.prompted) {
+      this.#store.remove(this.#mobiusSessionId);
+      stored = this.#store.read(this.#mobiusSessionId);
+    }
     if (stored instanceof DeletedAcpStoredSession)
       throw new AcpExecutionError(
         "The native Agent session was deleted. Start a new chat.",
@@ -1270,16 +1274,6 @@ class AcpProcessSession implements AcpClientHandler {
       );
       this.#nativeSessionId = created.sessionId;
       lifecycleResponse = created;
-      this.#store.write(
-        new AcpStoredSession(
-          this.#mobiusSessionId,
-          this.#agentId,
-          this.#nativeSessionId,
-          this.#cwd,
-          this.#additionalDirectories,
-          false,
-        ),
-      );
     }
     const lifecycleRecord = isRecord(lifecycleResponse)
       ? lifecycleResponse
@@ -1290,16 +1284,18 @@ class AcpProcessSession implements AcpClientHandler {
     );
     await this.#updateTail;
     signal.throwIfAborted();
-    this.#store.write(
-      new AcpStoredSession(
-        this.#mobiusSessionId,
-        this.#agentId,
-        this.#nativeSessionId,
-        this.#cwd,
-        this.#additionalDirectories,
-        this.#prompted,
-      ),
-    );
+    if (this.#prompted) {
+      this.#store.write(
+        new AcpStoredSession(
+          this.#mobiusSessionId,
+          this.#agentId,
+          this.#nativeSessionId,
+          this.#cwd,
+          this.#additionalDirectories,
+          true,
+        ),
+      );
+    }
   };
 
   readonly listNativeSessions = async (

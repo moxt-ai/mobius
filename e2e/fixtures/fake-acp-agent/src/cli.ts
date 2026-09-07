@@ -51,6 +51,10 @@ function exitsAfterSessionCreation(): boolean {
   return process.argv.includes("--exit-after-session-creation");
 }
 
+function persistsEmptySessions(): boolean {
+  return !process.argv.includes("--persist-after-first-prompt");
+}
+
 function failFirstRuntimeInitialization(
   clientCapabilities: unknown,
   selectedAgentName: string,
@@ -478,7 +482,9 @@ acp
       title: "",
     });
     sessions.set(sessionId, state);
-    persistState(sessionId, state);
+    if (persistsEmptySessions()) {
+      persistState(sessionId, state);
+    }
     if (exitsAfterSessionCreation()) {
       setImmediate(() => process.exit(0));
     }
