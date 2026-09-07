@@ -46,7 +46,7 @@ For Cloudflare deployment, the Web build is uploaded as Worker Static Assets in
 the same deployment as the Relay. API and WebSocket requests continue into the
 Worker, while browser assets are served at the Worker origin. The browser derives
 the relay WebSocket URL from that origin. The single current Relay API is exposed
-under `/api`; it has no Mobius format or route-version branches. A bare origin
+under `/mobius/api`; it has no format or route-version branches. A bare origin
 renders the pairing page.
 A successful one-time claim gives the browser an independent
 `/channels/<channel-id>` route. The Web application reads the paired machine and

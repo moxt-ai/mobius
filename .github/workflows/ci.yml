@@ -113,7 +113,7 @@ jobs:
             --max-time 15 \
             --retry 5 \
             --retry-all-errors \
-            https://mobius-relay.paraflow.biz/health)"
+            https://mobius-relay.paraflow.biz/mobius/api/health)"
           expected='{"service":"mobius-relay","status":"ok"}'
           if [[ "$actual" != "$expected" ]]; then
             echo "Unexpected health response: $actual" >&2

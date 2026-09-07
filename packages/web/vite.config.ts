@@ -47,8 +47,7 @@ export default defineConfig({
     host: "127.0.0.1",
     port: webPort,
     proxy: {
-      "/health": `http://127.0.0.1:${relayPort.toString()}`,
-      "/api": {
+      "/mobius/api": {
         changeOrigin: true,
         target: `http://127.0.0.1:${relayPort.toString()}`,
         ws: true,

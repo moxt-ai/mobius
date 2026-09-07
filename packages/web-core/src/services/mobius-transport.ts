@@ -40,7 +40,7 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
   const relayUrl = new URL(window.location.origin);
-  relayUrl.pathname = `/api/channels/${encodeURIComponent(connection.channelId)}/host`;
+  relayUrl.pathname = `/mobius/api/channels/${encodeURIComponent(connection.channelId)}/host`;
   relayUrl.searchParams.set("token", connection.hostToken);
   relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return relayUrl.toString();

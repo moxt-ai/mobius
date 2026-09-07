@@ -399,14 +399,14 @@ export class MobiusApplication extends Hono {
 }
 
 function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
-  app.get("/health", (context) =>
+  app.get("/mobius/api/health", (context) =>
     context.json({
       service: "mobius-relay",
       status: "ok",
     }),
   );
 
-  app.post("/api/pairings", async (context) => {
+  app.post("/mobius/api/pairings", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.createPairing(
@@ -420,7 +420,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.get("/api/pairings/:pairingId", async (context) => {
+  app.get("/mobius/api/pairings/:pairingId", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.readPairingStatus(
@@ -435,7 +435,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.post("/api/pairings/claim", async (context) => {
+  app.post("/mobius/api/pairings/claim", async (context) => {
     try {
       const body = await parseJsonBody(context.req.raw);
       assertExactKeys(body, [
@@ -466,7 +466,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.put("/api/channels/:channelId/catalog", async (context) => {
+  app.put("/mobius/api/channels/:channelId/catalog", async (context) => {
     try {
       const body = await parseJsonBody(context.req.raw);
       assertExactKeys(body, ["agents", "installableAgents"]);
@@ -489,7 +489,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.post("/api/channels/:channelId/access-grants", async (context) => {
+  app.post("/mobius/api/channels/:channelId/access-grants", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.createChannelAccessGrant(
@@ -506,7 +506,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   });
 
   app.post(
-    "/api/channels/:channelId/access-grants/:grantId/redeem",
+    "/mobius/api/channels/:channelId/access-grants/:grantId/redeem",
     async (context) => {
       try {
         const body = await parseJsonBody(context.req.raw);
@@ -526,7 +526,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     },
   );
 
-  app.get("/api/channels/:channelId/linked-devices", async (context) => {
+  app.get("/mobius/api/channels/:channelId/linked-devices", async (context) => {
     try {
       return context.json({
         devices: await dependencies.pairingDirectory.listLinkedChannelDevices(
@@ -542,7 +542,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   });
 
   app.delete(
-    "/api/channels/:channelId/linked-devices/:credentialId",
+    "/mobius/api/channels/:channelId/linked-devices/:credentialId",
     async (context) => {
       try {
         const revoked =
@@ -567,7 +567,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     },
   );
 
-  app.get("/api/channels/:channelId", async (context) => {
+  app.get("/mobius/api/channels/:channelId", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.readChannel(
@@ -582,7 +582,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.get("/api/channels/:channelId/host", async (context) => {
+  app.get("/mobius/api/channels/:channelId/host", async (context) => {
     try {
       const channelId = validateIdentifier(
         context.req.param("channelId"),
@@ -604,7 +604,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.get("/api/channels/:channelId/daemon", async (context) => {
+  app.get("/mobius/api/channels/:channelId/daemon", async (context) => {
     try {
       const channelId = validateIdentifier(
         context.req.param("channelId"),
@@ -626,7 +626,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.post("/api/projects/:projectId/sessions", async (context) => {
+  app.post("/mobius/api/projects/:projectId/sessions", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -649,7 +649,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.get("/api/projects/:projectId/sessions", async (context) => {
+  app.get("/mobius/api/projects/:projectId/sessions", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -670,52 +670,61 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
     }
   });
 
-  app.post("/api/projects/:projectId/session-imports", async (context) => {
-    try {
-      const scope = await projectScope(
-        dependencies,
-        context.req.param("projectId"),
-        context.req.raw,
-      );
-      const body = await parseJsonBody(context.req.raw, MAX_IMPORT_BODY_LENGTH);
-      assertExactKeys(body, ["export"]);
-      return context.json(
-        await dependencies.sessionRuntime.importSession(
-          scope,
-          body["export"],
-          Date.now(),
-          context.req.raw.signal,
-        ),
-        201,
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return sessionError(error);
-    }
-  });
+  app.post(
+    "/mobius/api/projects/:projectId/session-imports",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        const body = await parseJsonBody(
+          context.req.raw,
+          MAX_IMPORT_BODY_LENGTH,
+        );
+        assertExactKeys(body, ["export"]);
+        return context.json(
+          await dependencies.sessionRuntime.importSession(
+            scope,
+            body["export"],
+            Date.now(),
+            context.req.raw.signal,
+          ),
+          201,
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
 
-  app.get("/api/projects/:projectId/sessions/:sessionId", async (context) => {
-    try {
-      const scope = await projectScope(
-        dependencies,
-        context.req.param("projectId"),
-        context.req.raw,
-      );
-      return context.json(
-        await dependencies.sessionRuntime.readSession(
-          scope,
-          validateIdentifier(context.req.param("sessionId"), "session_id"),
-          context.req.raw.signal,
-        ),
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return sessionError(error);
-    }
-  });
+  app.get(
+    "/mobius/api/projects/:projectId/sessions/:sessionId",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.readSession(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
 
   app.put(
-    "/api/projects/:projectId/sessions/:sessionId/binding",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/binding",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -757,7 +766,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/turns/:turnId",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/turns/:turnId",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -781,7 +790,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -805,7 +814,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.post(
-    "/api/channels/:channelId/sessions/:sessionId/attempts/:attemptId/reconciliation",
+    "/mobius/api/channels/:channelId/sessions/:sessionId/attempts/:attemptId/reconciliation",
     async (context) => {
       try {
         const access = await dependencies.pairingDirectory.authorizeDaemon(
@@ -834,7 +843,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/interactions",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/interactions",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -858,7 +867,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/interactions/:interactionId",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/interactions/:interactionId",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -885,7 +894,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/messages",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/messages",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -910,7 +919,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/events",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/events",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -935,7 +944,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId/tool-calls/:toolCallId",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId/tool-calls/:toolCallId",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -960,7 +969,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/native-history",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/native-history",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -983,7 +992,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.get(
-    "/api/projects/:projectId/sessions/:sessionId/export",
+    "/mobius/api/projects/:projectId/sessions/:sessionId/export",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -1006,7 +1015,7 @@ function registerRelayRoutes(app: Hono, dependencies: RelayDependencies): void {
   );
 
   app.delete(
-    "/api/projects/:projectId/sessions/:sessionId",
+    "/mobius/api/projects/:projectId/sessions/:sessionId",
     async (context) => {
       try {
         const scope = await projectScope(

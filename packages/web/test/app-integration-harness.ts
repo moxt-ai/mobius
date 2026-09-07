@@ -249,13 +249,13 @@ export async function pairDaemon(): Promise<{
   readonly daemon: StatefulDaemon;
 }> {
   const createdResponse = await fetch(
-    new URL("/api/pairings", window.location.origin),
+    new URL("/mobius/api/pairings", window.location.origin),
     { method: "POST" },
   );
   expect(createdResponse.status).toBe(201);
   const created = decodeCreatedPairing(await createdResponse.json());
   const claimResponse = await fetch(
-    new URL("/api/pairings/claim", window.location.origin),
+    new URL("/mobius/api/pairings/claim", window.location.origin),
     {
       body: JSON.stringify({
         agents: [{ id: "codex", label: "Codex" }],
@@ -271,7 +271,7 @@ export async function pairDaemon(): Promise<{
   expect(claimResponse.status).toBe(200);
   const claimed = decodeClaimedPairing(await claimResponse.json());
   const daemonUrl = new URL(
-    `/api/channels/${claimed.channelId}/daemon`,
+    `/mobius/api/channels/${claimed.channelId}/daemon`,
     window.location.origin,
   );
   daemonUrl.protocol = "ws:";

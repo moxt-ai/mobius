@@ -308,7 +308,7 @@ async function claimPairing(
     id: agent.id,
     label: agent.label,
   }));
-  const endpoint = new URL("/api/pairings/claim", options.relayOrigin);
+  const endpoint = new URL("/mobius/api/pairings/claim", options.relayOrigin);
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -473,7 +473,7 @@ function buildPairedDaemon(
 ): PairedDaemon {
   assertInventoryUsable(inventory);
   const relayUrl = new URL(
-    `/api/channels/${encodeURIComponent(connection.channelId)}/daemon`,
+    `/mobius/api/channels/${encodeURIComponent(connection.channelId)}/daemon`,
     connection.relayOrigin,
   );
   relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";

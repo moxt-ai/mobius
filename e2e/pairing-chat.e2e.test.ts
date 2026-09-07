@@ -260,7 +260,7 @@ function hostSocketUrl(
   origin: string,
 ): URL {
   const url = new URL(
-    `/api/channels/${encodeURIComponent(pairing.channelId)}/host`,
+    `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}/host`,
     origin,
   );
   url.protocol = "ws:";
@@ -274,7 +274,7 @@ function projectSessionUrl(
   sessionId?: string,
   suffix = "",
 ): URL {
-  const base = `/api/projects/${encodeURIComponent(pairing.projectId)}/sessions`;
+  const base = `/mobius/api/projects/${encodeURIComponent(pairing.projectId)}/sessions`;
   const session =
     sessionId === undefined ? "" : `/${encodeURIComponent(sessionId)}`;
   return new URL(`${base}${session}${suffix}`, origin);
@@ -878,7 +878,9 @@ describe("pairing and channel chat", () => {
       await waitForRelay(wrangler);
       const pairing = decodeBrowserPairing(
         await (
-          await fetch(new URL("/api/pairings", origin), { method: "POST" })
+          await fetch(new URL("/mobius/api/pairings", origin), {
+            method: "POST",
+          })
         ).json(),
       );
       const paired = await pairLocalMachine([
@@ -1351,9 +1353,12 @@ describe("pairing and channel chat", () => {
 
     try {
       await waitForRelay(wrangler);
-      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
-        method: "POST",
-      });
+      const pairingResponse = await fetch(
+        new URL("/mobius/api/pairings", origin),
+        {
+          method: "POST",
+        },
+      );
       const pairing = decodeBrowserPairing(await pairingResponse.json());
       const paired = await pairLocalMachine([
         "--url",
@@ -1439,9 +1444,12 @@ describe("pairing and channel chat", () => {
 
     try {
       await waitForRelay(wrangler);
-      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
-        method: "POST",
-      });
+      const pairingResponse = await fetch(
+        new URL("/mobius/api/pairings", origin),
+        {
+          method: "POST",
+        },
+      );
       const pairing = decodeBrowserPairing(await pairingResponse.json());
       const paired = await pairLocalMachine([
         "--url",
@@ -1538,7 +1546,7 @@ describe("pairing and channel chat", () => {
       expect(host.readyState).toBe(WebSocket.OPEN);
 
       const reconciliationUrl = new URL(
-        `/api/channels/${encodeURIComponent(pairing.channelId)}/sessions/${encodeURIComponent(sessionId)}/attempts/stalled-attempt/reconciliation`,
+        `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}/sessions/${encodeURIComponent(sessionId)}/attempts/stalled-attempt/reconciliation`,
         origin,
       );
       const daemonToken = new URL(paired.config.relayUrl).searchParams.get(
@@ -1796,15 +1804,18 @@ child.once("exit", (code) => process.exit(code ?? 93));
 
     try {
       await waitForRelay(wrangler);
-      const healthResponse = await fetch(new URL("/health", origin));
+      const healthResponse = await fetch(new URL("/mobius/api/health", origin));
       expect(healthResponse.status).toBe(200);
       await expect(healthResponse.json()).resolves.toEqual({
         service: "mobius-relay",
         status: "ok",
       });
-      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
-        method: "POST",
-      });
+      const pairingResponse = await fetch(
+        new URL("/mobius/api/pairings", origin),
+        {
+          method: "POST",
+        },
+      );
       expect(pairingResponse.status).toBe(201);
       const pairingBody: unknown = await pairingResponse.json();
       expect(pairingBody).toEqual(
@@ -1827,7 +1838,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
         `/channels/${pairing.channelId}`,
       );
       expect(paired.config.relayUrl.pathname).toBe(
-        `/api/channels/${pairing.channelId}/daemon`,
+        `/mobius/api/channels/${pairing.channelId}/daemon`,
       );
       const initiallyResumed = await resumeLocalMachine([
         "--channel",
@@ -1857,7 +1868,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
         mode: 0o600,
       });
       const repeatedClaimResponse = await fetch(
-        new URL("/api/pairings/claim", origin),
+        new URL("/mobius/api/pairings/claim", origin),
         {
           body: JSON.stringify({
             agents: [
@@ -1875,14 +1886,14 @@ child.once("exit", (code) => process.exit(code ?? 93));
       expect(repeatedClaimResponse.status).toBe(400);
       const publicChannelResponse = await fetch(
         new URL(
-          `/api/channels/${encodeURIComponent(pairing.channelId)}`,
+          `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}`,
           origin,
         ),
       );
       expect(publicChannelResponse.status).toBe(401);
       const authorizedChannelResponse = await fetch(
         new URL(
-          `/api/channels/${encodeURIComponent(pairing.channelId)}`,
+          `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}`,
           origin,
         ),
         { headers: authenticatedHeaders(pairing) },
@@ -1934,7 +1945,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
       expect(injectedCatalogUpdate.status).toBe(400);
       const wrongRoleResponse = await fetch(
         new URL(
-          `/api/channels/${encodeURIComponent(pairing.channelId)}/daemon?token=invalid`,
+          `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}/daemon?token=invalid`,
           origin,
         ),
       );
@@ -1954,7 +1965,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
           await waitForRuntimeOnline(socket);
           const automaticallyProvisionedDescriptor = await fetch(
             new URL(
-              `/api/channels/${encodeURIComponent(pairing.channelId)}`,
+              `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}`,
               origin,
             ),
             { headers: authenticatedHeaders(pairing) },
@@ -2207,7 +2218,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
         await waitForRuntimeOnline(refreshedHost);
         const refreshedDescriptor = await fetch(
           new URL(
-            `/api/channels/${encodeURIComponent(pairing.channelId)}`,
+            `/mobius/api/channels/${encodeURIComponent(pairing.channelId)}`,
             origin,
           ),
           { headers: authenticatedHeaders(pairing) },

@@ -841,7 +841,7 @@ async function hasUsableChannelCredential(
     throw error;
   }
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}`,
     window.location.origin,
   );
   try {
@@ -1016,7 +1016,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
 
 export async function createBrowserPairing(): Promise<CreatedPairing> {
   const pairing = decodeCreatedPairing(
-    await requestJson(new URL("/api/pairings", window.location.origin), {
+    await requestJson(new URL("/mobius/api/pairings", window.location.origin), {
       method: "POST",
     }),
   );
@@ -1028,7 +1028,7 @@ export async function readBrowserPairingStatus(
   pairing: CreatedPairing,
 ): Promise<BrowserPairingStatus> {
   const endpoint = new URL(
-    `/api/pairings/${encodeURIComponent(pairing.pairingId)}`,
+    `/mobius/api/pairings/${encodeURIComponent(pairing.pairingId)}`,
     window.location.origin,
   );
   endpoint.searchParams.set("token", pairing.pollToken);
@@ -1068,7 +1068,7 @@ export async function createChannelAccessGrant(
 ): Promise<CreatedChannelAccessGrant> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}/access-grants`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}/access-grants`,
     window.location.origin,
   );
   return decodeCreatedChannelAccessGrant(
@@ -1089,7 +1089,7 @@ export async function readLinkedChannelDevices(
 ): Promise<readonly LinkedChannelDevice[]> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}/linked-devices`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}/linked-devices`,
     window.location.origin,
   );
   return decodeLinkedChannelDevices(
@@ -1122,7 +1122,7 @@ export async function redeemChannelAccessGrantFromLocation(
     return;
   }
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
     window.location.origin,
   );
   const credential = decodeRedeemedChannelCredential(
@@ -1155,7 +1155,7 @@ export async function revokeLinkedChannelDevice(
 ): Promise<void> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
     window.location.origin,
   );
   await requestEmpty(
@@ -1173,7 +1173,7 @@ export async function readChannelConnection(
 ): Promise<ChannelConnection> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/api/channels/${encodeURIComponent(channelId)}`,
+    `/mobius/api/channels/${encodeURIComponent(channelId)}`,
     window.location.origin,
   );
   return decodeChannelConnection(
@@ -1325,7 +1325,7 @@ async function readChannelHistoryWithSignal(
   const credential = readChannelCredential(channelId);
   const headers = { authorization: `Bearer ${credential.hostToken}` };
   const directoryEndpoint = new URL(
-    `/api/projects/${encodeURIComponent(credential.projectId)}/sessions`,
+    `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions`,
     window.location.origin,
   );
   directoryEndpoint.searchParams.set("limit", "100");
@@ -1348,16 +1348,16 @@ async function readChannelHistoryWithSignal(
     summaries.map(async ({ hasNativeHistory, session }) => {
       try {
         const messagesEndpoint = new URL(
-          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
           window.location.origin,
         );
         messagesEndpoint.searchParams.set("limit", "100");
         const historyEndpoint = new URL(
-          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
+          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
           window.location.origin,
         );
         const interactionsEndpoint = new URL(
-          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
+          `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
           window.location.origin,
         );
         const [page, nativeHistoryValue, interactionPage] = await Promise.all([
@@ -1625,7 +1625,7 @@ export async function readToolCallDetail(
 ): Promise<ActivityDetailResult> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
+    `/mobius/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
     window.location.origin,
   );
   return decodeActivityDetail(
