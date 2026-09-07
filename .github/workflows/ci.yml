@@ -105,17 +105,22 @@ jobs:
       - name: Verify production health
         shell: bash
         run: |
-          actual="$(curl \
-            --fail \
-            --show-error \
-            --silent \
-            --connect-timeout 5 \
-            --max-time 15 \
-            --retry 5 \
-            --retry-all-errors \
-            https://mobius-relay.paraflow.biz/mobius/api/health)"
           expected='{"service":"mobius-relay","status":"ok"}'
-          if [[ "$actual" != "$expected" ]]; then
-            echo "Unexpected health response: $actual" >&2
-            exit 1
-          fi
+          actual=''
+          for attempt in {1..6}; do
+            if actual="$(curl \
+              --fail \
+              --show-error \
+              --silent \
+              --connect-timeout 5 \
+              --max-time 15 \
+              https://mobius-relay.paraflow.biz/mobius/api/health)" && \
+              [[ "$actual" == "$expected" ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 6 ]]; then
+              sleep 5
+            fi
+          done
+          echo "Unexpected health response after deployment propagation: $actual" >&2
+          exit 1
