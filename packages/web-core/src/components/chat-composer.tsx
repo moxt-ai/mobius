@@ -57,7 +57,7 @@ function ContextUsageIndicator() {
     <details className="group/context relative">
       <summary
         aria-label={`Agent usage: ${detail}`}
-        className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-black/[0.045] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 md:size-9"
+        className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full text-muted-foreground outline-none hover:bg-black/[0.045] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 lg:size-9"
         title={detail}
       >
         <svg
@@ -289,8 +289,8 @@ export function ChatComposer({ placement }: ChatComposerProps) {
       className={cn(
         "relative z-[8] shrink-0 text-left",
         placement === "active"
-          ? "bg-gradient-to-t from-background via-background to-transparent px-3 pt-3 pb-3"
-          : "mt-6 w-full bg-transparent",
+          ? "chat-composer-active bg-gradient-to-t from-background via-background to-transparent px-2 pt-2 pb-3 md:px-3 md:pt-3"
+          : "mt-5 w-full bg-transparent sm:mt-6",
       )}
       data-composer-placement={placement}
     >
@@ -317,7 +317,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         </div>
       )}
       <form
-        className="composer-shell relative mx-auto w-full max-w-[840px] rounded-xl bg-white px-3 py-2.5 max-md:px-2.5"
+        className="composer-shell relative mx-auto w-full max-w-[840px] rounded-2xl bg-white px-2 py-1.5 sm:px-2.5 sm:py-2 md:rounded-[18px] md:px-3 md:py-2.5"
         onSubmit={submit}
       >
         {hasSelectedContext && (
@@ -328,14 +328,14 @@ export function ChatComposer({ placement }: ChatComposerProps) {
             <legend className="sr-only">Selected files and directories</legend>
             {conversation.additionalDirectories.map((directory) => (
               <span
-                className="inline-flex min-h-11 max-w-44 items-center gap-1 rounded-full bg-success-subtle py-0.5 pr-0.5 pl-2.5 text-[11px] font-medium text-success md:min-h-9"
+                className="inline-flex min-h-11 max-w-44 items-center gap-1 rounded-full bg-success-subtle py-0.5 pr-0.5 pl-2.5 text-[11px] font-medium text-success lg:min-h-9"
                 key={directory.directoryId}
                 title="Additional agent directory"
               >
                 <span className="truncate">+ {directory.name}</span>
                 <Button
                   aria-label={`Remove ${directory.name}`}
-                  className="size-11 rounded-full text-success md:size-8"
+                  className="size-11 rounded-full text-success lg:size-8"
                   disabled={conversation.contextLocked}
                   onClick={() => toggleAdditionalDirectory(directory)}
                   size="icon"
@@ -349,7 +349,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
               <ul aria-label="Prompt images" className="contents">
                 {conversation.draftImages.map((image) => (
                   <li
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border-[0.5px] border-black/9 bg-surface-subtle py-1 pr-1 pl-2 text-[11px] text-copy-secondary md:min-h-9"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border-[0.5px] border-black/9 bg-surface-subtle py-1 pr-1 pl-2 text-[11px] text-copy-secondary lg:min-h-9"
                     key={image.name}
                   >
                     <ImageIcon
@@ -359,7 +359,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     <span className="max-w-40 truncate">{image.name}</span>
                     <Button
                       aria-label={`Remove ${image.name}`}
-                      className="size-11 md:size-8"
+                      className="size-11 lg:size-8"
                       onClick={() => removeDraftImage(image.name)}
                       size="icon"
                       variant="ghost"
@@ -374,7 +374,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
               <ul aria-label="Prompt resources" className="contents">
                 {conversation.draftResources.map((resource) => (
                   <li
-                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border-[0.5px] border-black/9 bg-surface-subtle py-1 pr-1 pl-2 text-[11px] text-copy-secondary md:min-h-9"
+                    className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border-[0.5px] border-black/9 bg-surface-subtle py-1 pr-1 pl-2 text-[11px] text-copy-secondary lg:min-h-9"
                     key={resource.uri}
                   >
                     <FileText
@@ -384,7 +384,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     <span className="max-w-40 truncate">{resource.name}</span>
                     <Button
                       aria-label={`Remove ${resource.name}`}
-                      className="size-11 md:size-8"
+                      className="size-11 lg:size-8"
                       onClick={() => removeDraftResource(resource.name)}
                       size="icon"
                       variant="ghost"
@@ -402,6 +402,11 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         </label>
         <Textarea
           aria-describedby="composer-hint connection-hint"
+          className={cn(
+            placement === "active"
+              ? "min-h-12 lg:min-h-16"
+              : "min-h-12 md:min-h-16",
+          )}
           id="agent-prompt"
           maxLength={10000}
           onChange={(event) => {
@@ -411,7 +416,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
           onKeyDown={handleKeyDown}
           placeholder={
             conversation.session.isReady
-              ? "Ask the local agent anything — type / for commands"
+              ? "Ask the local agent…"
               : conversation.session.label
           }
           ref={textareaRef}
@@ -452,12 +457,12 @@ export function ChatComposer({ placement }: ChatComposerProps) {
             ))}
           </div>
         )}
-        <div className="mt-2.5 flex min-h-11 items-center justify-between gap-1.5 md:min-h-9 md:gap-2">
-          <fieldset className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="mt-1 flex min-h-11 items-center justify-between gap-1 lg:mt-2.5 lg:min-h-9 lg:gap-2">
+          <fieldset className="flex min-w-0 flex-1 items-center gap-0.5 sm:gap-1">
             <legend className="sr-only">Prompt and run controls</legend>
             <Button
               aria-label="Attach images or text resources"
-              className="size-11 rounded-full md:size-9"
+              className="size-11 rounded-full text-copy-secondary hover:bg-black/[0.04] lg:size-9"
               disabled={!canAttach || conversation.isRunning || attaching}
               onClick={() => fileInputRef.current?.click()}
               size="icon"
@@ -500,12 +505,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     : "Stopping agent"
                   : "Send message"
               }
-              className={cn(
-                "size-11 rounded-full border-0 p-0 shadow-none md:size-9",
-                conversation.isRunning
-                  ? "bg-destructive/10 text-destructive hover:bg-destructive/15"
-                  : "bg-primary text-primary-foreground hover:bg-primary/90",
-              )}
+              className="group size-11 rounded-full border-0 bg-transparent p-0 shadow-none hover:bg-transparent lg:size-9"
               disabled={
                 conversation.isRunning ? !conversation.canStop : !canSend
               }
@@ -519,15 +519,25 @@ export function ChatComposer({ placement }: ChatComposerProps) {
               size="icon"
               type={conversation.isRunning ? "button" : "submit"}
             >
-              {conversation.isRunning ? (
-                conversation.canStop ? (
-                  <Square className="size-[14px] fill-current" />
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "flex size-9 items-center justify-center rounded-full transition-colors duration-150 motion-reduce:transition-none",
+                  conversation.isRunning
+                    ? "bg-destructive/10 text-destructive group-hover:bg-destructive/15"
+                    : "bg-primary text-primary-foreground group-hover:bg-primary/90",
+                )}
+              >
+                {conversation.isRunning ? (
+                  conversation.canStop ? (
+                    <Square className="size-[14px] fill-current" />
+                  ) : (
+                    <LoaderCircle className="size-4 animate-spin" />
+                  )
                 ) : (
-                  <LoaderCircle className="size-[18px] animate-spin" />
-                )
-              ) : (
-                <Send className="size-[18px]" />
-              )}
+                  <Send className="size-4" />
+                )}
+              </span>
             </Button>
           </div>
         </div>

@@ -87,7 +87,7 @@
   body,
   #root {
     width: 100%;
-    min-width: 320px;
+    min-width: 0;
     height: 100%;
     margin: 0;
     overflow: hidden;
@@ -104,9 +104,47 @@
   button,
   a,
   textarea,
-  select {
+  select,
+  summary {
     -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
   }
+}
+
+.chat-header {
+  min-height: calc(56px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  padding-right: max(10px, env(safe-area-inset-right));
+  padding-left: max(10px, env(safe-area-inset-left));
+}
+
+.sidebar-safe-header {
+  min-height: calc(64px + env(safe-area-inset-top));
+  padding-top: env(safe-area-inset-top);
+  padding-left: max(18px, env(safe-area-inset-left));
+}
+
+.sidebar-safe-footer {
+  min-height: calc(56px + env(safe-area-inset-bottom));
+  padding-bottom: max(10px, env(safe-area-inset-bottom));
+  padding-left: max(16px, env(safe-area-inset-left));
+}
+
+.chat-composer-active {
+  padding-right: max(8px, env(safe-area-inset-right));
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  padding-left: max(8px, env(safe-area-inset-left));
+}
+
+.mobile-safe-sheet[data-placement="sheet"] {
+  bottom: max(12px, env(safe-area-inset-bottom));
+}
+
+.agent-markdown [data-streamdown="table-wrapper"] {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .pairing-card {
@@ -244,6 +282,113 @@
   animation-delay: 240ms;
 }
 
+@media (max-width: 1023px) {
+  div.conversation-scroll > [role="log"] {
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-left: max(14px, env(safe-area-inset-left));
+  }
+
+  [data-workspace-picker-panel] {
+    max-height: min(
+      82dvh,
+      calc(
+        100dvh -
+        env(safe-area-inset-top) -
+        env(safe-area-inset-bottom) -
+        24px
+      ),
+      660px
+    );
+  }
+
+  [data-session-config-panel] {
+    max-height: min(
+      76dvh,
+      calc(
+        100dvh -
+        env(safe-area-inset-top) -
+        env(safe-area-inset-bottom) -
+        24px
+      ),
+      620px
+    );
+  }
+
+  .agent-markdown [data-streamdown="code-block"] {
+    gap: 4px;
+    margin-block: 12px;
+    padding: 6px;
+    border-radius: 14px;
+  }
+
+  .agent-markdown [data-streamdown="code-block-header"] {
+    height: 44px;
+  }
+
+  .agent-markdown [data-streamdown="code-block-actions"] {
+    gap: 0;
+    padding: 0;
+    border-radius: 10px;
+  }
+
+  .agent-markdown [data-streamdown="code-block-actions"] button {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 9px;
+  }
+
+  .agent-markdown [data-streamdown="code-block-body"] {
+    padding: 12px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 1.65;
+  }
+
+  .agent-markdown [data-streamdown="table-header-cell"],
+  .agent-markdown [data-streamdown="table-cell"] {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+}
+
+@media (min-width: 768px) and (max-width: 1023px) {
+  div.conversation-scroll > [role="log"] {
+    padding-right: max(24px, env(safe-area-inset-right));
+    padding-left: max(24px, env(safe-area-inset-left));
+  }
+}
+
+@media (min-width: 1024px) {
+  .chat-header {
+    min-height: 56px;
+    padding-top: 0;
+    padding-right: 18px;
+    padding-left: 18px;
+  }
+
+  .sidebar-safe-header {
+    min-height: 64px;
+    padding-top: 0;
+    padding-left: 18px;
+  }
+
+  .sidebar-safe-footer {
+    min-height: 56px;
+    padding-bottom: 10px;
+    padding-left: 16px;
+  }
+
+  .chat-composer-active {
+    padding-right: 12px;
+    padding-bottom: 12px;
+    padding-left: 12px;
+  }
+}
+
 @keyframes thinking-dot {
   0%,
   60%,
@@ -268,6 +413,17 @@
 
   .composer-shell {
     transition: none;
+  }
+}
+
+@media (max-width: 1023px) and (max-height: 640px) {
+  .empty-conversation {
+    margin-top: 16px;
+    margin-bottom: 20px;
+  }
+
+  .empty-conversation-avatar {
+    display: none;
   }
 }
 

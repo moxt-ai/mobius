@@ -279,13 +279,13 @@ export function WorkspacePicker() {
       : [];
 
   return (
-    <div className="relative min-w-0">
+    <div className={cn("relative min-w-0", locked && "max-sm:hidden")}>
       <Button
         aria-controls={panelId}
         aria-expanded={browser.open}
         aria-haspopup="dialog"
         aria-label={`Workspace directory: ${conversation.directoryLabel}`}
-        className="h-11 w-11 shrink-0 justify-center rounded-full border-0 bg-black/[0.035] px-0 text-xs font-medium text-muted-foreground shadow-none hover:bg-black/[0.06] hover:text-foreground md:h-9 md:w-9 lg:w-auto lg:max-w-[180px] lg:justify-start lg:px-2.5"
+        className="h-11 w-11 shrink-0 justify-center rounded-full border-0 bg-transparent px-0 text-xs font-medium text-muted-foreground shadow-none hover:bg-black/[0.04] hover:text-foreground lg:h-9 lg:w-auto lg:max-w-[180px] lg:justify-start lg:bg-black/[0.035] lg:px-2.5"
         disabled={locked}
         onClick={() => {
           if (browser.open) {
@@ -303,7 +303,7 @@ export function WorkspacePicker() {
         }
         variant="outline"
       >
-        <FolderOpen className="size-3.5 shrink-0 text-success" />
+        <FolderOpen className="size-4 shrink-0 text-success" />
         <span className="sr-only lg:not-sr-only lg:truncate">
           {conversation.directoryLabel}
         </span>
@@ -313,7 +313,11 @@ export function WorkspacePicker() {
           <>
             <button
               aria-label="Close directory browser"
-              className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px] md:bg-transparent md:backdrop-blur-none"
+              className={cn(
+                "fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]",
+                panelLayout.kind !== "sheet" &&
+                  "md:bg-transparent md:backdrop-blur-none",
+              )}
               onClick={close}
               type="button"
             />
@@ -323,7 +327,7 @@ export function WorkspacePicker() {
               aria-labelledby={`${panelId}-title`}
               aria-modal="true"
               className={cn(
-                "fixed inset-x-3 bottom-3 z-40 flex max-h-[min(82vh,660px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_24px_80px_rgba(0,0,0,0.24)] outline-none md:shadow-[0_18px_54px_rgba(0,0,0,0.16)]",
+                "mobile-safe-sheet fixed inset-x-3 bottom-3 z-40 flex max-h-[min(82vh,660px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_24px_80px_rgba(0,0,0,0.24)] outline-none md:shadow-[0_18px_54px_rgba(0,0,0,0.16)]",
                 panelLayout.kind !== "sheet" &&
                   "md:inset-auto md:max-h-none md:max-w-none",
                 panelLayout.kind === "pending" && "md:invisible",
@@ -356,7 +360,7 @@ export function WorkspacePicker() {
                 </div>
                 <Button
                   aria-label="Close directory browser"
-                  className="-mt-1 -mr-1 size-11 rounded-full md:size-9"
+                  className="-mt-1 -mr-1 size-11 rounded-full lg:size-9"
                   onClick={close}
                   size="icon"
                   variant="ghost"
@@ -410,7 +414,7 @@ export function WorkspacePicker() {
                     {browser.message}
                   </p>
                   <Button
-                    className="mt-4 min-h-11 rounded-lg md:min-h-9"
+                    className="mt-4 min-h-11 rounded-lg lg:min-h-9"
                     onClick={() => load(browser.directoryId)}
                     size="sm"
                     variant="outline"
@@ -426,7 +430,7 @@ export function WorkspacePicker() {
                       {browser.entries.parentDirectoryId.length > 0 && (
                         <Button
                           aria-label="Open parent directory"
-                          className="size-11 rounded-xl bg-white shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)] md:size-10"
+                          className="size-11 rounded-xl bg-white shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)] lg:size-10"
                           onClick={() => {
                             load(browser.entries.parentDirectoryId);
                           }}
@@ -437,7 +441,7 @@ export function WorkspacePicker() {
                           <ChevronLeft className="size-4" />
                         </Button>
                       )}
-                      <div className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl bg-white px-3 shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)] md:h-10">
+                      <div className="flex h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl bg-white px-3 shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)] lg:h-10">
                         <FolderOpen className="size-4 shrink-0 text-success" />
                         <div className="min-w-0 flex-1">
                           <p className="text-[9px] font-semibold tracking-[0.08em] text-copy-tertiary uppercase">
@@ -453,7 +457,7 @@ export function WorkspacePicker() {
                       <span className="sr-only">Search folders</span>
                       <Search className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-copy-tertiary" />
                       <input
-                        className="h-11 w-full appearance-none rounded-xl border-[0.5px] border-black/10 bg-white pr-10 pl-9 text-xs text-foreground outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/15 motion-reduce:transition-none md:h-10 [&::-webkit-search-cancel-button]:hidden"
+                        className="h-11 w-full appearance-none rounded-xl border-[0.5px] border-black/10 bg-white pr-10 pl-9 text-xs text-foreground outline-none transition-[border-color,box-shadow] duration-150 placeholder:text-muted-foreground focus:border-ring focus:ring-2 focus:ring-ring/15 motion-reduce:transition-none lg:h-10 [&::-webkit-search-cancel-button]:hidden"
                         onChange={(event) =>
                           setSearchQuery(event.currentTarget.value)
                         }
@@ -464,7 +468,7 @@ export function WorkspacePicker() {
                       {searchQuery.length > 0 && (
                         <Button
                           aria-label="Clear folder search"
-                          className="absolute top-0 right-0 size-11 rounded-xl md:size-10"
+                          className="absolute top-0 right-0 size-11 rounded-xl lg:size-10"
                           onClick={() => setSearchQuery("")}
                           size="icon"
                           variant="ghost"
@@ -476,7 +480,7 @@ export function WorkspacePicker() {
                   </div>
                   <ul
                     aria-label={`Folders in ${browser.entries.directoryLabel}`}
-                    className="conversation-scroll min-h-40 flex-1 overflow-y-auto overscroll-contain p-2"
+                    className="conversation-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain p-2"
                   >
                     {visibleEntries.length === 0 && (
                       <li className="flex min-h-40 flex-col items-center justify-center px-6 py-8 text-center">
@@ -503,11 +507,11 @@ export function WorkspacePicker() {
                         );
                       return (
                         <li
-                          className="group flex min-h-11 items-center gap-1 rounded-xl px-1 transition-colors duration-150 hover:bg-surface-subtle motion-reduce:transition-none md:min-h-10"
+                          className="group flex min-h-11 items-center gap-1 rounded-xl px-1 transition-colors duration-150 hover:bg-surface-subtle motion-reduce:transition-none lg:min-h-10"
                           key={entry.directoryId}
                         >
                           <button
-                            className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-10"
+                            className="flex min-h-11 min-w-0 flex-1 items-center gap-2.5 rounded-xl px-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/70 lg:min-h-10"
                             onClick={() => load(entry.directoryId)}
                             type="button"
                           >
@@ -529,7 +533,7 @@ export function WorkspacePicker() {
                               }
                               aria-pressed={additional}
                               className={cn(
-                                "h-11 rounded-lg px-2.5 text-[11px] shadow-none md:h-9",
+                                "h-11 rounded-lg px-2.5 text-[11px] shadow-none lg:h-9",
                                 additional &&
                                   "bg-success-subtle text-success hover:bg-success-subtle/80 hover:text-success",
                               )}
@@ -568,7 +572,7 @@ export function WorkspacePicker() {
                       </p>
                     </div>
                     <Button
-                      className="min-h-11 rounded-lg px-4 text-xs disabled:opacity-100 md:min-h-9"
+                      className="min-h-11 rounded-lg px-4 text-xs disabled:opacity-100 lg:min-h-9"
                       disabled={
                         browser.entries.directoryId === conversation.directoryId
                       }

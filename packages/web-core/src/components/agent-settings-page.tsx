@@ -61,12 +61,13 @@ function AgentSettingsView({
 }: AgentSettingsViewProps) {
   return (
     <>
-      <header className="z-10 flex min-h-14 shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/95 px-3 md:px-[18px]">
+      <header className="chat-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
         <Button
           aria-controls="conversation-sidebar"
           aria-expanded={sidebarOpen}
           aria-label="Open conversation sidebar"
-          className="mr-[7px] md:hidden"
+          className="mr-[7px] size-11 lg:hidden"
+          id="conversation-sidebar-trigger"
           onClick={onOpenSidebar}
           size="icon"
           variant="ghost"
@@ -79,7 +80,7 @@ function AgentSettingsView({
               ? "Show conversation sidebar"
               : "Hide conversation sidebar"
           }
-          className="mr-2 hidden md:inline-flex"
+          className="mr-2 hidden lg:inline-flex"
           onClick={onToggleDesktopSidebar}
           size="icon"
           title={

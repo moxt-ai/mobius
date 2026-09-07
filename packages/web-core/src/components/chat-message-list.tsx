@@ -37,21 +37,21 @@ function EmptyConversation() {
   return (
     <section
       aria-labelledby="empty-title"
-      className="empty-conversation mx-auto mt-[clamp(42px,10vh,92px)] mb-10 w-[min(840px,calc(100%-40px))] text-center max-md:mt-[clamp(24px,6vh,52px)] max-md:w-[min(620px,calc(100%-24px))]"
+      className="empty-conversation mx-auto mt-[clamp(42px,10vh,92px)] mb-10 w-[min(840px,calc(100%-40px))] text-center max-md:mt-[clamp(24px,6vh,52px)] max-md:w-[min(620px,calc(100%-24px))] max-[420px]:mt-[clamp(22px,5vh,40px)]"
     >
-      <div className="empty-conversation-avatar mx-auto mb-[13px] w-fit">
-        <AgentAvatar floating />
+      <div className="empty-conversation-avatar mx-auto mb-3 w-fit">
+        <AgentAvatar className="max-[420px]:size-14" floating />
       </div>
-      <p className="m-0 text-xs font-semibold text-success">
+      <p className="m-0 text-xs leading-[18px] font-semibold text-success max-[360px]:text-[11px] max-[360px]:leading-4">
         {conversation.agentLabel} on your machine
       </p>
       <h2
-        className="mt-[7px] text-[clamp(23px,3vw,28px)] leading-[1.3] font-semibold tracking-[-0.03em] text-foreground max-[420px]:text-[22px]"
+        className="mt-1.5 text-[clamp(22px,3vw,28px)] leading-[1.28] font-semibold tracking-[-0.025em] text-foreground max-[360px]:text-xl max-[360px]:leading-[1.25]"
         id="empty-title"
       >
         What can I help you work on?
       </h2>
-      <p className="empty-conversation-description mx-auto mt-2 max-w-[520px] text-sm leading-[22px] text-copy-secondary max-md:max-w-[420px] max-md:text-[13px] max-md:leading-5">
+      <p className="empty-conversation-description mx-auto mt-2 max-w-[520px] text-sm leading-[22px] text-copy-secondary max-md:max-w-[420px] max-md:text-[13px] max-md:leading-5 max-[360px]:px-1">
         Plan, inspect, and make changes in your conversation’s working
         directory.
       </p>
@@ -90,10 +90,10 @@ function UserMessage({
   return (
     <article
       aria-label="Message from you"
-      className="mb-4 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
+      className="mb-5 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
     >
-      <div className="min-w-0 max-w-[85%] max-md:max-w-[92%]">
-        <div className="grid min-w-0 gap-2 rounded-md bg-black/[0.05] px-4 py-3 text-[15px] leading-6 whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+      <div className="min-w-0 max-w-[85%] max-md:max-w-[94%]">
+        <div className="grid min-w-0 gap-2 rounded-[18px] rounded-br-[6px] border-[0.5px] border-primary/12 bg-success-subtle px-3.5 py-2.5 text-[15px] leading-6 whitespace-pre-wrap text-foreground [overflow-wrap:anywhere] md:px-4 md:py-3">
           {message.images.length > 0 && (
             <div
               className={cn(
@@ -168,7 +168,7 @@ function AgentMessage({
   return (
     <article
       aria-label={`Message from ${agentLabel}`}
-      className="mb-12 min-w-0 motion-safe:animate-[message-enter_200ms_ease-out_both]"
+      className="mb-8 min-w-0 motion-safe:animate-[message-enter_200ms_ease-out_both] md:mb-12"
     >
       <div className="min-w-0">
         <AgentActivityList
@@ -212,7 +212,7 @@ function AgentMessage({
           <details className="group/turn-details max-w-full text-[11px] text-muted-foreground">
             <summary
               aria-label="Show run details"
-              className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full outline-none select-none hover:bg-black/[0.045] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:size-8"
+              className="flex size-11 cursor-pointer list-none items-center justify-center rounded-full outline-none select-none hover:bg-black/[0.045] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 lg:size-8"
               title="Run details"
             >
               <MoreHorizontal className="size-4" />
@@ -346,6 +346,11 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
       previousConversationIdRef.current = conversation.id;
       followLatestRef.current = true;
     }
+    if (conversation.messages.length === 0) {
+      viewport.scrollTop = 0;
+      setShowLatest(false);
+      return;
+    }
     if (followLatestRef.current) {
       viewport.scrollTop = viewport.scrollHeight;
       setShowLatest(false);
@@ -372,7 +377,7 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
             aria-busy={conversation.isRunning}
             aria-live="polite"
             aria-relevant="additions text"
-            className="mx-auto min-h-full w-full max-w-[840px] px-6 pt-10 pb-16 max-md:px-4 max-md:pt-7"
+            className="mx-auto min-h-full w-full max-w-[840px] px-3.5 pt-5 pb-12 sm:px-5 sm:pt-7 md:px-6 md:pt-10 md:pb-16"
             role="log"
           >
             {conversation.messages.map((message) => (
@@ -390,7 +395,7 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
       </div>
       {showLatest && conversation.messages.length > 0 && (
         <Button
-          className="absolute right-6 bottom-3 h-[34px] rounded-full border-black/9 bg-white px-[11px] text-[11px] font-medium text-[#454959] shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:bg-[#fcfcfd] max-md:right-3.5 max-md:h-11"
+          className="absolute right-6 bottom-3 h-[34px] rounded-full border-black/9 bg-white px-[11px] text-[11px] font-medium text-[#454959] shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:bg-[#fcfcfd] max-lg:right-3.5 max-lg:h-11"
           onClick={() => {
             const viewport = viewportRef.current;
             if (viewport !== null) {

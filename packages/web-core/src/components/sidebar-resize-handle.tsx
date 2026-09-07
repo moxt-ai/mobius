@@ -94,7 +94,7 @@ export function SidebarResizeHandle({
       aria-valuemax={MAX_SIDEBAR_WIDTH}
       aria-valuemin={MIN_SIDEBAR_WIDTH}
       aria-valuenow={width}
-      className="absolute inset-y-0 -right-1.5 z-40 hidden h-auto w-3 cursor-col-resize touch-none border-0 bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent after:transition-colors after:duration-150 motion-reduce:after:transition-none hover:after:bg-primary focus-visible:after:bg-primary md:block"
+      className="absolute inset-y-0 -right-1.5 z-40 hidden h-auto w-3 cursor-col-resize touch-none border-0 bg-transparent outline-none after:absolute after:inset-y-0 after:left-1/2 after:w-px after:-translate-x-1/2 after:bg-transparent after:transition-colors after:duration-150 motion-reduce:after:transition-none hover:after:bg-primary focus-visible:after:bg-primary lg:block"
       onDoubleClick={onReset}
       onKeyDown={(event) => {
         const step = event.shiftKey

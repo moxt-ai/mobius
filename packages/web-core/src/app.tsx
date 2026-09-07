@@ -167,7 +167,7 @@ function ChannelWorkspace({
   const channelConfigured = useChatStore((state) => state.channelConfigured);
   const configureChannel = useChatStore((state) => state.configureChannel);
   const createConversation = useChatStore((state) => state.createConversation);
-  const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
+  const sidebarOpen = useChatStore((state) => state.sidebarOpen);
   const location = useLocation();
   const navigate = useNavigate();
   const mainContentRef = useRef<HTMLElement>(null);
@@ -237,10 +237,6 @@ function ChannelWorkspace({
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
-      if (event.key === "Escape") {
-        setSidebarOpen(false);
-        return;
-      }
       if (
         event.key.toLowerCase() === "n" &&
         (event.metaKey || event.ctrlKey) &&
@@ -254,7 +250,7 @@ function ChannelWorkspace({
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [createAndOpenConversation, setSidebarOpen]);
+  }, [createAndOpenConversation]);
 
   useEffect(() => {
     if (workspaceReady && location.pathname.length > 0) {
@@ -297,6 +293,7 @@ function ChannelWorkspace({
         <main
           className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none"
           id="main-content"
+          inert={sidebarOpen ? true : undefined}
           ref={mainContentRef}
           tabIndex={-1}
         >

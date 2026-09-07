@@ -83,6 +83,82 @@ describe.sequential("Agent interaction boundaries", () => {
     }
   });
 
+  it("Given a paired chat uses compact navigation, When the conversation drawer opens, Then it receives focus and isolates the conversation", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const prepare = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, prepare);
+
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Open conversation sidebar",
+        }),
+      );
+
+      const drawer = await screen.findByRole("dialog", {
+        name: "Conversation sidebar",
+      });
+      const closeButton = within(drawer).getByRole("button", {
+        name: "Close conversation sidebar",
+      });
+      await waitFor(() => {
+        expect(drawer.getAttribute("aria-modal")).toBe("true");
+        expect(
+          document.getElementById("main-content")?.hasAttribute("inert"),
+        ).toBe(true);
+        expect(document.activeElement).toBe(closeButton);
+      });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a new chat starts with a Markdown heading, When the first message is sent, Then the compact header shows a readable title", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const prepare = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, prepare);
+      await completeRenderedPrompt(
+        paired.daemon,
+        "## Review the mobile layout\n\nKeep the narrow chat readable and calm.",
+        "The mobile layout is ready for review.",
+      );
+
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Review the mobile layout",
+      });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
   it("Given one New chat already exists, When a user requests New chat from another conversation, Then the existing draft is reopened without creating another", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(

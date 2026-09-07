@@ -1,4 +1,5 @@
 import { LoaderCircle, MessageSquare, Plus, Settings, X } from "lucide-react";
+import { type ComponentProps, useCallback, useEffect, useRef } from "react";
 import { Link, NavLink } from "react-router";
 
 import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
@@ -20,6 +21,30 @@ import {
   sidebarDisplayWidth,
 } from "@/services/workspace-layout";
 import { useChatStore } from "@/store/chat-store";
+
+const FOCUSABLE_CONTROL_SELECTOR = [
+  "button:not([disabled])",
+  "[href]",
+  "input:not([disabled])",
+  "select:not([disabled])",
+  "textarea:not([disabled])",
+  "[tabindex]:not([tabindex='-1'])",
+].join(",");
+
+function sidebarAccessibility(open: boolean): ComponentProps<"div"> {
+  if (open) {
+    return {
+      "aria-label": "Conversation sidebar",
+      "aria-modal": true,
+      role: "dialog",
+      tabIndex: -1,
+    };
+  }
+  return {
+    "aria-label": "Conversation sidebar",
+    role: "complementary",
+  };
+}
 
 function MobiusMark() {
   return (
@@ -58,6 +83,8 @@ export function ConversationSidebar({
   const runtime = useChatStore((state) => state.runtime);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const machineName = useChatStore((state) => state.machineName);
   const runningConversations = conversations.filter(
     (conversation) => conversation.isRunning,
@@ -74,6 +101,78 @@ export function ConversationSidebar({
       ? channelSettingsRoutePath(channelId)
       : sessionSettingsRoutePath(channelId, activeSessionId);
 
+  const closeSidebar = useCallback((): void => {
+    if (!sidebarOpen) {
+      return;
+    }
+    setSidebarOpen(false);
+    window.requestAnimationFrame(() => {
+      document.getElementById("conversation-sidebar-trigger")?.focus();
+    });
+  }, [setSidebarOpen, sidebarOpen]);
+
+  useEffect(() => {
+    if (!sidebarOpen) {
+      return;
+    }
+    const focusFrame = window.requestAnimationFrame(() => {
+      closeButtonRef.current?.focus({ preventScroll: true });
+    });
+    const controller = new AbortController();
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeSidebar();
+          return;
+        }
+        if (event.key !== "Tab" || sidebarRef.current === null) {
+          return;
+        }
+        const controls = Array.from(
+          sidebarRef.current.querySelectorAll<HTMLElement>(
+            FOCUSABLE_CONTROL_SELECTOR,
+          ),
+        ).filter((control) => control.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls.at(-1);
+        const activeElement = document.activeElement;
+        if (first === undefined || last === undefined) {
+          event.preventDefault();
+          sidebarRef.current.focus({ preventScroll: true });
+          return;
+        }
+        if (
+          event.shiftKey &&
+          (activeElement === first || activeElement === sidebarRef.current)
+        ) {
+          event.preventDefault();
+          last.focus({ preventScroll: true });
+        } else if (!event.shiftKey && activeElement === last) {
+          event.preventDefault();
+          first.focus({ preventScroll: true });
+        }
+      },
+      { signal: controller.signal },
+    );
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      controller.abort();
+    };
+  }, [closeSidebar, sidebarOpen]);
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1024px)");
+    const handleChange = (event: MediaQueryListEvent): void => {
+      if (event.matches) {
+        setSidebarOpen(false);
+      }
+    };
+    desktop.addEventListener("change", handleChange);
+    return () => desktop.removeEventListener("change", handleChange);
+  }, [setSidebarOpen]);
+
   const conversationButton = (conversation: (typeof conversations)[number]) => {
     return (
       <NavLink
@@ -85,6 +184,7 @@ export function ConversationSidebar({
         }
         end
         key={conversation.id}
+        onClick={closeSidebar}
         to={sessionRoutePath(channelId, conversation.sessionId)}
       >
         <span
@@ -117,36 +217,36 @@ export function ConversationSidebar({
     <>
       {sidebarOpen && (
         <button
-          aria-label="Close conversation sidebar"
-          className="fixed inset-0 z-20 bg-black/25 md:hidden"
-          onClick={() => {
-            setSidebarOpen(false);
-          }}
+          aria-label="Dismiss conversation sidebar"
+          className="fixed inset-0 z-30 bg-black/35 backdrop-blur-[1px] lg:hidden"
+          onClick={closeSidebar}
           type="button"
         />
       )}
       <div
         className={cn(
-          "contents md:relative md:block md:h-full md:shrink-0",
-          layout.kind === "collapsed" && "md:w-0",
+          "contents lg:relative lg:block lg:h-full lg:shrink-0",
+          layout.kind === "collapsed" && "lg:w-0",
         )}
         data-sidebar-state={layout.kind}
         style={{ width: `${displayWidth.toString()}px` }}
       >
-        <aside
-          aria-label="Conversation sidebar"
+        <div
+          {...sidebarAccessibility(sidebarOpen)}
           className={cn(
-            "fixed inset-y-0 left-0 z-30 flex w-[min(288px,calc(100vw-52px))] flex-col overflow-hidden border-r-[0.5px] border-black/9 bg-sidebar shadow-[18px_0_50px_rgba(0,0,0,0.12)] transition-transform duration-200 ease-out motion-reduce:transition-none md:static md:h-full md:w-full md:translate-x-0 md:shadow-none",
+            "fixed inset-y-0 left-0 z-40 flex w-[min(320px,calc(100vw-20px))] flex-col overflow-hidden rounded-r-[20px] border-r-[0.5px] border-black/9 bg-sidebar shadow-[18px_0_56px_rgba(0,0,0,0.2)] transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:h-full lg:w-full lg:translate-x-0 lg:rounded-none lg:shadow-none",
             sidebarOpen ? "translate-x-0" : "-translate-x-[105%]",
             layout.kind === "collapsed" &&
-              "md:pointer-events-none md:invisible",
+              "lg:pointer-events-none lg:invisible",
           )}
           id="conversation-sidebar"
+          ref={sidebarRef}
         >
-          <div className="flex min-h-16 items-center justify-between pr-3.5 pl-[18px]">
+          <div className="sidebar-safe-header flex items-center justify-between pr-3.5 pl-[18px]">
             <Link
               aria-label="Mobius agent chat home"
-              className="inline-flex min-h-11 items-center gap-2.5 text-base font-semibold tracking-[-0.02em] text-foreground no-underline md:min-h-10"
+              className="inline-flex min-h-11 items-center gap-2.5 text-base font-semibold tracking-[-0.02em] text-foreground no-underline lg:min-h-10"
+              onClick={closeSidebar}
               to="/"
             >
               <MobiusMark />
@@ -154,10 +254,9 @@ export function ConversationSidebar({
             </Link>
             <Button
               aria-label="Close conversation sidebar"
-              className="size-11 md:hidden"
-              onClick={() => {
-                setSidebarOpen(false);
-              }}
+              className="size-11 lg:hidden"
+              onClick={closeSidebar}
+              ref={closeButtonRef}
               size="icon"
               variant="ghost"
             >
@@ -167,9 +266,12 @@ export function ConversationSidebar({
 
           <div className="px-3 pt-2 pb-3">
             <Button
-              className="h-11 w-full justify-start rounded-[10px] border-black/9 bg-white px-2.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-background md:h-10"
+              className="h-11 w-full justify-start rounded-[10px] border-black/9 bg-white px-2.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-background lg:h-10"
               disabled={agents.length === 0}
-              onClick={onCreateConversation}
+              onClick={() => {
+                onCreateConversation();
+                closeSidebar();
+              }}
               variant="outline"
             >
               <Plus className="size-[17px]" />
@@ -224,6 +326,7 @@ export function ConversationSidebar({
                 )
               }
               end
+              onClick={closeSidebar}
               to={settingsPath}
             >
               <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
@@ -233,13 +336,13 @@ export function ConversationSidebar({
             </NavLink>
           </nav>
 
-          <div className="flex min-h-[56px] items-center justify-between gap-3 border-t-[0.5px] border-black/6 px-4 py-2.5">
+          <div className="sidebar-safe-footer flex min-h-[56px] items-center justify-between gap-3 border-t-[0.5px] border-black/6 px-4 py-2.5">
             <strong className="min-w-0 flex-1 truncate text-xs leading-[18px] font-medium">
               {machineName}
             </strong>
             <SidebarRuntimeStatus runtime={runtime} />
           </div>
-        </aside>
+        </div>
         {layout.kind === "expanded" && (
           <SidebarResizeHandle
             onReset={() => onLayoutChange(resetSidebar())}

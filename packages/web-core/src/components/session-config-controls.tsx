@@ -157,7 +157,7 @@ function SelectConfigControl({
         <SelectTrigger
           aria-describedby={describedBy.length > 0 ? describedBy : undefined}
           aria-labelledby={labelId}
-          className="h-10 w-full min-w-0 justify-between rounded-lg bg-surface-subtle px-3"
+          className="h-11 w-full min-w-0 justify-between rounded-lg bg-surface-subtle px-3 lg:h-10"
         >
           <SelectValue />
           {pending && (
@@ -416,14 +416,14 @@ export function SessionConfigControls() {
   };
 
   return (
-    <div className="relative min-w-0 max-w-[176px] flex-1 min-[421px]:max-w-[240px] lg:max-w-none lg:flex-none">
+    <div className="relative w-fit min-w-0 max-w-[176px] shrink max-[360px]:w-11 max-[360px]:max-w-11 max-[360px]:shrink-0 lg:max-w-none lg:shrink-0">
       <Button
         aria-controls={panelId}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={summary.accessibleLabel}
         className={cn(
-          "h-11 w-full min-w-0 gap-1.5 rounded-full border-[0.5px] border-black/8 bg-black/[0.025] px-2.5 text-xs text-copy-secondary hover:border-black/12 hover:bg-black/[0.05] md:h-9 lg:w-auto lg:max-w-[240px]",
+          "group h-11 w-auto max-w-full min-w-0 gap-0 rounded-full bg-transparent p-1 text-xs text-copy-secondary hover:bg-transparent lg:h-9 lg:max-w-[240px] lg:p-0",
           conversation.session instanceof SessionPreparationFailedState &&
             "text-destructive",
         )}
@@ -439,26 +439,34 @@ export function SessionConfigControls() {
         title={summary.accessibleLabel}
         variant="ghost"
       >
-        {conversation.session.isPreparing ? (
-          <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-        ) : (
-          <Settings2 className="size-3.5" />
-        )}
-        <span className="min-w-0 truncate">{summary.compactLabel}</span>
-        <ChevronDown
-          aria-hidden="true"
-          className={cn(
-            "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none",
-            open && "rotate-180",
+        <span className="flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-full border-[0.5px] border-black/8 bg-black/[0.025] px-2.5 transition-colors duration-150 group-hover:border-black/12 group-hover:bg-black/[0.05] motion-reduce:transition-none max-[360px]:w-9 max-[360px]:justify-center max-[360px]:gap-0 max-[360px]:border-transparent max-[360px]:bg-transparent max-[360px]:px-0 max-[360px]:group-hover:bg-black/[0.04]">
+          {conversation.session.isPreparing ? (
+            <LoaderCircle className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
+          ) : (
+            <Settings2 className="size-4 shrink-0" />
           )}
-        />
+          <span className="min-w-0 truncate max-[360px]:hidden">
+            {summary.compactLabel}
+          </span>
+          <ChevronDown
+            aria-hidden="true"
+            className={cn(
+              "size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none max-[360px]:hidden",
+              open && "rotate-180",
+            )}
+          />
+        </span>
       </Button>
       {open &&
         createPortal(
           <>
             <button
               aria-label="Close run settings"
-              className="fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px] md:bg-transparent md:backdrop-blur-none"
+              className={cn(
+                "fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]",
+                panelLayout.kind !== "sheet" &&
+                  "md:bg-transparent md:backdrop-blur-none",
+              )}
               onClick={close}
               type="button"
             />
@@ -466,7 +474,7 @@ export function SessionConfigControls() {
               aria-label="Run settings"
               aria-modal="true"
               className={cn(
-                "fixed inset-x-3 bottom-3 z-40 flex max-h-[min(76vh,620px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_20px_70px_rgba(0,0,0,0.22)] outline-none md:shadow-[0_16px_44px_rgba(0,0,0,0.15)]",
+                "mobile-safe-sheet fixed inset-x-3 bottom-3 z-40 flex max-h-[min(76vh,620px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_20px_70px_rgba(0,0,0,0.22)] outline-none md:shadow-[0_16px_44px_rgba(0,0,0,0.15)]",
                 panelLayout.kind !== "sheet" &&
                   "md:inset-auto md:max-h-none md:max-w-none",
                 panelLayout.kind === "pending" && "md:invisible",
@@ -493,7 +501,7 @@ export function SessionConfigControls() {
                 </span>
                 <Button
                   aria-label="Close run settings"
-                  className="size-11 md:size-9"
+                  className="size-11 lg:size-9"
                   onClick={close}
                   size="icon"
                   variant="ghost"
@@ -514,7 +522,7 @@ export function SessionConfigControls() {
                       {conversation.session.error}
                     </p>
                     <Button
-                      className="mt-3 min-h-11 md:min-h-9"
+                      className="mt-3 min-h-11 lg:min-h-9"
                       onClick={() => {
                         void prepareActiveSession(conversation.sessionId);
                       }}

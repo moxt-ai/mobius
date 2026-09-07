@@ -1756,7 +1756,29 @@ function titleFromTurn(
 }
 
 function titleFromPrompt(prompt: string): string {
-  const compact = prompt.replaceAll(/\s+/g, " ").trim();
+  let compact = "";
+  for (const line of prompt.split(/\r?\n/u)) {
+    const candidate = line.replaceAll(/\s+/g, " ").trim();
+    if (
+      candidate.length === 0 ||
+      candidate.startsWith("```") ||
+      candidate.startsWith("~~~")
+    ) {
+      continue;
+    }
+    const readable = candidate
+      .replace(/^(?:>\s*)+/u, "")
+      .replace(/^#{1,6}(?:\s+|$)/u, "")
+      .replace(/^(?:[-*+]|\d+[.)])\s+/u, "")
+      .trim();
+    if (readable.length > 0) {
+      compact = readable;
+      break;
+    }
+  }
+  if (compact.length === 0) {
+    compact = prompt.replaceAll(/\s+/g, " ").trim();
+  }
   const characters = Array.from(compact);
   if (characters.length <= 42) {
     return compact;
