@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "main": "./src/worker.ts",
+  "exports": {
+    ".": "./src/worker.ts",
+    "./adapters": "./src/adapters.ts"
+  },
   "scripts": {
     "build": "pnpm --filter @moxt-ai/mobius-web build && wrangler deploy --dry-run --outdir dist/lite && wrangler deploy --dry-run --config wrangler.r2.jsonc --outdir dist/r2",
     "deploy": "pnpm --dir ../.. wrangler deploy",

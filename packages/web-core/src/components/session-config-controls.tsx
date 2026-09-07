@@ -17,7 +17,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { createPortal } from "react-dom";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -511,134 +510,131 @@ export function SessionConfigControls() {
           />
         </span>
       </Button>
-      {open &&
-        createPortal(
-          <>
-            <button
-              aria-label="Close run settings"
-              className={cn(
-                "fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]",
-                panelLayout.kind !== "sheet" &&
-                  "md:bg-transparent md:backdrop-blur-none",
-              )}
-              onClick={close}
-              type="button"
-            />
-            <section
-              aria-label="Run settings"
-              aria-modal="true"
-              className={cn(
-                "mobile-safe-sheet fixed inset-x-3 bottom-3 z-40 flex max-h-[min(76vh,620px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_20px_70px_rgba(0,0,0,0.22)] outline-none md:shadow-[0_16px_44px_rgba(0,0,0,0.15)]",
-                panelLayout.kind !== "sheet" &&
-                  "md:inset-auto md:max-h-none md:max-w-none",
-                panelLayout.kind === "pending" && "md:invisible",
-              )}
-              data-session-config-panel=""
-              data-placement={panelLayout.kind}
-              id={panelId}
-              ref={panelRef}
-              role="dialog"
-              style={panelStyle(panelLayout)}
-              tabIndex={-1}
-            >
-              <header className="flex min-h-14 shrink-0 items-center gap-3 border-b-[0.5px] border-black/7 px-4">
-                <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-success">
-                  <Settings2 className="size-4" />
+      {open && (
+        <>
+          <button
+            aria-label="Close run settings"
+            className={cn(
+              "fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]",
+              panelLayout.kind !== "sheet" &&
+                "md:bg-transparent md:backdrop-blur-none",
+            )}
+            onClick={close}
+            type="button"
+          />
+          <section
+            aria-label="Run settings"
+            aria-modal="true"
+            className={cn(
+              "mobile-safe-sheet fixed inset-x-3 bottom-3 z-40 flex max-h-[min(76vh,620px)] flex-col overflow-hidden rounded-2xl border-[0.5px] border-black/10 bg-white shadow-[0_20px_70px_rgba(0,0,0,0.22)] outline-none md:shadow-[0_16px_44px_rgba(0,0,0,0.15)]",
+              panelLayout.kind !== "sheet" &&
+                "md:inset-auto md:max-h-none md:max-w-none",
+              panelLayout.kind === "pending" && "md:invisible",
+            )}
+            data-session-config-panel=""
+            data-placement={panelLayout.kind}
+            id={panelId}
+            ref={panelRef}
+            role="dialog"
+            style={panelStyle(panelLayout)}
+            tabIndex={-1}
+          >
+            <header className="flex min-h-14 shrink-0 items-center gap-3 border-b-[0.5px] border-black/7 px-4">
+              <span className="flex size-8 items-center justify-center rounded-full bg-primary/10 text-success">
+                <Settings2 className="size-4" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <strong className="block text-sm font-semibold">
+                  Run settings
+                </strong>
+                <span className="block truncate text-[11px] text-muted-foreground">
+                  {conversation.agentLabel} · {conversation.directoryLabel}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <strong className="block text-sm font-semibold">
-                    Run settings
-                  </strong>
-                  <span className="block truncate text-[11px] text-muted-foreground">
-                    {conversation.agentLabel} · {conversation.directoryLabel}
-                  </span>
-                </span>
-                <Button
-                  aria-label="Close run settings"
-                  className="size-11 lg:size-9"
-                  onClick={close}
-                  size="icon"
-                  variant="ghost"
-                >
-                  <X className="size-4" />
-                </Button>
-              </header>
-              <div className="conversation-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain bg-surface-subtle/70 p-3">
-                {conversation.isRunning && (
-                  <p className="mb-3 rounded-lg bg-black/[0.045] px-3 py-2 text-[11px] leading-[18px] text-muted-foreground">
-                    Settings are locked while this run is active.
+              </span>
+              <Button
+                aria-label="Close run settings"
+                className="size-11 lg:size-9"
+                onClick={close}
+                size="icon"
+                variant="ghost"
+              >
+                <X className="size-4" />
+              </Button>
+            </header>
+            <div className="conversation-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain bg-surface-subtle/70 p-3">
+              {conversation.isRunning && (
+                <p className="mb-3 rounded-lg bg-black/[0.045] px-3 py-2 text-[11px] leading-[18px] text-muted-foreground">
+                  Settings are locked while this run is active.
+                </p>
+              )}
+              {conversation.session instanceof SessionPreparationFailedState ? (
+                <div className="rounded-xl border-[0.5px] border-destructive/15 bg-destructive/5 p-4 text-center">
+                  <p className="text-xs leading-5 text-destructive">
+                    {conversation.session.error}
                   </p>
-                )}
-                {conversation.session instanceof
-                SessionPreparationFailedState ? (
-                  <div className="rounded-xl border-[0.5px] border-destructive/15 bg-destructive/5 p-4 text-center">
-                    <p className="text-xs leading-5 text-destructive">
-                      {conversation.session.error}
-                    </p>
-                    <Button
-                      className="mt-3 min-h-11 lg:min-h-9"
-                      onClick={() => {
-                        void prepareActiveSession(conversation.sessionId);
-                      }}
-                      size="sm"
-                      variant="outline"
-                    >
-                      <RefreshCw className="size-3.5" />
-                      Retry agent
-                    </Button>
-                  </div>
-                ) : ready ? (
-                  options.length === 0 ? (
-                    <p className="px-3 py-8 text-center text-xs leading-5 text-muted-foreground">
-                      This agent uses its default run settings.
-                    </p>
-                  ) : (
-                    <div className="grid gap-4">
-                      {groupSessionConfigOptions(options).map((section) => (
-                        <fieldset
-                          className="grid gap-2 border-0 p-0"
-                          key={section.id}
-                        >
-                          <legend className="mb-1 px-1 text-[10px] font-semibold tracking-[0.07em] text-muted-foreground uppercase">
-                            {section.label}
-                          </legend>
-                          <div className="divide-y divide-black/[0.07] overflow-hidden rounded-xl border-[0.5px] border-black/9 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.025)]">
-                            {section.options.map((option) =>
-                              option.type === "select" ? (
-                                <SelectConfigControl
-                                  key={option.id}
-                                  option={option}
-                                  pending={pendingIds.includes(option.id)}
-                                  setPending={setPending}
-                                />
-                              ) : (
-                                <BooleanConfigControl
-                                  key={option.id}
-                                  option={option}
-                                  pending={pendingIds.includes(option.id)}
-                                  setPending={setPending}
-                                />
-                              ),
-                            )}
-                          </div>
-                        </fieldset>
-                      ))}
-                    </div>
-                  )
-                ) : (
-                  <div
-                    aria-live="polite"
-                    className="flex min-h-32 items-center justify-center gap-2 text-xs text-muted-foreground"
+                  <Button
+                    className="mt-3 min-h-11 lg:min-h-9"
+                    onClick={() => {
+                      void prepareActiveSession(conversation.sessionId);
+                    }}
+                    size="sm"
+                    variant="outline"
                   >
-                    <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
-                    {conversation.session.label}
+                    <RefreshCw className="size-3.5" />
+                    Retry agent
+                  </Button>
+                </div>
+              ) : ready ? (
+                options.length === 0 ? (
+                  <p className="px-3 py-8 text-center text-xs leading-5 text-muted-foreground">
+                    This agent uses its default run settings.
+                  </p>
+                ) : (
+                  <div className="grid gap-4">
+                    {groupSessionConfigOptions(options).map((section) => (
+                      <fieldset
+                        className="grid gap-2 border-0 p-0"
+                        key={section.id}
+                      >
+                        <legend className="mb-1 px-1 text-[10px] font-semibold tracking-[0.07em] text-muted-foreground uppercase">
+                          {section.label}
+                        </legend>
+                        <div className="divide-y divide-black/[0.07] overflow-hidden rounded-xl border-[0.5px] border-black/9 bg-white shadow-[0_1px_2px_rgba(0,0,0,0.025)]">
+                          {section.options.map((option) =>
+                            option.type === "select" ? (
+                              <SelectConfigControl
+                                key={option.id}
+                                option={option}
+                                pending={pendingIds.includes(option.id)}
+                                setPending={setPending}
+                              />
+                            ) : (
+                              <BooleanConfigControl
+                                key={option.id}
+                                option={option}
+                                pending={pendingIds.includes(option.id)}
+                                setPending={setPending}
+                              />
+                            ),
+                          )}
+                        </div>
+                      </fieldset>
+                    ))}
                   </div>
-                )}
-              </div>
-            </section>
-          </>,
-          document.body,
-        )}
+                )
+              ) : (
+                <div
+                  aria-live="polite"
+                  className="flex min-h-32 items-center justify-center gap-2 text-xs text-muted-foreground"
+                >
+                  <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+                  {conversation.session.label}
+                </div>
+              )}
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }

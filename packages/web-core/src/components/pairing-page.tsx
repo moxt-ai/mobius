@@ -14,6 +14,7 @@ import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
+  type ChannelConnection,
   ConnectedBrowserPairingStatus,
   type CreatedPairing,
   ExpiredBrowserPairingStatus,
@@ -318,8 +319,13 @@ function PairingInstructions({
   );
 }
 
-function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
-  const navigate = useNavigate();
+function PairingWorkflow({
+  onConnected,
+  onRetry,
+}: {
+  readonly onConnected: (connection: ChannelConnection) => void;
+  readonly onRetry: () => void;
+}) {
   const [state, setState] = useState<PairingPageState>(
     new CreatingPairingPageState(),
   );
@@ -353,7 +359,7 @@ function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
               window.setTimeout(resolve, CONNECTED_PAUSE_MILLISECONDS);
             });
             if (!controller.signal.aborted) {
-              await navigate(channelRoutePath(status.connection.channelId));
+              onConnected(status.connection);
             }
             return;
           }
@@ -372,7 +378,7 @@ function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
 
     void run();
     return () => controller.abort();
-  }, [navigate]);
+  }, [onConnected]);
 
   let content = <PairingLoading />;
   if (state instanceof WaitingPairingPageState) {
@@ -393,9 +399,25 @@ function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
   return content;
 }
 
-export function PairingPage() {
+export function Pair({
+  onConnected,
+}: {
+  readonly onConnected: (connection: ChannelConnection) => void;
+}) {
   const [generation, setGeneration] = useState(0);
   const retry = (): void => setGeneration((value) => value + 1);
+
+  return (
+    <PairingWorkflow
+      key={generation}
+      onConnected={onConnected}
+      onRetry={retry}
+    />
+  );
+}
+
+export function PairingPage() {
+  const navigate = useNavigate();
 
   return (
     <div className="pairing-page h-dvh overflow-y-auto bg-background">
@@ -407,7 +429,11 @@ export function PairingPage() {
         </span>
       </header>
       <main className="mx-auto flex min-h-[calc(100dvh-112px)] w-[min(1120px,calc(100%-40px))] items-center py-8 max-sm:w-[calc(100%-24px)] max-sm:py-4">
-        <PairingWorkflow key={generation} onRetry={retry} />
+        <Pair
+          onConnected={(connection) => {
+            void navigate(channelRoutePath(connection.channelId));
+          }}
+        />
       </main>
       <footer className="mx-auto flex min-h-10 w-[min(1120px,calc(100%-40px))] items-center justify-center pb-5 text-[10px] text-muted-foreground">
         ACP adapters run beside your tools. Relay traffic contains protocol
