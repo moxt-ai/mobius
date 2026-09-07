@@ -596,6 +596,82 @@ describe.sequential("Web application boundaries", () => {
     }
   });
 
+  it("Given one New chat already exists, When a user requests New chat from another conversation, Then the existing draft is reopened without creating another", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Existing conversation",
+        "Existing response",
+      );
+
+      const sidebar = screen.getByRole("complementary", {
+        name: "Conversation sidebar",
+      });
+      fireEvent.click(
+        within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }),
+      );
+      const draftPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, draftPreparation);
+      const draftPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(draftPreparation.sessionId)}`;
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(draftPath);
+      });
+      fireEvent.change(
+        await screen.findByRole("textbox", {
+          name: "Message the local agent",
+        }),
+        { target: { value: "Keep the existing New chat draft" } },
+      );
+
+      const conversations = screen.getByRole("navigation", {
+        name: "Conversations",
+      });
+      fireEvent.click(
+        within(conversations).getByRole("link", {
+          name: /Existing conversation/,
+        }),
+      );
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Existing conversation",
+      });
+
+      fireEvent.click(
+        within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }),
+      );
+
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(draftPath);
+      });
+      expect(
+        screen.getByDisplayValue("Keep the existing New chat draft"),
+      ).toBeTruthy();
+      expect(
+        within(conversations).getAllByRole("link", { name: /New chat/ }),
+      ).toHaveLength(1);
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
   it("Given a paired local Agent, When a user answers its form and sends a prompt, Then the Web app exchanges protocol messages and renders the response safely", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(

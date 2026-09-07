@@ -882,9 +882,18 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     if (state.agents.length === 0) {
       return;
     }
-    const activeConversation = readActiveConversation(state);
-    if (!activeConversation.contextLocked) {
-      set({ sidebarOpen: false });
+    const existingDraft = state.conversations.find(
+      (conversation) => !conversation.contextLocked,
+    );
+    if (existingDraft !== undefined) {
+      set({
+        activeConversationId: existingDraft.id,
+        errorMessage:
+          existingDraft.id === state.activeConversationId
+            ? state.errorMessage
+            : "",
+        sidebarOpen: false,
+      });
       return;
     }
     const conversation = Conversation.create(readDefaultAgent(state.agents));
