@@ -525,7 +525,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                   "flex size-9 items-center justify-center rounded-full transition-colors duration-150 motion-reduce:transition-none",
                   conversation.isRunning
                     ? "bg-destructive/10 text-destructive group-hover:bg-destructive/15"
-                    : "bg-primary text-primary-foreground group-hover:bg-primary/90",
+                    : "bg-foreground text-background group-hover:bg-foreground/85",
                 )}
               >
                 {conversation.isRunning ? (

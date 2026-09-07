@@ -1,5 +1,6 @@
 @import "tailwindcss";
-@source "../../../node_modules/streamdown/dist/*.js";
+@source "../node_modules/streamdown/dist/*.js";
+@source "../../web-core/node_modules/@streamdown/code/dist/*.js";
 @source "../../web-core/src/**/*.{ts,tsx}";
 
 :root {
@@ -145,6 +146,135 @@
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.agent-progress .agent-markdown {
+  color: var(--copy-secondary);
+}
+
+.agent-progress [data-streamdown="strong"] {
+  color: var(--foreground);
+}
+
+.agent-step-narrative .agent-markdown {
+  color: var(--copy-secondary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.agent-step-narrative .agent-markdown > :first-child {
+  margin-top: 0;
+}
+
+.agent-step-narrative .agent-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.agent-step-narrative [data-streamdown="strong"] {
+  color: var(--foreground);
+  font-weight: 600;
+}
+
+.agent-markdown [data-streamdown="inline-code"] {
+  padding: 0.1em 0.38em;
+  border: 0.5px solid rgba(0, 0, 0, 0.08);
+  border-radius: 5px;
+  background: rgba(11, 26, 57, 0.055);
+  color: #25282e;
+  font-size: 0.88em;
+  overflow-wrap: anywhere;
+}
+
+.agent-markdown [data-streamdown="code-block"] {
+  max-width: 100%;
+  margin-block: 16px;
+  gap: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0.5px solid rgba(0, 0, 0, 0.12);
+  border-radius: 13px;
+  background: #f1f3f5;
+  box-shadow:
+    0 1px 2px rgba(15, 23, 42, 0.04),
+    0 6px 18px rgba(15, 23, 42, 0.035);
+}
+
+.agent-markdown [data-streamdown="code-block-header"] {
+  height: 48px;
+  padding: 0 58px 0 14px;
+  border-bottom: 0.5px solid rgba(0, 0, 0, 0.09);
+  color: var(--copy-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.agent-markdown
+  [data-streamdown="code-block"]
+  > :has(> [data-streamdown="code-block-actions"]) {
+  position: relative;
+  top: auto;
+  height: 48px;
+  margin-top: -48px;
+}
+
+.agent-markdown [data-streamdown="code-block-actions"] {
+  height: 48px;
+  gap: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.agent-markdown [data-streamdown="code-block-actions"] button {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border-radius: 9px;
+  color: var(--copy-tertiary);
+}
+
+.agent-markdown [data-streamdown="code-block-actions"] button:hover {
+  background: rgba(0, 0, 0, 0.055);
+  color: var(--foreground);
+}
+
+.agent-markdown [data-streamdown="code-block-actions"] button:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
+  outline-offset: -3px;
+}
+
+.agent-markdown [data-streamdown="code-block-body"] {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 15px 16px 17px;
+  border: 0;
+  border-radius: 0;
+  background: #fbfcfd;
+  color: #24272d;
+  font-size: 13px;
+  line-height: 1.65;
+  overscroll-behavior-inline: contain;
+  scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.agent-markdown [data-streamdown="code-block-body"] pre {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: inherit;
+  line-height: inherit;
+  tab-size: 2;
 }
 
 .pairing-card {
@@ -314,37 +444,9 @@
     );
   }
 
-  .agent-markdown [data-streamdown="code-block"] {
-    gap: 4px;
-    margin-block: 12px;
-    padding: 6px;
-    border-radius: 14px;
-  }
-
-  .agent-markdown [data-streamdown="code-block-header"] {
-    height: 44px;
-  }
-
-  .agent-markdown [data-streamdown="code-block-actions"] {
-    gap: 0;
-    padding: 0;
-    border-radius: 10px;
-  }
-
-  .agent-markdown [data-streamdown="code-block-actions"] button {
-    display: inline-flex;
-    width: 44px;
-    height: 44px;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    border-radius: 9px;
-  }
-
   .agent-markdown [data-streamdown="code-block-body"] {
-    padding: 12px;
-    border-radius: 10px;
-    font-size: 13px;
+    padding: 13px 12px 15px;
+    font-size: 12.5px;
     line-height: 1.65;
   }
 

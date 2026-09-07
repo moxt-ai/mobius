@@ -12,6 +12,7 @@
   "devDependencies": {
     "@moxt-ai/mobius-web-sdk": "workspace:*",
     "@radix-ui/react-select": "2.3.7",
+    "@streamdown/code": "1.1.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "class-variance-authority": "^0.7.1",

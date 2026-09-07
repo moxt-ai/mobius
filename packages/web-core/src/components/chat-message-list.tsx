@@ -395,7 +395,8 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
       </div>
       {showLatest && conversation.messages.length > 0 && (
         <Button
-          className="absolute right-6 bottom-3 h-[34px] rounded-full border-black/9 bg-white px-[11px] text-[11px] font-medium text-[#454959] shadow-[0_4px_14px_rgba(0,0,0,0.08)] hover:bg-[#fcfcfd] max-lg:right-3.5 max-lg:h-11"
+          aria-label="Scroll to latest message"
+          className="absolute bottom-3 left-1/2 z-10 size-9 -translate-x-1/2 rounded-full border-border/70 bg-background/95 p-0 text-foreground shadow-[0_4px_14px_rgba(0,0,0,0.1)] backdrop-blur-sm hover:bg-accent max-lg:size-11"
           onClick={() => {
             const viewport = viewportRef.current;
             if (viewport !== null) {
@@ -410,10 +411,11 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
               setShowLatest(false);
             }
           }}
+          size="icon"
+          title="Scroll to latest message"
           variant="outline"
         >
-          <ArrowDown className="size-3.5" />
-          Latest
+          <ArrowDown className="size-4" />
         </Button>
       )}
     </div>

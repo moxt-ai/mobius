@@ -22,6 +22,7 @@ import {
   useState,
 } from "react";
 
+import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
 import type { RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
@@ -100,10 +101,47 @@ function statusLabel(status: string, active: boolean): string {
   return "Pending";
 }
 
-function ActivityText({ children }: { readonly children: string }) {
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function presentActivityText(value: string): string {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(value);
+  } catch {
+    return value;
+  }
+  if (!isRecord(decoded)) {
+    return value;
+  }
+  const keys = Object.keys(decoded);
+  if (keys.some((key) => key !== "exit_code" && key !== "formatted_output")) {
+    return value;
+  }
+  const { exit_code: exitCode, formatted_output: formattedOutput } = decoded;
+  if (
+    typeof formattedOutput !== "string" ||
+    (exitCode !== undefined && typeof exitCode !== "number")
+  ) {
+    return value;
+  }
+  const content = formattedOutput.trimEnd();
+  return typeof exitCode === "number" && exitCode !== 0
+    ? `${content}\n\nExit code: ${exitCode.toString()}`
+    : content;
+}
+
+function ActivityText({
+  children,
+  unwrapToolOutput = false,
+}: {
+  readonly children: string;
+  readonly unwrapToolOutput?: boolean;
+}) {
   return (
-    <pre className="max-h-72 overflow-auto rounded-md bg-black/[0.025] px-3 py-2.5 font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-copy-secondary">
-      {children}
+    <pre className="max-h-80 min-w-0 max-w-full overflow-auto rounded-lg border border-black/[0.07] bg-black/[0.025] px-3 py-2.5 font-mono text-xs leading-5 whitespace-pre-wrap text-copy-secondary [overflow-wrap:anywhere]">
+      {unwrapToolOutput ? presentActivityText(children) : children}
     </pre>
   );
 }
@@ -120,15 +158,15 @@ function ToolDetails({
   const output = available?.output ?? activity.output;
   const content = available?.content ?? activity.content;
   return (
-    <div className="mt-1 ml-[7px] grid gap-2 border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
+    <div className="mt-1 ml-[7px] grid min-w-0 max-w-full gap-2 border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
       {activity.locations.length > 0 && (
-        <div>
+        <div className="min-w-0 max-w-full">
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Locations
           </p>
-          <ul className="m-0 grid list-none gap-0.5 p-0 font-mono text-[11px] leading-[18px] text-copy-secondary">
+          <ul className="m-0 grid list-none gap-0.5 p-0 font-mono text-xs leading-5 text-copy-secondary">
             {activity.locations.map((location) => (
-              <li className="break-all" key={location}>
+              <li className="[overflow-wrap:anywhere]" key={location}>
                 {location}
               </li>
             ))}
@@ -136,7 +174,7 @@ function ToolDetails({
         </div>
       )}
       {input.length > 0 && (
-        <div>
+        <div className="min-w-0 max-w-full">
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Input
           </p>
@@ -144,11 +182,11 @@ function ToolDetails({
         </div>
       )}
       {output.length > 0 && (
-        <div>
+        <div className="min-w-0 max-w-full">
           <p className="mb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
             Output
           </p>
-          <ActivityText>{output}</ActivityText>
+          <ActivityText unwrapToolOutput>{output}</ActivityText>
         </div>
       )}
       <AgentRichContent contents={content} />
@@ -159,9 +197,11 @@ function ToolDetails({
 function NarrativeDetails({
   activity,
   detail,
+  streaming,
 }: {
   readonly activity: RecordedActivity;
   readonly detail: ActivityDetailResult | null;
+  readonly streaming: boolean;
 }) {
   const available = detail?.kind === "available" ? detail : null;
   const output = available?.output ?? activity.output;
@@ -170,8 +210,10 @@ function NarrativeDetails({
     return null;
   }
   return (
-    <div className="mt-1 ml-[7px] border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
-      {output.length > 0 && <ActivityText>{output}</ActivityText>}
+    <div className="agent-step-narrative mt-1 ml-[7px] min-w-0 max-w-full border-l-[0.5px] border-black/10 pt-1 pb-2 pl-[22px]">
+      {output.length > 0 && (
+        <AgentMarkdown markdown={output} streaming={streaming} />
+      )}
       <AgentRichContent contents={content} />
     </div>
   );
@@ -331,7 +373,10 @@ function ActivityLine({
       >
         {activityIcon(activity)}
       </span>
-      <span className="min-w-0 flex-1 truncate text-copy-secondary">
+      <span
+        className="min-w-0 flex-1 truncate text-copy-secondary"
+        title={activity.title}
+      >
         {activity.title}
       </span>
       {activity.name.length > 0 && (
@@ -348,7 +393,12 @@ function ActivityLine({
         )}
       >
         {statusIcon(activity.status, streaming)}
-        <span className="sr-only sm:not-sr-only">
+        <span
+          className={cn(
+            "sr-only",
+            activity.status !== "completed" && "sm:not-sr-only",
+          )}
+        >
           {statusLabel(activity.status, streaming)}
         </span>
       </span>
@@ -365,7 +415,7 @@ function ActivityLine({
 
   return (
     <details
-      className="group/activity"
+      className="group/activity min-w-0 max-w-full"
       data-activity-type={activity.activityType}
       data-status={activity.status}
       data-testid="agent-activity"
@@ -381,10 +431,54 @@ function ActivityLine({
       {activity.activityType === "tool" ? (
         <ToolDetails activity={activity} detail={loadedDetail} />
       ) : (
-        <NarrativeDetails activity={activity} detail={loadedDetail} />
+        <NarrativeDetails
+          activity={activity}
+          detail={loadedDetail}
+          streaming={
+            streaming &&
+            (activity.status === "pending" || activity.status === "running")
+          }
+        />
       )}
       <DetailAvailability load={detailLoad} onRetry={loadDetails} />
     </details>
+  );
+}
+
+function ProgressUpdates({
+  activities,
+  streaming,
+}: {
+  readonly activities: readonly RecordedActivity[];
+  readonly streaming: boolean;
+}) {
+  if (activities.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mb-4 grid gap-3">
+      {activities.map((activity) => {
+        const active =
+          streaming &&
+          (activity.status === "pending" || activity.status === "running");
+        return (
+          <section
+            aria-label="Agent progress update"
+            aria-live={active ? "polite" : undefined}
+            className={cn(
+              "agent-progress min-w-0",
+              active && "agent-stream is-streaming",
+            )}
+            key={activity.activityId}
+          >
+            {activity.output.length > 0 && (
+              <AgentMarkdown markdown={activity.output} streaming={active} />
+            )}
+            <AgentRichContent contents={activity.content} />
+          </section>
+        );
+      })}
+    </div>
   );
 }
 
@@ -399,17 +493,26 @@ export function AgentActivityList({
   readonly sessionId: string;
   readonly streaming: boolean;
 }) {
-  const initialPresentation = describeAgentActivities(activities, streaming);
+  const progressActivities = activities.filter(
+    (activity) => activity.activityType === "progress",
+  );
+  const workActivities = activities.filter(
+    (activity) => activity.activityType !== "progress",
+  );
+  const initialPresentation = describeAgentActivities(
+    workActivities,
+    streaming,
+  );
   const [manuallyOpen, setManuallyOpen] = useState(
     () => !streaming && initialPresentation.defaultOpen,
   );
   const working =
     streaming &&
-    activities.some(
+    workActivities.some(
       (activity) =>
         activity.status === "pending" || activity.status === "running",
     );
-  const presentation = describeAgentActivities(activities, streaming);
+  const presentation = describeAgentActivities(workActivities, streaming);
   useEffect(() => {
     if (!streaming && presentation.defaultOpen) {
       setManuallyOpen(true);
@@ -422,37 +525,42 @@ export function AgentActivityList({
   const disclosureLabel = presentation.label;
 
   return (
-    <details
-      className="group/work mb-3"
-      data-testid="agent-process-disclosure"
-      onToggle={(event) => {
-        if (!streaming) {
-          setManuallyOpen(event.currentTarget.open);
-        }
-      }}
-      open={open}
-    >
-      <summary
-        aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
-        className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
-      >
-        <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
-        <span>{disclosureLabel}</span>
-        {working && (
-          <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
-        )}
-      </summary>
-      <div className="mt-1.5 grid gap-1">
-        {activities.map((activity) => (
-          <ActivityLine
-            activity={activity}
-            channelId={channelId}
-            key={`${sessionId}:${activity.activityId}`}
-            sessionId={sessionId}
-            streaming={streaming}
-          />
-        ))}
-      </div>
-    </details>
+    <>
+      <ProgressUpdates activities={progressActivities} streaming={streaming} />
+      {workActivities.length > 0 && (
+        <details
+          className="group/work mb-3 min-w-0 max-w-full"
+          data-testid="agent-process-disclosure"
+          onToggle={(event) => {
+            if (!streaming) {
+              setManuallyOpen(event.currentTarget.open);
+            }
+          }}
+          open={open}
+        >
+          <summary
+            aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
+            className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
+          >
+            <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
+            <span>{disclosureLabel}</span>
+            {working && (
+              <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
+            )}
+          </summary>
+          <div className="mt-1.5 grid min-w-0 max-w-full gap-1">
+            {workActivities.map((activity) => (
+              <ActivityLine
+                activity={activity}
+                channelId={channelId}
+                key={`${sessionId}:${activity.activityId}`}
+                sessionId={sessionId}
+                streaming={streaming}
+              />
+            ))}
+          </div>
+        </details>
+      )}
+    </>
   );
 }
