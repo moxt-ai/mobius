@@ -445,3 +445,8 @@ profile is embeddable and expects the host process to provide its pairing/channe
 ports and HTTP listener; `deploy/docker` remains a placeholder for a packaged
 server image. External boundary fixtures remain under `e2e/fixtures` because
 they are deterministic test dependencies rather than shipped product units.
+
+## D1 migrations
+
+See [shared D1 shard migrations](docs/d1-migrations.md) to initialize Cloud-owned
+shards with this business's SQL files and independent migration history.

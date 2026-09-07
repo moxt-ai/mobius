@@ -9,6 +9,7 @@
     "pnpm": ">=11.25.0 <12"
   },
   "scripts": {
+    "db:shard": "bash scripts/migrate-shard.sh",
     "dev": "pnpm dev:relay",
     "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
     "dev:web": "pnpm --filter @moxt-ai/mobius-web dev",
