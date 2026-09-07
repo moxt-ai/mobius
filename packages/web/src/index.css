@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @source "../../../node_modules/streamdown/dist/*.js";
+@source "../../web-core/src/**/*.{ts,tsx}";
 
 :root {
   color-scheme: light;

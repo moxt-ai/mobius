@@ -182,8 +182,10 @@ events use bounded stages and sanitized stable codes.
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network
   boundaries.
-- `packages/web` owns the Vite, React, Zustand, Tailwind CSS, and shadcn/ui agent
-  chat application.
+- `packages/web` owns the Vite application shell, runtime dependencies, and
+  Tailwind CSS entrypoint.
+- `packages/web-core` owns the reusable React agent experience, including chat
+  and integration components.
 - `packages/web-sdk` owns the browser-facing API.
 - `e2e/fixtures` contains deterministic external-boundary fixtures.
 - `deploy/docker` is an empty placeholder for a future packaged Node image.

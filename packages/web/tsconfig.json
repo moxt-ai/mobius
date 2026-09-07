@@ -8,7 +8,7 @@
     "noEmit": true,
     "skipLibCheck": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["../web-core/src/*"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]

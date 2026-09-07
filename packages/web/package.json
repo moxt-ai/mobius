@@ -10,6 +10,7 @@
     "typecheck": "tsc --project tsconfig.json && tsc --project test/tsconfig.json"
   },
   "dependencies": {
+    "@moxt-ai/mobius-web-core": "workspace:*",
     "@moxt-ai/mobius-web-sdk": "workspace:*",
     "@radix-ui/react-select": "2.3.7",
     "class-variance-authority": "^0.7.1",

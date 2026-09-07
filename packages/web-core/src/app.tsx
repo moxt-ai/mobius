@@ -54,7 +54,7 @@ import { useChatStore } from "@/store/chat-store";
 
 const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
 
-interface ChannelWorkspaceContext {
+export interface ChatProps {
   readonly channelId: string;
   readonly desktopSidebarCollapsed: boolean;
   readonly onCreateConversation: () => void;
@@ -106,7 +106,7 @@ function ChannelContentError({
   readonly message: string;
   readonly title: string;
 }) {
-  const { channelId } = useOutletContext<ChannelWorkspaceContext>();
+  const { channelId } = useOutletContext<ChatProps>();
   const navigate = useNavigate();
   return (
     <section className="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -269,7 +269,7 @@ function ChannelWorkspace({
     return <AgentInstallationPage channelId={connection.channelId} />;
   }
 
-  const context: ChannelWorkspaceContext = {
+  const context: ChatProps = {
     channelId: connection.channelId,
     desktopSidebarCollapsed: sidebarLayout.kind === "collapsed",
     onCreateConversation: createAndOpenConversation,
@@ -411,7 +411,7 @@ function ChannelRoute() {
 }
 
 function ChannelIndexRoute() {
-  const { channelId } = useOutletContext<ChannelWorkspaceContext>();
+  const { channelId } = useOutletContext<ChatProps>();
   const activeConversationId = useChatStore(
     (state) => state.activeConversationId,
   );
@@ -431,7 +431,7 @@ function ChannelIndexRoute() {
 }
 
 function LegacyAgentSettingsRoute() {
-  const context = useOutletContext<ChannelWorkspaceContext>();
+  const context = useOutletContext<ChatProps>();
   const activeConversationId = useChatStore(
     (state) => state.activeConversationId,
   );
@@ -451,7 +451,7 @@ function LegacyAgentSettingsRoute() {
 }
 
 function SessionRoute() {
-  const context = useOutletContext<ChannelWorkspaceContext>();
+  const context = useOutletContext<ChatProps>();
   const params = useParams<"sessionId">();
   const sessionId = params.sessionId ?? "";
   const activeConversationId = useChatStore(
@@ -494,8 +494,12 @@ function SessionRoute() {
   return <Outlet context={context} />;
 }
 
-function ConversationRoutePage() {
-  const context = useOutletContext<ChannelWorkspaceContext>();
+export function Chat({
+  channelId,
+  desktopSidebarCollapsed,
+  onCreateConversation,
+  onToggleDesktopSidebar,
+}: ChatProps) {
   const announcement = useChatStore((state) => state.announcement);
   const activeConversationMessageCount = useChatStore((state) => {
     const conversation = state.conversations.find(
@@ -506,15 +510,15 @@ function ConversationRoutePage() {
   return (
     <>
       <ChatHeader
-        desktopSidebarCollapsed={context.desktopSidebarCollapsed}
-        onCreateConversation={context.onCreateConversation}
-        onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+        desktopSidebarCollapsed={desktopSidebarCollapsed}
+        onCreateConversation={onCreateConversation}
+        onToggleDesktopSidebar={onToggleDesktopSidebar}
       />
       <section
         aria-label="Agent conversation"
         className="flex min-h-0 flex-1 flex-col"
       >
-        <ChatMessageList channelId={context.channelId} />
+        <ChatMessageList channelId={channelId} />
         {activeConversationMessageCount > 0 && (
           <ChatComposer placement="active" />
         )}
@@ -526,8 +530,13 @@ function ConversationRoutePage() {
   );
 }
 
+function ConversationRoutePage() {
+  const context = useOutletContext<ChatProps>();
+  return <Chat {...context} />;
+}
+
 function AgentSettingsRoutePage() {
-  const context = useOutletContext<ChannelWorkspaceContext>();
+  const context = useOutletContext<ChatProps>();
   return (
     <AgentSettingsPage
       channelId={context.channelId}
