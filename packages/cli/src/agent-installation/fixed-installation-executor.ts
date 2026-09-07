@@ -207,6 +207,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
       if (agent === null) {
         agent = await recipe.install({
           audit: this.#audit,
+          environment: this.#environment,
           report,
           requestId,
           signal,
@@ -295,6 +296,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
         ) {
           agent = await recipe.install({
             audit: this.#audit,
+            environment: this.#environment,
             report,
             requestId,
             signal,

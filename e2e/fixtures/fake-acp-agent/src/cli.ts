@@ -462,7 +462,7 @@ acp
         sessionCapabilities: {
           additionalDirectories: {},
           close: {},
-          resume: {},
+          ...(process.argv.includes("--load-only") ? {} : { resume: {} }),
           ...(process.argv.includes("--no-native-sessions")
             ? {}
             : { list: {}, delete: {}, fork: {} }),
@@ -473,6 +473,9 @@ acp
     };
   })
   .onRequest(acp.methods.agent.session.new, (context) => {
+    if (process.argv.includes("--authentication-required")) {
+      throw acp.RequestError.authRequired();
+    }
     const sessionId = crypto.randomUUID();
     acquireWriter(sessionId);
     const state = new FakeSessionState(0);

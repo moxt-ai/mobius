@@ -26,6 +26,7 @@ export class LocalAgentDefinition {
   readonly environment: Readonly<Record<string, string>>;
   readonly id: string;
   readonly label: string;
+  readonly promptTimeoutMilliseconds: number;
 
   constructor(
     id: string,
@@ -37,7 +38,14 @@ export class LocalAgentDefinition {
     agentVersion = "",
     adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
     agentIdentity: ExecutableIdentity = adapterIdentity,
+    promptTimeoutMilliseconds = 30 * 60 * 1_000,
   ) {
+    if (
+      !Number.isSafeInteger(promptTimeoutMilliseconds) ||
+      promptTimeoutMilliseconds < 1
+    ) {
+      throw new Error("The local Agent prompt deadline is invalid");
+    }
     this.adapterIdentity = adapterIdentity;
     this.adapterPath = adapterIdentity.realPath;
     this.adapterVersion = adapterVersion;
@@ -45,6 +53,7 @@ export class LocalAgentDefinition {
     this.agentVersion = agentVersion;
     this.id = id;
     this.label = label;
+    this.promptTimeoutMilliseconds = promptTimeoutMilliseconds;
     this.command = adapterIdentity.realPath;
     this.arguments = Object.freeze([...arguments_]);
     this.environment = Object.freeze({ ...environment });

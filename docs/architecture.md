@@ -14,7 +14,7 @@ Pairing page / channel Web app
   -> paired Local Daemon
   -> verified local Agent catalog + execution authorization
   -> ACP v1 over JSON-RPC and stdio
-  -> discovered Codex or Claude Code adapter + Agent CLI
+  -> discovered Codex, Claude Code, or Pi adapter + Agent CLI
 ```
 
 `packages/relay-core` owns the Hono HTTP routes, input validation, pairing and
@@ -93,7 +93,7 @@ The daemon owns local path resolution, authorization, sandboxing, process
 lifecycle, long-lived ACP conversation sessions, approved agent selection,
 software installation, and audit records. Remote input is never an authorization
 decision at the local execution boundary. Agent identifiers map only to the
-built-in Codex and Claude Code specifications; remote clients cannot provide
+built-in Codex, Claude Code, and Pi specifications; remote clients cannot provide
 commands, URLs, versions, arguments, environment values, or executable paths.
 
 ## Local Agent catalog and installation trust boundary
@@ -101,8 +101,10 @@ commands, URLs, versions, arguments, environment values, or executable paths.
 Discovery resolves an exact Agent/adapter pair from explicit local overrides,
 direct platform-aware `PATH` lookup, or Mobius's private managed cache. It
 resolves symlinks, verifies executable regular files, captures stable file
-identity, runs bounded `--version` probes, supplies the resolved Agent path to
-the adapter, and completes a bounded ACP initialize handshake. The resulting
+identity, runs each Agent's fixed bounded version probe, supplies the resolved
+Agent path to the adapter, and completes a bounded ACP initialize handshake. Pi
+uses `PI_ACP_PI_COMMAND` to bind the verified executable and must also finish a
+bounded `/session` prompt through `pi-acp -> pi --mode rpc`. The resulting
 candidate pair is accepted only after the complete probe: an invalid automatic
 external candidate can fall back to the private cache, while an explicit
 override never silently falls back. Before each new adapter process, both
@@ -145,7 +147,7 @@ requestId + registered agentId from Web
   -> strict protocol validation
   -> built-in recipe and private target resolution
   -> per-request terminal confirmation or narrow local grant
-  -> bounded official download, verification, and subprocess execution
+  -> bounded official download or npm install, integrity verification, and subprocess execution
   -> pinned private ACP adapter staging and atomic publication
   -> normal Agent and ACP discovery
   -> authenticated catalog publication
@@ -164,7 +166,10 @@ per-Agent concurrency slots are owned and released by the local daemon.
 
 Managed adapters use exact package versions, omit optional platform Agent
 dependencies, disable lifecycle scripts, validate package name/version/bin
-containment in a staging directory, and publish with an atomic rename. A failed
+containment in a staging directory, and publish with an atomic rename. Pi's
+managed Agent and adapter are independent versioned dependency units; both direct
+npm artifacts are matched against built-in SRI and registry tarball values before
+the complete bridge can become ready. A failed
 staging install cannot replace an existing cache entry. Installation request IDs
 are idempotent for the daemon lifetime, and all cross-Relay progress and failure
 events use bounded stages and sanitized stable codes.

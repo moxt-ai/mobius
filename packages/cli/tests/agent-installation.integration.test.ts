@@ -2,6 +2,7 @@ import {
   chmod,
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   writeFile,
@@ -17,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import {
   CodexAgentSpecification,
   discoverLocalAgentInventory,
+  PiAgentSpecification,
 } from "../src/agent-catalog/discover-local-agents.ts";
 import {
   InstallableAgentDefinition,
@@ -34,11 +36,15 @@ import { AutomaticAdapterProvisioner } from "../src/agent-installation/automatic
 import {
   type AgentInstallRecipeOptions,
   FixedAgentInstallRecipe,
+  fixedAgentInstallRecipes,
 } from "../src/agent-installation/fixed-agent-install-recipes.ts";
 import { FixedInstallationExecutor } from "../src/agent-installation/fixed-installation-executor.ts";
 import { readGrantedAgents } from "../src/agent-installation/installation-grants.ts";
 import { ConsoleInstallationAuthorizer } from "../src/agent-installation/local-installation-authorizer.ts";
-import type { AdapterInstallationPort } from "../src/agent-installation/managed-adapter-installer.ts";
+import {
+  type AdapterInstallationPort,
+  ManagedAdapterInstaller,
+} from "../src/agent-installation/managed-adapter-installer.ts";
 import {
   type ResolvedExecutable,
   resolveExecutablePath,
@@ -213,23 +219,255 @@ if (process.argv.includes("--version")) {
   await chmod(path, 0o700);
 }
 
-async function writeInstallationGrant(stateDirectory: string): Promise<void> {
+async function writeInstallationGrant(
+  stateDirectory: string,
+  agentId = "codex",
+): Promise<void> {
   await writeFile(
     join(stateDirectory, "installation-grants.json"),
-    `${JSON.stringify({ agents: ["codex"] })}\n`,
+    `${JSON.stringify({ agents: [agentId] })}\n`,
     { mode: 0o600 },
   );
 }
 
-function request(requestId: string): AgentInstallRequestCommand {
+function request(
+  requestId: string,
+  agentId = "codex",
+): AgentInstallRequestCommand {
   return {
-    agentId: "codex",
+    agentId,
     kind: AGENT_INSTALL_REQUEST_KIND,
     requestId,
   };
 }
 
 describe("local Agent installation authorization", () => {
+  it("Given Pi installation is selected, When its fixed recipe and adapter installer run, Then exact verified packages are installed without lifecycle scripts in separate private caches", async () => {
+    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-install-"));
+    const executableDirectory = join(stateDirectory, "bin");
+    const npmPath = join(executableDirectory, "npm");
+    const piExecutable = executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.85.0\\n");
+} else {
+  if (!process.argv.includes("--mode") || !process.argv.includes("rpc")) {
+    process.exit(90);
+  }
+  process.argv.push("--agent-name", "Pi");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`);
+    const adapterExecutable = executableSource(`
+import { spawn } from "node:child_process";
+const pi = process.env.PI_ACP_PI_COMMAND;
+if (pi === undefined) process.exit(91);
+const child = spawn(pi, ["--mode", "rpc"], {
+  env: process.env,
+  stdio: "inherit",
+});
+child.once("error", () => process.exit(92));
+child.once("exit", (code) => process.exit(code ?? 93));
+`);
+    try {
+      await mkdir(executableDirectory, { mode: 0o700, recursive: true });
+      await writeFile(
+        npmPath,
+        executableSource(`
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const prefixIndex = process.argv.indexOf("--prefix");
+const prefix = process.argv[prefixIndex + 1];
+if (prefixIndex < 0 || prefix === undefined) process.exit(81);
+const requested = process.argv.at(-1);
+const installsAgent = requested === "@earendil-works/pi-coding-agent@0.85.0";
+const installsAdapter = requested === "pi-acp@0.0.33";
+if (!installsAgent && !installsAdapter) process.exit(82);
+const packageName = installsAgent ? "@earendil-works/pi-coding-agent" : "pi-acp";
+const version = installsAgent ? "0.85.0" : "0.0.33";
+const executableName = installsAgent ? "pi" : "pi-acp";
+const executablePath = installsAgent ? "dist/bundle/cli.js" : "dist/index.js";
+const integrity = installsAgent
+  ? "sha512-INxVkLAVfAMju5MojJpmyu/0bMP+r+ffZuS7UqVv32E2JwHBRbcHfELDfmFNvapEbgYfKN2r9OYO1p3TqDBR+g=="
+  : "sha512-vX9kY1tK14E72G4dBAx+RGCk/k7XPjTHls6dLUxA8WSkBav6B6JHuSBv3eusp50LCR/GTRsR2kIKsG0Z5jANzw==";
+const resolved = installsAgent
+  ? "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.0.tgz"
+  : "https://registry.npmjs.org/pi-acp/-/pi-acp-0.0.33.tgz";
+const packageRoot = join(prefix, "node_modules", ...packageName.split("/"));
+const executable = join(packageRoot, executablePath);
+mkdirSync(join(executable, ".."), { recursive: true });
+writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+  name: packageName,
+  version,
+  bin: { [executableName]: executablePath },
+}));
+writeFileSync(
+  executable,
+  installsAgent
+    ? ${JSON.stringify(piExecutable)}
+    : ${JSON.stringify(adapterExecutable)},
+  { mode: 0o700 },
+);
+chmodSync(executable, 0o700);
+writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
+  lockfileVersion: 3,
+  packages: {
+    ["node_modules/" + packageName]: {
+      integrity,
+      resolved,
+      version,
+    },
+  },
+}));
+writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
+  arguments: process.argv.slice(2),
+  ignoreScripts: process.env.NPM_CONFIG_IGNORE_SCRIPTS,
+}));
+`),
+        { mode: 0o700 },
+      );
+      await chmod(npmPath, 0o700);
+      const recipes = fixedAgentInstallRecipes().filter(
+        (candidate) => candidate.id === "pi",
+      );
+      expect(recipes).toHaveLength(1);
+      const recipe = recipes[0];
+      if (recipe === undefined) {
+        throw new Error("Pi installation recipe is unavailable");
+      }
+      await writeInstallationGrant(stateDirectory, "pi");
+      const specification = new PiAgentSpecification();
+      const observer = new RecordingInstallationObserver();
+      const audit = new RecordingInstallationAudit();
+      const catalog = new LocalAgentCatalog(
+        [],
+        [new InstallableAgentDefinition("pi", "Pi", false)],
+      );
+      const environment = {
+        MOBIUS_STATE_DIRECTORY: stateDirectory,
+        PATH: executableDirectory,
+      };
+      const manager = new AgentInstallationManager(
+        [specification],
+        new ConsoleInstallationAuthorizer(stateDirectory),
+        new FixedInstallationExecutor(
+          {
+            defaultWorkspace: stateDirectory,
+            audit,
+            catalog,
+            environment,
+            publishCatalog: (signal) => {
+              signal.throwIfAborted();
+              return Promise.resolve();
+            },
+            stateDirectory,
+          },
+          [specification],
+          [recipe],
+          new ManagedAdapterInstaller({ environment, stateDirectory }),
+        ),
+        observer,
+        audit,
+      );
+
+      await expect(
+        manager.request(
+          request("install-pi", "pi"),
+          new AbortController().signal,
+        ),
+      ).resolves.toBeInstanceOf(SucceededInstallation);
+
+      const packageRoot = join(stateDirectory, "agents", "pi", "0.85.0");
+      expect(catalog.read().agents[0]?.agentIdentity.realPath).toBe(
+        await realpath(
+          join(
+            packageRoot,
+            "node_modules",
+            "@earendil-works",
+            "pi-coding-agent",
+            "dist",
+            "bundle",
+            "cli.js",
+          ),
+        ),
+      );
+      const invocation = await readFile(
+        join(packageRoot, "npm-invocation.json"),
+        "utf8",
+      );
+      expect(invocation).toContain("@earendil-works/pi-coding-agent@0.85.0");
+      expect(invocation).toContain("--ignore-scripts");
+      expect(invocation).toContain('"ignoreScripts":"true"');
+      const adapterRoot = join(stateDirectory, "adapters", "pi", "0.0.33");
+      expect(catalog.read().agents[0]?.adapterIdentity.realPath).toBe(
+        await realpath(
+          join(adapterRoot, "node_modules", "pi-acp", "dist", "index.js"),
+        ),
+      );
+      await expect(
+        readFile(join(adapterRoot, "npm-invocation.json"), "utf8"),
+      ).resolves.toContain("pi-acp@0.0.33");
+      expect(catalog.read().installableAgents).toEqual([]);
+      expect(
+        observer.states
+          .filter((state) => state instanceof RunningInstallation)
+          .map((state) => state.stage),
+      ).toEqual([
+        "downloading",
+        "verifying",
+        "installing_agent",
+        "installing_adapter",
+        "checking_acp",
+      ]);
+      await writeFile(
+        join(packageRoot, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/@earendil-works/pi-coding-agent": {
+              integrity: "sha512-tampered",
+              resolved:
+                "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.0.tgz",
+              version: "0.85.0",
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await expect(
+        recipe.install({
+          audit: new RecordingInstallationAudit(),
+          environment,
+          report: () => Promise.resolve(),
+          requestId: "install-tampered-pi",
+          signal: new AbortController().signal,
+          stateDirectory,
+        }),
+      ).rejects.toMatchObject({ code: "agent_verification_failed" });
+      await writeFile(
+        join(adapterRoot, "package-lock.json"),
+        JSON.stringify({
+          lockfileVersion: 3,
+          packages: {
+            "node_modules/pi-acp": {
+              integrity: "sha512-tampered",
+              resolved: "https://registry.npmjs.org/pi-acp/-/pi-acp-0.0.33.tgz",
+              version: "0.0.33",
+            },
+          },
+        }),
+        { mode: 0o600 },
+      );
+      await expect(
+        new ManagedAdapterInstaller({
+          environment,
+          stateDirectory,
+        }).install(new PiAgentSpecification(), new AbortController().signal),
+      ).rejects.toMatchObject({ code: "adapter_verification_failed" });
+    } finally {
+      await rm(stateDirectory, { force: true, recursive: true });
+    }
+  });
+
   it.skipIf(process.stdin.isTTY || process.stdout.isTTY)(
     "Given no locally configured capability grant in a headless daemon, When authorization is requested, Then installation is denied without execution",
     async () => {

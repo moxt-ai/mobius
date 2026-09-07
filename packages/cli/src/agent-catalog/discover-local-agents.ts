@@ -2,12 +2,16 @@ import { spawn } from "node:child_process";
 import { isAbsolute, join } from "node:path";
 
 import {
+  type AgentCapabilities,
+  type ClientConnection,
   type CompleteElicitationNotification,
   type CreateElicitationRequest,
   type CreateElicitationResponse,
+  type InitializeResponse,
   methods,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -19,6 +23,14 @@ import {
 } from "../acp/create-client.ts";
 import { readGrantedAgents } from "../agent-installation/installation-grants.ts";
 import { validateManagedAdapter } from "../agent-installation/managed-adapter-installer.ts";
+import {
+  ManagedNpmPackageDefinition,
+  validateManagedNpmPackage,
+} from "../agent-installation/managed-npm-package.ts";
+import {
+  PI_ACP_PACKAGE,
+  PI_AGENT_PACKAGE,
+} from "../agent-installation/pi-managed-packages.ts";
 import {
   findExecutableOnPath,
   ProcessExecutionError,
@@ -36,19 +48,52 @@ import {
 const VERSION_PROBE_TIMEOUT_MILLISECONDS = 3_000;
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 5_000;
 const ACP_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+const DEFAULT_PROMPT_TIMEOUT_MILLISECONDS = 30 * 60 * 1_000;
+const PI_ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
+const PI_PROMPT_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 
 export abstract class LocalAgentSpecification {
   abstract readonly adapterEnvironmentVariable: string;
-  abstract readonly adapterExecutable: string;
   abstract readonly adapterOverrideVariable: string;
-  abstract readonly adapterPackage: string;
-  abstract readonly adapterVersion: string;
+  abstract readonly adapterPackageDefinition: ManagedNpmPackageDefinition;
   abstract readonly agentExecutable: string;
   abstract readonly agentOverrideVariable: string;
   abstract readonly id: string;
   abstract readonly label: string;
   abstract readonly managedAdapterExecutablePath: readonly string[];
   abstract readonly managedAgentExecutablePath: readonly string[];
+  readonly acpProbeTimeoutMilliseconds: number = ACP_PROBE_TIMEOUT_MILLISECONDS;
+  readonly authenticationCommand = (): string => "";
+  readonly adapterVersionArguments: readonly string[] = ["--version"];
+  readonly agentVersionArguments: readonly string[] = ["--version"];
+  readonly promptTimeoutMilliseconds: number =
+    DEFAULT_PROMPT_TIMEOUT_MILLISECONDS;
+
+  get adapterExecutable(): string {
+    return this.adapterPackageDefinition.executableName;
+  }
+
+  get adapterPackage(): string {
+    return this.adapterPackageDefinition.packageName;
+  }
+
+  get adapterVersion(): string {
+    return this.adapterPackageDefinition.version;
+  }
+
+  readonly resolveManagedAgent = async (
+    stateDirectory: string,
+    platform: NodeJS.Platform,
+  ): Promise<ResolvedExecutable> => {
+    const executable = await resolveExecutablePath(
+      join(stateDirectory, ...this.managedAgentExecutablePath),
+      platform,
+    );
+    if (executable === null) {
+      throw new Error("The managed Agent executable is unavailable");
+    }
+    return executable;
+  };
 
   readonly recoveryCommand = (): string =>
     `npm install -g --omit=optional ${this.adapterPackage}@${this.adapterVersion}`;
@@ -59,14 +104,25 @@ export abstract class LocalAgentSpecification {
   ): boolean =>
     (platform === "darwin" || platform === "linux") &&
     (architecture === "arm64" || architecture === "x64");
+
+  readonly verifyAcp = (
+    _connection: ClientConnection,
+    _initialized: InitializeResponse,
+    _defaultWorkspace: string,
+    _signal: AbortSignal,
+  ): Promise<void> => Promise.resolve();
 }
 
-export class CodexAgentSpecification extends LocalAgentSpecification {
+abstract class BridgedAcpAgentDefinition extends LocalAgentSpecification {}
+
+export class CodexAgentSpecification extends BridgedAcpAgentDefinition {
   readonly adapterEnvironmentVariable = "CODEX_PATH";
-  readonly adapterExecutable = "codex-acp";
   readonly adapterOverrideVariable = "MOBIUS_CODEX_ACP_PATH";
-  readonly adapterPackage = "@agentclientprotocol/codex-acp";
-  readonly adapterVersion = "1.8.0";
+  readonly adapterPackageDefinition = new ManagedNpmPackageDefinition(
+    "@agentclientprotocol/codex-acp",
+    "1.8.0",
+    "codex-acp",
+  );
   readonly agentExecutable = "codex";
   readonly agentOverrideVariable = "MOBIUS_CODEX_PATH";
   readonly id = "codex";
@@ -84,12 +140,14 @@ export class CodexAgentSpecification extends LocalAgentSpecification {
   readonly managedAgentExecutablePath = ["agents", "codex", "bin", "codex"];
 }
 
-class ClaudeCodeAgentSpecification extends LocalAgentSpecification {
+class ClaudeCodeAgentSpecification extends BridgedAcpAgentDefinition {
   readonly adapterEnvironmentVariable = "CLAUDE_CODE_EXECUTABLE";
-  readonly adapterExecutable = "claude-agent-acp";
   readonly adapterOverrideVariable = "MOBIUS_CLAUDE_ACP_PATH";
-  readonly adapterPackage = "@agentclientprotocol/claude-agent-acp";
-  readonly adapterVersion = "0.73.0";
+  readonly adapterPackageDefinition = new ManagedNpmPackageDefinition(
+    "@agentclientprotocol/claude-agent-acp",
+    "0.73.0",
+    "claude-agent-acp",
+  );
   readonly agentExecutable = "claude";
   readonly agentOverrideVariable = "MOBIUS_CLAUDE_PATH";
   readonly id = "claude";
@@ -114,10 +172,100 @@ class ClaudeCodeAgentSpecification extends LocalAgentSpecification {
   ];
 }
 
+export class PiAgentSpecification extends BridgedAcpAgentDefinition {
+  override readonly acpProbeTimeoutMilliseconds =
+    PI_ACP_PROBE_TIMEOUT_MILLISECONDS;
+  readonly adapterEnvironmentVariable = "PI_ACP_PI_COMMAND";
+  readonly adapterOverrideVariable = "MOBIUS_PI_ACP_PATH";
+  readonly adapterPackageDefinition = PI_ACP_PACKAGE;
+  override readonly adapterVersionArguments: readonly string[] = [];
+  override readonly authenticationCommand = (): string =>
+    "pi-acp --terminal-login";
+  readonly agentExecutable = "pi";
+  readonly agentOverrideVariable = "MOBIUS_PI_PATH";
+  readonly id = "pi";
+  readonly label = "Pi";
+  readonly managedAdapterExecutablePath = [
+    "adapters",
+    "pi",
+    PI_ACP_PACKAGE.version,
+    "node_modules",
+    "pi-acp",
+    "dist",
+    "index.js",
+  ];
+  readonly managedAgentExecutablePath = [
+    "agents",
+    "pi",
+    PI_AGENT_PACKAGE.version,
+    "node_modules",
+    "@earendil-works",
+    "pi-coding-agent",
+    "dist",
+    "bundle",
+    "cli.js",
+  ];
+  override readonly promptTimeoutMilliseconds = PI_PROMPT_TIMEOUT_MILLISECONDS;
+
+  override readonly resolveManagedAgent = async (
+    stateDirectory: string,
+    _platform: NodeJS.Platform,
+  ): Promise<ResolvedExecutable> =>
+    await validateManagedNpmPackage(
+      join(stateDirectory, "agents", this.id, PI_AGENT_PACKAGE.version),
+      PI_AGENT_PACKAGE,
+    );
+
+  override readonly verifyAcp = async (
+    connection: ClientConnection,
+    initialized: InitializeResponse,
+    defaultWorkspace: string,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const capabilities: AgentCapabilities = initialized.agentCapabilities ?? {};
+    if (capabilities.loadSession !== true) {
+      throw new AgentProbeError(
+        "acp_incompatible",
+        "Pi ACP adapter does not support session recovery",
+      );
+    }
+    const session = await connection.agent.request(
+      methods.agent.session.new,
+      {
+        additionalDirectories: [],
+        cwd: defaultWorkspace,
+        mcpServers: [],
+      },
+      { cancellationSignal: signal },
+    );
+    if (session.sessionId.length === 0) {
+      throw new AgentProbeError(
+        "acp_incompatible",
+        "Pi ACP adapter returned an invalid session",
+      );
+    }
+    const prompt = await connection.agent.request(
+      methods.agent.session.prompt,
+      {
+        prompt: [{ text: "/session", type: "text" }],
+        sessionId: session.sessionId,
+      },
+      { cancellationSignal: signal },
+    );
+    if (prompt.stopReason !== "end_turn") {
+      throw new AgentProbeError(
+        "acp_incompatible",
+        "Pi ACP adapter did not complete its conformance prompt",
+      );
+    }
+  };
+}
+
 export function supportedLocalAgentSpecifications(): readonly LocalAgentSpecification[] {
   return Object.freeze([
     new CodexAgentSpecification(),
     new ClaudeCodeAgentSpecification(),
+    new PiAgentSpecification(),
   ]);
 }
 
@@ -194,6 +342,16 @@ class IncompatibleAdapter extends UnavailableAgent {
   }
 }
 
+class AuthenticationRequiredAgent extends UnavailableAgent {
+  readonly code = "authentication_required";
+  readonly message = "Agent authentication is required";
+  readonly status = "authentication_required";
+
+  constructor(specification: LocalAgentSpecification) {
+    super(specification);
+  }
+}
+
 export class LocalAgentInventory {
   readonly available: readonly AvailableAgent[];
   readonly discoveries: readonly AgentDiscovery[];
@@ -221,8 +379,13 @@ export class LocalAgentInventory {
     this.discoveries = Object.freeze([...discoveries]);
     this.installable = Object.freeze(
       unavailable
-        .filter((discovery) =>
-          discovery.specification.supportsInstallation(platform, architecture),
+        .filter(
+          (discovery) =>
+            !(discovery instanceof AuthenticationRequiredAgent) &&
+            discovery.specification.supportsInstallation(
+              platform,
+              architecture,
+            ),
         )
         .map(
           (discovery) =>
@@ -281,13 +444,17 @@ class DiscoveryAcpHandler implements AcpClientHandler {
 }
 
 async function resolveManagedExecutable(
-  managedExecutablePath: readonly string[],
+  specification: LocalAgentSpecification,
   options: DiscoverLocalAgentInventoryOptions,
 ): Promise<ResolvedExecutable | null> {
-  return await resolveExecutablePath(
-    join(readStateDirectory(options.environment), ...managedExecutablePath),
-    options.platform,
-  );
+  try {
+    return await specification.resolveManagedAgent(
+      readStateDirectory(options.environment),
+      options.platform ?? process.platform,
+    );
+  } catch {
+    return null;
+  }
 }
 
 async function resolveManagedAdapterExecutable(
@@ -347,11 +514,7 @@ async function resolveAgentExecutables(
   return await resolveSpecificationExecutables(
     specification.agentExecutable,
     specification.agentOverrideVariable,
-    async () =>
-      await resolveManagedExecutable(
-        specification.managedAgentExecutablePath,
-        options,
-      ),
+    async () => await resolveManagedExecutable(specification, options),
     options,
   );
 }
@@ -390,12 +553,13 @@ function normalizedVersion(output: string): string {
 
 async function probeVersion(
   executable: ResolvedExecutable,
+  arguments_: readonly string[],
   environment: Readonly<NodeJS.ProcessEnv>,
   defaultWorkspace: string,
   signal: AbortSignal,
 ): Promise<string> {
   const result = await runBoundedProcess({
-    arguments: ["--version"],
+    arguments: arguments_,
     command: executable.path,
     cwd: defaultWorkspace,
     environment,
@@ -431,6 +595,7 @@ export async function findVerifiedAgentExecutable(
     try {
       const version = await probeVersion(
         executable,
+        specification.agentVersionArguments,
         options.environment,
         options.defaultWorkspace,
         options.signal,
@@ -507,18 +672,19 @@ function writableAcpStream(
 }
 
 async function probeAcp(
+  specification: LocalAgentSpecification,
   agent: LocalAgentDefinition,
   environment: Readonly<NodeJS.ProcessEnv>,
   defaultWorkspace: string,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<string> {
   signal.throwIfAborted();
   const controller = new AbortController();
   let timedOut = false;
   const timeout = setTimeout(() => {
     timedOut = true;
     controller.abort(new Error("ACP probe timed out"));
-  }, ACP_PROBE_TIMEOUT_MILLISECONDS);
+  }, specification.acpProbeTimeoutMilliseconds);
   const abort = (): void => controller.abort(signal.reason);
   signal.addEventListener("abort", abort, { once: true });
   if (signal.aborted) {
@@ -579,6 +745,13 @@ async function probeAcp(
         "ACP adapter selected an unsupported protocol version",
       );
     }
+    await specification.verifyAcp(
+      connection,
+      initialized,
+      defaultWorkspace,
+      controller.signal,
+    );
+    return normalizedVersion(initialized.agentInfo?.version ?? "");
   } catch (error) {
     if (signal.aborted) {
       signal.throwIfAborted();
@@ -592,6 +765,17 @@ async function probeAcp(
     }
     if (error instanceof AgentProbeError) {
       throw error;
+    }
+    if (
+      error instanceof RequestError &&
+      error.code === -32_000 &&
+      specification.authenticationCommand().length > 0
+    ) {
+      throw new AgentProbeError(
+        "authentication_required",
+        "Agent authentication is required",
+        { cause: error },
+      );
     }
     throw new AgentProbeError(
       "acp_incompatible",
@@ -614,6 +798,9 @@ function probeFailure(
   error: unknown,
 ): UnavailableAgent {
   if (error instanceof AgentProbeError) {
+    if (error.code === "authentication_required") {
+      return new AuthenticationRequiredAgent(specification);
+    }
     return error.code === "acp_incompatible"
       ? new IncompatibleAdapter(specification)
       : new ProbeFailed(specification, error.code, error.message);
@@ -658,6 +845,7 @@ async function discoverSpecification(
     try {
       agentVersion = await probeVersion(
         agent,
+        specification.agentVersionArguments,
         options.environment,
         options.defaultWorkspace,
         options.signal,
@@ -673,15 +861,18 @@ async function discoverSpecification(
     for (const adapter of adapters) {
       let adapterVersion = "";
       try {
-        adapterVersion = await probeVersion(
-          adapter,
-          {
-            ...options.environment,
-            [specification.adapterEnvironmentVariable]: agent.path,
-          },
-          options.defaultWorkspace,
-          options.signal,
-        );
+        if (specification.adapterVersionArguments.length > 0) {
+          adapterVersion = await probeVersion(
+            adapter,
+            specification.adapterVersionArguments,
+            {
+              ...options.environment,
+              [specification.adapterEnvironmentVariable]: agent.path,
+            },
+            options.defaultWorkspace,
+            options.signal,
+          );
+        }
       } catch (error) {
         if (options.signal.aborted) {
           options.signal.throwIfAborted();
@@ -700,15 +891,39 @@ async function discoverSpecification(
         agentVersion,
         adapter.identity,
         agent.identity,
+        specification.promptTimeoutMilliseconds,
       );
       try {
-        await probeAcp(
+        const acpVersion = await probeAcp(
+          specification,
           definition,
           options.environment,
           options.defaultWorkspace,
           options.signal,
         );
-        return new AvailableAgent(specification, definition);
+        const verifiedAdapterVersion =
+          adapterVersion.length > 0 ? adapterVersion : acpVersion;
+        if (verifiedAdapterVersion.length === 0) {
+          throw new AgentProbeError(
+            "acp_incompatible",
+            "ACP adapter did not report a version",
+          );
+        }
+        return new AvailableAgent(
+          specification,
+          new LocalAgentDefinition(
+            specification.id,
+            specification.label,
+            adapter.path,
+            [],
+            { [specification.adapterEnvironmentVariable]: agent.path },
+            verifiedAdapterVersion,
+            agentVersion,
+            adapter.identity,
+            agent.identity,
+            specification.promptTimeoutMilliseconds,
+          ),
+        );
       } catch (error) {
         if (options.signal.aborted) {
           options.signal.throwIfAborted();

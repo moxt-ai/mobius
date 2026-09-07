@@ -87,14 +87,17 @@ The dependency direction is from the application to Mobius:
 As a result, `app-slack` and other `app-*` services can be added or removed
 without changing Mobius itself.
 
-### Planned agent harness integrations
+### Agent harness integrations
 
-Initial integration targets include:
+Implemented local integrations:
 
-- DeepSeek harness
-- Pi coding agent
 - Codex
 - Claude Code
+- Pi coding agent through `pi-acp`
+
+Additional integration targets include:
+
+- DeepSeek harness
 - `opencode`
 - `cursor-cli`
 - `grok-build`
@@ -140,7 +143,7 @@ terminal open. Pass `--workspace <directory>` to choose a different default.
 When developing the CLI from this checkout, the equivalent command is
 `pnpm mobius pair ...`.
 The browser then moves to an independent `/channels/<channel-id>` route. Every new
-conversation can select a locally verified Codex or Claude Code integration; the
+conversation can select a locally verified Codex, Claude Code, or Pi integration; the
 selection is locked after its first message so the ACP session remains coherent
 across turns. Conversations run independently, so a user can switch chats,
 create another chat, and start a second agent task while an earlier conversation
@@ -170,10 +173,12 @@ restart a previously paired daemon, use the channel identifier shown in its URL:
 npx --yes @moxt-ai/mobius start --channel <channel-id>
 ```
 
-Mobius does not bundle Codex, Claude Code, or their platform binaries. Pairing
-and every saved-channel start discover the Agent CLI and its ACP adapter, run
-bounded version probes, and complete an ACP initialize handshake. Only complete
-integrations are advertised. Inspect the local result without pairing:
+Mobius does not bundle Codex, Claude Code, Pi, or their platform binaries.
+Pairing and every saved-channel start discover the Agent CLI and its ACP adapter,
+run bounded version probes, and complete an ACP initialize handshake. Pi also
+has to create a session and finish a bounded `/session` conformance prompt through
+`pi-acp -> pi --mode rpc`. Only complete integrations are advertised. Inspect the
+local result without pairing:
 
 ```bash
 npx --yes @moxt-ai/mobius agents
@@ -184,6 +189,7 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 
 - `MOBIUS_CODEX_PATH` and `MOBIUS_CODEX_ACP_PATH`
 - `MOBIUS_CLAUDE_PATH` and `MOBIUS_CLAUDE_ACP_PATH`
+- `MOBIUS_PI_PATH` and `MOBIUS_PI_ACP_PATH`
 
 Automatic lookup uses the `PATH` inherited by the Mobius process. An explicit
 override is authoritative and fails closed; an automatically found executable
@@ -214,11 +220,13 @@ is only a request:
 by default, the terminal running Mobius must approve that individual request
 before an installer starts. The initial recipes use the documented
 [Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli) and
-[Claude Code native stable channel](https://code.claude.com/docs/en/installation).
-Mobius downloads the official installer into a private temporary directory,
-applies bounded verification and execution,
-installs a pinned ACP adapter into `~/.mobius/adapters`, repeats normal ACP
-discovery, and publishes the Agent only after the full path succeeds. Progress
+[Claude Code native stable channel](https://code.claude.com/docs/en/installation),
+plus the exact `@earendil-works/pi-coding-agent@0.85.0` package. The Pi recipe
+disables npm lifecycle scripts, verifies the published package SRI, and keeps Pi
+and `pi-acp@0.0.33` in separate versioned private cache entries. Mobius downloads
+or installs into a private staging directory, applies bounded verification and
+execution, installs a pinned ACP adapter into `~/.mobius/adapters`, repeats normal
+ACP discovery, and publishes the Agent only after the full path succeeds. Progress
 sent to Web contains stages and stable errors, never commands, URLs, paths, raw
 output, environment values, or credentials. Installing an Agent does not sign
 the user into its provider.
@@ -235,7 +243,10 @@ mode-`0600` `~/.mobius/installation-grants.json` file:
 The grant is disabled by default, is scoped to the listed built-in Agent IDs,
 and is revoked by removing an ID or the file. It cannot change a release
 channel, command, URL, arguments, or installation target. Local provider
-credentials remain with Codex or Claude Code. Pairing authorizes this channel to
+credentials remain with Codex, Claude Code, or Pi. Pi authentication is a local
+terminal action through `pi-acp --terminal-login`; `mobius agents` reports
+`authentication_required` without exposing a credential or local path. Pairing
+authorizes this channel to
 request work within the operating-system permissions of the user running Mobius.
 Agent-specific sandbox and approval behavior remains under the Agent's own
 configuration.
@@ -246,6 +257,11 @@ reasoning effort, boolean options such as fast mode, context-window usage and
 cost, slash commands, permission requests, form or URL elicitation, image and
 embedded-resource prompts, rich agent content, and structured tool details.
 Unsupported controls are omitted instead of being simulated by Mobius.
+In particular, Pi does not advertise ACP filesystem delegation, terminal
+delegation, or MCP passthrough while `pi-acp@0.0.33` does not implement them.
+Pi prompts have a five-minute outer Mobius deadline. A timeout closes the ACP
+connection and terminates the detached adapter process group, including its Pi
+RPC child.
 
 Open **Local sessions** in the sidebar, then choose an installed Agent to see
 its saved conversations across projects on the paired machine. This works before starting a chat

@@ -1648,7 +1648,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given supported Agents and a paired machine, When the connection resumes and a browser sends prompts, Then responses and usage persist", {
+  it("Given Codex, Claude Code, and Pi integrations on a paired machine, When the browser sends prompts and the daemon restarts, Then responses, usage, and Pi recovery persist", {
     timeout: 90_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -1660,6 +1660,12 @@ describe("pairing and channel chat", () => {
     const codexPath = join(executableDirectory, "codex");
     const codexAdapterPath = join(executableDirectory, "codex-acp");
     const claudePath = join(executableDirectory, "claude");
+    const unusableClaudeAdapterPath = join(
+      executableDirectory,
+      "claude-agent-acp",
+    );
+    const piPath = join(executableDirectory, "pi");
+    const piAdapterPath = join(executableDirectory, "pi-acp");
     const packageManagerPath = join(executableDirectory, "npm");
     const packageManagerRecordPath = join(
       temporaryDirectory,
@@ -1681,20 +1687,74 @@ describe("pairing and channel chat", () => {
         { mode: 0o700 },
       ),
       writeFile(
+        unusableClaudeAdapterPath,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("claude-agent-acp 0.73.0\\n");
+} else {
+  process.exit(1);
+}
+`),
+        { mode: 0o700 },
+      ),
+      writeFile(
+        piPath,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.85.0\\n");
+} else {
+  if (!process.argv.includes("--mode") || !process.argv.includes("rpc")) {
+    process.exit(90);
+  }
+  if (process.env.MOBIUS_FAKE_ACP_STATE_DIRECTORY !== undefined) {
+    process.env.MOBIUS_FAKE_ACP_STATE_DIRECTORY += "/pi";
+  }
+  process.argv.push("--agent-name", "Pi");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+        { mode: 0o700 },
+      ),
+      writeFile(
+        piAdapterPath,
+        executableSource(`
+import { spawn } from "node:child_process";
+const executable = process.env.PI_ACP_PI_COMMAND;
+if (executable === undefined) process.exit(91);
+const child = spawn(executable, ["--mode", "rpc"], {
+  env: process.env,
+  stdio: "inherit",
+});
+child.once("error", () => process.exit(92));
+child.once("exit", (code) => process.exit(code ?? 93));
+`),
+        { mode: 0o700 },
+      ),
+      writeFile(
         packageManagerPath,
         packageManagerExecutableSource(packageManagerRecordPath),
         { mode: 0o700 },
       ),
     ]);
     await Promise.all(
-      [codexPath, codexAdapterPath, claudePath, packageManagerPath].map(
-        async (path) => await chmod(path, 0o700),
-      ),
+      [
+        codexPath,
+        codexAdapterPath,
+        claudePath,
+        unusableClaudeAdapterPath,
+        piPath,
+        piAdapterPath,
+        packageManagerPath,
+      ].map(async (path) => await chmod(path, 0o700)),
     );
     const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
     const previousCodexAdapterPath = process.env["MOBIUS_CODEX_ACP_PATH"];
     const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
     const previousClaudeAdapterPath = process.env["MOBIUS_CLAUDE_ACP_PATH"];
+    const previousPiPath = process.env["MOBIUS_PI_PATH"];
+    const previousPiAdapterPath = process.env["MOBIUS_PI_ACP_PATH"];
+    const previousFakeAcpStateDirectory =
+      process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
     const previousPath = process.env["PATH"];
     const previousNoProxy = process.env["NO_PROXY"];
@@ -1703,6 +1763,12 @@ describe("pairing and channel chat", () => {
     process.env["MOBIUS_CODEX_ACP_PATH"] = codexAdapterPath;
     process.env["MOBIUS_CLAUDE_PATH"] = claudePath;
     delete process.env["MOBIUS_CLAUDE_ACP_PATH"];
+    process.env["MOBIUS_PI_PATH"] = piPath;
+    process.env["MOBIUS_PI_ACP_PATH"] = piAdapterPath;
+    process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(
+      temporaryDirectory,
+      "native",
+    );
     process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
     process.env["PATH"] =
       `${executableDirectory}${delimiter}${previousPath ?? ""}`;
@@ -1824,7 +1890,10 @@ describe("pairing and channel chat", () => {
       expect(authorizedChannelResponse.status).toBe(200);
       const publicChannel: unknown = await authorizedChannelResponse.json();
       expect(publicChannel).toMatchObject({
-        agents: [{ id: "codex", label: "Codex" }],
+        agents: [
+          { id: "codex", label: "Codex" },
+          { id: "pi", label: "Pi" },
+        ],
         channelId: pairing.channelId,
         installableAgents: [
           {
@@ -1873,6 +1942,7 @@ describe("pairing and channel chat", () => {
 
       const audit = new AuditStore(paired.config.auditDatabasePath);
       const daemonController = new AbortController();
+      const piSessionId = crypto.randomUUID();
       const daemonRun = runDaemon(
         resumed.config,
         audit,
@@ -1895,6 +1965,7 @@ describe("pairing and channel chat", () => {
             agents: [
               { id: "codex", label: "Codex" },
               { id: "claude", label: "Claude Code" },
+              { id: "pi", label: "Pi" },
             ],
             installableAgents: [],
           });
@@ -1916,6 +1987,12 @@ describe("pairing and channel chat", () => {
           await expect(
             runBrowserPrompt(socket, "codex", codexSessionId, "second"),
           ).resolves.toBe("Codex turn 2: second");
+          await expect(
+            runBrowserPrompt(socket, "pi", piSessionId, "first"),
+          ).resolves.toBe("Pi turn 1: first");
+          await expect(
+            runBrowserPrompt(socket, "pi", piSessionId, "second"),
+          ).resolves.toBe("Pi turn 2: second");
           const usageSessions: string[] = [];
           for (const [agent, label, total] of [
             ["codex", "Codex", 1_000],
@@ -2004,7 +2081,7 @@ describe("pairing and channel chat", () => {
                 expect.objectContaining({
                   source: "prompt",
                   usage: expect.objectContaining({
-                    totalTokens: index === 0 ? 2_000 : 2_200,
+                    totalTokens: 2_000 + index * 200,
                   }),
                 }),
               ]),
@@ -2139,9 +2216,13 @@ describe("pairing and channel chat", () => {
           agents: [
             { id: "codex", label: "Codex" },
             { id: "claude", label: "Claude Code" },
+            { id: "pi", label: "Pi" },
           ],
           installableAgents: [],
         });
+        await expect(
+          runBrowserPrompt(refreshedHost, "pi", piSessionId, "third"),
+        ).resolves.toBe("Pi turn 3: third");
       } finally {
         refreshedHost.close(1000, "Refreshed catalog E2E complete");
         refreshedController.abort();
@@ -2160,6 +2241,12 @@ describe("pairing and channel chat", () => {
       restoreEnvironmentVariable(
         "MOBIUS_CLAUDE_ACP_PATH",
         previousClaudeAdapterPath,
+      );
+      restoreEnvironmentVariable("MOBIUS_PI_PATH", previousPiPath);
+      restoreEnvironmentVariable("MOBIUS_PI_ACP_PATH", previousPiAdapterPath);
+      restoreEnvironmentVariable(
+        "MOBIUS_FAKE_ACP_STATE_DIRECTORY",
+        previousFakeAcpStateDirectory,
       );
       restoreEnvironmentVariable(
         "MOBIUS_STATE_DIRECTORY",

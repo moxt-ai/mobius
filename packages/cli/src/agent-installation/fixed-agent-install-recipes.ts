@@ -9,6 +9,12 @@ import {
 } from "../process/executable.ts";
 import type { InstallationAudit } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
+import {
+  ManagedNpmPackageError,
+  type ManagedNpmPackageInstallationPort,
+  ManagedNpmPackageInstaller,
+} from "./managed-npm-package.ts";
+import { PI_AGENT_PACKAGE } from "./pi-managed-packages.ts";
 import { downloadVerifiedFile } from "./verified-download.ts";
 
 const INSTALLER_DOWNLOAD_LIMIT_BYTES = 1024 * 1024;
@@ -18,6 +24,7 @@ const MINIMAL_PATH = "/usr/bin:/bin";
 
 export interface AgentInstallRecipeOptions {
   readonly audit: InstallationAudit;
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
   readonly report: (stage: AgentInstallationStage) => Promise<void>;
   readonly requestId: string;
   readonly signal: AbortSignal;
@@ -222,9 +229,88 @@ class ClaudeCodeInstallRecipe extends FixedAgentInstallRecipe {
   };
 }
 
+class PiInstallRecipe extends FixedAgentInstallRecipe {
+  readonly #npmInstaller: ManagedNpmPackageInstallationPort;
+  readonly id = "pi";
+  readonly label = "Pi";
+  readonly releaseChannel = PI_AGENT_PACKAGE.version;
+
+  constructor(
+    npmInstaller: ManagedNpmPackageInstallationPort = new ManagedNpmPackageInstaller(),
+  ) {
+    super();
+    this.#npmInstaller = npmInstaller;
+  }
+
+  readonly install = async (
+    options: AgentInstallRecipeOptions,
+  ): Promise<ResolvedExecutable> => {
+    this.assertSupportedPlatform();
+    try {
+      await options.report("downloading");
+      await options.report("verifying");
+      await options.report("installing_agent");
+      const executable = await this.#npmInstaller.install(
+        join(
+          options.stateDirectory,
+          "agents",
+          this.id,
+          PI_AGENT_PACKAGE.version,
+        ),
+        PI_AGENT_PACKAGE,
+        options.environment,
+        options.signal,
+      );
+      options.audit.record(
+        "agent_npm_package_verified",
+        options.requestId,
+        this.id,
+        {
+          integrity: PI_AGENT_PACKAGE.integrity,
+          package: PI_AGENT_PACKAGE.packageName,
+          version: PI_AGENT_PACKAGE.version,
+        },
+      );
+      return executable;
+    } catch (error) {
+      if (options.signal.aborted) {
+        options.signal.throwIfAborted();
+      }
+      if (error instanceof ManagedNpmPackageError) {
+        if (error.code === "managed_package_verification_failed") {
+          throw new InstallationManagerError(
+            "agent_verification_failed",
+            "The managed Pi package did not match its pinned artifact",
+            { cause: error },
+          );
+        }
+        if (error.code === "managed_package_publish_failed") {
+          throw new InstallationManagerError(
+            "agent_publish_failed",
+            "The managed Pi package could not be published",
+            { cause: error },
+          );
+        }
+        throw new InstallationManagerError(error.code, error.message, {
+          cause: error,
+        });
+      }
+      if (error instanceof InstallationManagerError) {
+        throw error;
+      }
+      throw new InstallationManagerError(
+        "agent_install_failed",
+        "The fixed Pi installation recipe failed",
+        { cause: error },
+      );
+    }
+  };
+}
+
 export function fixedAgentInstallRecipes(): readonly FixedAgentInstallRecipe[] {
   return Object.freeze([
     new CodexInstallRecipe(),
     new ClaudeCodeInstallRecipe(),
+    new PiInstallRecipe(),
   ]);
 }

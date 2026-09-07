@@ -2309,12 +2309,27 @@ export class AcpSessionManager {
         "session_busy",
       );
     }
+    const deadlineController = new AbortController();
+    const deadlineError = new AcpExecutionError(
+      "The local Agent prompt exceeded its deadline",
+      {},
+      "prompt_timeout",
+    );
+    const deadline = setTimeout(
+      () => deadlineController.abort(deadlineError),
+      options.agent.promptTimeoutMilliseconds,
+    );
+    deadline.unref();
+    const boundedOptions = {
+      ...options,
+      signal: AbortSignal.any([options.signal, deadlineController.signal]),
+    };
     this.#activeSessionIds.add(options.sessionId);
     try {
       if (this.#cancellationRequests.has(options.sessionId)) {
         return { stopReason: "cancelled" };
       }
-      const runtime = await this.ensureSession(options);
+      const runtime = await this.ensureSession(boundedOptions);
       if (
         this.#nativeOperations.has(
           `${options.agent.id}:${runtime.nativeSessionId()}`,
@@ -2328,7 +2343,7 @@ export class AcpSessionManager {
       if (this.#cancellationRequests.has(options.sessionId)) {
         return { stopReason: "cancelled" };
       }
-      return await runtime.prompt(options);
+      return await runtime.prompt(boundedOptions);
     } catch (error) {
       const failedRuntime = this.#sessions.get(options.sessionId);
       if (failedRuntime !== undefined) {
@@ -2342,6 +2357,7 @@ export class AcpSessionManager {
         cause: error,
       });
     } finally {
+      clearTimeout(deadline);
       this.#activeSessionIds.delete(options.sessionId);
       this.#cancellationRequests.delete(options.sessionId);
     }

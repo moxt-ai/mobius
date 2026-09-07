@@ -1,10 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   AcpSessionManager,
@@ -17,7 +17,189 @@ const fakeAgentPath = fileURLToPath(
   new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url),
 );
 
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ESRCH") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 describe("ACP conversation sessions", () => {
+  it.skipIf(process.platform === "win32")(
+    "Given a Pi ACP prompt hangs, When its outer deadline expires, Then Mobius reports a typed timeout and terminates the adapter and Pi child",
+    async () => {
+      const temporaryDirectory = await mkdtemp(
+        join(tmpdir(), "mobius-pi-prompt-timeout-"),
+      );
+      const adapterPath = join(temporaryDirectory, "pi-acp");
+      const piPidPath = join(temporaryDirectory, "pi.pid");
+      await writeFile(
+        adapterPath,
+        `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const pidPath = process.env.MOBIUS_TEST_PI_PID_FILE;
+if (pidPath === undefined) process.exit(81);
+const child = spawn(process.execPath, [${JSON.stringify(fakeAgentPath)}, "--agent-name", "Pi"], {
+  env: process.env,
+  stdio: "inherit",
+});
+if (child.pid === undefined) process.exit(82);
+writeFileSync(pidPath, child.pid.toString());
+process.on("SIGTERM", () => child.kill("SIGTERM"));
+child.once("error", () => process.exit(83));
+child.once("exit", (code) => process.exit(code ?? 84));
+`,
+        { mode: 0o700 },
+      );
+      await chmod(adapterPath, 0o700);
+      vi.useFakeTimers({ toFake: ["clearTimeout", "setTimeout"] });
+      const manager = new AcpSessionManager();
+      const adapterBaseline = new LocalAgentDefinition(
+        "pi",
+        "Pi",
+        adapterPath,
+        [],
+      );
+      const agentBaseline = new LocalAgentDefinition(
+        "pi",
+        "Pi",
+        process.execPath,
+        [],
+      );
+      const agent = new LocalAgentDefinition(
+        "pi",
+        "Pi",
+        adapterPath,
+        [],
+        { MOBIUS_TEST_PI_PID_FILE: piPidPath },
+        "0.0.33",
+        "0.85.0",
+        adapterBaseline.adapterIdentity,
+        agentBaseline.agentIdentity,
+        1_000,
+      );
+      const activityStarted = Promise.withResolvers<void>();
+
+      try {
+        const hangingTurn = manager.runPrompt({
+          additionalDirectories: [],
+          agent,
+          commandId: "pi-hanging-command",
+          cwd: process.cwd(),
+          images: [],
+          onActivity: () => {
+            activityStarted.resolve();
+            return Promise.resolve();
+          },
+          onText: () => Promise.resolve(),
+          prompt: "wait until cancelled",
+          resources: [],
+          sessionId: "pi-hanging-conversation",
+          signal: new AbortController().signal,
+        });
+        await activityStarted.promise;
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        await expect(hangingTurn).rejects.toMatchObject({
+          code: "prompt_timeout",
+        });
+        const piPid = Number.parseInt(await readFile(piPidPath, "utf8"), 10);
+        expect(Number.isSafeInteger(piPid)).toBe(true);
+        expect(processExists(piPid)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+        await manager.close();
+        await rm(temporaryDirectory, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("Given a persisted Pi session and a restarted load-only adapter, When the conversation is prepared again, Then Mobius explicitly loads the native session before continuing", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-pi-load-session-"),
+    );
+    const databasePath = join(temporaryDirectory, "sessions.sqlite");
+    const agent = new LocalAgentDefinition(
+      "pi",
+      "Pi",
+      process.execPath,
+      [fakeAgentPath, "--agent-name", "Pi", "--load-only"],
+      { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+      "0.0.33",
+      "0.85.0",
+    );
+    const signal = new AbortController().signal;
+
+    try {
+      const firstStore = new SqliteAcpSessionStore(databasePath);
+      const first = new AcpSessionManager(undefined, firstStore);
+      const firstText: string[] = [];
+      await first.runPrompt({
+        additionalDirectories: [],
+        agent,
+        commandId: "pi-first-command",
+        cwd: temporaryDirectory,
+        images: [],
+        onActivity: () => Promise.resolve(),
+        onText: (text) => {
+          firstText.push(text);
+          return Promise.resolve();
+        },
+        prompt: "first",
+        resources: [],
+        sessionId: "persisted-pi-conversation",
+        signal,
+      });
+      await first.close();
+      firstStore.close();
+
+      const secondStore = new SqliteAcpSessionStore(databasePath);
+      const second = new AcpSessionManager(undefined, secondStore);
+      try {
+        await expect(
+          second.prepareSession({
+            additionalDirectories: [],
+            agent,
+            cwd: temporaryDirectory,
+            sessionId: "persisted-pi-conversation",
+            signal,
+          }),
+        ).resolves.toMatchObject({ restored: true });
+        const secondText: string[] = [];
+        await second.runPrompt({
+          additionalDirectories: [],
+          agent,
+          commandId: "pi-second-command",
+          cwd: temporaryDirectory,
+          images: [],
+          onActivity: () => Promise.resolve(),
+          onText: (text) => {
+            secondText.push(text);
+            return Promise.resolve();
+          },
+          prompt: "second",
+          resources: [],
+          sessionId: "persisted-pi-conversation",
+          signal,
+        });
+        expect(firstText.join("")).toBe("Pi turn 1: first");
+        expect(secondText.join("")).toBe("Pi turn 2: second");
+      } finally {
+        await second.close();
+        secondStore.close();
+      }
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("Given a prepared conversation has no turns, When its agent selection changes, Then the same Mobius session is rebound before the first prompt", async () => {
     const manager = new AcpSessionManager();
     const codex = new LocalAgentDefinition("codex", "Codex", process.execPath, [

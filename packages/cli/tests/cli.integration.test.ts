@@ -98,6 +98,14 @@ if (process.argv.includes("--version")) {
               "npm install -g --omit=optional @agentclientprotocol/claude-agent-acp@0.73.0",
             status: "missing_adapter",
           },
+          {
+            code: "adapter_not_found",
+            id: "pi",
+            label: "Pi",
+            message: "ACP adapter not found",
+            recoveryCommand: "npm install -g --omit=optional pi-acp@0.0.33",
+            status: "missing_adapter",
+          },
         ],
       });
       expect(result.stdout).not.toContain(temporaryDirectory);

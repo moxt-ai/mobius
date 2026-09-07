@@ -15,10 +15,12 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import { AcpSessionManager } from "../src/acp/session-manager.ts";
+import { formatAgentDiagnostics } from "../src/agent-catalog/agent-diagnostics.ts";
 import {
   AvailableAgent,
   CodexAgentSpecification,
   discoverLocalAgentInventory,
+  PiAgentSpecification,
   resolveAgentExecutable,
 } from "../src/agent-catalog/discover-local-agents.ts";
 
@@ -32,6 +34,200 @@ function executableSource(source: string): string {
 }
 
 describe("local Agent discovery", () => {
+  it("Given a verified Pi executable exists without pi-acp, When discovery runs, Then Pi is installable but not ready", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-pi-missing-adapter-"),
+    );
+    const piPath = join(temporaryDirectory, "pi");
+    try {
+      await writeFile(
+        piPath,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.85.0\\n");
+}
+`),
+        { mode: 0o700 },
+      );
+      await chmod(piPath, 0o700);
+
+      const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace: temporaryDirectory,
+        environment: { PATH: temporaryDirectory },
+        signal: new AbortController().signal,
+        specifications: [new PiAgentSpecification()],
+      });
+
+      expect(inventory.available).toEqual([]);
+      expect(inventory.unavailable).toHaveLength(1);
+      expect(inventory.unavailable[0]).toMatchObject({
+        code: "adapter_not_found",
+        status: "missing_adapter",
+      });
+      expect(inventory.installable).toEqual([
+        expect.objectContaining({ id: "pi", label: "Pi" }),
+      ]);
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("Given Pi and pi-acp are verified but Pi needs local authentication, When discovery runs, Then Mobius reports authentication-required with only the terminal login entrypoint", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-pi-authentication-"),
+    );
+    const piPath = join(temporaryDirectory, "pi");
+    const adapterPath = join(temporaryDirectory, "pi-acp");
+    try {
+      await writeFile(
+        piPath,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.85.0\\n");
+} else {
+  process.argv.push("--agent-name", "Pi", "--authentication-required");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+        { mode: 0o700 },
+      );
+      await writeFile(
+        adapterPath,
+        executableSource(`
+import { spawn } from "node:child_process";
+const executable = process.env.PI_ACP_PI_COMMAND;
+if (executable === undefined) process.exit(91);
+const child = spawn(executable, ["--mode", "rpc"], {
+  env: process.env,
+  stdio: "inherit",
+});
+child.once("error", () => process.exit(92));
+child.once("exit", (code) => process.exit(code ?? 93));
+`),
+        { mode: 0o700 },
+      );
+      await Promise.all([chmod(piPath, 0o700), chmod(adapterPath, 0o700)]);
+
+      const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace: temporaryDirectory,
+        environment: { PATH: temporaryDirectory },
+        signal: new AbortController().signal,
+        specifications: [new PiAgentSpecification()],
+      });
+
+      expect(inventory.available).toEqual([]);
+      expect(inventory.installable).toEqual([]);
+      expect(inventory.unavailable).toHaveLength(1);
+      expect(inventory.unavailable[0]).toMatchObject({
+        code: "authentication_required",
+        status: "authentication_required",
+      });
+      expect(JSON.parse(formatAgentDiagnostics(inventory, true))).toEqual({
+        available: [],
+        unavailable: [
+          {
+            code: "authentication_required",
+            id: "pi",
+            label: "Pi",
+            message: "Agent authentication is required",
+            recoveryCommand: "pi-acp --terminal-login",
+            status: "authentication_required",
+          },
+        ],
+      });
+    } finally {
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
+  it("Given PATH contains verified Pi and pi-acp executables, When local Agents are discovered, Then Pi is ready only through the exact executable and a bounded ACP prompt completes", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-pi-discovery-"),
+    );
+    const piPath = join(temporaryDirectory, "pi");
+    const adapterPath = join(temporaryDirectory, "pi-acp");
+    const manager = new AcpSessionManager();
+
+    try {
+      await writeFile(
+        piPath,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.85.0\\n");
+} else {
+  if (!process.argv.includes("--mode") || !process.argv.includes("rpc")) {
+    process.exit(90);
+  }
+  process.argv.push("--agent-name", "Pi");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+        { mode: 0o700 },
+      );
+      await writeFile(
+        adapterPath,
+        executableSource(`
+import { spawn } from "node:child_process";
+if (process.argv.includes("--version")) process.exit(89);
+const executable = process.env.PI_ACP_PI_COMMAND;
+if (executable === undefined) process.exit(91);
+const child = spawn(executable, ["--mode", "rpc"], {
+  env: process.env,
+  stdio: "inherit",
+});
+child.once("error", () => process.exit(92));
+child.once("exit", (code) => process.exit(code ?? 93));
+`),
+        { mode: 0o700 },
+      );
+      await Promise.all([chmod(piPath, 0o700), chmod(adapterPath, 0o700)]);
+
+      const specification = new PiAgentSpecification();
+      const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace: temporaryDirectory,
+        environment: { PATH: temporaryDirectory },
+        signal: new AbortController().signal,
+        specifications: [specification],
+      });
+
+      expect(inventory.unavailable).toEqual([]);
+      expect(inventory.available).toHaveLength(1);
+      const discovered = inventory.available[0];
+      if (!(discovered instanceof AvailableAgent)) {
+        throw new Error("Pi was not discovered");
+      }
+      expect(discovered.agent.id).toBe("pi");
+      expect(discovered.agent.environment).toEqual({
+        PI_ACP_PI_COMMAND: await realpath(piPath),
+      });
+      expect(discovered.agent.agentVersion).toBe("0.85.0");
+      expect(discovered.agent.adapterVersion).toBe("1.0.0");
+
+      const chunks: string[] = [];
+      await manager.runPrompt({
+        additionalDirectories: [],
+        agent: discovered.agent,
+        commandId: "pi-command",
+        cwd: temporaryDirectory,
+        images: [],
+        onActivity: () => Promise.resolve(),
+        onText: (text) => {
+          chunks.push(text);
+          return Promise.resolve();
+        },
+        prompt: "use the verified Pi executable",
+        resources: [],
+        sessionId: "pi-session",
+        signal: new AbortController().signal,
+      });
+
+      expect(chunks.join("")).toBe("Pi turn 1: use the verified Pi executable");
+    } finally {
+      await manager.close();
+      await rm(temporaryDirectory, { force: true, recursive: true });
+    }
+  });
+
   it("Given PATH contains a runnable Codex CLI and adapter but no Claude integration, When local Agents are discovered, Then only Codex is ready and a prompt uses the resolved Codex executable", async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-agent-discovery-"),
@@ -89,7 +285,7 @@ if (process.argv.includes("--version")) {
       });
       expect(
         inventory.unavailable.map((agent) => agent.specification.id),
-      ).toEqual(["claude"]);
+      ).toEqual(["claude", "pi"]);
 
       const chunks: string[] = [];
       await manager.runPrompt({

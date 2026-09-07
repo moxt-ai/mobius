@@ -36,7 +36,9 @@ class UnavailableAgentDiagnostic {
     this.recoveryCommand =
       discovery instanceof MissingAdapter
         ? discovery.specification.recoveryCommand()
-        : "";
+        : discovery.code === "authentication_required"
+          ? discovery.specification.authenticationCommand()
+          : "";
     this.status = discovery.status;
   }
 }
@@ -83,7 +85,11 @@ export function formatAgentDiagnostics(
       humanLine(unavailable.label, unavailable.status, unavailable.message),
     );
     if (unavailable.recoveryCommand.length > 0) {
-      lines.push(`  Install adapter: ${unavailable.recoveryCommand}`);
+      lines.push(
+        unavailable.code === "authentication_required"
+          ? `  Authenticate locally: ${unavailable.recoveryCommand}`
+          : `  Install adapter: ${unavailable.recoveryCommand}`,
+      );
     }
   }
   return `${lines.join("\n")}\n`;
