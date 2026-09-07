@@ -3,14 +3,18 @@ import { resolve } from "node:path";
 
 import type { AgentInstallationStage } from "@moxt-ai/mobius-protocol";
 
+import { AvailableAgent } from "../agent-catalog/agent-discovery.ts";
 import {
-  AvailableAgent,
-  discoverLocalAgentInventory,
+  BridgedAcpAgentDefinition,
+  DirectAcpAgentDefinition,
   type LocalAgentSpecification,
+} from "../agent-catalog/agent-specification.ts";
+import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/supported-agent-specifications.ts";
+import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
+import {
   resolveAdapterExecutable,
   resolveAgentExecutable,
-  supportedLocalAgentSpecifications,
-} from "../agent-catalog/discover-local-agents.ts";
+} from "../agent-catalog/executable-discovery.ts";
 import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
 import { ProcessExecutionError } from "../process/executable.ts";
 import type {
@@ -215,12 +219,18 @@ export class FixedInstallationExecutor implements InstallationExecutor {
         });
         installedAgent = true;
       }
-      let adapter = await resolveAdapterExecutable(
-        specification,
-        discoveryOptions,
-      );
+      let adapter =
+        specification instanceof DirectAcpAgentDefinition
+          ? agent
+          : await resolveAdapterExecutable(specification, discoveryOptions);
       let installedAdapter = false;
       if (adapter === null) {
+        if (!(specification instanceof BridgedAcpAgentDefinition)) {
+          throw new InstallationManagerError(
+            "agent_verification_failed",
+            "The direct Agent executable is unavailable",
+          );
+        }
         await report("installing_adapter");
         adapter = await this.#adapterInstaller.install(specification, signal);
         installedAdapter = true;
@@ -280,7 +290,11 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             "The complete Agent ACP path did not pass verification",
           );
         }
-        if (!installedAdapter && requiresAdapterReplacement(unavailable.code)) {
+        if (
+          !installedAdapter &&
+          specification instanceof BridgedAcpAgentDefinition &&
+          requiresAdapterReplacement(unavailable.code)
+        ) {
           await report("installing_adapter");
           adapter = await this.#adapterInstaller.install(specification, signal);
           installedAdapter = true;
@@ -303,6 +317,9 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             stateDirectory: this.#stateDirectory,
           });
           installedAgent = true;
+          if (specification instanceof DirectAcpAgentDefinition) {
+            adapter = agent;
+          }
           continue;
         }
         throw new InstallationManagerError(

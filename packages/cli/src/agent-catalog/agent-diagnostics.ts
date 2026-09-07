@@ -3,7 +3,7 @@ import {
   type LocalAgentInventory,
   MissingAdapter,
   type UnavailableAgent,
-} from "./discover-local-agents.ts";
+} from "./agent-discovery.ts";
 
 class AvailableAgentDiagnostic {
   readonly adapterVersion: string;

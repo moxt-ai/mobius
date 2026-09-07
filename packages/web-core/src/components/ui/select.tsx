@@ -14,6 +14,28 @@ export function SelectValue(
   return <SelectPrimitive.Value data-slot="select-value" {...props} />;
 }
 
+export function SelectGroup(
+  props: ComponentProps<typeof SelectPrimitive.Group>,
+) {
+  return <SelectPrimitive.Group data-slot="select-group" {...props} />;
+}
+
+export function SelectLabel({
+  className,
+  ...props
+}: ComponentProps<typeof SelectPrimitive.Label>) {
+  return (
+    <SelectPrimitive.Label
+      className={cn(
+        "px-2.5 pt-2 pb-1 text-[10px] leading-4 font-semibold tracking-[0.04em] text-muted-foreground",
+        className,
+      )}
+      data-slot="select-label"
+      {...props}
+    />
+  );
+}
+
 export function SelectTrigger({
   className,
   children,
@@ -96,5 +118,18 @@ export function SelectItem({
       </span>
       <SelectPrimitive.ItemText>{children}</SelectPrimitive.ItemText>
     </SelectPrimitive.Item>
+  );
+}
+
+export function SelectSeparator({
+  className,
+  ...props
+}: ComponentProps<typeof SelectPrimitive.Separator>) {
+  return (
+    <SelectPrimitive.Separator
+      className={cn("my-1 h-px bg-black/[0.07]", className)}
+      data-slot="select-separator"
+      {...props}
+    />
   );
 }

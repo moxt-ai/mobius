@@ -11,6 +11,7 @@ import {
   methods,
   ndJsonStream,
   PROTOCOL_VERSION,
+  RequestError,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
@@ -78,6 +79,8 @@ import {
 } from "./session-store.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
+const MAX_PRE_SESSION_UPDATES = 100;
+const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 const SESSION_CONTROL_COMMAND_ID = "session-control";
 
 export interface AcpPrepareOptions {
@@ -892,8 +895,11 @@ class AcpProcessSession implements AcpClientHandler {
   readonly #mobiusSessionId: string;
   readonly #pendingElicitations = new Map<string, PendingElicitation>();
   readonly #pendingPermissions = new Map<string, PendingPermission>();
+  readonly #preSessionUpdates: SessionNotification[] = [];
   readonly #processExit: Promise<void>;
   readonly #store: AcpSessionStore;
+  readonly #verifiedAgentVersion: string;
+  #preSessionUpdateBytes = 0;
   #agentName = "";
   #agentVersion = "";
   #capabilities: SessionCapabilities = {
@@ -937,6 +943,7 @@ class AcpProcessSession implements AcpClientHandler {
     this.#getObserver = getObserver;
     this.#mobiusSessionId = mobiusSessionId;
     this.#store = store;
+    this.#verifiedAgentVersion = agent.agentVersion;
     this.#child = spawn(agent.adapterPath, [...agent.arguments], {
       cwd,
       detached: process.platform !== "win32",
@@ -1128,7 +1135,12 @@ class AcpProcessSession implements AcpClientHandler {
         this.#agentId,
       255,
     );
-    this.#agentVersion = truncate(initialized.agentInfo?.version ?? "", 128);
+    this.#agentVersion = truncate(
+      this.#verifiedAgentVersion.length > 0
+        ? this.#verifiedAgentVersion
+        : (initialized.agentInfo?.version ?? ""),
+      128,
+    );
   }
 
   readonly initialize = async (
@@ -1181,7 +1193,7 @@ class AcpProcessSession implements AcpClientHandler {
         "ACP agent exited while forking a session",
         signal,
       );
-      this.#nativeSessionId = nativeSessionIdSchema.parse(forked.sessionId);
+      this.selectNativeSession(forked.sessionId);
       if (
         this.#nativeSessionId === origin.nativeSessionId ||
         this.#store.findNative(this.#agentId, this.#nativeSessionId).length > 0
@@ -1204,7 +1216,7 @@ class AcpProcessSession implements AcpClientHandler {
         this.#additionalDirectories,
       )
     ) {
-      this.#nativeSessionId = stored.session.nativeSessionId;
+      this.selectNativeSession(stored.session.nativeSessionId);
       this.#prompted = stored.session.prompted;
       this.#restored = true;
       if (this.#capabilities.resumeSession) {
@@ -1274,7 +1286,7 @@ class AcpProcessSession implements AcpClientHandler {
         "ACP agent exited while starting a session",
         signal,
       );
-      this.#nativeSessionId = created.sessionId;
+      this.selectNativeSession(created.sessionId);
       lifecycleResponse = created;
     }
     const lifecycleRecord = isRecord(lifecycleResponse)
@@ -1789,10 +1801,55 @@ class AcpProcessSession implements AcpClientHandler {
   };
 
   readonly onUpdate = (notification: SessionNotification): Promise<void> => {
+    if (this.#nativeSessionId.length === 0) {
+      const notificationBytes = Buffer.byteLength(JSON.stringify(notification));
+      if (
+        this.#preSessionUpdates.length >= MAX_PRE_SESSION_UPDATES ||
+        this.#preSessionUpdateBytes + notificationBytes >
+          MAX_PRE_SESSION_UPDATE_BYTES
+      ) {
+        return Promise.reject(
+          new AcpExecutionError(
+            "ACP agent sent too many updates before creating its session",
+            {},
+            "agent_update_limit",
+          ),
+        );
+      }
+      this.#preSessionUpdates.push(notification);
+      this.#preSessionUpdateBytes += notificationBytes;
+      return Promise.resolve();
+    }
+    return this.enqueueUpdate(notification);
+  };
+
+  readonly enqueueUpdate = (
+    notification: SessionNotification,
+  ): Promise<void> => {
     this.#updateTail = this.#updateTail.then(
       async () => await this.processUpdate(notification),
     );
     return this.#updateTail;
+  };
+
+  readonly selectNativeSession = (sessionId: string): void => {
+    const selected = nativeSessionIdSchema.parse(sessionId);
+    if (
+      this.#nativeSessionId.length > 0 &&
+      this.#nativeSessionId !== selected
+    ) {
+      throw new AcpExecutionError(
+        "ACP agent attempted to replace the selected session",
+        {},
+        "invalid_agent_session",
+      );
+    }
+    this.#nativeSessionId = selected;
+    const pending = this.#preSessionUpdates.splice(0);
+    this.#preSessionUpdateBytes = 0;
+    for (const notification of pending) {
+      void this.enqueueUpdate(notification);
+    }
   };
 
   readonly processUpdate = async (
@@ -1979,13 +2036,25 @@ class AcpProcessSession implements AcpClientHandler {
       };
     });
     try {
-      return await Promise.race([
-        operation,
-        this.#processExit.then(() => {
-          throw new AcpExecutionError(exitMessage);
-        }),
-        aborted,
-      ]);
+      try {
+        return await Promise.race([
+          operation,
+          this.#processExit.then(() => {
+            throw new AcpExecutionError(exitMessage);
+          }),
+          aborted,
+        ]);
+      } catch (error) {
+        signal.throwIfAborted();
+        if (error instanceof RequestError && error.code === -32_000) {
+          throw new AcpExecutionError(
+            "Agent authentication is required",
+            { cause: error },
+            "authentication_required",
+          );
+        }
+        throw error;
+      }
     } finally {
       removeAbortListener();
     }

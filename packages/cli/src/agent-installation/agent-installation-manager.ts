@@ -3,7 +3,7 @@ import type {
   AgentInstallRequestCommand,
 } from "@moxt-ai/mobius-protocol";
 
-import type { LocalAgentSpecification } from "../agent-catalog/discover-local-agents.ts";
+import type { LocalAgentSpecification } from "../agent-catalog/agent-specification.ts";
 
 const INSTALLATION_DEADLINE_MILLISECONDS = 10 * 60 * 1_000;
 

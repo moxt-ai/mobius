@@ -21,9 +21,12 @@ const PACKAGE_METADATA_LIMIT_BYTES = 64 * 1024;
 const PACKAGE_LOCK_LIMIT_BYTES = 8 * 1024 * 1024;
 
 export class ManagedNpmPackageDefinition {
+  readonly dependencyResolutionArguments: readonly string[] = Object.freeze([]);
   readonly executableName: string;
+  readonly includeOptionalDependencies: boolean = false;
   readonly packageName: string;
   readonly version: string;
+  readonly verifyDependencyClosure: boolean = false;
 
   constructor(packageName: string, version: string, executableName: string) {
     this.executableName = executableName;
@@ -155,6 +158,41 @@ function verifyPackageLock(
   let matches = 0;
   for (const [key, candidate] of Object.entries(packages)) {
     const normalizedKey = key.replaceAll("\\", "/");
+    if (definition.verifyDependencyClosure && normalizedKey.length > 0) {
+      let resolved: URL;
+      try {
+        if (
+          !normalizedKey.split("/").includes("node_modules") ||
+          !isRecord(candidate) ||
+          typeof candidate["version"] !== "string" ||
+          candidate["version"].length === 0 ||
+          typeof candidate["integrity"] !== "string" ||
+          !/^sha512-[A-Za-z0-9+/]{86}==$/.test(candidate["integrity"]) ||
+          typeof candidate["resolved"] !== "string"
+        ) {
+          throw new Error("Invalid locked dependency");
+        }
+        resolved = new URL(candidate["resolved"]);
+      } catch (error) {
+        throw new ManagedNpmPackageError(
+          "managed_package_verification_failed",
+          "The managed npm dependency closure is invalid",
+          { cause: error },
+        );
+      }
+      if (
+        resolved.protocol !== "https:" ||
+        resolved.hostname !== "registry.npmjs.org" ||
+        resolved.port.length > 0 ||
+        resolved.username.length > 0 ||
+        resolved.password.length > 0
+      ) {
+        throw new ManagedNpmPackageError(
+          "managed_package_verification_failed",
+          "The managed npm dependency closure is invalid",
+        );
+      }
+    }
     if (normalizedKey === suffix || normalizedKey.endsWith(`/${suffix}`)) {
       entry = candidate;
       matches += 1;
@@ -291,33 +329,42 @@ export class ManagedNpmPackageInstaller
           "A supported npm executable is required to install the managed package",
         );
       }
+      const installArguments = ["install", "--prefix", staging];
+      installArguments.push(...definition.dependencyResolutionArguments);
+      if (definition.includeOptionalDependencies) {
+        installArguments.push("--include=optional");
+      } else {
+        installArguments.push("--omit=optional");
+      }
+      installArguments.push(
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--package-lock=true",
+        "--save-exact",
+        "--registry=https://registry.npmjs.org/",
+        `${definition.packageName}@${definition.version}`,
+      );
+      const installEnvironment: NodeJS.ProcessEnv = {
+        HOME: join(staging, "home"),
+        NPM_CONFIG_AUDIT: "false",
+        NPM_CONFIG_CACHE: join(staging, ".npm-cache"),
+        NPM_CONFIG_FUND: "false",
+        NPM_CONFIG_IGNORE_SCRIPTS: "true",
+        NPM_CONFIG_PACKAGE_LOCK: "true",
+        NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
+        PATH: `${dirname(process.execPath)}${delimiter}/usr/bin${delimiter}/bin`,
+      };
+      if (definition.includeOptionalDependencies) {
+        installEnvironment["NPM_CONFIG_INCLUDE"] = "optional";
+      } else {
+        installEnvironment["NPM_CONFIG_OMIT"] = "optional";
+      }
       await runBoundedProcess({
-        arguments: [
-          "install",
-          "--prefix",
-          staging,
-          "--omit=optional",
-          "--ignore-scripts",
-          "--no-audit",
-          "--no-fund",
-          "--package-lock=true",
-          "--save-exact",
-          "--registry=https://registry.npmjs.org/",
-          `${definition.packageName}@${definition.version}`,
-        ],
+        arguments: installArguments,
         command: npm.path,
         cwd: staging,
-        environment: {
-          HOME: join(staging, "home"),
-          NPM_CONFIG_AUDIT: "false",
-          NPM_CONFIG_CACHE: join(staging, ".npm-cache"),
-          NPM_CONFIG_FUND: "false",
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          NPM_CONFIG_OMIT: "optional",
-          NPM_CONFIG_PACKAGE_LOCK: "true",
-          NPM_CONFIG_REGISTRY: "https://registry.npmjs.org/",
-          PATH: `${dirname(process.execPath)}${delimiter}/usr/bin${delimiter}/bin`,
-        },
+        environment: installEnvironment,
         outputLimitBytes: 64 * 1024,
         signal,
         timeoutMilliseconds: INSTALL_TIMEOUT_MILLISECONDS,

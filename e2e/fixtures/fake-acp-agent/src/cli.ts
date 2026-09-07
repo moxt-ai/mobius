@@ -47,6 +47,14 @@ function readAgentName(): string {
   return process.argv[optionIndex + 1] ?? "";
 }
 
+function readAgentVersion(): string {
+  const optionIndex = process.argv.indexOf("--agent-version");
+  if (optionIndex < 0) {
+    return "1.0.0";
+  }
+  return process.argv[optionIndex + 1] ?? "";
+}
+
 function exitsAfterSessionCreation(): boolean {
   return process.argv.includes("--exit-after-session-creation");
 }
@@ -454,25 +462,38 @@ acp
     );
     return {
       agentCapabilities: {
-        loadSession: true,
+        loadSession: !process.argv.includes("--no-load-session"),
+        ...(process.argv.includes("--http-mcp")
+          ? { mcpCapabilities: { http: true } }
+          : {}),
         promptCapabilities: {
-          embeddedContext: true,
-          image: true,
+          embeddedContext: !process.argv.includes("--no-embedded-context"),
+          image: !process.argv.includes("--no-image-prompt"),
         },
         sessionCapabilities: {
-          additionalDirectories: {},
+          ...(process.argv.includes("--no-additional-directories")
+            ? {}
+            : { additionalDirectories: {} }),
           close: {},
           ...(process.argv.includes("--load-only") ? {} : { resume: {} }),
           ...(process.argv.includes("--no-native-sessions")
             ? {}
-            : { list: {}, delete: {}, fork: {} }),
+            : {
+                list: {},
+                ...(process.argv.includes("--no-delete-session")
+                  ? {}
+                  : { delete: {} }),
+                ...(process.argv.includes("--no-fork-session")
+                  ? {}
+                  : { fork: {} }),
+              }),
         },
       },
-      agentInfo: { name: "Mobius test agent", version: "1.0.0" },
+      agentInfo: { name: "Mobius test agent", version: readAgentVersion() },
       protocolVersion: acp.PROTOCOL_VERSION,
     };
   })
-  .onRequest(acp.methods.agent.session.new, (context) => {
+  .onRequest(acp.methods.agent.session.new, async (context) => {
     if (process.argv.includes("--authentication-required")) {
       throw acp.RequestError.authRequired();
     }
@@ -487,6 +508,19 @@ acp
     sessions.set(sessionId, state);
     if (persistsEmptySessions()) {
       persistState(sessionId, state);
+    }
+    if (process.argv.includes("--announce-config-while-creating")) {
+      await context.client.notify(acp.methods.client.session.update, {
+        sessionId: process.argv.includes(
+          "--announce-wrong-session-while-creating",
+        )
+          ? "unexpected-native-session"
+          : sessionId,
+        update: {
+          configOptions: configOptions(state),
+          sessionUpdate: "config_option_update",
+        },
+      });
     }
     if (exitsAfterSessionCreation()) {
       setImmediate(() => process.exit(0));

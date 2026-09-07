@@ -106,6 +106,22 @@ if (process.argv.includes("--version")) {
             recoveryCommand: "npm install -g --omit=optional pi-acp@0.0.33",
             status: "missing_adapter",
           },
+          {
+            code: "agent_not_found",
+            id: "deepseek-harness",
+            label: "DeepSeek Harness",
+            message: "Agent executable not found",
+            recoveryCommand: "",
+            status: "missing_agent",
+          },
+          {
+            code: "agent_not_found",
+            id: "opencode",
+            label: "OpenCode",
+            message: "Agent executable not found",
+            recoveryCommand: "",
+            status: "missing_agent",
+          },
         ],
       });
       expect(result.stdout).not.toContain(temporaryDirectory);

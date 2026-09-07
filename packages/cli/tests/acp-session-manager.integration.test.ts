@@ -453,6 +453,60 @@ child.once("exit", (code) => process.exit(code ?? 84));
     expect(secondChunks.join("")).toBe("Codex turn 2: second");
   });
 
+  it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {
+    const manager = new AcpSessionManager();
+    const agent = new LocalAgentDefinition(
+      "deepseek",
+      "DeepSeek Harness",
+      process.execPath,
+      [
+        fakeAgentPath,
+        "--agent-name",
+        "DeepSeek Harness",
+        "--announce-config-while-creating",
+        "--announce-wrong-session-while-creating",
+      ],
+    );
+
+    try {
+      await expect(
+        manager.prepareSession({
+          additionalDirectories: [],
+          agent,
+          cwd: process.cwd(),
+          sessionId: "deepseek-wrong-session-notification",
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({ code: "invalid_agent_session" });
+    } finally {
+      await manager.close();
+    }
+  });
+
+  it("Given an ACP agent returns the standard authentication error, When Mobius starts its session, Then the local boundary preserves an authentication-required code", async () => {
+    const manager = new AcpSessionManager();
+    const agent = new LocalAgentDefinition(
+      "opencode",
+      "OpenCode",
+      process.execPath,
+      [fakeAgentPath, "--authentication-required"],
+    );
+
+    try {
+      await expect(
+        manager.prepareSession({
+          additionalDirectories: [],
+          agent,
+          cwd: process.cwd(),
+          sessionId: "authentication-required-session",
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toMatchObject({ code: "authentication_required" });
+    } finally {
+      await manager.close();
+    }
+  });
+
   it("Given a turn is running, When it is cancelled, Then ACP stops that turn and keeps the session usable", async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-acp-cancel-resume-"),

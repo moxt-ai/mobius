@@ -1,6 +1,6 @@
 import { join } from "node:path";
 
-import type { LocalAgentSpecification } from "../agent-catalog/discover-local-agents.ts";
+import type { BridgedAcpAgentDefinition } from "../agent-catalog/agent-specification.ts";
 import type { ResolvedExecutable } from "../process/executable.ts";
 import {
   ManagedNpmPackageError,
@@ -55,7 +55,7 @@ function translateError(error: unknown): ManagedAdapterInstallError {
 
 export async function validateManagedAdapter(
   root: string,
-  specification: LocalAgentSpecification,
+  specification: BridgedAcpAgentDefinition,
 ): Promise<ResolvedExecutable> {
   try {
     return await validateManagedNpmPackage(
@@ -74,7 +74,7 @@ export interface ManagedAdapterInstallerOptions {
 
 export interface AdapterInstallationPort {
   readonly install: (
-    specification: LocalAgentSpecification,
+    specification: BridgedAcpAgentDefinition,
     signal: AbortSignal,
   ) => Promise<ResolvedExecutable>;
 }
@@ -94,7 +94,7 @@ export class ManagedAdapterInstaller implements AdapterInstallationPort {
   }
 
   readonly install = async (
-    specification: LocalAgentSpecification,
+    specification: BridgedAcpAgentDefinition,
     signal: AbortSignal,
   ): Promise<ResolvedExecutable> => {
     const root = join(

@@ -156,3 +156,8 @@ for `@moxt-ai/mobius` in npm with these values:
 After trusted publishing is configured, merge a CLI version change to `main` to
 publish it. No release tag is required. The workflow uses npm trusted publishing,
 so it does not require an `NPM_TOKEN` repository secret.
+
+## Adding a Local Agent
+
+See [Local Agent Integration](./docs/local-agent-integration.md) for the module
+boundaries, trust constraints, registration point, and verification checklist.

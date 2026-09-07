@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import {
   type CSSProperties,
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -22,7 +23,10 @@ import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -91,6 +95,39 @@ interface ConfigControlProps {
   readonly setPending: (id: string, pending: boolean) => void;
 }
 
+interface ConfigValueGroup {
+  readonly id: string;
+  readonly label: string;
+  readonly values: SessionConfigOption["values"][number][];
+}
+
+function groupConfigValues(
+  values: SessionConfigOption["values"],
+): readonly ConfigValueGroup[] {
+  const groups = new Map<string, ConfigValueGroup>();
+  for (const value of values) {
+    const groupId = value.groupId.trim();
+    const groupName = value.groupName.trim();
+    const id =
+      groupId.length > 0
+        ? `id:${groupId}`
+        : groupName.length > 0
+          ? `name:${groupName}`
+          : "ungrouped";
+    const existing = groups.get(id);
+    if (existing === undefined) {
+      groups.set(id, {
+        id,
+        label: groupName.length > 0 ? groupName : groupId,
+        values: [value],
+      });
+      continue;
+    }
+    existing.values.push(value);
+  }
+  return Array.from(groups.values());
+}
+
 function SelectConfigControl({
   option,
   pending,
@@ -102,6 +139,7 @@ function SelectConfigControl({
   const errorId = useId();
   const [failure, setFailure] = useState("");
   const disabled = conversation.isRunning || pending;
+  const valueGroups = groupConfigValues(option.values);
   const describedBy = [
     option.description.length > 0 ? descriptionId : "",
     failure.length > 0 ? errorId : "",
@@ -165,10 +203,26 @@ function SelectConfigControl({
           )}
         </SelectTrigger>
         <SelectContent>
-          {option.values.map((value) => (
-            <SelectItem key={value.value} value={value.value}>
-              <span title={value.description}>{value.name}</span>
-            </SelectItem>
+          {valueGroups.map((group, index) => (
+            <Fragment key={group.id}>
+              {index > 0 && <SelectSeparator />}
+              {group.label.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>{group.label}</SelectLabel>
+                  {group.values.map((value) => (
+                    <SelectItem key={value.value} value={value.value}>
+                      <span title={value.description}>{value.name}</span>
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : (
+                group.values.map((value) => (
+                  <SelectItem key={value.value} value={value.value}>
+                    <span title={value.description}>{value.name}</span>
+                  </SelectItem>
+                ))
+              )}
+            </Fragment>
           ))}
         </SelectContent>
       </Select>

@@ -2,13 +2,16 @@ import { randomUUID } from "node:crypto";
 
 import {
   AvailableAgent,
-  discoverLocalAgentInventory,
-  findVerifiedAgentExecutable,
   type LocalAgentInventory,
-  type LocalAgentSpecification,
-  supportedLocalAgentSpecifications,
   type UnavailableAgent,
-} from "../agent-catalog/discover-local-agents.ts";
+} from "../agent-catalog/agent-discovery.ts";
+import {
+  BridgedAcpAgentDefinition,
+  type LocalAgentSpecification,
+} from "../agent-catalog/agent-specification.ts";
+import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/supported-agent-specifications.ts";
+import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
+import { findVerifiedAgentExecutable } from "../agent-catalog/executable-discovery.ts";
 import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
 import type { ResolvedExecutable } from "../process/executable.ts";
 import type { InstallationAudit } from "./agent-installation-manager.ts";
@@ -54,6 +57,7 @@ function shouldProvisionAdapter(
   options: AutomaticAdapterProvisionerOptions,
 ): boolean {
   return (
+    unavailable.specification instanceof BridgedAcpAgentDefinition &&
     AUTOMATIC_ADAPTER_FAILURE_CODES.has(unavailable.code) &&
     options.environment[unavailable.specification.adapterOverrideVariable] ===
       undefined &&
@@ -122,6 +126,10 @@ export class AutomaticAdapterProvisioner {
     for (const unavailable of candidates) {
       signal.throwIfAborted();
       const specification = unavailable.specification;
+      if (!(specification instanceof BridgedAcpAgentDefinition)) {
+        attempts.push(null);
+        continue;
+      }
       const verifiedAgent = await findVerifiedAgentExecutable(
         specification,
         discoveryOptions(

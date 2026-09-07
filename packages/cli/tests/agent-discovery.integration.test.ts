@@ -53,7 +53,10 @@ if (process.argv.includes("--version")) {
 
       const inventory = await discoverLocalAgentInventory({
         defaultWorkspace: temporaryDirectory,
-        environment: { PATH: temporaryDirectory },
+        environment: {
+          MOBIUS_STATE_DIRECTORY: temporaryDirectory,
+          PATH: temporaryDirectory,
+        },
         signal: new AbortController().signal,
         specifications: [new PiAgentSpecification()],
       });
@@ -110,7 +113,10 @@ child.once("exit", (code) => process.exit(code ?? 93));
 
       const inventory = await discoverLocalAgentInventory({
         defaultWorkspace: temporaryDirectory,
-        environment: { PATH: temporaryDirectory },
+        environment: {
+          MOBIUS_STATE_DIRECTORY: temporaryDirectory,
+          PATH: temporaryDirectory,
+        },
         signal: new AbortController().signal,
         specifications: [new PiAgentSpecification()],
       });
@@ -185,7 +191,10 @@ child.once("exit", (code) => process.exit(code ?? 93));
       const specification = new PiAgentSpecification();
       const inventory = await discoverLocalAgentInventory({
         defaultWorkspace: temporaryDirectory,
-        environment: { PATH: temporaryDirectory },
+        environment: {
+          MOBIUS_STATE_DIRECTORY: temporaryDirectory,
+          PATH: temporaryDirectory,
+        },
         signal: new AbortController().signal,
         specifications: [specification],
       });
@@ -269,7 +278,10 @@ if (process.argv.includes("--version")) {
 
       const inventory = await discoverLocalAgentInventory({
         defaultWorkspace: repositoryRoot,
-        environment: { PATH: temporaryDirectory },
+        environment: {
+          MOBIUS_STATE_DIRECTORY: temporaryDirectory,
+          PATH: temporaryDirectory,
+        },
         signal: new AbortController().signal,
       });
 
@@ -285,7 +297,7 @@ if (process.argv.includes("--version")) {
       });
       expect(
         inventory.unavailable.map((agent) => agent.specification.id),
-      ).toEqual(["claude", "pi"]);
+      ).toEqual(["claude", "pi", "deepseek-harness", "opencode"]);
 
       const chunks: string[] = [];
       await manager.runPrompt({

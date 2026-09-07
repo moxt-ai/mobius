@@ -94,11 +94,11 @@ Implemented local integrations:
 - Codex
 - Claude Code
 - Pi coding agent through `pi-acp`
+- DeepSeek Harness through `dsh --profile acp`
+- OpenCode through `opencode acp`
 
 Additional integration targets include:
 
-- DeepSeek harness
-- `opencode`
 - `cursor-cli`
 - `grok-build`
 
@@ -143,11 +143,11 @@ terminal open. Pass `--workspace <directory>` to choose a different default.
 When developing the CLI from this checkout, the equivalent command is
 `pnpm mobius pair ...`.
 The browser then moves to an independent `/channels/<channel-id>` route. Every new
-conversation can select a locally verified Codex, Claude Code, or Pi integration; the
-selection is locked after its first message so the ACP session remains coherent
-across turns. Conversations run independently, so a user can switch chats,
-create another chat, and start a second agent task while an earlier conversation
-is still working.
+conversation can select a locally verified Codex, Claude Code, Pi, DeepSeek
+Harness, or OpenCode integration; the selection is locked after its first message
+so the ACP session remains coherent across turns. Conversations run independently,
+so a user can switch chats, create another chat, and start a second agent task while
+an earlier conversation is still working.
 
 The channel sidebar links to `/channels/<channel-id>/settings`, where the user can
 see verified local Agents separately from supported integrations that still need
@@ -173,11 +173,15 @@ restart a previously paired daemon, use the channel identifier shown in its URL:
 npx --yes @moxt-ai/mobius start --channel <channel-id>
 ```
 
-Mobius does not bundle Codex, Claude Code, Pi, or their platform binaries.
-Pairing and every saved-channel start discover the Agent CLI and its ACP adapter,
-run bounded version probes, and complete an ACP initialize handshake. Pi also
-has to create a session and finish a bounded `/session` conformance prompt through
-`pi-acp -> pi --mode rpc`. Only complete integrations are advertised. Inspect the
+Mobius does not bundle Codex, Claude Code, Pi, DeepSeek Harness, OpenCode, or
+their platform binaries. Pairing and every saved-channel start discover each
+Agent's direct ACP command or CLI-plus-adapter pair, run bounded version probes,
+and complete an ACP initialize handshake. Pi also has to create a session and
+finish a bounded `/session` conformance prompt through `pi-acp -> pi --mode rpc`.
+DeepSeek Harness runs directly as `dsh --profile acp`; Mobius uses the `dsh` CLI
+version because the current ACP profile reports its internal bridge version.
+OpenCode runs directly as `opencode acp` with its own auto-update disabled while
+Mobius owns the process. Only complete integrations are advertised. Inspect the
 local result without pairing:
 
 ```bash
@@ -190,6 +194,8 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 - `MOBIUS_CODEX_PATH` and `MOBIUS_CODEX_ACP_PATH`
 - `MOBIUS_CLAUDE_PATH` and `MOBIUS_CLAUDE_ACP_PATH`
 - `MOBIUS_PI_PATH` and `MOBIUS_PI_ACP_PATH`
+- `MOBIUS_DEEPSEEK_HARNESS_PATH`
+- `MOBIUS_OPENCODE_PATH`
 
 Automatic lookup uses the `PATH` inherited by the Mobius process. An explicit
 override is authoritative and fails closed; an automatically found executable
@@ -199,15 +205,16 @@ Executable paths, versions, identities, probe output, and adapter environment
 stay on the local machine. The Relay receives only stable Agent identifiers,
 labels, and sanitized ready/installable metadata.
 
-If an Agent CLI passes local executable and version checks but its adapter is
-missing, broken, or ACP-incompatible, the paired daemon automatically installs
-the exact pinned adapter into Mobius's private cache with optional platform Agent
-dependencies omitted. It then repeats the complete discovery and ACP initialize
-handshake before advertising the Agent. Mobius never installs or replaces the
-Agent CLI through this automatic path. An explicit adapter override remains
-authoritative and is never replaced automatically. Adapter installation failure
-does not take the channel offline; the Agent remains in the installable catalog
-with a sanitized diagnostic.
+For integrations that need a separate ACP adapter, if the Agent CLI passes local
+executable and version checks but its adapter is missing, broken, or
+ACP-incompatible, the paired daemon automatically installs the exact pinned
+adapter into Mobius's private cache with optional platform Agent dependencies
+omitted. It then repeats the complete discovery and ACP initialize handshake
+before advertising the Agent. Mobius never installs or replaces an Agent CLI
+through this automatic adapter path. Direct ACP integrations never install an
+adapter. An explicit override remains authoritative and is never replaced
+automatically. Installation failure does not take the channel offline; the Agent
+remains in the installable catalog with a sanitized diagnostic.
 
 `mobius agents` and the one-time pairing claim remain read-only. The command
 prints the exact lightweight adapter recovery command when applicable, while
@@ -221,15 +228,25 @@ by default, the terminal running Mobius must approve that individual request
 before an installer starts. The initial recipes use the documented
 [Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli) and
 [Claude Code native stable channel](https://code.claude.com/docs/en/installation),
-plus the exact `@earendil-works/pi-coding-agent@0.85.0` package. The Pi recipe
-disables npm lifecycle scripts, verifies the published package SRI, and keeps Pi
-and `pi-acp@0.0.33` in separate versioned private cache entries. Mobius downloads
-or installs into a private staging directory, applies bounded verification and
-execution, installs a pinned ACP adapter into `~/.mobius/adapters`, repeats normal
-ACP discovery, and publishes the Agent only after the full path succeeds. Progress
-sent to Web contains stages and stable errors, never commands, URLs, paths, raw
-output, environment values, or credentials. Installing an Agent does not sign
-the user into its provider.
+plus the exact `@earendil-works/pi-coding-agent@0.85.0` and
+`@deepseek-ai/dsh@0.1.2-rc.1` packages and checksum-pinned OpenCode platform
+archives. The Pi and DeepSeek recipes disable npm lifecycle scripts and verify
+the published package SRI. DeepSeek also installs the lockfile's platform
+optional dependencies because its `sharp` and `koffi` runtimes require them,
+pins dependency resolution to the audited release window, and rejects any
+dependency without registry origin and SHA-512 integrity. Pi and separate
+adapters continue to omit optional dependencies. Pi and
+`pi-acp@0.0.33` use separate versioned private cache entries. Managed DeepSeek
+Harness receives a separate `DSH_HOME` and a fixed
+`DSH_PERMISSION_MODE=workspace-write`; a validated local `DSH_HOME` remains in
+use for a local installation. OpenCode archives are restricted to one expected
+executable, verified before extraction, and revalidated from a local manifest
+before every use. Mobius downloads or installs into a private staging directory,
+applies bounded verification and execution, repeats normal ACP discovery, and
+publishes the Agent only after the full path succeeds. Progress sent to Web
+contains stages and stable errors, never commands, URLs, paths, raw output,
+environment values, or credentials. Installing an Agent does not sign the user
+into its provider.
 
 A local user may explicitly grant one fixed recipe by creating a private
 mode-`0600` `~/.mobius/installation-grants.json` file:
@@ -243,13 +260,15 @@ mode-`0600` `~/.mobius/installation-grants.json` file:
 The grant is disabled by default, is scoped to the listed built-in Agent IDs,
 and is revoked by removing an ID or the file. It cannot change a release
 channel, command, URL, arguments, or installation target. Local provider
-credentials remain with Codex, Claude Code, or Pi. Pi authentication is a local
-terminal action through `pi-acp --terminal-login`; `mobius agents` reports
-`authentication_required` without exposing a credential or local path. Pairing
-authorizes this channel to
-request work within the operating-system permissions of the user running Mobius.
-Agent-specific sandbox and approval behavior remains under the Agent's own
-configuration.
+credentials remain with the Agent process and never cross the Relay. Pi
+authentication is a local terminal action through `pi-acp --terminal-login`;
+OpenCode uses `opencode auth login`. DeepSeek Harness reads credentials from its
+validated local home or launch environment; use the local `dsh web` Models page
+or `DEEPSEEK_API_KEY` to configure the default route. `mobius agents` reports ACP
+authentication failures as `authentication_required` without exposing a
+credential or local path. Pairing authorizes this channel to request work within
+the operating-system permissions of the user running Mobius. Agent-specific
+sandbox and approval behavior remains under the Agent's own configuration.
 
 Each conversation negotiates its available ACP capabilities with the selected
 agent. When provided by that agent, the Web chat exposes session mode, model,
@@ -261,7 +280,11 @@ In particular, Pi does not advertise ACP filesystem delegation, terminal
 delegation, or MCP passthrough while `pi-acp@0.0.33` does not implement them.
 Pi prompts have a five-minute outer Mobius deadline. A timeout closes the ACP
 connection and terminates the detached adapter process group, including its Pi
-RPC child.
+RPC child. DeepSeek Harness advertises its current list, resume, close, and HTTP
+MCP capabilities; unsupported load, additional-directory, delete, fork, image,
+audio, embedded-resource, and elicitation features remain absent. OpenCode's ACP
+session lifecycle, including persisted load/resume behavior, is negotiated from
+the running binary.
 
 Open **Local sessions** in the sidebar, then choose an installed Agent to see
 its saved conversations across projects on the paired machine. This works before starting a chat
