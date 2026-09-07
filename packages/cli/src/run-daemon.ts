@@ -1,4 +1,5 @@
 import { basename } from "node:path";
+import { styleText } from "node:util";
 
 import {
   AGENT_ACTIVITY_KIND,
@@ -885,12 +886,14 @@ async function runRelayConnection(
   installationObserver: DaemonInstallationObserver,
   nativeSessions: NativeSessionService,
   outbox: SessionEventOutbox,
+  onConnected: () => void,
   signal: AbortSignal,
   timer: DaemonTimer,
 ): Promise<void> {
   const relayUrl = new URL(config.relayUrl);
   relayUrl.searchParams.set("liveness", "1");
   const socket = await connectRelay(relayUrl, signal);
+  onConnected();
   const activeTurns = new Map<string, ActiveDaemonTurn>();
   const activeAttemptIds = new Map<string, string>();
   const connectionController = new AbortController();
@@ -1378,6 +1381,21 @@ export async function runDaemon(
     installationAudit,
   );
   let retryAnnounced = false;
+  let connectionAnnounced = false;
+  const announceConnection = (): void => {
+    if (connectionAnnounced) {
+      return;
+    }
+    connectionAnnounced = true;
+    const reconnectCommand = `npx --yes @moxt-ai/mobius start --channel ${config.channelId}`;
+    process.stdout.write("Mobius daemon connected to the relay.\n\n");
+    process.stdout.write(
+      `${styleText(
+        ["bold", "yellow"],
+        `Reconnect this channel later:\n  ${reconnectCommand}`,
+      )}\n\n`,
+    );
+  };
 
   try {
     while (!signal.aborted) {
@@ -1392,6 +1410,7 @@ export async function runDaemon(
           installationObserver,
           nativeSessions,
           outbox,
+          announceConnection,
           signal,
           timer,
         );
