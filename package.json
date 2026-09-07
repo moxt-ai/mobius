@@ -50,10 +50,10 @@
     "pre-commit": "pnpm typecheck && pnpm check:no-chinese && pnpm biome check --staged --files-ignore-unknown=true --no-errors-on-unmatched"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.9",
+    "@biomejs/biome": "2.5.12",
     "@types/node": "^24.13.3",
     "@vitest/coverage-v8": "^4.1.10",
-    "happy-dom": "20.8.9",
+    "happy-dom": "20.14.0",
     "knip": "^6.32.2",
     "simple-git-hooks": "^2.13.1",
     "typescript": "^7.0.2",
