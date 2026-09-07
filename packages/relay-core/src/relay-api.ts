@@ -182,11 +182,20 @@ function preserveCancellation(signal: AbortSignal, error: unknown): void {
 function directoryError(error: unknown): Response {
   if (error instanceof PairingDirectoryError) {
     const status =
-      error.code === "pairing_not_found" || error.code === "channel_not_found"
+      error.code === "pairing_not_found" ||
+      error.code === "channel_not_found" ||
+      error.code === "access_grant_invalid" ||
+      error.code === "linked_device_not_found"
         ? 404
         : error.code === "unauthorized"
           ? 401
-          : 400;
+          : error.code === "owner_access_required"
+            ? 403
+            : error.code === "access_grant_expired"
+              ? 410
+              : error.code === "access_grant_redeemed"
+                ? 409
+                : 400;
     return Response.json(
       { error: { code: error.code, message: error.message } },
       { status },
@@ -460,6 +469,84 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
       return directoryError(error);
     }
   });
+
+  app.post("/api/channels/:channelId/access-grants", async (context) => {
+    try {
+      return context.json(
+        await dependencies.pairingDirectory.createChannelAccessGrant(
+          validateIdentifier(context.req.param("channelId"), "channel_id"),
+          bearerToken(context.req.raw),
+          context.req.raw.signal,
+        ),
+        201,
+      );
+    } catch (error) {
+      preserveCancellation(context.req.raw.signal, error);
+      return directoryError(error);
+    }
+  });
+
+  app.post(
+    "/api/channels/:channelId/access-grants/:grantId/redeem",
+    async (context) => {
+      try {
+        const body = await parseJsonBody(context.req.raw);
+        assertExactKeys(body, ["grantSecret"]);
+        return context.json(
+          await dependencies.pairingDirectory.redeemChannelAccessGrant(
+            validateIdentifier(context.req.param("channelId"), "channel_id"),
+            validateIdentifier(context.req.param("grantId"), "grant_id"),
+            readString(body, "grantSecret", 256),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return directoryError(error);
+      }
+    },
+  );
+
+  app.get("/api/channels/:channelId/linked-devices", async (context) => {
+    try {
+      return context.json({
+        devices: await dependencies.pairingDirectory.listLinkedChannelDevices(
+          validateIdentifier(context.req.param("channelId"), "channel_id"),
+          bearerToken(context.req.raw),
+          context.req.raw.signal,
+        ),
+      });
+    } catch (error) {
+      preserveCancellation(context.req.raw.signal, error);
+      return directoryError(error);
+    }
+  });
+
+  app.delete(
+    "/api/channels/:channelId/linked-devices/:credentialId",
+    async (context) => {
+      try {
+        const revoked =
+          await dependencies.pairingDirectory.revokeLinkedChannelDevice(
+            validateIdentifier(context.req.param("channelId"), "channel_id"),
+            validateIdentifier(
+              context.req.param("credentialId"),
+              "credential_id",
+            ),
+            bearerToken(context.req.raw),
+            context.req.raw.signal,
+          );
+        await dependencies.channelRuntime.disconnectHost(
+          revoked,
+          context.req.raw.signal,
+        );
+        return new Response(null, { status: 204 });
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return directoryError(error);
+      }
+    },
+  );
 
   app.get("/api/channels/:channelId", async (context) => {
     try {

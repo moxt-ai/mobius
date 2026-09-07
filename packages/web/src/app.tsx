@@ -19,6 +19,7 @@ import {
   readChannelConnection,
   readChannelHistory,
   readChannelHistoryForSynchronization,
+  redeemChannelAccessGrantFromLocation,
 } from "@/services/pairing-api";
 import {
   type DesktopSidebarLayoutState,
@@ -294,8 +295,13 @@ function ChannelRoute({
 
   useEffect(() => {
     let active = true;
+    const controller = new AbortController();
     const load = async (): Promise<void> => {
       try {
+        await redeemChannelAccessGrantFromLocation(
+          channelId,
+          controller.signal,
+        );
         const [connection, history] = await Promise.all([
           readChannelConnection(channelId),
           readChannelHistory(channelId),
@@ -317,6 +323,7 @@ function ChannelRoute({
     void load();
     return () => {
       active = false;
+      controller.abort();
     };
   }, [channelId]);
 

@@ -75,10 +75,34 @@ interface PairedChannel {
 interface PairingRecord {
   readonly channel_id: string;
   readonly daemon_token_hash: string;
-  readonly host_token_hash: string;
   readonly project_id: string;
   readonly runtime_id: string;
   readonly tenant_id: string;
+}
+
+interface HostCredentialRecord {
+  readonly authority: string;
+  readonly channel_id: string;
+  readonly credential_id: string;
+  readonly token_hash: string;
+}
+
+interface CreatedAccessGrantResponse {
+  readonly expiresAt: string;
+  readonly grantId: string;
+  readonly grantSecret: string;
+}
+
+interface RedeemedAccessGrantResponse {
+  readonly channelId: string;
+  readonly hostToken: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+}
+
+interface AccessGrantRecord {
+  readonly grant_id: string;
+  readonly secret_hash: string;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -121,6 +145,31 @@ function decodeClaimedPairing(value: unknown): ClaimedPairingResponse {
     channelId: requiredString(value, "channelId"),
     daemonToken: requiredString(value, "daemonToken"),
     runtimeId: requiredString(value, "runtimeId"),
+  };
+}
+
+function decodeCreatedAccessGrant(value: unknown): CreatedAccessGrantResponse {
+  if (!isRecord(value)) {
+    throw new Error("Expected an access grant response object");
+  }
+  return {
+    expiresAt: requiredString(value, "expiresAt"),
+    grantId: requiredString(value, "grantId"),
+    grantSecret: requiredString(value, "grantSecret"),
+  };
+}
+
+function decodeRedeemedAccessGrant(
+  value: unknown,
+): RedeemedAccessGrantResponse {
+  if (!isRecord(value)) {
+    throw new Error("Expected a redeemed access grant response object");
+  }
+  return {
+    channelId: requiredString(value, "channelId"),
+    hostToken: requiredString(value, "hostToken"),
+    projectId: requiredString(value, "projectId"),
+    tenantId: requiredString(value, "tenantId"),
   };
 }
 
@@ -492,7 +541,7 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(unauthorizedHost.status).toBe(401);
 
     const record = await env.DIRECTORY_DATABASE.prepare(
-      `SELECT channel_id, daemon_token_hash, host_token_hash, project_id, runtime_id, tenant_id
+      `SELECT channel_id, daemon_token_hash, project_id, runtime_id, tenant_id
        FROM pairing_channels WHERE pairing_id = ?`,
     )
       .bind(created.pairingId)
@@ -500,13 +549,182 @@ describe.sequential("Cloudflare session deployment", () => {
     expect(record).toMatchObject({
       channel_id: created.channelId,
       daemon_token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
-      host_token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
       project_id: created.projectId,
       runtime_id: created.runtimeId,
       tenant_id: created.tenantId,
     });
+    const ownerCredential = await env.DIRECTORY_DATABASE.prepare(
+      `SELECT credential_id, channel_id, token_hash, authority
+       FROM channel_host_credentials
+       WHERE channel_id = ? AND authority = 'owner'`,
+    )
+      .bind(created.channelId)
+      .first<HostCredentialRecord>();
+    expect(ownerCredential).toMatchObject({
+      authority: "owner",
+      channel_id: created.channelId,
+      credential_id: expect.stringMatching(/^hcr_/),
+      token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
     expect(record?.daemon_token_hash).not.toBe(claimed.daemonToken);
-    expect(record?.host_token_hash).not.toBe(created.hostToken);
+    expect(ownerCredential?.token_hash).not.toBe(created.hostToken);
+  });
+
+  it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {
+    const pairing = await pairChannel();
+    const createGrantResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants`,
+      { headers: authorization(pairing.created), method: "POST" },
+    );
+    expect(createGrantResponse.status).toBe(201);
+    const grant = decodeCreatedAccessGrant(await createGrantResponse.json());
+    expect(Date.parse(grant.expiresAt) - Date.now()).toBe(10 * 60 * 1_000);
+    expect(grant.grantSecret).not.toBe(pairing.created.hostToken);
+    const storedGrant = await env.DIRECTORY_DATABASE.prepare(
+      `SELECT grant_id, secret_hash
+       FROM channel_access_grants
+       WHERE grant_id = ? AND channel_id = ?`,
+    )
+      .bind(grant.grantId, pairing.created.channelId)
+      .first<AccessGrantRecord>();
+    expect(storedGrant).toMatchObject({
+      grant_id: grant.grantId,
+      secret_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
+    });
+    expect(storedGrant?.secret_hash).not.toBe(grant.grantSecret);
+
+    const wrongSecretResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      {
+        body: JSON.stringify({ grantSecret: "x".repeat(43) }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(wrongSecretResponse.status).toBe(404);
+    await expect(wrongSecretResponse.json()).resolves.toMatchObject({
+      error: { code: "access_grant_invalid" },
+    });
+
+    const redeemResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      {
+        body: JSON.stringify({ grantSecret: grant.grantSecret }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(redeemResponse.status).toBe(200);
+    const redeemed = decodeRedeemedAccessGrant(await redeemResponse.json());
+    expect(redeemed).toMatchObject({
+      channelId: pairing.created.channelId,
+      projectId: pairing.created.projectId,
+      tenantId: pairing.created.tenantId,
+    });
+    expect(redeemed.hostToken).not.toBe(pairing.created.hostToken);
+    expect(redeemed.hostToken).not.toBe(grant.grantSecret);
+
+    const replayResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
+      {
+        body: JSON.stringify({ grantSecret: grant.grantSecret }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(replayResponse.status).toBe(409);
+    await expect(replayResponse.json()).resolves.toMatchObject({
+      error: { code: "access_grant_redeemed" },
+    });
+
+    const linkedAuthorization = {
+      authorization: `Bearer ${redeemed.hostToken}`,
+    };
+    const linkedChannel = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}`,
+      { headers: linkedAuthorization },
+    );
+    expect(linkedChannel.status).toBe(200);
+    const linkedProject = await exports.default.fetch(
+      `${relayOrigin}/api/projects/${pairing.created.projectId}/sessions`,
+      { headers: linkedAuthorization },
+    );
+    expect(linkedProject.status).toBe(200);
+    const linkedHost = await openChannelSocket(
+      `/api/channels/${pairing.created.channelId}/host?token=${redeemed.hostToken}`,
+    );
+    const linkedHostClosed = new Promise<number>((resolve) => {
+      linkedHost.socket.addEventListener(
+        "close",
+        (event) => resolve(event.code),
+        { once: true },
+      );
+    });
+    const delegationAttempt = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants`,
+      { headers: linkedAuthorization, method: "POST" },
+    );
+    expect(delegationAttempt.status).toBe(403);
+    await expect(delegationAttempt.json()).resolves.toMatchObject({
+      error: { code: "owner_access_required" },
+    });
+
+    const devicePageResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/linked-devices`,
+      { headers: authorization(pairing.created) },
+    );
+    expect(devicePageResponse.status).toBe(200);
+    const devicePage: unknown = await devicePageResponse.json();
+    if (
+      !isRecord(devicePage) ||
+      !Array.isArray(devicePage["devices"]) ||
+      devicePage["devices"].length !== 1 ||
+      !isRecord(devicePage["devices"][0])
+    ) {
+      throw new Error("Expected one linked device");
+    }
+    const linkedCredentialId = requiredString(
+      devicePage["devices"][0],
+      "credentialId",
+    );
+
+    const revokeResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/linked-devices/${linkedCredentialId}`,
+      { headers: authorization(pairing.created), method: "DELETE" },
+    );
+    expect(revokeResponse.status).toBe(204);
+    expect(await linkedHostClosed).toBe(1008);
+    const revokedChannel = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}`,
+      { headers: linkedAuthorization },
+    );
+    expect(revokedChannel.status).toBe(401);
+    const ownerChannel = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}`,
+      { headers: authorization(pairing.created) },
+    );
+    expect(ownerChannel.status).toBe(200);
+
+    const expiringGrantResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants`,
+      { headers: authorization(pairing.created), method: "POST" },
+    );
+    const expiringGrant = decodeCreatedAccessGrant(
+      await expiringGrantResponse.json(),
+    );
+    vi.setSystemTime(Date.parse(expiringGrant.expiresAt));
+    const expiredResponse = await exports.default.fetch(
+      `${relayOrigin}/api/channels/${pairing.created.channelId}/access-grants/${expiringGrant.grantId}/redeem`,
+      {
+        body: JSON.stringify({ grantSecret: expiringGrant.grantSecret }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+    );
+    expect(expiredResponse.status).toBe(410);
+    await expect(expiredResponse.json()).resolves.toMatchObject({
+      error: { code: "access_grant_expired" },
+    });
   });
 
   it("Given a stable Channel targets a distinct Runtime, When a daemon connection is replaced, Then its durable epoch advances and the stale connection is fenced", async () => {

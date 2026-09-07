@@ -1,4 +1,5 @@
 export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
+export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -34,6 +35,31 @@ export interface ClaimedPairing {
   readonly runtimeId: string;
 }
 
+export interface CreatedChannelAccessGrant {
+  readonly expiresAt: string;
+  readonly grantId: string;
+  readonly grantSecret: string;
+}
+
+export interface RedeemedChannelAccessGrant {
+  readonly channelId: string;
+  readonly hostToken: string;
+  readonly projectId: string;
+  readonly tenantId: string;
+}
+
+export class LinkedChannelDevice {
+  readonly createdAt: string;
+  readonly credentialId: string;
+  readonly lastUsedAt: string;
+
+  constructor(credentialId: string, createdAt: string, lastUsedAt: string) {
+    this.createdAt = createdAt;
+    this.credentialId = credentialId;
+    this.lastUsedAt = lastUsedAt;
+  }
+}
+
 export class VerifiedChannelAccess {
   readonly channelId: string;
   readonly projectId: string;
@@ -50,6 +76,21 @@ export class VerifiedChannelAccess {
     this.projectId = projectId;
     this.runtimeId = runtimeId;
     this.tenantId = tenantId;
+  }
+}
+
+export class ChannelHostCredential extends VerifiedChannelAccess {
+  readonly credentialId: string;
+
+  constructor(
+    channelId: string,
+    runtimeId: string,
+    tenantId: string,
+    projectId: string,
+    credentialId: string,
+  ) {
+    super(channelId, runtimeId, tenantId, projectId);
+    this.credentialId = credentialId;
   }
 }
 
@@ -155,7 +196,7 @@ export interface PairingDirectory {
     channelId: string,
     token: string,
     signal: AbortSignal,
-  ) => Promise<VerifiedChannelAccess>;
+  ) => Promise<ChannelHostCredential>;
   readonly authorizeProject: (
     projectId: string,
     token: string,
@@ -169,7 +210,17 @@ export interface PairingDirectory {
     installableAgents: readonly InstallableAgentDescriptor[],
     signal: AbortSignal,
   ) => Promise<ClaimedPairing>;
+  readonly createChannelAccessGrant: (
+    channelId: string,
+    token: string,
+    signal: AbortSignal,
+  ) => Promise<CreatedChannelAccessGrant>;
   readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
+  readonly listLinkedChannelDevices: (
+    channelId: string,
+    token: string,
+    signal: AbortSignal,
+  ) => Promise<readonly LinkedChannelDevice[]>;
   readonly readChannel: (
     channelId: string,
     token: string,
@@ -180,6 +231,18 @@ export interface PairingDirectory {
     pollToken: string,
     signal: AbortSignal,
   ) => Promise<PairingStatus>;
+  readonly redeemChannelAccessGrant: (
+    channelId: string,
+    grantId: string,
+    grantSecret: string,
+    signal: AbortSignal,
+  ) => Promise<RedeemedChannelAccessGrant>;
+  readonly revokeLinkedChannelDevice: (
+    channelId: string,
+    credentialId: string,
+    token: string,
+    signal: AbortSignal,
+  ) => Promise<ChannelHostCredential>;
   readonly updateAgentCatalog: (
     channelId: string,
     token: string,

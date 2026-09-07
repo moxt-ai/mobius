@@ -540,6 +540,30 @@ export class CreatedPairing {
   }
 }
 
+export class CreatedChannelAccessGrant {
+  readonly expiresAt: Date;
+  readonly grantId: string;
+  readonly grantSecret: string;
+
+  constructor(grantId: string, grantSecret: string, expiresAt: Date) {
+    this.expiresAt = expiresAt;
+    this.grantId = grantId;
+    this.grantSecret = grantSecret;
+  }
+}
+
+export class LinkedChannelDevice {
+  readonly createdAt: Date;
+  readonly credentialId: string;
+  readonly lastUsedAt: Date;
+
+  constructor(credentialId: string, createdAt: Date, lastUsedAt: Date) {
+    this.createdAt = createdAt;
+    this.credentialId = credentialId;
+    this.lastUsedAt = lastUsedAt;
+  }
+}
+
 export abstract class BrowserPairingStatus {
   abstract readonly status: string;
 }

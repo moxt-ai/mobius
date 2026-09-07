@@ -51,9 +51,19 @@ renders the pairing page.
 A successful one-time claim gives the browser an independent
 `/channels/<channel-id>` route. The Web application reads the paired machine and
 agent catalog from D1 through the Relay whenever that route opens, so it works in
-the browser that holds the separate high-entropy host credential. The channel ID
-is only an address and does not grant access. User and team identity remain a
-required layer before credentials are shared outside a trusted group.
+any browser that holds a scoped high-entropy host credential. The pairing browser
+is the credential owner: it can mint a ten-minute, single-use access grant whose
+secret is carried only in a URL fragment. Redeeming that grant atomically creates
+a distinct linked-device credential; the grant secret and host credentials are
+stored only as hashes. Linked devices cannot delegate access. The owner can list
+and revoke each one independently, and revocation closes matching live sockets as
+well as rejecting later HTTP and WebSocket authorization. The channel ID is only
+an address and does not grant access. Mobius deliberately has no user identity
+system; user and team policy belongs in a separate identity service layered over
+these capabilities.
+
+The credential tables are part of the rebuilt initial D1 schema. A D1 instance
+created by an earlier revision must be reset once when adopting this design.
 
 Session identity and durable history are independent of connection channels.
 Turns and Attempts have explicit queued, running, waiting, terminal, or

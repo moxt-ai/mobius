@@ -150,13 +150,18 @@ The channel sidebar links to `/channels/<channel-id>/settings`, where the user c
 see verified local Agents separately from supported integrations that still need
 installation or recovery. Missing integrations use the same locally authorized
 install, retry, progress, and cancellation flow. The page intentionally does not
-expose local paths, versions, credentials, or a remote uninstall action.
+expose local Agent paths, versions, provider credentials, or a remote uninstall
+action.
 
-The pairing browser stores a separate high-entropy host credential for the
-channel. The URL contains only the channel address, so opening it in another
-browser without that credential cannot submit work or read persisted history.
-Treat exported browser storage as a bearer capability, and add user or team
-identity before sharing access beyond trusted collaborators.
+The pairing browser stores an owner host credential for the channel. The normal
+URL contains only the channel address, so opening it in another browser without
+a credential cannot submit work or read persisted history. From Channel
+settings, the owner can create an accountless access link that expires after ten
+minutes and works once. Its secret stays in the URL fragment, is stored only as
+a hash by the Relay, and is exchanged for a distinct linked-device credential.
+The owner can list and revoke linked devices without rotating its own credential;
+revocation also closes an active linked-device WebSocket. These links are bearer
+capabilities for trusted device transfer, not user or team identity.
 
 Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
 restart a previously paired daemon, use the channel identifier shown in its URL:
@@ -388,8 +393,13 @@ an unrelated Wrangler login does not need to be removed or overwritten.
 The daemon and browser receive separate high-entropy credentials whose hashes and
 channel metadata are stored in D1. The pairing code expires after ten minutes and
 can be claimed only once. A channel ID addresses a runtime but is not an access
-credential; the browser retains its host credential locally. Application identity
-and credential sharing remain separate concerns.
+credential; each authorized browser retains its own host credential locally.
+Mobius itself has no account system. A future identity service can own user and
+team policy while issuing or revoking the same scoped capabilities.
+
+This revision replaces the original single browser credential column with
+credential and access-grant tables in the initial D1 schema. Existing D1
+instances from an earlier revision must be reset once before deployment.
 
 Cloudflare may apply an abuse-prevention challenge to an unclaimed temporary
 preview. If that blocks the non-browser daemon, claim the deployment using the

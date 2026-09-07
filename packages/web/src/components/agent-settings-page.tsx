@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
+import { ChannelAccessPanel } from "@/components/channel-access-panel";
 import { Button } from "@/components/ui/button";
 import type {
   AgentInstallationViewState,
@@ -134,7 +135,7 @@ function AgentSettingsView({
                   Access
                 </span>
                 <strong className="mt-1 block text-sm font-semibold">
-                  Current user account
+                  Local OS user
                 </strong>
               </div>
               <div className="rounded-xl border-[0.5px] border-black/10 bg-white p-4 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
@@ -162,6 +163,8 @@ function AgentSettingsView({
               </div>
             </div>
           </section>
+
+          <ChannelAccessPanel channelId={channelId} key={channelId} />
 
           <section aria-labelledby="ready-agents-heading" className="mt-10">
             <div className="flex items-end justify-between gap-4">

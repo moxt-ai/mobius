@@ -6,7 +6,6 @@ CREATE TABLE pairing_channels (
   runtime_id TEXT NOT NULL UNIQUE,
   tenant_id TEXT NOT NULL,
   project_id TEXT NOT NULL,
-  host_token_hash TEXT NOT NULL,
   daemon_token_hash TEXT,
   status TEXT NOT NULL CHECK (status IN ('pending', 'paired')),
   created_at INTEGER NOT NULL,
@@ -23,6 +22,34 @@ CREATE INDEX pairing_channels_expires_at
 
 CREATE INDEX pairing_channels_project
   ON pairing_channels(tenant_id, project_id, channel_id);
+
+CREATE TABLE channel_host_credentials (
+  credential_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  authority TEXT NOT NULL CHECK (authority IN ('owner', 'linked')),
+  created_at INTEGER NOT NULL,
+  last_used_at INTEGER NOT NULL,
+  revoked_at INTEGER,
+  source_grant_id TEXT UNIQUE
+);
+
+CREATE INDEX channel_host_credentials_channel
+  ON channel_host_credentials(channel_id, authority, revoked_at, created_at);
+
+CREATE TABLE channel_access_grants (
+  grant_id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  secret_hash TEXT NOT NULL,
+  created_by_credential_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  redeemed_at INTEGER,
+  redeemed_credential_id TEXT
+);
+
+CREATE INDEX channel_access_grants_channel
+  ON channel_access_grants(channel_id, created_at);
 
 CREATE TABLE session_directory (
   tenant_id TEXT NOT NULL,

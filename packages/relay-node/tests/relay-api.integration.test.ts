@@ -65,7 +65,21 @@ class ScopedPairingDirectory implements PairingDirectory {
     );
   };
 
+  readonly createChannelAccessGrant = async (): Promise<never> => {
+    throw new PairingDirectoryError(
+      "invalid_request",
+      "Not available in this scenario",
+    );
+  };
+
   readonly createPairing = async (): Promise<never> => {
+    throw new PairingDirectoryError(
+      "invalid_request",
+      "Not available in this scenario",
+    );
+  };
+
+  readonly listLinkedChannelDevices = async (): Promise<never> => {
     throw new PairingDirectoryError(
       "invalid_request",
       "Not available in this scenario",
@@ -86,6 +100,20 @@ class ScopedPairingDirectory implements PairingDirectory {
     );
   };
 
+  readonly redeemChannelAccessGrant = async (): Promise<never> => {
+    throw new PairingDirectoryError(
+      "invalid_request",
+      "Not available in this scenario",
+    );
+  };
+
+  readonly revokeLinkedChannelDevice = async (): Promise<never> => {
+    throw new PairingDirectoryError(
+      "invalid_request",
+      "Not available in this scenario",
+    );
+  };
+
   readonly updateAgentCatalog = async (): Promise<never> => {
     throw new PairingDirectoryError(
       "unauthorized",
@@ -100,6 +128,8 @@ class InertChannelRuntime implements ChannelRuntime {
 
   readonly acceptHost = async (): Promise<Response> =>
     new Response(null, { status: 501 });
+
+  readonly disconnectHost = async (): Promise<void> => {};
 }
 
 function prompt(sessionId: string): SessionPromptCommand {

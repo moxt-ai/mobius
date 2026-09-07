@@ -17,6 +17,7 @@ import {
   ChannelHistory,
   CompletedRecordedTurn,
   ConnectedBrowserPairingStatus,
+  CreatedChannelAccessGrant,
   CreatedPairing,
   ExpiredBrowserPairingStatus,
   FailedRecordedTurn,
@@ -24,6 +25,7 @@ import {
   isIdentifier,
   isPairingCode,
   isToken,
+  LinkedChannelDevice,
   PairingApiError,
   PendingRecordedTurn,
   RecordedActivity,
@@ -92,6 +94,9 @@ async function requestJson(
       signal,
     });
   } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
     throw new PairingApiError(
       "relay_unavailable",
       "The pairing relay could not be reached.",
@@ -123,6 +128,50 @@ async function requestJson(
     );
   }
   return value;
+}
+
+async function requestEmpty(
+  url: URL,
+  init: RequestInit,
+  signal: AbortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS),
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal });
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+    throw new PairingApiError(
+      "relay_unavailable",
+      "The pairing relay could not be reached.",
+      { cause: error },
+    );
+  }
+  if (response.ok) {
+    return;
+  }
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch (error) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The pairing relay returned an invalid response.",
+      { cause: error },
+    );
+  }
+  if (isRecord(value) && isRecord(value["error"])) {
+    const code = value["error"]["code"];
+    const message = value["error"]["message"];
+    if (typeof code === "string" && typeof message === "string") {
+      throw new PairingApiError(code, message);
+    }
+  }
+  throw new PairingApiError(
+    "pairing_failed",
+    "The pairing relay rejected the request.",
+  );
 }
 
 function readDate(value: unknown, field: string): Date {
@@ -492,15 +541,26 @@ interface BrowserChannelCredential {
   readonly tenantId: string;
 }
 
-function saveChannelCredential(pairing: CreatedPairing): void {
+function saveBrowserChannelCredential(
+  channelId: string,
+  credential: BrowserChannelCredential,
+): void {
   window.localStorage.setItem(
-    `${CHANNEL_CREDENTIAL_PREFIX}${pairing.channelId}`,
+    `${CHANNEL_CREDENTIAL_PREFIX}${channelId}`,
     JSON.stringify({
-      hostToken: pairing.hostToken,
-      projectId: pairing.projectId,
-      tenantId: pairing.tenantId,
+      hostToken: credential.hostToken,
+      projectId: credential.projectId,
+      tenantId: credential.tenantId,
     }),
   );
+}
+
+function saveChannelCredential(pairing: CreatedPairing): void {
+  saveBrowserChannelCredential(pairing.channelId, {
+    hostToken: pairing.hostToken,
+    projectId: pairing.projectId,
+    tenantId: pairing.tenantId,
+  });
 }
 
 function readChannelCredential(channelId: string): BrowserChannelCredential {
@@ -540,6 +600,206 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
     );
   }
   return { hostToken, projectId, tenantId };
+}
+
+function decodeCreatedChannelAccessGrant(
+  value: unknown,
+): CreatedChannelAccessGrant {
+  if (!isRecord(value)) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid access link.",
+    );
+  }
+  const grantId = value["grantId"];
+  const grantSecret = value["grantSecret"];
+  if (
+    typeof grantId !== "string" ||
+    !isIdentifier(grantId) ||
+    typeof grantSecret !== "string" ||
+    !isToken(grantSecret)
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid access link.",
+    );
+  }
+  return new CreatedChannelAccessGrant(
+    grantId,
+    grantSecret,
+    readDate(value["expiresAt"], "access link expiry time"),
+  );
+}
+
+function decodeLinkedChannelDevices(
+  value: unknown,
+): readonly LinkedChannelDevice[] {
+  if (!isRecord(value) || !Array.isArray(value["devices"])) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid linked device list.",
+    );
+  }
+  const devices: LinkedChannelDevice[] = [];
+  const credentialIds = new Set<string>();
+  for (const candidate of value["devices"]) {
+    if (!isRecord(candidate)) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid linked device.",
+      );
+    }
+    const credentialId = candidate["credentialId"];
+    if (
+      typeof credentialId !== "string" ||
+      !isIdentifier(credentialId) ||
+      credentialIds.has(credentialId)
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid linked device.",
+      );
+    }
+    credentialIds.add(credentialId);
+    devices.push(
+      new LinkedChannelDevice(
+        credentialId,
+        readDate(candidate["createdAt"], "linked device creation time"),
+        readDate(candidate["lastUsedAt"], "linked device activity time"),
+      ),
+    );
+  }
+  return devices;
+}
+
+function decodeRedeemedChannelCredential(
+  value: unknown,
+  expectedChannelId: string,
+): BrowserChannelCredential {
+  if (!isRecord(value) || value["channelId"] !== expectedChannelId) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid channel credential.",
+    );
+  }
+  const hostToken = value["hostToken"];
+  const projectId = value["projectId"];
+  const tenantId = value["tenantId"];
+  if (
+    typeof hostToken !== "string" ||
+    !isToken(hostToken) ||
+    typeof projectId !== "string" ||
+    !isIdentifier(projectId) ||
+    typeof tenantId !== "string" ||
+    !isIdentifier(tenantId)
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid channel credential.",
+    );
+  }
+  return { hostToken, projectId, tenantId };
+}
+
+abstract class ChannelAccessFragmentState {}
+
+class MissingChannelAccessFragment extends ChannelAccessFragmentState {}
+
+class PresentChannelAccessFragment extends ChannelAccessFragmentState {
+  readonly grantId: string;
+  readonly grantSecret: string;
+
+  constructor(grantId: string, grantSecret: string) {
+    super();
+    this.grantId = grantId;
+    this.grantSecret = grantSecret;
+  }
+}
+
+function readChannelAccessFragment(): ChannelAccessFragmentState {
+  const parameters = new URLSearchParams(window.location.hash.slice(1));
+  const accessValues = parameters.getAll("access");
+  if (accessValues.length === 0) {
+    return new MissingChannelAccessFragment();
+  }
+  window.history.replaceState(
+    window.history.state,
+    "",
+    `${window.location.pathname}${window.location.search}`,
+  );
+  if (accessValues.length !== 1 || Array.from(parameters.keys()).length !== 1) {
+    throw new PairingApiError(
+      "access_link_invalid",
+      "The access link is malformed.",
+    );
+  }
+  const access = accessValues[0] ?? "";
+  const separator = access.indexOf(".");
+  if (
+    separator <= 0 ||
+    separator !== access.lastIndexOf(".") ||
+    separator === access.length - 1
+  ) {
+    throw new PairingApiError(
+      "access_link_invalid",
+      "The access link is malformed.",
+    );
+  }
+  const grantId = access.slice(0, separator);
+  const grantSecret = access.slice(separator + 1);
+  if (!isIdentifier(grantId) || !isToken(grantSecret)) {
+    throw new PairingApiError(
+      "access_link_invalid",
+      "The access link is malformed.",
+    );
+  }
+  return new PresentChannelAccessFragment(grantId, grantSecret);
+}
+
+async function hasUsableChannelCredential(
+  channelId: string,
+  cancellationSignal: AbortSignal,
+): Promise<boolean> {
+  let credential: BrowserChannelCredential;
+  try {
+    credential = readChannelCredential(channelId);
+  } catch (error) {
+    if (
+      error instanceof PairingApiError &&
+      (error.code === "channel_credential_missing" ||
+        error.code === "channel_credential_invalid")
+    ) {
+      return false;
+    }
+    throw error;
+  }
+  const endpoint = new URL(
+    `/api/channels/${encodeURIComponent(channelId)}`,
+    window.location.origin,
+  );
+  try {
+    await requestJson(
+      endpoint,
+      {
+        headers: { authorization: `Bearer ${credential.hostToken}` },
+        method: "GET",
+      },
+      requestSignal(cancellationSignal),
+    );
+    return true;
+  } catch (error) {
+    if (error instanceof PairingApiError && error.code === "unauthorized") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function requestSignal(cancellationSignal: AbortSignal): AbortSignal {
+  return AbortSignal.any([
+    cancellationSignal,
+    AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS),
+  ]);
 }
 
 function decodeChannelConnection(
@@ -732,6 +992,112 @@ export async function readBrowserPairingStatus(
       projectId: pairing.projectId,
       tenantId: pairing.tenantId,
     }),
+  );
+}
+
+export async function createChannelAccessGrant(
+  channelId: string,
+  cancellationSignal: AbortSignal,
+): Promise<CreatedChannelAccessGrant> {
+  const credential = readChannelCredential(channelId);
+  const endpoint = new URL(
+    `/api/channels/${encodeURIComponent(channelId)}/access-grants`,
+    window.location.origin,
+  );
+  return decodeCreatedChannelAccessGrant(
+    await requestJson(
+      endpoint,
+      {
+        headers: { authorization: `Bearer ${credential.hostToken}` },
+        method: "POST",
+      },
+      requestSignal(cancellationSignal),
+    ),
+  );
+}
+
+export async function readLinkedChannelDevices(
+  channelId: string,
+  cancellationSignal: AbortSignal,
+): Promise<readonly LinkedChannelDevice[]> {
+  const credential = readChannelCredential(channelId);
+  const endpoint = new URL(
+    `/api/channels/${encodeURIComponent(channelId)}/linked-devices`,
+    window.location.origin,
+  );
+  return decodeLinkedChannelDevices(
+    await requestJson(
+      endpoint,
+      {
+        headers: { authorization: `Bearer ${credential.hostToken}` },
+        method: "GET",
+      },
+      requestSignal(cancellationSignal),
+    ),
+  );
+}
+
+export async function redeemChannelAccessGrantFromLocation(
+  channelId: string,
+  cancellationSignal: AbortSignal,
+): Promise<void> {
+  const fragment = readChannelAccessFragment();
+  if (fragment instanceof MissingChannelAccessFragment) {
+    return;
+  }
+  if (!(fragment instanceof PresentChannelAccessFragment)) {
+    throw new PairingApiError(
+      "access_link_invalid",
+      "The access link is malformed.",
+    );
+  }
+  if (await hasUsableChannelCredential(channelId, cancellationSignal)) {
+    return;
+  }
+  const endpoint = new URL(
+    `/api/channels/${encodeURIComponent(channelId)}/access-grants/${encodeURIComponent(fragment.grantId)}/redeem`,
+    window.location.origin,
+  );
+  const credential = decodeRedeemedChannelCredential(
+    await requestJson(
+      endpoint,
+      {
+        body: JSON.stringify({ grantSecret: fragment.grantSecret }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      },
+      requestSignal(cancellationSignal),
+    ),
+    channelId,
+  );
+  try {
+    saveBrowserChannelCredential(channelId, credential);
+  } catch (cause) {
+    throw new PairingApiError(
+      "channel_credential_unavailable",
+      "This browser could not save access to the channel.",
+      { cause },
+    );
+  }
+}
+
+export async function revokeLinkedChannelDevice(
+  channelId: string,
+  credentialId: string,
+  cancellationSignal: AbortSignal,
+): Promise<void> {
+  const credential = readChannelCredential(channelId);
+  const endpoint = new URL(
+    `/api/channels/${encodeURIComponent(channelId)}/linked-devices/${encodeURIComponent(credentialId)}`,
+    window.location.origin,
+  );
+  await requestEmpty(
+    endpoint,
+    {
+      headers: { authorization: `Bearer ${credential.hostToken}` },
+      method: "DELETE",
+    },
+    requestSignal(cancellationSignal),
   );
 }
 

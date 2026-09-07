@@ -14,6 +14,8 @@ import {
   ProjectScope,
 } from "@moxt-ai/mobius-relay-core";
 import {
+  INTERNAL_CHANNEL_ID_HEADER,
+  INTERNAL_HOST_CREDENTIAL_ID_HEADER,
   INTERNAL_PROJECT_ID_HEADER,
   INTERNAL_RUNTIME_ID_HEADER,
   INTERNAL_TENANT_ID_HEADER,
@@ -42,6 +44,8 @@ type SocketAttachment =
       readonly tenantId: string;
     }
   | {
+      readonly channelId: string;
+      readonly credentialId: string;
       readonly projectId: string;
       readonly role: "host";
       readonly runtimeId: string;
@@ -58,6 +62,8 @@ function readAttachment(value: unknown): SocketAttachment {
   const projectId = Reflect.get(value, "projectId");
   const connectionEpoch = Reflect.get(value, "connectionEpoch");
   const connectionId = Reflect.get(value, "connectionId");
+  const channelId = Reflect.get(value, "channelId");
+  const credentialId = Reflect.get(value, "credentialId");
   if (
     (role !== "daemon" && role !== "host" && role !== "replaced-daemon") ||
     typeof runtimeId !== "string" ||
@@ -67,7 +73,17 @@ function readAttachment(value: unknown): SocketAttachment {
     throw new Error("Invalid WebSocket attachment");
   }
   if (role === "host") {
-    return { projectId, role, runtimeId, tenantId };
+    if (typeof channelId !== "string" || typeof credentialId !== "string") {
+      throw new Error("Invalid host WebSocket attachment");
+    }
+    return {
+      channelId,
+      credentialId,
+      projectId,
+      role,
+      runtimeId,
+      tenantId,
+    };
   }
   if (
     typeof connectionEpoch !== "number" ||
@@ -96,16 +112,27 @@ interface CurrentRuntimeConnection {
 }
 
 function accessFromRequest(request: Request): {
+  readonly channelId: string;
   readonly runtimeId: string;
   readonly scope: ProjectScope;
 } {
+  const channelId = request.headers.get(INTERNAL_CHANNEL_ID_HEADER);
   const runtimeId = request.headers.get(INTERNAL_RUNTIME_ID_HEADER);
   const tenantId = request.headers.get(INTERNAL_TENANT_ID_HEADER);
   const projectId = request.headers.get(INTERNAL_PROJECT_ID_HEADER);
-  if (runtimeId === null || tenantId === null || projectId === null) {
+  if (
+    channelId === null ||
+    runtimeId === null ||
+    tenantId === null ||
+    projectId === null
+  ) {
     throw new Error("Missing verified channel access");
   }
-  return { runtimeId, scope: new ProjectScope(tenantId, projectId) };
+  return {
+    channelId,
+    runtimeId,
+    scope: new ProjectScope(tenantId, projectId),
+  };
 }
 
 class CloudflareChannelSocket implements ChannelSocket {
@@ -154,6 +181,7 @@ class CloudflareChannelPeers implements ChannelPeers {
 
 export class RuntimeRelay {
   #daemonMessageTail: Promise<void> = Promise.resolve();
+  readonly #database: D1Database;
   readonly #peers: CloudflareChannelPeers;
   readonly #sessions: CloudflareSessionRuntime;
   readonly #state: DurableObjectState;
@@ -171,6 +199,7 @@ export class RuntimeRelay {
       ) STRICT;
     `);
     this.#peers = new CloudflareChannelPeers(state);
+    this.#database = environment.DIRECTORY_DATABASE;
     this.#sessions = new CloudflareSessionRuntime(
       environment.SESSION_RELAY,
       environment.DIRECTORY_DATABASE,
@@ -194,10 +223,31 @@ export class RuntimeRelay {
         { status: 401 },
       );
     }
+    const pathname = new URL(request.url).pathname;
+    if (
+      request.method === "DELETE" &&
+      pathname.endsWith("/host-credentials/revoke")
+    ) {
+      const credentialId = request.headers.get(
+        INTERNAL_HOST_CREDENTIAL_ID_HEADER,
+      );
+      if (credentialId === null) {
+        return Response.json(
+          {
+            error: {
+              code: "unauthorized",
+              message: "Verified host credential access is required",
+            },
+          },
+          { status: 401 },
+        );
+      }
+      this.disconnectHostCredential(access, credentialId);
+      return new Response(null, { status: 204 });
+    }
     if (request.headers.get("Upgrade") !== "websocket") {
       return new Response("WebSocket upgrade required", { status: 426 });
     }
-    const pathname = new URL(request.url).pathname;
     if (pathname.endsWith("/daemon")) {
       return await this.acceptDaemonSocket(
         access.runtimeId,
@@ -207,7 +257,23 @@ export class RuntimeRelay {
       );
     }
     if (pathname.endsWith("/host")) {
+      const credentialId = request.headers.get(
+        INTERNAL_HOST_CREDENTIAL_ID_HEADER,
+      );
+      if (credentialId === null) {
+        return Response.json(
+          {
+            error: {
+              code: "unauthorized",
+              message: "Verified host credential access is required",
+            },
+          },
+          { status: 401 },
+        );
+      }
       return await this.acceptHostSocket(
+        access.channelId,
+        credentialId,
         access.runtimeId,
         access.scope,
         request.signal,
@@ -221,6 +287,10 @@ export class RuntimeRelay {
     if (attachment.role === "host") {
       await this.withSocketSignal(socket, async (signal) => {
         const channelSocket = new CloudflareChannelSocket(socket);
+        if (!(await this.isHostCredentialActive(attachment, signal))) {
+          channelSocket.close(1008, "Channel access revoked");
+          return;
+        }
         const scope = new ProjectScope(
           attachment.tenantId,
           attachment.projectId,
@@ -392,6 +462,8 @@ export class RuntimeRelay {
   };
 
   private readonly acceptHostSocket = async (
+    channelId: string,
+    credentialId: string,
     runtimeId: string,
     scope: ProjectScope,
     signal: AbortSignal,
@@ -400,6 +472,8 @@ export class RuntimeRelay {
     const client = pair[0];
     const server = pair[1];
     server.serializeAttachment({
+      channelId,
+      credentialId,
       projectId: scope.projectId,
       role: "host",
       runtimeId,
@@ -411,6 +485,62 @@ export class RuntimeRelay {
       signal,
     );
     return new Response(null, { status: 101, webSocket: client });
+  };
+
+  private readonly disconnectHostCredential = (
+    access: ReturnType<typeof accessFromRequest>,
+    credentialId: string,
+  ): void => {
+    for (const socket of this.#state.getWebSockets(HOST_TAG)) {
+      const attachment = readAttachment(socket.deserializeAttachment());
+      if (
+        attachment.role === "host" &&
+        attachment.channelId === access.channelId &&
+        attachment.credentialId === credentialId &&
+        attachment.runtimeId === access.runtimeId &&
+        attachment.tenantId === access.scope.tenantId &&
+        attachment.projectId === access.scope.projectId
+      ) {
+        socket.close(1008, "Channel access revoked");
+      }
+    }
+  };
+
+  private readonly isHostCredentialActive = async (
+    attachment: Readonly<{
+      readonly channelId: string;
+      readonly credentialId: string;
+      readonly projectId: string;
+      readonly runtimeId: string;
+      readonly tenantId: string;
+    }>,
+    signal: AbortSignal,
+  ): Promise<boolean> => {
+    signal.throwIfAborted();
+    const row = await this.#database
+      .prepare(
+        `SELECT 1 AS active
+         FROM channel_host_credentials AS credentials
+         INNER JOIN pairing_channels AS channels
+           ON channels.channel_id = credentials.channel_id
+         WHERE credentials.credential_id = ?
+           AND credentials.channel_id = ?
+           AND credentials.revoked_at IS NULL
+           AND channels.runtime_id = ?
+           AND channels.tenant_id = ?
+           AND channels.project_id = ?
+           AND channels.status = 'paired'`,
+      )
+      .bind(
+        attachment.credentialId,
+        attachment.channelId,
+        attachment.runtimeId,
+        attachment.tenantId,
+        attachment.projectId,
+      )
+      .first<{ readonly active: number }>();
+    signal.throwIfAborted();
+    return row?.active === 1;
   };
 
   private readonly currentConnection = (): CurrentRuntimeConnection | null => {
