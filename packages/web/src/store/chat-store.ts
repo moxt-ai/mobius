@@ -109,6 +109,7 @@ export interface ChatStore {
   readonly configureChannel: (
     connection: ChannelConnection,
     history: ChannelHistory,
+    selectedSessionId: string,
   ) => void;
   readonly conversations: readonly Conversation[];
   readonly createConversation: () => void;
@@ -847,9 +848,17 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       };
     });
   },
-  configureChannel: (connection, history) => {
+  configureChannel: (connection, history, selectedSessionId) => {
     const restored = restoreConversations(connection.agents, history);
-    const catalog = new ReconciledAgentCatalog(connection.agents, restored, "");
+    const selectedConversation = findConversationBySession(
+      restored,
+      selectedSessionId,
+    );
+    const catalog = new ReconciledAgentCatalog(
+      connection.agents,
+      restored,
+      selectedConversation?.id ?? "",
+    );
     set({
       activeConversationId: catalog.activeConversationId,
       agentInstallations: initialInstallationStates(

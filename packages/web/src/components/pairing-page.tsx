@@ -10,6 +10,7 @@ import {
   TerminalSquare,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +19,7 @@ import {
   ExpiredBrowserPairingStatus,
   PairingApiError,
 } from "@/domain/channel";
+import { channelRoutePath } from "@/services/app-routes";
 import {
   createBrowserPairing,
   pairingCommand,
@@ -85,10 +87,10 @@ function waitForPoll(signal: AbortSignal): Promise<void> {
 
 function MobiusWordmark() {
   return (
-    <a
+    <Link
       aria-label="Mobius home"
       className="inline-flex min-h-11 items-center gap-2.5 text-base font-semibold tracking-[-0.02em] text-foreground no-underline"
-      href="/"
+      to="/"
     >
       <svg
         aria-hidden="true"
@@ -100,7 +102,7 @@ function MobiusWordmark() {
         <path d="M11 15h10M21 17H11" />
       </svg>
       <span>Mobius</span>
-    </a>
+    </Link>
   );
 }
 
@@ -317,6 +319,7 @@ function PairingInstructions({
 }
 
 function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
+  const navigate = useNavigate();
   const [state, setState] = useState<PairingPageState>(
     new CreatingPairingPageState(),
   );
@@ -350,9 +353,7 @@ function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
               window.setTimeout(resolve, CONNECTED_PAUSE_MILLISECONDS);
             });
             if (!controller.signal.aborted) {
-              window.location.assign(
-                `/channels/${encodeURIComponent(status.connection.channelId)}`,
-              );
+              await navigate(channelRoutePath(status.connection.channelId));
             }
             return;
           }
@@ -371,7 +372,7 @@ function PairingWorkflow({ onRetry }: { readonly onRetry: () => void }) {
 
     void run();
     return () => controller.abort();
-  }, []);
+  }, [navigate]);
 
   let content = <PairingLoading />;
   if (state instanceof WaitingPairingPageState) {

@@ -549,6 +549,53 @@ describe.sequential("Web application boundaries", () => {
     }
   });
 
+  it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then navigation stays in the page and preserves the draft", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const prepare = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, prepare);
+
+      const promptInput = await screen.findByRole("textbox", {
+        name: "Message the local agent",
+      });
+      const sessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(prepare.sessionId)}`;
+      await waitFor(() => {
+        expect(window.location.pathname).toBe(sessionPath);
+      });
+      fireEvent.change(promptInput, {
+        target: { value: "Keep this draft while viewing settings" },
+      });
+
+      fireEvent.click(screen.getByRole("link", { name: "Agent settings" }));
+      await screen.findByRole("heading", { level: 1, name: "Agent settings" });
+      expect(window.location.pathname).toBe(`${sessionPath}/settings`);
+
+      fireEvent.click(screen.getByRole("link", { name: "Back to chat" }));
+      const restoredPromptInput = await screen.findByRole("textbox", {
+        name: "Message the local agent",
+      });
+      expect(
+        screen.getByDisplayValue("Keep this draft while viewing settings"),
+      ).toBe(restoredPromptInput);
+      expect(window.location.pathname).toBe(sessionPath);
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
   it("Given a paired local Agent, When a user answers its form and sends a prompt, Then the Web app exchanges protocol messages and renders the response safely", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(
@@ -1025,6 +1072,9 @@ describe.sequential("Web application boundaries", () => {
         name: "Persistent native title",
       });
       await screen.findByText("Persisted native answer");
+      expect(window.location.pathname).toBe(
+        `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(openRequest.targetSessionId)}`,
+      );
 
       cleanup();
       await closeMobiusTransport();
@@ -1048,7 +1098,7 @@ describe.sequential("Web application boundaries", () => {
     }
   });
 
-  it("Given several persisted conversations, When the Web app reloads, Then the newest conversation stays first and active", async () => {
+  it("Given several persisted Sessions, When a user selects an older Session and reloads, Then its route and selection are restored", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(
       null,
@@ -1086,6 +1136,33 @@ describe.sequential("Web application boundaries", () => {
         "Newest persisted prompt",
         "NEWEST-RESPONSE",
       );
+      expect(window.location.pathname).toBe(
+        `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(newerPreparation.sessionId)}`,
+      );
+
+      const conversations = await screen.findByRole("navigation", {
+        name: "Conversations",
+      });
+      const conversationLinks = within(conversations).getAllByRole("link");
+      expect(conversationLinks).toHaveLength(2);
+      expect(conversationLinks[0]?.textContent).toContain(
+        "Newest persisted prompt",
+      );
+      expect(conversationLinks[1]?.textContent).toContain(
+        "Older persisted prompt",
+      );
+      fireEvent.click(
+        within(conversations).getByRole("link", {
+          name: /Older persisted prompt/,
+        }),
+      );
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Older persisted prompt",
+      });
+      expect(window.location.pathname).toBe(
+        `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(olderPreparation.sessionId)}`,
+      );
 
       cleanup();
       await closeMobiusTransport();
@@ -1093,14 +1170,16 @@ describe.sequential("Web application boundaries", () => {
       const resumedPreparation = decodeSessionPrepareCommand(
         await paired.daemon.receive(SESSION_PREPARE_KIND),
       );
+      expect(resumedPreparation.sessionId).toBe(olderPreparation.sessionId);
       await sendReadySession(paired.daemon, resumedPreparation);
 
-      const conversations = await screen.findByRole("navigation", {
+      const restoredConversations = await screen.findByRole("navigation", {
         name: "Conversations",
       });
       await waitFor(() => {
-        const conversationButtons =
-          within(conversations).getAllByRole("button");
+        const conversationButtons = within(restoredConversations).getAllByRole(
+          "link",
+        );
         expect(conversationButtons).toHaveLength(2);
         expect(conversationButtons[0]?.textContent).toContain(
           "Newest persisted prompt",
@@ -1110,7 +1189,7 @@ describe.sequential("Web application boundaries", () => {
         );
       });
       expect(screen.getByRole("heading", { level: 1 }).textContent).toContain(
-        "Newest persisted prompt",
+        "Older persisted prompt",
       );
     } finally {
       cleanup();
@@ -1162,7 +1241,7 @@ describe.sequential("Web application boundaries", () => {
         name: "Conversations",
       });
       expect(
-        within(conversations).getByRole("button", {
+        within(conversations).getByRole("link", {
           name: /Prepared empty Session/,
         }),
       ).toBeTruthy();

@@ -1,4 +1,5 @@
 import { LoaderCircle, MessageSquare, Plus, Settings, X } from "lucide-react";
+import { Link, NavLink } from "react-router";
 
 import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
 import { NativeSessionBrowser } from "@/components/native-session-browser";
@@ -6,6 +7,11 @@ import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import {
+  channelSettingsRoutePath,
+  sessionRoutePath,
+  sessionSettingsRoutePath,
+} from "@/services/app-routes";
 import {
   type DesktopSidebarLayoutState,
   finishSidebarResize,
@@ -32,6 +38,7 @@ function MobiusMark() {
 interface ConversationSidebarProps {
   readonly channelId: string;
   readonly layout: DesktopSidebarLayoutState;
+  readonly onCreateConversation: () => void;
   readonly onLayoutChange: (layout: DesktopSidebarLayoutState) => void;
   readonly settingsOpen: boolean;
 }
@@ -39,6 +46,7 @@ interface ConversationSidebarProps {
 export function ConversationSidebar({
   channelId,
   layout,
+  onCreateConversation,
   onLayoutChange,
   settingsOpen,
 }: ConversationSidebarProps) {
@@ -47,9 +55,7 @@ export function ConversationSidebar({
     (state) => state.activeConversationId,
   );
   const agents = useChatStore((state) => state.agents);
-  const createConversation = useChatStore((state) => state.createConversation);
   const runtime = useChatStore((state) => state.runtime);
-  const selectConversation = useChatStore((state) => state.selectConversation);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
   const machineName = useChatStore((state) => state.machineName);
@@ -60,30 +66,26 @@ export function ConversationSidebar({
     (conversation) => !conversation.isRunning,
   );
   const displayWidth = sidebarDisplayWidth(layout);
-  const channelPath = `/channels/${encodeURIComponent(channelId)}`;
-
-  const returnToChat = (): void => {
-    setSidebarOpen(false);
-    if (settingsOpen) {
-      window.location.assign(channelPath);
-    }
-  };
+  const activeSessionId = conversations.find(
+    (conversation) => conversation.id === activeConversationId,
+  )?.sessionId;
+  const settingsPath =
+    activeSessionId === undefined
+      ? channelSettingsRoutePath(channelId)
+      : sessionSettingsRoutePath(channelId, activeSessionId);
 
   const conversationButton = (conversation: (typeof conversations)[number]) => {
-    const active = !settingsOpen && conversation.id === activeConversationId;
     return (
-      <Button
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "grid min-h-11 w-full grid-cols-[24px_minmax(0,1fr)] items-center rounded-[9px] px-2.5 py-1.5 text-left hover:bg-black/5",
-          active && "bg-black/8 hover:bg-black/8",
-        )}
+      <NavLink
+        className={({ isActive }) =>
+          cn(
+            "grid min-h-11 w-full grid-cols-[24px_minmax(0,1fr)] items-center rounded-[9px] px-2.5 py-1.5 text-left text-sm font-medium text-foreground no-underline outline-none transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+            isActive && "bg-black/8 hover:bg-black/8",
+          )
+        }
+        end
         key={conversation.id}
-        onClick={() => {
-          selectConversation(conversation.id);
-          returnToChat();
-        }}
-        variant="ghost"
+        to={sessionRoutePath(channelId, conversation.sessionId)}
       >
         <span
           className={cn(
@@ -107,7 +109,7 @@ export function ConversationSidebar({
               : conversation.preview}
           </span>
         </span>
-      </Button>
+      </NavLink>
     );
   };
 
@@ -142,14 +144,14 @@ export function ConversationSidebar({
           id="conversation-sidebar"
         >
           <div className="flex min-h-16 items-center justify-between pr-3.5 pl-[18px]">
-            <a
+            <Link
               aria-label="Mobius agent chat home"
               className="inline-flex min-h-11 items-center gap-2.5 text-base font-semibold tracking-[-0.02em] text-foreground no-underline md:min-h-10"
-              href="/"
+              to="/"
             >
               <MobiusMark />
               <span>Mobius</span>
-            </a>
+            </Link>
             <Button
               aria-label="Close conversation sidebar"
               className="size-11 md:hidden"
@@ -167,10 +169,7 @@ export function ConversationSidebar({
             <Button
               className="h-11 w-full justify-start rounded-[10px] border-black/9 bg-white px-2.5 text-[13px] font-medium shadow-[0_1px_2px_rgba(0,0,0,0.03)] hover:bg-background md:h-10"
               disabled={agents.length === 0}
-              onClick={() => {
-                createConversation();
-                returnToChat();
-              }}
+              onClick={onCreateConversation}
               variant="outline"
             >
               <Plus className="size-[17px]" />
@@ -217,19 +216,21 @@ export function ConversationSidebar({
             aria-label="Channel settings"
             className="border-t-[0.5px] border-black/6 px-3 py-2.5"
           >
-            <a
-              aria-current={settingsOpen ? "page" : undefined}
-              className={cn(
-                "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-                settingsOpen && "bg-black/8 hover:bg-black/8",
-              )}
-              href={`/channels/${encodeURIComponent(channelId)}/settings`}
+            <NavLink
+              className={({ isActive }) =>
+                cn(
+                  "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  isActive && "bg-black/8 hover:bg-black/8",
+                )
+              }
+              end
+              to={settingsPath}
             >
               <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
                 <Settings aria-hidden="true" className="size-3.5" />
               </span>
               Agent settings
-            </a>
+            </NavLink>
           </nav>
 
           <div className="flex min-h-[56px] items-center justify-between gap-3 border-t-[0.5px] border-black/6 px-4 py-2.5">

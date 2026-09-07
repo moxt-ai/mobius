@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   X,
 } from "lucide-react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +17,7 @@ import {
   type InstallableAgentOption,
   SucceededAgentInstallationState,
 } from "@/domain/channel";
+import { channelSettingsRoutePath } from "@/services/app-routes";
 import {
   cancelLocalAgentInstallation,
   installLocalAgent,
@@ -184,13 +186,13 @@ export function AgentInstallationPage({
           Mobius verifies the Agent and ACP adapter before it becomes
           selectable. Provider sign-in may still be required afterward.
         </p>
-        <a
+        <Link
           className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-          href={`/channels/${encodeURIComponent(channelId)}/settings`}
+          to={channelSettingsRoutePath(channelId)}
         >
           <Settings aria-hidden="true" className="size-3.5" />
           Open Agent settings
-        </a>
+        </Link>
       </section>
     </main>
   );

@@ -8,6 +8,7 @@ import {
   Settings,
   ShieldCheck,
 } from "lucide-react";
+import { Link } from "react-router";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
 import { ChannelAccessPanel } from "@/components/channel-access-panel";
@@ -58,8 +59,6 @@ function AgentSettingsView({
   runtimeLabel,
   sidebarOpen,
 }: AgentSettingsViewProps) {
-  const channelPath = `/channels/${encodeURIComponent(channelId)}`;
-
   return (
     <>
       <header className="z-10 flex min-h-14 shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/95 px-3 md:px-[18px]">
@@ -102,13 +101,14 @@ function AgentSettingsView({
         <h1 className="ml-2 text-sm font-semibold tracking-[-0.01em]">
           Agent settings
         </h1>
-        <a
+        <Link
           className="ml-auto inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-          href={channelPath}
+          relative="path"
+          to=".."
         >
           <ArrowLeft aria-hidden="true" className="size-3.5" />
           Back to chat
-        </a>
+        </Link>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
@@ -215,12 +215,13 @@ function AgentSettingsView({
                       The local Agent CLI and its ACP connection are verified
                       for this channel.
                     </p>
-                    <a
+                    <Link
                       className="mt-3 inline-flex min-h-11 items-center rounded-lg px-3 text-xs font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                      href={channelPath}
+                      relative="path"
+                      to=".."
                     >
                       Use in chat
-                    </a>
+                    </Link>
                   </li>
                 ))}
               </ul>

@@ -1,5 +1,23 @@
 import { CircleAlert, Home, LoaderCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
+import {
+  BrowserRouter,
+  Navigate,
+  Outlet,
+  Route,
+  Routes,
+  useLocation,
+  useMatch,
+  useNavigate,
+  useOutletContext,
+  useParams,
+} from "react-router";
 import { AgentInstallationPage } from "@/components/agent-installation-panel";
 import { AgentSettingsPage } from "@/components/agent-settings-page";
 import { ChatComposer } from "@/components/chat-composer";
@@ -10,6 +28,11 @@ import { PairingPage } from "@/components/pairing-page";
 import { Button } from "@/components/ui/button";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
 import { isIdentifier, PairingApiError } from "@/domain/channel";
+import {
+  channelRoutePath,
+  sessionRoutePath,
+  sessionSettingsRoutePath,
+} from "@/services/app-routes";
 import { ChannelHistorySynchronizer } from "@/services/channel-history-synchronizer";
 import {
   closeMobiusTransport,
@@ -31,6 +54,13 @@ import { useChatStore } from "@/store/chat-store";
 
 const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
 
+interface ChannelWorkspaceContext {
+  readonly channelId: string;
+  readonly desktopSidebarCollapsed: boolean;
+  readonly onCreateConversation: () => void;
+  readonly onToggleDesktopSidebar: () => void;
+}
+
 function initialSidebarLayout(): DesktopSidebarLayoutState {
   try {
     return decodeSidebarLayoutPreference(
@@ -48,6 +78,7 @@ function ChannelErrorPage({
   readonly message: string;
   readonly title: string;
 }) {
+  const navigate = useNavigate();
   return (
     <main className="flex h-dvh items-center justify-center bg-background p-6">
       <section className="pairing-card w-full max-w-[520px] rounded-2xl bg-white px-8 py-10 text-center">
@@ -60,7 +91,7 @@ function ChannelErrorPage({
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
           {message}
         </p>
-        <Button className="mt-6" onClick={() => window.location.assign("/")}>
+        <Button className="mt-6" onClick={() => navigate("/")}>
           <Home className="size-4" /> Start a new pairing
         </Button>
       </section>
@@ -68,41 +99,85 @@ function ChannelErrorPage({
   );
 }
 
-abstract class ChannelPage {
-  abstract readonly name: string;
+function ChannelContentError({
+  message,
+  title,
+}: {
+  readonly message: string;
+  readonly title: string;
+}) {
+  const { channelId } = useOutletContext<ChannelWorkspaceContext>();
+  const navigate = useNavigate();
+  return (
+    <section className="flex min-h-0 flex-1 items-center justify-center p-6">
+      <div className="w-full max-w-[520px] text-center">
+        <span className="mx-auto inline-flex size-12 items-center justify-center rounded-2xl bg-[#fff0f0] text-[#b4232a]">
+          <CircleAlert className="size-5" />
+        </span>
+        <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">
+          {title}
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          {message}
+        </p>
+        <Button
+          className="mt-6"
+          onClick={() =>
+            navigate(channelRoutePath(channelId), { replace: true })
+          }
+        >
+          Return to channel
+        </Button>
+      </div>
+    </section>
+  );
 }
 
-class ConversationChannelPage extends ChannelPage {
-  readonly name = "conversation";
-}
-
-class AgentSettingsChannelPage extends ChannelPage {
-  readonly name = "agent_settings";
+function ChannelLoadingPage() {
+  return (
+    <main
+      aria-busy="true"
+      aria-live="polite"
+      className="flex h-dvh items-center justify-center bg-background p-6"
+    >
+      <section className="pairing-card w-full max-w-[520px] rounded-2xl bg-white px-8 py-10 text-center">
+        <LoaderCircle className="mx-auto size-6 animate-spin text-[#279a60]" />
+        <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">
+          Opening channel
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">
+          Loading the paired local machine from the relay.
+        </p>
+      </section>
+    </main>
+  );
 }
 
 function ChannelWorkspace({
   connection,
   history,
-  page,
 }: {
   readonly connection: ChannelConnection;
   readonly history: ChannelHistory;
-  readonly page: ChannelPage;
 }) {
-  const announcement = useChatStore((state) => state.announcement);
-  const activeConversationMessageCount = useChatStore((state) => {
-    const conversation = state.conversations.find(
-      (candidate) => candidate.id === state.activeConversationId,
-    );
-    return conversation?.messages.length ?? 0;
-  });
+  const params = useParams<"sessionId">();
+  const [initialSessionId] = useState(() => params.sessionId ?? "");
+  const [workspaceReady, setWorkspaceReady] = useState(false);
   const agents = useChatStore((state) => state.agents);
   const channelConfigured = useChatStore((state) => state.channelConfigured);
   const configureChannel = useChatStore((state) => state.configureChannel);
   const createConversation = useChatStore((state) => state.createConversation);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
-  const settingsOpen = page instanceof AgentSettingsChannelPage;
-  const channelPath = `/channels/${encodeURIComponent(connection.channelId)}`;
+  const location = useLocation();
+  const navigate = useNavigate();
+  const mainContentRef = useRef<HTMLElement>(null);
+  const channelIndexMatch = useMatch("/channels/:channelId");
+  const legacySettingsMatch = useMatch("/channels/:channelId/settings");
+  const sessionSettingsMatch = useMatch(
+    "/channels/:channelId/sessions/:sessionId/settings",
+  );
+  const settingsOpen =
+    legacySettingsMatch !== null || sessionSettingsMatch !== null;
   const [sidebarLayout, setSidebarLayout] =
     useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
@@ -116,7 +191,8 @@ function ChannelWorkspace({
   }, [sidebarLayout]);
 
   useEffect(() => {
-    configureChannel(connection, history);
+    configureChannel(connection, history, initialSessionId);
+    setWorkspaceReady(true);
     const synchronizer = new ChannelHistorySynchronizer({
       applyHistory: (latestHistory) => {
         useChatStore.getState().reconcileHistory(latestHistory);
@@ -144,7 +220,20 @@ function ChannelWorkspace({
       synchronizer.stop();
       void closeMobiusTransport();
     };
-  }, [configureChannel, connection, history]);
+  }, [configureChannel, connection, history, initialSessionId]);
+
+  const createAndOpenConversation = useCallback((): void => {
+    createConversation();
+    const store = useChatStore.getState();
+    for (const conversation of store.conversations) {
+      if (conversation.id === store.activeConversationId) {
+        void navigate(
+          sessionRoutePath(connection.channelId, conversation.sessionId),
+        );
+        return;
+      }
+    }
+  }, [connection.channelId, createConversation, navigate]);
 
   useEffect(() => {
     const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
@@ -159,23 +248,35 @@ function ChannelWorkspace({
         !event.altKey
       ) {
         event.preventDefault();
-        createConversation();
-        if (settingsOpen) {
-          window.location.assign(channelPath);
-        }
+        createAndOpenConversation();
       }
     };
 
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [channelPath, createConversation, setSidebarOpen, settingsOpen]);
+  }, [createAndOpenConversation, setSidebarOpen]);
 
-  if (!channelConfigured) {
+  useEffect(() => {
+    if (workspaceReady && location.pathname.length > 0) {
+      mainContentRef.current?.focus({ preventScroll: true });
+    }
+  }, [location.pathname, workspaceReady]);
+
+  if (!workspaceReady || !channelConfigured) {
     return <ChannelLoadingPage />;
   }
-  if (agents.length === 0 && page instanceof ConversationChannelPage) {
+  if (agents.length === 0 && channelIndexMatch !== null) {
     return <AgentInstallationPage channelId={connection.channelId} />;
   }
+
+  const context: ChannelWorkspaceContext = {
+    channelId: connection.channelId,
+    desktopSidebarCollapsed: sidebarLayout.kind === "collapsed",
+    onCreateConversation: createAndOpenConversation,
+    onToggleDesktopSidebar: () => {
+      setSidebarLayout((current) => toggleSidebar(current));
+    },
+  };
 
   return (
     <>
@@ -189,43 +290,17 @@ function ChannelWorkspace({
         <ConversationSidebar
           channelId={connection.channelId}
           layout={sidebarLayout}
+          onCreateConversation={createAndOpenConversation}
           onLayoutChange={setSidebarLayout}
           settingsOpen={settingsOpen}
         />
         <main
-          className="flex min-h-0 min-w-0 flex-1 flex-col bg-background"
+          className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none"
           id="main-content"
+          ref={mainContentRef}
+          tabIndex={-1}
         >
-          {settingsOpen ? (
-            <AgentSettingsPage
-              channelId={connection.channelId}
-              desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
-              onToggleDesktopSidebar={() => {
-                setSidebarLayout((current) => toggleSidebar(current));
-              }}
-            />
-          ) : (
-            <>
-              <ChatHeader
-                desktopSidebarCollapsed={sidebarLayout.kind === "collapsed"}
-                onToggleDesktopSidebar={() => {
-                  setSidebarLayout((current) => toggleSidebar(current));
-                }}
-              />
-              <section
-                aria-label="Agent conversation"
-                className="flex min-h-0 flex-1 flex-col"
-              >
-                <ChatMessageList channelId={connection.channelId} />
-                {activeConversationMessageCount > 0 && (
-                  <ChatComposer placement="active" />
-                )}
-                <p aria-live="polite" className="sr-only">
-                  {announcement}
-                </p>
-              </section>
-            </>
-          )}
+          <Outlet context={context} />
         </main>
       </div>
     </>
@@ -262,40 +337,20 @@ class FailedChannelRouteState extends ChannelRouteState {
   }
 }
 
-function ChannelLoadingPage() {
-  return (
-    <main
-      aria-busy="true"
-      aria-live="polite"
-      className="flex h-dvh items-center justify-center bg-background p-6"
-    >
-      <section className="pairing-card w-full max-w-[520px] rounded-2xl bg-white px-8 py-10 text-center">
-        <LoaderCircle className="mx-auto size-6 animate-spin text-[#279a60]" />
-        <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">
-          Opening channel
-        </h1>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          Loading the paired local machine from the relay.
-        </p>
-      </section>
-    </main>
-  );
-}
-
-function ChannelRoute({
-  channelId,
-  page,
-}: {
-  readonly channelId: string;
-  readonly page: ChannelPage;
-}) {
+function ChannelRoute() {
+  const params = useParams<"channelId">();
+  const channelId = params.channelId ?? "";
   const [state, setState] = useState<ChannelRouteState>(
     new LoadingChannelRouteState(),
   );
 
   useEffect(() => {
+    if (!isIdentifier(channelId)) {
+      return;
+    }
     let active = true;
     const controller = new AbortController();
+    setState(new LoadingChannelRouteState());
     const load = async (): Promise<void> => {
       try {
         await redeemChannelAccessGrantFromLocation(
@@ -327,12 +382,23 @@ function ChannelRoute({
     };
   }, [channelId]);
 
-  if (state instanceof ReadyChannelRouteState) {
+  if (!isIdentifier(channelId)) {
+    return (
+      <ChannelErrorPage
+        message="The channel route is malformed."
+        title="Invalid channel"
+      />
+    );
+  }
+  if (
+    state instanceof ReadyChannelRouteState &&
+    state.connection.channelId === channelId
+  ) {
     return (
       <ChannelWorkspace
         connection={state.connection}
         history={state.history}
-        page={page}
+        key={state.connection.channelId}
       />
     );
   }
@@ -344,47 +410,172 @@ function ChannelRoute({
   return <ChannelLoadingPage />;
 }
 
-export function App() {
-  if (window.location.pathname === "/") {
-    return <PairingPage />;
-  }
-
-  const match = /^\/channels\/([^/]+)(?:\/(settings))?\/?$/.exec(
-    window.location.pathname,
+function ChannelIndexRoute() {
+  const { channelId } = useOutletContext<ChannelWorkspaceContext>();
+  const activeConversationId = useChatStore(
+    (state) => state.activeConversationId,
   );
-  if (match === null) {
+  const conversations = useChatStore((state) => state.conversations);
+  const sessionId = conversations.find(
+    (conversation) => conversation.id === activeConversationId,
+  )?.sessionId;
+  if (sessionId === undefined) {
     return (
-      <ChannelErrorPage
-        message="This route does not identify a Mobius channel."
-        title="Channel not found"
+      <ChannelContentError
+        message="This channel does not have a Session to open."
+        title="Session unavailable"
       />
     );
   }
+  return <Navigate replace to={sessionRoutePath(channelId, sessionId)} />;
+}
 
-  let channelId = "";
-  try {
-    channelId = decodeURIComponent(match[1] ?? "");
-  } catch {
+function LegacyAgentSettingsRoute() {
+  const context = useOutletContext<ChannelWorkspaceContext>();
+  const activeConversationId = useChatStore(
+    (state) => state.activeConversationId,
+  );
+  const conversations = useChatStore((state) => state.conversations);
+  const sessionId = conversations.find(
+    (conversation) => conversation.id === activeConversationId,
+  )?.sessionId;
+  if (sessionId !== undefined) {
     return (
-      <ChannelErrorPage
-        message="The channel route is malformed."
-        title="Invalid channel"
+      <Navigate
+        replace
+        to={sessionSettingsRoutePath(context.channelId, sessionId)}
       />
     );
   }
-  if (!isIdentifier(channelId)) {
+  return <AgentSettingsRoutePage />;
+}
+
+function SessionRoute() {
+  const context = useOutletContext<ChannelWorkspaceContext>();
+  const params = useParams<"sessionId">();
+  const sessionId = params.sessionId ?? "";
+  const activeConversationId = useChatStore(
+    (state) => state.activeConversationId,
+  );
+  const conversations = useChatStore((state) => state.conversations);
+  const selectConversation = useChatStore((state) => state.selectConversation);
+  const conversation = conversations.find(
+    (candidate) => candidate.sessionId === sessionId,
+  );
+
+  useLayoutEffect(() => {
+    if (
+      conversation !== undefined &&
+      conversation.id !== activeConversationId
+    ) {
+      selectConversation(conversation.id);
+    }
+  }, [activeConversationId, conversation, selectConversation]);
+
+  if (!isIdentifier(sessionId)) {
     return (
-      <ChannelErrorPage
-        message="The channel route is malformed."
-        title="Invalid channel"
+      <ChannelContentError
+        message="The Session route is malformed."
+        title="Invalid Session"
       />
     );
   }
+  if (conversation === undefined) {
+    return (
+      <ChannelContentError
+        message="This Session is not available in the paired channel history."
+        title="Session unavailable"
+      />
+    );
+  }
+  if (conversation.id !== activeConversationId) {
+    return null;
+  }
+  return <Outlet context={context} />;
+}
 
-  const page =
-    match[2] === "settings"
-      ? new AgentSettingsChannelPage()
-      : new ConversationChannelPage();
+function ConversationRoutePage() {
+  const context = useOutletContext<ChannelWorkspaceContext>();
+  const announcement = useChatStore((state) => state.announcement);
+  const activeConversationMessageCount = useChatStore((state) => {
+    const conversation = state.conversations.find(
+      (candidate) => candidate.id === state.activeConversationId,
+    );
+    return conversation?.messages.length ?? 0;
+  });
+  return (
+    <>
+      <ChatHeader
+        desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+        onCreateConversation={context.onCreateConversation}
+        onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+      />
+      <section
+        aria-label="Agent conversation"
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <ChatMessageList channelId={context.channelId} />
+        {activeConversationMessageCount > 0 && (
+          <ChatComposer placement="active" />
+        )}
+        <p aria-live="polite" className="sr-only">
+          {announcement}
+        </p>
+      </section>
+    </>
+  );
+}
 
-  return <ChannelRoute channelId={channelId} page={page} />;
+function AgentSettingsRoutePage() {
+  const context = useOutletContext<ChannelWorkspaceContext>();
+  return (
+    <AgentSettingsPage
+      channelId={context.channelId}
+      desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+      onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+    />
+  );
+}
+
+function ChannelRouteNotFound() {
+  return (
+    <ChannelContentError
+      message="This route does not identify a page in the paired channel."
+      title="Page not found"
+    />
+  );
+}
+
+function AppRoutes() {
+  return (
+    <Routes>
+      <Route element={<PairingPage />} path="/" />
+      <Route element={<ChannelRoute />} path="/channels/:channelId">
+        <Route element={<ChannelIndexRoute />} index />
+        <Route element={<LegacyAgentSettingsRoute />} path="settings" />
+        <Route element={<SessionRoute />} path="sessions/:sessionId">
+          <Route element={<ConversationRoutePage />} index />
+          <Route element={<AgentSettingsRoutePage />} path="settings" />
+        </Route>
+        <Route element={<ChannelRouteNotFound />} path="*" />
+      </Route>
+      <Route
+        element={
+          <ChannelErrorPage
+            message="This route does not identify a Mobius channel."
+            title="Channel not found"
+          />
+        }
+        path="*"
+      />
+    </Routes>
+  );
+}
+
+export function App() {
+  return (
+    <BrowserRouter>
+      <AppRoutes />
+    </BrowserRouter>
+  );
 }

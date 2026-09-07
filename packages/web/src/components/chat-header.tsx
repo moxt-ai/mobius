@@ -6,15 +6,16 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 interface ChatHeaderProps {
   readonly desktopSidebarCollapsed: boolean;
+  readonly onCreateConversation: () => void;
   readonly onToggleDesktopSidebar: () => void;
 }
 
 export function ChatHeader({
   desktopSidebarCollapsed,
+  onCreateConversation,
   onToggleDesktopSidebar,
 }: ChatHeaderProps) {
   const conversation = useChatStore(selectActiveConversation);
-  const createConversation = useChatStore((state) => state.createConversation);
   const runtime = useChatStore((state) => state.runtime);
   const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
   const sidebarOpen = useChatStore((state) => state.sidebarOpen);
@@ -65,7 +66,7 @@ export function ChatHeader({
       <Button
         aria-label="New chat"
         className="ml-auto size-11 md:hidden"
-        onClick={createConversation}
+        onClick={onCreateConversation}
         size="icon"
         title="New chat"
         variant="ghost"
