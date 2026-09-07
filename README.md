@@ -114,7 +114,7 @@ pnpm install
 pnpm check
 ```
 
-Start the local Cloudflare deployment profile and production Web build:
+Start the local Cloudflare Lite deployment profile and production Web build:
 
 ```bash
 pnpm dev:relay
@@ -122,6 +122,8 @@ pnpm dev:relay
 
 `pnpm dev:cloudflare` is the explicit profile command; `pnpm dev:relay` remains
 its short alias. The command applies local D1 migrations before Wrangler starts.
+Lite stores compressed session archive chunks in each Session Durable Object's
+SQLite database and does not require an R2 binding.
 
 Open [http://127.0.0.1:8787](http://127.0.0.1:8787). The default page creates a
 short-lived pairing code and displays a command like this:
@@ -340,6 +342,33 @@ directory name instead:
 pnpm run worktree:delete -- pairing-history
 ```
 
+### Cloudflare deployment profiles
+
+The default profile is Cloudflare Lite. It uses Worker Static Assets, D1, and
+SQLite-backed Durable Objects, so a new deployment does not need R2 activation
+or a billing card:
+
+```bash
+pnpm wrangler deploy
+```
+
+Lite limits immutable archive chunks to 256 MiB per session by default. Change
+`SESSION_ARCHIVE_BYTES_PER_SESSION` in `packages/relay-cloudflare/wrangler.jsonc`
+to choose a different positive byte limit. The limit is enforced atomically by
+the Session Durable Object; exceeding it returns the stable
+`session_quota_exceeded` error and preserves the hot copy for recovery.
+
+For deployments that need R2-backed archive capacity, use the separate profile:
+
+```bash
+pnpm deploy:cloudflare:r2
+```
+
+The Lite and R2 profiles use distinct Session Durable Object classes. Select a
+profile before the first deployment and continue using it for that Worker;
+switching profiles does not migrate existing session history. In particular, an
+existing R2 deployment must keep using `pnpm deploy:cloudflare:r2`.
+
 ### One-command Cloudflare preview
 
 Run the temporary deployment from the repository root:
@@ -349,11 +378,12 @@ pnpm wrangler deploy --temporary
 ```
 
 This command builds the React application and deploys it as Worker Static Assets
-together with the Relay Worker, Durable Object, and an automatically provisioned
-D1 binding. Wrangler prints the temporary account's claim URL, and Mobius prints
-the Web URL. Open that URL and use the one-time command shown by the pairing page.
-The wrapper uses a dedicated temporary profile automatically, so an unrelated
-Wrangler login does not need to be removed or overwritten.
+together with the Relay Worker, SQLite-backed Durable Objects, and an
+automatically provisioned D1 binding. It uses the default Lite profile and does
+not provision R2. Wrangler prints the temporary account's claim URL, and Mobius
+prints the Web URL. Open that URL and use the one-time command shown by the
+pairing page. The wrapper uses a dedicated temporary profile automatically, so
+an unrelated Wrangler login does not need to be removed or overwritten.
 
 The daemon and browser receive separate high-entropy credentials whose hashes and
 channel metadata are stored in D1. The pairing code expires after ten minutes and
@@ -370,10 +400,12 @@ does not run the local daemon or ACP agent; the pairing command starts it locall
 The Web package uses Vite, TypeScript, React, Zustand, Tailwind CSS, and local
 shadcn/ui components. Zustand owns live page state, while independent Session
 Durable Objects record accepted commands, concrete attempts, ordered events, and
-archive references. The Web opens one paginated message page and loads full tool
-details only when expanded. Prompts and agent responses are therefore persisted
-in Cloudflare; local agent credentials remain only on the paired machine. Each
-conversation keeps one Mobius session across turns. The
+archive references. In the default Lite profile, the referenced compressed
+chunks live in the same Session Durable Object's SQLite database; the R2 profile
+stores those chunks in R2. The Web opens one paginated message page and loads
+full tool details only when expanded. Prompts and agent responses are therefore
+persisted in Cloudflare; local agent credentials remain only on the paired
+machine. Each conversation keeps one Mobius session across turns. The
 daemon stores the corresponding native ACP session identifier in its local
 SQLite database and uses ACP resume or load after a daemon restart when the
 selected agent advertises that capability.

@@ -5,9 +5,11 @@
   "type": "module",
   "main": "./src/worker.ts",
   "scripts": {
-    "build": "pnpm --filter @moxt-ai/mobius-web build && wrangler deploy --dry-run --outdir dist",
+    "build": "pnpm --filter @moxt-ai/mobius-web build && wrangler deploy --dry-run --outdir dist/lite && wrangler deploy --dry-run --config wrangler.r2.jsonc --outdir dist/r2",
     "deploy": "pnpm --dir ../.. wrangler deploy",
+    "deploy:r2": "pnpm --dir ../.. wrangler deploy --config wrangler.r2.jsonc",
     "dev": "pnpm --filter @moxt-ai/mobius-web build && pnpm --dir ../.. wrangler dev",
+    "dev:r2": "pnpm --filter @moxt-ai/mobius-web build && pnpm --dir ../.. wrangler dev --config wrangler.r2.jsonc",
     "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
     "typecheck": "tsc --project tsconfig.json && tsc --project tsconfig.vitest.json && tsc --project test/tsconfig.json"
   },

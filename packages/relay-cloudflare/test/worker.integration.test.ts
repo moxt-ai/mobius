@@ -1081,7 +1081,7 @@ describe.sequential("Cloudflare session deployment", () => {
     }
   });
 
-  it("Given a large tool record and a pre-uploaded segment, When archive recovery runs, Then full details remain readable and immutable segments are bounded", async () => {
+  it("Given a large tool record in the free deployment profile, When archive recovery and restart run, Then full details remain readable without external object storage", async () => {
     const pairing = await pairChannel();
     const sessionId = "large-session";
     expect(
@@ -1192,12 +1192,25 @@ describe.sequential("Cloudflare session deployment", () => {
         output: fullOutput,
       });
       await evictDurableObject(stub);
-      await runInDurableObject(stub, async (instance) => {
-        if (instance.alarm === undefined) {
-          throw new Error("Expected the Session Durable Object alarm handler");
-        }
-        await instance.alarm();
-      });
+      const chunkSizes = await runInDurableObject(
+        stub,
+        async (instance, state) => {
+          if (instance.alarm === undefined) {
+            throw new Error(
+              "Expected the Session Durable Object alarm handler",
+            );
+          }
+          await instance.alarm();
+          return state.storage.sql
+            .exec<{ byte_length: number }>(
+              `SELECT length(bytes) AS byte_length
+             FROM immutable_content
+             ORDER BY object_key`,
+            )
+            .toArray()
+            .map((row) => row.byte_length);
+        },
+      );
       const archived = await exports.default.fetch(detailPath, {
         headers: authorization(pairing.created),
       });
@@ -1206,14 +1219,123 @@ describe.sequential("Cloudflare session deployment", () => {
         output: fullOutput,
         storage: "archive",
       });
-      const objects = await env.SESSION_ARCHIVES.list({
-        include: ["customMetadata"],
-        prefix: `${pairing.created.tenantId}/${pairing.created.projectId}/${sessionId}/${artifactId}.`,
-      });
-      expect(objects.objects.length).toBeGreaterThan(1);
-      expect(objects.objects.every((object) => object.size <= 192 * 1024)).toBe(
-        true,
+      expect(chunkSizes.length).toBeGreaterThan(1);
+      expect(chunkSizes.every((size) => size <= 192 * 1024)).toBe(true);
+    } finally {
+      host.socket.close(1000, "Worker integration complete");
+      daemon.socket.close(1000, "Worker integration complete");
+    }
+  });
+
+  it("Given the free deployment archive quota, When a compressed tool record exceeds it, Then the archive reports a typed quota error and preserves the hot detail", async () => {
+    const pairing = await pairChannel();
+    const sessionId = "quota-session";
+    expect(
+      (
+        await createSession(pairing.created, sessionId, {
+          contentLimitBytes: 500_000,
+        })
+      ).status,
+    ).toBe(201);
+    const daemon = await openChannelSocket(
+      `/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+    );
+    const host = await openChannelSocket(
+      `/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+    );
+    await host.messages.next();
+
+    try {
+      const command = prompt(sessionId, "quota-command", "run noisy tool");
+      await submitPrompt(host, daemon, command);
+      await commit(
+        host,
+        daemon,
+        envelope(sessionId, "quota-started", {
+          commandId: command.commandId,
+          kind: SESSION_STARTED_KIND,
+          attemptId: "quota-attempt",
+          sessionId,
+        }),
       );
+      let generatorState = 0x12345678;
+      let fullOutput = "";
+      for (let index = 0; index < 24_000; index += 1) {
+        generatorState =
+          (Math.imul(generatorState, 1_664_525) + 1_013_904_223) >>> 0;
+        fullOutput += generatorState.toString(16).padStart(8, "0");
+      }
+      await commit(
+        host,
+        daemon,
+        envelope(sessionId, "quota-activity", {
+          activityId: "activity-quota",
+          activityType: "tool",
+          commandId: command.commandId,
+          content: [],
+          detail: {
+            content: [],
+            input: "{}",
+            kind: "recorded",
+            output: fullOutput,
+          },
+          input: "{}",
+          kind: AGENT_ACTIVITY_KIND,
+          locations: [],
+          name: "terminal",
+          output: fullOutput.slice(0, 24_000),
+          sequence: 0,
+          sessionId,
+          status: "completed",
+          title: "Run terminal command",
+          toolKind: "execute",
+        }),
+      );
+
+      const stub = env.SESSION_RELAY.get(
+        env.SESSION_RELAY.idFromName(
+          `${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`,
+        ),
+      );
+      const archiveResponse = await runInDurableObject(
+        stub,
+        async (instance) => {
+          if (instance.fetch === undefined) {
+            throw new Error(
+              "Expected the Session Durable Object fetch handler",
+            );
+          }
+          return await instance.fetch(
+            new Request("https://session.internal/internal/sessions/archive", {
+              body: JSON.stringify({
+                scope: {
+                  projectId: pairing.created.projectId,
+                  tenantId: pairing.created.tenantId,
+                },
+                sessionId,
+              }),
+              method: "POST",
+            }),
+          );
+        },
+      );
+      expect(archiveResponse.status).toBe(429);
+      await expect(archiveResponse.json()).resolves.toEqual({
+        error: {
+          code: "session_quota_exceeded",
+          message: "The session archive quota is exhausted",
+        },
+      });
+
+      const detail = await exports.default.fetch(
+        `${relayOrigin}/api/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/quota-attempt/tool-calls/activity-quota`,
+        { headers: authorization(pairing.created) },
+      );
+      await expect(detail.json()).resolves.toMatchObject({
+        kind: "available",
+        output: fullOutput,
+        storage: "hot",
+      });
     } finally {
       host.socket.close(1000, "Worker integration complete");
       daemon.socket.close(1000, "Worker integration complete");

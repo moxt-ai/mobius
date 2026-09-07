@@ -3,9 +3,16 @@ import {
   SessionQuotaPolicy,
 } from "@moxt-ai/mobius-relay-core";
 
+const DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION = 256 * 1024 * 1024;
+
 export interface SessionConfigurationEnvironment {
   readonly SESSION_ACTIVE_SESSIONS_PER_PROJECT?: string;
   readonly SESSION_ACTIVE_SESSIONS_PER_TENANT?: string;
+}
+
+export interface LiteSessionConfigurationEnvironment
+  extends SessionConfigurationEnvironment {
+  readonly SESSION_ARCHIVE_BYTES_PER_SESSION: string;
 }
 
 function readLimit(
@@ -40,5 +47,15 @@ export function sessionQuotaFromEnvironment(
       DEFAULT_SESSION_QUOTA_POLICY.activeSessionsPerProject,
       "SESSION_ACTIVE_SESSIONS_PER_PROJECT",
     ),
+  );
+}
+
+export function sessionArchiveByteLimitFromEnvironment(
+  environment: LiteSessionConfigurationEnvironment,
+): number {
+  return readLimit(
+    environment.SESSION_ARCHIVE_BYTES_PER_SESSION,
+    DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION,
+    "SESSION_ARCHIVE_BYTES_PER_SESSION",
   );
 }

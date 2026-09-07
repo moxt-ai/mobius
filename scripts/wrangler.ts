@@ -134,6 +134,9 @@ async function applyD1Migrations(
     "--persist-to",
     "--profile",
   ]);
+  const temporaryOptions = hasArgument(wranglerArguments, "--temporary")
+    ? ["--temporary"]
+    : [];
   await runPnpm(
     [
       "--filter",
@@ -146,6 +149,7 @@ async function applyD1Migrations(
       DIRECTORY_DATABASE_BINDING,
       location,
       ...forwardedOptions,
+      ...temporaryOptions,
     ],
     signal,
   );

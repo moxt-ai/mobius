@@ -10,7 +10,7 @@ declare global {
     interface Env extends RelayTestBindings {}
 
     interface GlobalProps {
-      readonly durableNamespaces: "RuntimeRelay" | "SessionRelay";
+      readonly durableNamespaces: string;
       readonly mainModule: typeof import("../src/worker.ts");
     }
   }

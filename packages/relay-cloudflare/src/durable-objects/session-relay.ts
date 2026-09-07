@@ -8,6 +8,7 @@ import {
   type AttemptReconciliationOutcome,
   CreateSessionBindingRequest,
   CreateSessionRequest,
+  type ImmutableContentStore,
   ProjectScope,
   RequestBodyError,
   readBoundedUtf8Body,
@@ -16,11 +17,13 @@ import {
   type SessionSqlRow,
   SqliteSessionRuntime,
 } from "@moxt-ai/mobius-relay-core";
-
+import { DurableObjectContentStore } from "../durable-object-content-store.ts";
 import { DurableObjectSqlDatabase } from "../durable-object-sql-database.ts";
 import { R2ContentStore } from "../r2-content-store.ts";
 import {
+  type LiteSessionConfigurationEnvironment,
   type SessionConfigurationEnvironment,
+  sessionArchiveByteLimitFromEnvironment,
   sessionQuotaFromEnvironment,
 } from "../session-configuration.ts";
 
@@ -349,16 +352,20 @@ function errorResponse(
   );
 }
 
-export class SessionRelay {
+class SessionRelayController {
   readonly #database: DurableObjectSqlDatabase;
   readonly #runtime: SqliteSessionRuntime;
   readonly #state: DurableObjectState;
 
-  constructor(state: DurableObjectState, environment: SessionRelayEnvironment) {
+  constructor(
+    state: DurableObjectState,
+    environment: SessionConfigurationEnvironment,
+    content: ImmutableContentStore,
+  ) {
     this.#database = new DurableObjectSqlDatabase(state.storage);
     this.#runtime = new SqliteSessionRuntime(
       this.#database,
-      new R2ContentStore(environment.SESSION_ARCHIVES),
+      content,
       sessionQuotaFromEnvironment(environment),
     );
     this.#state = state;
@@ -752,4 +759,50 @@ export class SessionRelay {
     }
     return value;
   };
+}
+
+export class LiteSessionRelay {
+  readonly #controller: SessionRelayController;
+
+  constructor(
+    state: DurableObjectState,
+    environment: LiteSessionConfigurationEnvironment,
+  ) {
+    this.#controller = new SessionRelayController(
+      state,
+      environment,
+      new DurableObjectContentStore(
+        state.storage,
+        sessionArchiveByteLimitFromEnvironment(environment),
+      ),
+    );
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    return await this.#controller.fetch(request);
+  }
+
+  async alarm(): Promise<void> {
+    await this.#controller.alarm();
+  }
+}
+
+export class SessionRelay {
+  readonly #controller: SessionRelayController;
+
+  constructor(state: DurableObjectState, environment: SessionRelayEnvironment) {
+    this.#controller = new SessionRelayController(
+      state,
+      environment,
+      new R2ContentStore(environment.SESSION_ARCHIVES),
+    );
+  }
+
+  async fetch(request: Request): Promise<Response> {
+    return await this.#controller.fetch(request);
+  }
+
+  async alarm(): Promise<void> {
+    await this.#controller.alarm();
+  }
 }

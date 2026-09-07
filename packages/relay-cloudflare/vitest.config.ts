@@ -22,6 +22,7 @@ export default defineConfig(async () => {
           bindings: {
             SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
             SESSION_ACTIVE_SESSIONS_PER_TENANT: "8",
+            SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
             TEST_MIGRATIONS: migrations,
           },
         },

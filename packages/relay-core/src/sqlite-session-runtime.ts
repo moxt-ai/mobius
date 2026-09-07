@@ -46,6 +46,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 import {
+  ContentQuotaExceededError,
   ContentStorageError,
   ContentTarget,
   type ImmutableContentStore,
@@ -2841,6 +2842,13 @@ export class SqliteSessionRuntime implements SessionRuntime {
             rowString(job, "target_id"),
           ],
         );
+        if (error instanceof ContentQuotaExceededError) {
+          throw new SessionRuntimeError(
+            "session_quota_exceeded",
+            "The session archive quota is exhausted",
+            { cause: error },
+          );
+        }
         throw new SessionRuntimeError(
           "session_storage_unavailable",
           "The session archive could not be written",

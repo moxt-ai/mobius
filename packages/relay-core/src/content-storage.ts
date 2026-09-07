@@ -16,6 +16,17 @@ export class ContentStorageError extends Error {
   }
 }
 
+export class ContentQuotaExceededError extends Error {
+  readonly code = "content_quota_exceeded";
+  readonly limitBytes: number;
+
+  constructor(limitBytes: number) {
+    super("The immutable content quota is exhausted");
+    this.limitBytes = limitBytes;
+    this.name = "ContentQuotaExceededError";
+  }
+}
+
 export class ContentTarget {
   readonly artifactId: string;
   readonly projectId: string;
