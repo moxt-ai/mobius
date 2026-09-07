@@ -17,7 +17,7 @@
   },
   "migrations": [
     {
-      "tag": "v1",
+      "tag": "initial",
       "new_sqlite_classes": ["RuntimeRelay", "SessionRelay"]
     }
   ],
@@ -40,7 +40,7 @@
   "assets": {
     "directory": "../web/dist",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/health", "/v1/*"]
+    "run_worker_first": ["/health", "/api/*"]
   },
   "observability": {
     "enabled": true

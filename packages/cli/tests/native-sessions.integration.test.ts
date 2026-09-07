@@ -14,7 +14,6 @@ import type {
   NativeSessionCommand,
   NativeSessionEntry,
 } from "@moxt-ai/mobius-protocol";
-import { MOBIUS_PROTOCOL_VERSION } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
 import {
   AcpSessionManager,
@@ -94,7 +93,6 @@ async function fixture(
     bindingId: "workspace",
     directoryId: "default",
     kind: "native.session.request",
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     requestId: "native-operation",
     sessionId: "browser",
   } satisfies Omit<NativeSessionCommand, "action">;
@@ -214,6 +212,7 @@ describe("native Agent session boundary", () => {
         const command = {
           ...f.identity,
           action: "import",
+          directoryId: entry.directoryId,
           entryId: entry.entryId,
           targetSessionId: "imported",
         } satisfies NativeSessionCommand;

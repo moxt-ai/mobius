@@ -24,7 +24,6 @@ export interface SessionPromptCommand {
   readonly images: readonly PromptImage[];
   readonly kind: typeof SESSION_PROMPT_KIND;
   readonly prompt: string;
-  readonly protocolVersion: number;
   readonly resources: readonly PromptResource[];
   readonly sessionId: string;
 }
@@ -32,46 +31,39 @@ export interface SessionPromptCommand {
 export interface SessionCancelCommand {
   readonly commandId: string;
   readonly kind: typeof SESSION_CANCEL_KIND;
-  readonly protocolVersion: number;
   readonly sessionId: string;
 }
 
 export interface RuntimeStatusEvent {
   readonly kind: typeof RUNTIME_STATUS_KIND;
   readonly online: boolean;
-  readonly protocolVersion: number;
   readonly runtimeId: string;
 }
 
 export interface RuntimeLivenessReadyEvent {
   readonly kind: typeof RUNTIME_LIVENESS_READY_KIND;
-  readonly protocolVersion: number;
 }
 
 export interface RuntimeHeartbeatEvent {
   readonly heartbeatId: string;
   readonly kind: typeof RUNTIME_HEARTBEAT_KIND;
-  readonly protocolVersion: number;
 }
 
 export interface RuntimeHeartbeatAckEvent {
   readonly heartbeatId: string;
   readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
-  readonly protocolVersion: number;
 }
 
 export interface SessionStartedEvent {
   readonly commandId: string;
   readonly kind: typeof SESSION_STARTED_KIND;
-  readonly processAttemptId: string;
-  readonly protocolVersion: number;
+  readonly attemptId: string;
   readonly sessionId: string;
 }
 
 export interface AgentMessageDeltaEvent {
   readonly commandId: string;
   readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
-  readonly protocolVersion: number;
   readonly sessionId: string;
   readonly text: string;
 }
@@ -87,7 +79,6 @@ export interface AgentActivityEvent {
   readonly locations: readonly string[];
   readonly name: string;
   readonly output: string;
-  readonly protocolVersion: number;
   readonly sequence: number;
   readonly sessionId: string;
   readonly status: string;
@@ -116,7 +107,6 @@ export type AgentActivityDetailCapture =
 export interface SessionCompletedEvent {
   readonly commandId: string;
   readonly kind: typeof SESSION_COMPLETED_KIND;
-  readonly protocolVersion: number;
   readonly sessionId: string;
   readonly stopReason: string;
 }
@@ -126,7 +116,6 @@ export interface SessionFailedEvent {
   readonly commandId: string;
   readonly kind: typeof SESSION_FAILED_KIND;
   readonly message: string;
-  readonly protocolVersion: number;
   readonly sessionId: string;
 }
 

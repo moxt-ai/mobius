@@ -33,7 +33,7 @@ import {
   encodeRuntimeStatusEvent,
   encodeSessionEventAcknowledgement,
   encodeSessionFailedEvent,
-  MOBIUS_PROTOCOL_VERSION,
+  encodeSessionOperationFailedEvent,
   NATIVE_SESSION_CANCEL_KIND,
   NATIVE_SESSION_REQUEST_KIND,
   NATIVE_SESSION_RESULT_KIND,
@@ -54,6 +54,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 import {
+  CreateSessionBindingRequest,
   CreateSessionRequest,
   type ProjectScope,
   SessionRecordingPolicy,
@@ -120,8 +121,11 @@ export class ChannelActor {
     this.#scope = scope;
   }
 
-  readonly attachDaemon = async (signal: AbortSignal): Promise<void> => {
-    if (this.#peers.daemons().some((socket) => socket.isOpen())) {
+  readonly attachDaemon = async (
+    replacedExistingConnection: boolean,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    if (replacedExistingConnection) {
       await this.#runtime.markRuntimeDisconnected(
         this.#scope,
         this.#runtimeId,
@@ -130,6 +134,7 @@ export class ChannelActor {
       );
     }
     this.broadcastRuntimeStatus(true);
+    await this.deliverPendingDaemonWork(signal);
   };
 
   readonly attachHost = (
@@ -140,7 +145,6 @@ export class ChannelActor {
       encodeRuntimeStatusEvent({
         kind: RUNTIME_STATUS_KIND,
         online: this.hasOnlineDaemon(),
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         runtimeId: this.#runtimeId,
       }),
     );
@@ -192,7 +196,6 @@ export class ChannelActor {
             duplicate: result.duplicate,
             eventId: result.committed.eventId,
             kind: SESSION_EVENT_ACK_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sequence: result.committed.sequence,
             sessionId: result.committed.sessionId,
           }),
@@ -207,11 +210,50 @@ export class ChannelActor {
       }
       if (kind === NATIVE_SESSION_RESULT_KIND) {
         const result = decodeNativeSessionResult(message);
-        if (
-          result.action === "preview" ||
-          ((result.action === "import" || result.action === "fork") &&
-            result.ready.sessionId !== result.targetSessionId)
-        ) {
+        if (result.action === "import" || result.action === "fork") {
+          const target = await this.#runtime.readSession(
+            this.#scope,
+            result.targetSessionId,
+            signal,
+          );
+          if (
+            target.runtimeId !== this.#runtimeId ||
+            target.agentId !== result.ready.agentId ||
+            target.defaultBinding.workspaceRef !== result.ready.directoryId
+          )
+            throw new ProtocolMessageError(
+              "The native session result resolved to a different binding",
+            );
+          if (result.ready.sessionId !== result.targetSessionId) {
+            const existing = await this.#runtime.readSession(
+              this.#scope,
+              result.ready.sessionId,
+              signal,
+            );
+            if (
+              existing.runtimeId !== this.#runtimeId ||
+              existing.agentId !== result.ready.agentId
+            )
+              throw new ProtocolMessageError(
+                "The native session result resolved to a different binding",
+              );
+            await this.#runtime.deleteSession(
+              this.#scope,
+              result.targetSessionId,
+              this.#clock.now(),
+              signal,
+            );
+          }
+          await this.#runtime.recordNativeHistory(
+            this.#scope,
+            this.#runtimeId,
+            result.ready.sessionId,
+            result.title,
+            result.history,
+            this.#clock.now(),
+            signal,
+          );
+        } else if (result.action === "preview") {
           await this.#runtime.deleteSession(
             this.#scope,
             result.targetSessionId,
@@ -262,19 +304,35 @@ export class ChannelActor {
               kind: SESSION_FAILED_KIND,
               message:
                 "The local runtime is offline; the command was not accepted",
-              protocolVersion: MOBIUS_PROTOCOL_VERSION,
               sessionId: command.sessionId,
             }),
           );
           return;
         }
-        const acceptance = await this.#runtime.acceptCommand(
-          this.#scope,
-          this.#runtimeId,
-          command,
-          this.#clock.now(),
-          signal,
-        );
+        let acceptance: Awaited<ReturnType<SessionRuntime["acceptTurn"]>>;
+        try {
+          acceptance = await this.#runtime.acceptTurn(
+            this.#scope,
+            this.#runtimeId,
+            command,
+            this.#clock.now(),
+            signal,
+          );
+        } catch (error) {
+          if (error instanceof SessionRuntimeError) {
+            socket.send(
+              encodeSessionFailedEvent({
+                code: error.code,
+                commandId: command.commandId,
+                kind: SESSION_FAILED_KIND,
+                message: error.message,
+                sessionId: command.sessionId,
+              }),
+            );
+            return;
+          }
+          throw error;
+        }
         if (acceptance.kind === "duplicate") {
           socket.send(
             encodeSessionFailedEvent({
@@ -283,7 +341,6 @@ export class ChannelActor {
               kind: SESSION_FAILED_KIND,
               message:
                 "The command was already accepted and was not executed again",
-              protocolVersion: MOBIUS_PROTOCOL_VERSION,
               sessionId: command.sessionId,
             }),
           );
@@ -297,35 +354,75 @@ export class ChannelActor {
               kind: SESSION_FAILED_KIND,
               message:
                 "The local runtime disconnected before the accepted command could be forwarded",
-              protocolVersion: MOBIUS_PROTOCOL_VERSION,
               sessionId: command.sessionId,
             }),
           );
           return;
         }
+        await this.#runtime.markPendingWorkCompleted(
+          this.#scope,
+          command.sessionId,
+          acceptance.pendingWork.workId,
+          this.#clock.now(),
+          signal,
+        );
         this.broadcast(this.#peers.hosts(), message);
         return;
       }
       if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(message);
-        await this.#runtime.createSession(
-          this.#scope,
-          new CreateSessionRequest(
-            command.sessionId,
-            this.#runtimeId,
-            command.agentId,
-            command.bindingId,
-            command.directoryId,
-            new SessionRecordingPolicy(
-              "full",
-              DEFAULT_RETENTION_MILLISECONDS,
-              1_000,
-              6_000_000,
+        const now = this.#clock.now();
+        try {
+          await this.#runtime.createSession(
+            this.#scope,
+            new CreateSessionRequest(
+              command.sessionId,
+              this.#runtimeId,
+              command.agentId,
+              command.bindingId,
+              command.directoryId,
+              new SessionRecordingPolicy(
+                "full",
+                DEFAULT_RETENTION_MILLISECONDS,
+                1_000,
+                6_000_000,
+              ),
             ),
-          ),
-          this.#clock.now(),
-          signal,
-        );
+            now,
+            signal,
+          );
+        } catch (error) {
+          if (
+            !(error instanceof SessionRuntimeError) ||
+            error.code !== "session_conflict"
+          ) {
+            throw error;
+          }
+          const existing = await this.#runtime.readSession(
+            this.#scope,
+            command.sessionId,
+            signal,
+          );
+          if (
+            existing.defaultBinding.bindingId !== command.bindingId ||
+            existing.defaultBinding.runtimeId !== this.#runtimeId ||
+            existing.defaultBinding.agentRef !== command.agentId ||
+            existing.defaultBinding.workspaceRef !== command.directoryId
+          ) {
+            await this.#runtime.setDefaultBinding(
+              this.#scope,
+              command.sessionId,
+              new CreateSessionBindingRequest(
+                command.bindingId,
+                this.#runtimeId,
+                command.agentId,
+                command.directoryId,
+              ),
+              now,
+              signal,
+            );
+          }
+        }
         this.forwardControl(
           socket,
           message,
@@ -362,6 +459,70 @@ export class ChannelActor {
           command.requestId,
           command.sessionId,
         );
+        return;
+      }
+      if (kind === SESSION_PERMISSION_RESPOND_KIND) {
+        const command = decodeSessionPermissionRespondCommand(message);
+        try {
+          await this.acceptAndDeliverInteractionResponse(
+            command.sessionId,
+            command.interactionId,
+            {
+              content: JSON.stringify({
+                optionId: command.optionId,
+                outcome: command.outcome,
+              }),
+              kind: "permission",
+            },
+            message,
+            signal,
+          );
+        } catch (error) {
+          if (
+            this.sendInteractionFailure(
+              socket,
+              command.sessionId,
+              command.interactionId,
+              error,
+            )
+          ) {
+            return;
+          }
+          throw error;
+        }
+        this.broadcast(this.#peers.hosts(), message);
+        return;
+      }
+      if (kind === SESSION_ELICITATION_RESPOND_KIND) {
+        const command = decodeSessionElicitationRespondCommand(message);
+        try {
+          await this.acceptAndDeliverInteractionResponse(
+            command.sessionId,
+            command.interactionId,
+            {
+              content: JSON.stringify({
+                action: command.action,
+                content: command.content,
+              }),
+              kind: "elicitation",
+            },
+            message,
+            signal,
+          );
+        } catch (error) {
+          if (
+            this.sendInteractionFailure(
+              socket,
+              command.sessionId,
+              command.interactionId,
+              error,
+            )
+          ) {
+            return;
+          }
+          throw error;
+        }
+        this.broadcast(this.#peers.hosts(), message);
         return;
       }
       const control = this.validateHostControl(kind, message);
@@ -485,7 +646,6 @@ export class ChannelActor {
           commandId: requestId,
           kind: SESSION_FAILED_KIND,
           message: "The local runtime is offline",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: sessionId.length === 0 ? "runtime" : sessionId,
         }),
       );
@@ -503,6 +663,96 @@ export class ChannelActor {
     return true;
   };
 
+  private readonly acceptAndDeliverInteractionResponse = async (
+    sessionId: string,
+    interactionId: string,
+    response: Readonly<{
+      content: string;
+      kind: "elicitation" | "permission";
+    }>,
+    payload: string,
+    signal: AbortSignal,
+  ): Promise<void> => {
+    const accepted = await this.#runtime.acceptInteractionResponse(
+      this.#scope,
+      sessionId,
+      interactionId,
+      "project-client",
+      response,
+      payload,
+      this.#clock.now(),
+      signal,
+    );
+    if (accepted.pendingWork.state.kind === "completed") {
+      return;
+    }
+    if (!this.sendToDaemon(payload)) {
+      return;
+    }
+    await this.#runtime.markPendingWorkCompleted(
+      this.#scope,
+      sessionId,
+      accepted.pendingWork.workId,
+      this.#clock.now(),
+      signal,
+    );
+  };
+
+  private readonly sendInteractionFailure = (
+    socket: ChannelSocket,
+    sessionId: string,
+    interactionId: string,
+    error: unknown,
+  ): boolean => {
+    if (!(error instanceof SessionRuntimeError)) {
+      return false;
+    }
+    socket.send(
+      encodeSessionOperationFailedEvent({
+        code: error.code,
+        kind: SESSION_OPERATION_FAILED_KIND,
+        message: error.message,
+        requestId: interactionId,
+        sessionId,
+      }),
+    );
+    return true;
+  };
+
+  private readonly deliverPendingDaemonWork = async (
+    signal: AbortSignal,
+  ): Promise<void> => {
+    let delivered = 0;
+    while (delivered < 500) {
+      const batch = await this.#runtime.listPendingDaemonDeliveries(
+        this.#scope,
+        this.#runtimeId,
+        Math.min(100, 500 - delivered),
+        signal,
+      );
+      if (batch.length === 0) {
+        return;
+      }
+      for (const delivery of batch) {
+        signal.throwIfAborted();
+        if (!this.sendToDaemon(delivery.payload)) {
+          return;
+        }
+        await this.#runtime.markPendingWorkCompleted(
+          this.#scope,
+          delivery.pendingWork.sessionId,
+          delivery.pendingWork.workId,
+          this.#clock.now(),
+          signal,
+        );
+        delivered += 1;
+      }
+      if (batch.length < 100) {
+        return;
+      }
+    }
+  };
+
   private readonly hasOnlineDaemon = (): boolean =>
     this.#peers.daemons().some((socket) => socket.isOpen());
 
@@ -512,7 +762,6 @@ export class ChannelActor {
       encodeRuntimeStatusEvent({
         kind: RUNTIME_STATUS_KIND,
         online,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         runtimeId: this.#runtimeId,
       }),
     );

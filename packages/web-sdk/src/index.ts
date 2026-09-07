@@ -9,6 +9,7 @@ export type {
   AgentInstallFailedEvent,
   AgentInstallProgressEvent,
   AgentInstallStartedEvent,
+  Interaction,
   NativeSessionCommand,
   NativeSessionEntry,
   NativeSessionResult,
@@ -34,6 +35,7 @@ export type {
 } from "@moxt-ai/mobius-protocol";
 export {
   decodeAgentDisplayContentValue,
+  decodeInteraction,
   decodeNativeSessionHistory,
   decodePromptImagesValue,
   decodePromptResourcesValue,
@@ -43,7 +45,6 @@ export {
   decodeSessionPermissionRequestedEvent,
   decodeSessionReadyEvent,
   decodeSessionUsageUpdatedEvent,
-  MOBIUS_PROTOCOL_VERSION,
   type NativeSessionHistory,
   parseNativeHistoryText,
   SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,

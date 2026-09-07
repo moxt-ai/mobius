@@ -1,8 +1,12 @@
 import {
+  decodeInteractionResponse,
+  decodeNativeSessionHistory,
   decodeSessionEventEnvelope,
   decodeSessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
+  type AttemptReconciliationOutcome,
+  CreateSessionBindingRequest,
   CreateSessionRequest,
   ProjectScope,
   RequestBodyError,
@@ -138,6 +142,7 @@ function readCreateRequest(
   assertExactKeys(request, [
     "agentId",
     "bindingId",
+    "createdBy",
     "directoryId",
     "policy",
     "runtimeId",
@@ -154,6 +159,7 @@ function readCreateRequest(
   assertExactKeys(policy, [
     "contentLimitBytes",
     "hotEventLimit",
+    "idempotencyRetentionMilliseconds",
     "level",
     "retentionMilliseconds",
   ]);
@@ -175,8 +181,84 @@ function readCreateRequest(
       readInteger(policy, "retentionMilliseconds"),
       readInteger(policy, "hotEventLimit"),
       readInteger(policy, "contentLimitBytes"),
+      readInteger(policy, "idempotencyRetentionMilliseconds"),
     ),
     readString(request, "title", 500, true),
+    readString(request, "createdBy"),
+  );
+}
+
+function readBinding(
+  value: Readonly<Record<string, unknown>>,
+): CreateSessionBindingRequest {
+  const binding = value["binding"];
+  if (!isRecord(binding)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The Session binding is invalid",
+    );
+  }
+  assertExactKeys(binding, [
+    "agentRef",
+    "bindingId",
+    "configRevision",
+    "runtimeId",
+    "workspaceRef",
+  ]);
+  return new CreateSessionBindingRequest(
+    readString(binding, "bindingId"),
+    readString(binding, "runtimeId"),
+    readString(binding, "agentRef"),
+    readString(binding, "workspaceRef"),
+    readInteger(binding, "configRevision"),
+  );
+}
+
+function readReconciliationOutcome(
+  value: Readonly<Record<string, unknown>>,
+): AttemptReconciliationOutcome {
+  const outcome = value["outcome"];
+  if (!isRecord(outcome)) {
+    throw new InternalRequestError(
+      "invalid_session_operation",
+      "The Attempt reconciliation outcome is invalid",
+    );
+  }
+  const kind = outcome["kind"];
+  if (kind === "running") {
+    assertExactKeys(outcome, ["kind"]);
+    return { kind };
+  }
+  if (kind === "succeeded") {
+    assertExactKeys(outcome, ["kind", "stopReason"]);
+    return { kind, stopReason: readString(outcome, "stopReason") };
+  }
+  if (kind === "cancelled") {
+    assertExactKeys(outcome, ["kind"]);
+    return { kind };
+  }
+  if (kind === "failed" && isRecord(outcome["error"])) {
+    assertExactKeys(outcome, ["error", "kind"]);
+    const error = outcome["error"];
+    assertExactKeys(error, ["code", "message", "retryable"]);
+    if (typeof error["retryable"] !== "boolean") {
+      throw new InternalRequestError(
+        "invalid_session_operation",
+        "The Attempt reconciliation error is invalid",
+      );
+    }
+    return {
+      error: {
+        code: readString(error, "code"),
+        message: readString(error, "message", 2_000),
+        retryable: error["retryable"],
+      },
+      kind,
+    };
+  }
+  throw new InternalRequestError(
+    "invalid_session_operation",
+    "The Attempt reconciliation outcome is invalid",
   );
 }
 
@@ -304,7 +386,7 @@ export class SessionRelay {
       if (operation === "accept") {
         assertExactKeys(body, ["command", "now", "runtimeId", "scope"]);
         return Response.json(
-          await this.#runtime.acceptCommand(
+          await this.#runtime.acceptTurn(
             scope,
             readString(body, "runtimeId"),
             decodeSessionPromptCommand(readString(body, "command", 8_000_000)),
@@ -333,13 +415,14 @@ export class SessionRelay {
         await this.#state.storage.setAlarm(Date.now());
         return Response.json({ ...result, summary });
       }
-      if (operation === "bind") {
-        assertExactKeys(body, ["runtimeId", "scope", "sessionId"]);
+      if (operation === "set-binding") {
+        assertExactKeys(body, ["binding", "now", "scope", "sessionId"]);
         return Response.json(
-          await this.#runtime.bindSession(
+          await this.#runtime.setDefaultBinding(
             scope,
             readString(body, "sessionId"),
-            readString(body, "runtimeId"),
+            readBinding(body),
+            readInteger(body, "now"),
             request.signal,
           ),
         );
@@ -350,6 +433,147 @@ export class SessionRelay {
           await this.#runtime.readSession(
             scope,
             readString(body, "sessionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "native-history") {
+        assertExactKeys(body, ["scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readNativeHistory(
+            scope,
+            readString(body, "sessionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "record-native-history") {
+        assertExactKeys(body, [
+          "history",
+          "now",
+          "runtimeId",
+          "scope",
+          "sessionId",
+          "title",
+        ]);
+        return Response.json(
+          await this.#runtime.recordNativeHistory(
+            scope,
+            readString(body, "runtimeId"),
+            readString(body, "sessionId"),
+            readString(body, "title", 500, true),
+            decodeNativeSessionHistory(body["history"]),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "turn") {
+        assertExactKeys(body, ["scope", "sessionId", "turnId"]);
+        return Response.json(
+          await this.#runtime.readTurn(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "turnId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "attempt") {
+        assertExactKeys(body, ["attemptId", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readAttempt(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "attemptId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "interaction") {
+        assertExactKeys(body, ["interactionId", "scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readInteraction(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "interactionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "pending-interactions") {
+        assertExactKeys(body, ["scope", "sessionId"]);
+        return Response.json(
+          await this.#runtime.readPendingInteractions(
+            scope,
+            readString(body, "sessionId"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "accept-interaction-response") {
+        assertExactKeys(body, [
+          "deliveryPayload",
+          "interactionId",
+          "now",
+          "responderId",
+          "response",
+          "scope",
+          "sessionId",
+        ]);
+        return Response.json(
+          await this.#runtime.acceptInteractionResponse(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "interactionId"),
+            readString(body, "responderId"),
+            decodeInteractionResponse(body["response"]),
+            readString(body, "deliveryPayload", 8_000_000),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "pending-daemon-deliveries") {
+        assertExactKeys(body, ["limit", "runtimeId", "scope"]);
+        return Response.json(
+          await this.#runtime.listPendingDaemonDeliveries(
+            scope,
+            readString(body, "runtimeId"),
+            readInteger(body, "limit"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "complete-pending-work") {
+        assertExactKeys(body, ["now", "scope", "sessionId", "workId"]);
+        return Response.json(
+          await this.#runtime.markPendingWorkCompleted(
+            scope,
+            readString(body, "sessionId"),
+            readString(body, "workId"),
+            readInteger(body, "now"),
+            request.signal,
+          ),
+        );
+      }
+      if (operation === "reconcile") {
+        assertExactKeys(body, [
+          "attemptId",
+          "now",
+          "outcome",
+          "runtimeId",
+          "scope",
+          "sessionId",
+        ]);
+        return Response.json(
+          await this.#runtime.reconcileAttempt(
+            scope,
+            readString(body, "runtimeId"),
+            readString(body, "sessionId"),
+            readString(body, "attemptId"),
+            readReconciliationOutcome(body),
+            readInteger(body, "now"),
             request.signal,
           ),
         );
@@ -379,12 +603,18 @@ export class SessionRelay {
         );
       }
       if (operation === "detail") {
-        assertExactKeys(body, ["activityId", "scope", "sessionId"]);
+        assertExactKeys(body, [
+          "attemptId",
+          "scope",
+          "sessionId",
+          "toolCallId",
+        ]);
         return Response.json(
-          await this.#runtime.readActivityDetail(
+          await this.#runtime.readToolCallDetail(
             scope,
             readString(body, "sessionId"),
-            readString(body, "activityId"),
+            readString(body, "attemptId"),
+            readString(body, "toolCallId"),
             request.signal,
           ),
         );
@@ -479,7 +709,7 @@ export class SessionRelay {
   async alarm(): Promise<void> {
     const rows = this.#database.query(
       `SELECT tenant_id, project_id, session_id, lifecycle
-       FROM session_records WHERE lifecycle <> 'deleted'`,
+       FROM sessions WHERE lifecycle <> 'deleted'`,
     );
     let pending = false;
     for (const row of rows) {

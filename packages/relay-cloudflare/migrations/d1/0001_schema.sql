@@ -3,6 +3,7 @@ CREATE TABLE pairing_channels (
   pairing_code_hash TEXT NOT NULL UNIQUE,
   poll_token_hash TEXT NOT NULL,
   channel_id TEXT NOT NULL UNIQUE,
+  runtime_id TEXT NOT NULL UNIQUE,
   tenant_id TEXT NOT NULL,
   project_id TEXT NOT NULL,
   host_token_hash TEXT NOT NULL,
@@ -28,7 +29,7 @@ CREATE TABLE session_directory (
   project_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
   runtime_id TEXT NOT NULL,
-  lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active', 'deleting', 'deleted')),
+  lifecycle TEXT NOT NULL CHECK (lifecycle IN ('ready', 'deleting', 'deleted')),
   updated_at INTEGER NOT NULL,
   summary_json TEXT NOT NULL,
   PRIMARY KEY (tenant_id, project_id, session_id)

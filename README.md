@@ -221,7 +221,6 @@ mode-`0600` `~/.mobius/installation-grants.json` file:
 
 ```json
 {
-  "version": 1,
   "agents": ["codex"]
 }
 ```

@@ -36,8 +36,7 @@ export async function readGrantedAgents(
     const value: unknown = JSON.parse(encoded);
     if (
       !isRecord(value) ||
-      Object.keys(value).length !== 2 ||
-      value["version"] !== 1 ||
+      Object.keys(value).length !== 1 ||
       !Array.isArray(value["agents"])
     ) {
       throw new Error("The local installation grant file is invalid");

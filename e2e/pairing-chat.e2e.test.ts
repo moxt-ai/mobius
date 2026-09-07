@@ -46,7 +46,6 @@ import {
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
-  MOBIUS_PROTOCOL_VERSION,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_HEARTBEAT_KIND,
   RUNTIME_LIVENESS_READY_KIND,
@@ -54,7 +53,6 @@ import {
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
   SESSION_EVENT_COMMITTED_KIND,
-  SESSION_EVENT_FORMAT_VERSION,
   SESSION_EVENT_KIND,
   SESSION_FAILED_KIND,
   SESSION_PREPARE_KIND,
@@ -167,6 +165,7 @@ class BrowserPairingCredentials {
   readonly hostToken: string;
   readonly pairingCode: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
 
   constructor(
@@ -175,11 +174,13 @@ class BrowserPairingCredentials {
     hostToken: string,
     tenantId: string,
     projectId: string,
+    runtimeId: string,
   ) {
     this.channelId = channelId;
     this.hostToken = hostToken;
     this.pairingCode = pairingCode;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
   }
 }
@@ -222,12 +223,14 @@ function decodeBrowserPairing(value: unknown): BrowserPairingCredentials {
   const hostToken = value["hostToken"];
   const pairingCode = value["pairingCode"];
   const projectId = value["projectId"];
+  const runtimeId = value["runtimeId"];
   const tenantId = value["tenantId"];
   if (
     typeof channelId !== "string" ||
     typeof hostToken !== "string" ||
     typeof pairingCode !== "string" ||
     typeof projectId !== "string" ||
+    typeof runtimeId !== "string" ||
     typeof tenantId !== "string"
   ) {
     throw new Error("Invalid pairing response");
@@ -238,6 +241,7 @@ function decodeBrowserPairing(value: unknown): BrowserPairingCredentials {
     hostToken,
     tenantId,
     projectId,
+    runtimeId,
   );
 }
 
@@ -252,7 +256,7 @@ function hostSocketUrl(
   origin: string,
 ): URL {
   const url = new URL(
-    `/v1/channels/${encodeURIComponent(pairing.channelId)}/host`,
+    `/api/channels/${encodeURIComponent(pairing.channelId)}/host`,
     origin,
   );
   url.protocol = "ws:";
@@ -266,7 +270,7 @@ function projectSessionUrl(
   sessionId?: string,
   suffix = "",
 ): URL {
-  const base = `/v1/projects/${encodeURIComponent(pairing.projectId)}/sessions`;
+  const base = `/api/projects/${encodeURIComponent(pairing.projectId)}/sessions`;
   const session =
     sessionId === undefined ? "" : `/${encodeURIComponent(sessionId)}`;
   return new URL(`${base}${session}${suffix}`, origin);
@@ -370,21 +374,43 @@ function unwrapCommittedEvent(message: string): string {
     : message;
 }
 
+const browserEventSources = new Map<
+  string,
+  { readonly attemptId: string; nextSourceSeq: number }
+>();
+
 function sendSessionEvent(
   socket: WebSocket,
   sessionId: string,
   payload: string,
 ): void {
+  const kind = decodeMessageKind(payload);
+  const existing = browserEventSources.get(sessionId);
+  const source =
+    kind === SESSION_STARTED_KIND
+      ? {
+          attemptId: decodeSessionStartedEvent(payload).attemptId,
+          nextSourceSeq: 1,
+        }
+      : existing;
+  if (source === undefined) {
+    throw new Error("An execution event has no Attempt source identity");
+  }
+  browserEventSources.set(sessionId, source);
   socket.send(
     encodeSessionEventEnvelope({
       eventId: crypto.randomUUID(),
-      eventVersion: SESSION_EVENT_FORMAT_VERSION,
       kind: SESSION_EVENT_KIND,
       payload,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId,
+      source: {
+        attemptId: source.attemptId,
+        kind: "attempt",
+        sourceSeq: source.nextSourceSeq.toString(),
+      },
     }),
   );
+  source.nextSourceSeq += 1;
 }
 
 function waitForSocketOpen(socket: WebSocket): Promise<void> {
@@ -512,7 +538,6 @@ function startBrowserPrompt(
         images: [],
         kind: SESSION_PROMPT_KIND,
         prompt,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         resources: [],
         sessionId,
       }),
@@ -569,7 +594,6 @@ async function verifyActiveTurnHistory(
         images: [],
         kind: SESSION_PROMPT_KIND,
         prompt: "controlled task",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         resources: [],
         sessionId: controlledSessionId,
       }),
@@ -608,8 +632,7 @@ async function verifyActiveTurnHistory(
       encodeSessionStartedEvent({
         commandId: controlledCommandId,
         kind: SESSION_STARTED_KIND,
-        processAttemptId: "controlled-attempt",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        attemptId: "controlled-attempt",
         sessionId: controlledSessionId,
       }),
     );
@@ -627,7 +650,6 @@ async function verifyActiveTurnHistory(
       encodeAgentMessageDeltaEvent({
         commandId: controlledCommandId,
         kind: AGENT_MESSAGE_DELTA_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: controlledSessionId,
         text: "partial response",
       }),
@@ -654,7 +676,6 @@ async function verifyActiveTurnHistory(
         locations: [`${repositoryRoot}/package.json`],
         name: "read_file",
         output: "package metadata",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sequence: 0,
         sessionId: controlledSessionId,
         status: "completed",
@@ -679,7 +700,7 @@ async function verifyActiveTurnHistory(
             response: "partial response",
             attempt: expect.objectContaining({
               kind: "running",
-              processAttemptId: "controlled-attempt",
+              attemptId: "controlled-attempt",
             }),
             activities: expect.arrayContaining([
               expect.objectContaining({
@@ -703,7 +724,6 @@ async function verifyActiveTurnHistory(
       encodeSessionCompletedEvent({
         commandId: controlledCommandId,
         kind: SESSION_COMPLETED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: controlledSessionId,
         stopReason: "end_turn",
       }),
@@ -719,7 +739,7 @@ async function verifyActiveTurnHistory(
       expect.objectContaining({
         messages: expect.arrayContaining([
           expect.objectContaining({
-            attempt: expect.objectContaining({ kind: "completed" }),
+            attempt: expect.objectContaining({ kind: "succeeded" }),
             commandId: controlledCommandId,
           }),
         ]),
@@ -806,7 +826,7 @@ describe("pairing and channel chat", () => {
       await waitForRelay(wrangler);
       const pairing = decodeBrowserPairing(
         await (
-          await fetch(new URL("/v1/pairings", origin), { method: "POST" })
+          await fetch(new URL("/api/pairings", origin), { method: "POST" })
         ).json(),
       );
       const paired = await pairLocalMachine([
@@ -884,7 +904,6 @@ describe("pairing and channel chat", () => {
           encodeSessionPrepareCommand({
             ...identity,
             kind: SESSION_PREPARE_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: "prepare-native-browser",
           }),
         );
@@ -893,7 +912,6 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "workspace.list",
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             bindingId: "workspace",
             directoryId: "home",
             requestId: "browse-home",
@@ -940,7 +958,6 @@ describe("pairing and channel chat", () => {
               ...identity,
               ...fields,
               kind: "native.session.request",
-              protocolVersion: MOBIUS_PROTOCOL_VERSION,
               requestId,
             }),
           );
@@ -966,7 +983,6 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "workspace.list",
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             bindingId: "workspace",
             directoryId: projectDirectoryId,
             requestId: "browse-other-project",
@@ -984,7 +1000,6 @@ describe("pairing and channel chat", () => {
             directoryId: projectDirectoryId,
             requestId: "choose-directory",
             kind: SESSION_PREPARE_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
           }),
         );
         expect(JSON.parse(await chosen)).toMatchObject({
@@ -1001,6 +1016,7 @@ describe("pairing and channel chat", () => {
         ).toBe(await realpath(workspace));
         const preview = await request({
           action: "import",
+          directoryId: projectDirectoryId,
           entryId: entries[0]["entryId"],
           targetSessionId: "read-only-preview",
         });
@@ -1039,6 +1055,7 @@ describe("pairing and channel chat", () => {
         const cancelledLoad = request(
           {
             action: "import",
+            directoryId: projectDirectoryId,
             entryId: entries[0]["entryId"],
             targetSessionId: "cancelled-load",
           },
@@ -1057,13 +1074,13 @@ describe("pairing and channel chat", () => {
         socket.send(
           JSON.stringify({
             kind: "native.session.cancel",
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: cancellationId,
             sessionId: identity.sessionId,
           }),
         );
         const nextImport = request({
           action: "import",
+          directoryId: projectDirectoryId,
           entryId: entries[0]["entryId"],
           targetSessionId: "imported-chat",
         });
@@ -1121,6 +1138,7 @@ describe("pairing and channel chat", () => {
         });
         const forked = await request({
           action: "fork",
+          directoryId: projectDirectoryId,
           entryId: entries[0]["entryId"],
           targetSessionId: "forked-chat",
         });
@@ -1163,6 +1181,7 @@ describe("pairing and channel chat", () => {
         ).resolves.toBe("Codex turn 3: Continue original");
         const reopened = await request({
           action: "import",
+          directoryId: projectDirectoryId,
           entryId: entries[0]["entryId"],
           targetSessionId: "duplicate-import",
         });
@@ -1175,7 +1194,11 @@ describe("pairing and channel chat", () => {
           },
         });
         expect(
-          await request({ action: "delete", entryId: entries[0]["entryId"] }),
+          await request({
+            action: "delete",
+            directoryId: projectDirectoryId,
+            entryId: entries[0]["entryId"],
+          }),
         ).toMatchObject({
           action: "delete",
           deletedSessionIds: ["imported-chat"],
@@ -1204,6 +1227,7 @@ describe("pairing and channel chat", () => {
         expect(
           await request({
             action: "import",
+            directoryId: projectDirectoryId,
             entryId: entries[0]["entryId"],
             targetSessionId: "stale-import",
           }),
@@ -1260,7 +1284,7 @@ describe("pairing and channel chat", () => {
 
     try {
       await waitForRelay(wrangler);
-      const pairingResponse = await fetch(new URL("/v1/pairings", origin), {
+      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
         method: "POST",
       });
       const pairing = decodeBrowserPairing(await pairingResponse.json());
@@ -1279,7 +1303,6 @@ describe("pairing and channel chat", () => {
       await waitForSocketOpen(daemon);
       expect(decodeRuntimeLivenessReadyEvent(await ready)).toEqual({
         kind: RUNTIME_LIVENESS_READY_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
       });
 
       const heartbeatId = crypto.randomUUID();
@@ -1291,7 +1314,6 @@ describe("pairing and channel chat", () => {
         encodeRuntimeHeartbeatEvent({
           heartbeatId,
           kind: RUNTIME_HEARTBEAT_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
         }),
       );
 
@@ -1312,7 +1334,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given a running turn, When a replacement daemon connects, Then the uncertain outcome is preserved and another message is accepted", {
+  it("Given a running Attempt, When a replacement daemon connects, Then the indeterminate outcome blocks overlap until explicit reconciliation", {
     timeout: 30_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -1350,7 +1372,7 @@ describe("pairing and channel chat", () => {
 
     try {
       await waitForRelay(wrangler);
-      const pairingResponse = await fetch(new URL("/v1/pairings", origin), {
+      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
         method: "POST",
       });
       const pairing = decodeBrowserPairing(await pairingResponse.json());
@@ -1383,7 +1405,6 @@ describe("pairing and channel chat", () => {
           images: [],
           kind: SESSION_PROMPT_KIND,
           prompt: "stalled task",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           resources: [],
           sessionId,
         }),
@@ -1401,8 +1422,7 @@ describe("pairing and channel chat", () => {
         encodeSessionStartedEvent({
           commandId: stalledCommandId,
           kind: SESSION_STARTED_KIND,
-          processAttemptId: "stalled-attempt",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          attemptId: "stalled-attempt",
           sessionId,
         }),
       );
@@ -1420,12 +1440,66 @@ describe("pairing and channel chat", () => {
         expect.objectContaining({
           messages: expect.arrayContaining([
             expect.objectContaining({
-              attempt: expect.objectContaining({ kind: "outcome_unknown" }),
+              attempt: expect.objectContaining({ kind: "indeterminate" }),
               commandId: stalledCommandId,
             }),
           ]),
         }),
       );
+
+      const rejectedCommandId = crypto.randomUUID();
+      const rejectedFailure = waitForProtocolKind(host, SESSION_FAILED_KIND);
+      host.send(
+        encodeSessionPromptCommand({
+          additionalDirectoryIds: [],
+          agentId: "codex",
+          bindingId: "workspace",
+          commandId: rejectedCommandId,
+          directoryId: "default",
+          images: [],
+          kind: SESSION_PROMPT_KIND,
+          prompt: "must not overlap indeterminate work",
+          resources: [],
+          sessionId,
+        }),
+      );
+      expect(decodeSessionFailedEvent(await rejectedFailure)).toMatchObject({
+        code: "session_busy",
+        commandId: rejectedCommandId,
+        sessionId,
+      });
+      expect(host.readyState).toBe(WebSocket.OPEN);
+
+      const reconciliationUrl = new URL(
+        `/api/channels/${encodeURIComponent(pairing.channelId)}/sessions/${encodeURIComponent(sessionId)}/attempts/stalled-attempt/reconciliation`,
+        origin,
+      );
+      const daemonToken = new URL(paired.config.relayUrl).searchParams.get(
+        "token",
+      );
+      if (daemonToken === null) {
+        throw new Error("The paired daemon credential is missing");
+      }
+      reconciliationUrl.searchParams.set("token", daemonToken);
+      const reconciliation = await fetch(reconciliationUrl, {
+        body: JSON.stringify({
+          outcome: {
+            error: {
+              code: "runtime_restarted",
+              message: "The replacement Runtime confirmed execution stopped",
+              retryable: true,
+            },
+            kind: "failed",
+          },
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+      });
+      expect(reconciliation.status).toBe(200);
+      await expect(reconciliation.json()).resolves.toMatchObject({
+        attemptId: "stalled-attempt",
+        state: { kind: "failed" },
+      });
 
       const nextCommandId = crypto.randomUUID();
       const nextPrompt = waitForProtocolKind(
@@ -1442,7 +1516,6 @@ describe("pairing and channel chat", () => {
           images: [],
           kind: SESSION_PROMPT_KIND,
           prompt: "continue after recovery",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           resources: [],
           sessionId,
         }),
@@ -1457,8 +1530,7 @@ describe("pairing and channel chat", () => {
         encodeSessionStartedEvent({
           commandId: nextCommandId,
           kind: SESSION_STARTED_KIND,
-          processAttemptId: "replacement-attempt",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          attemptId: "replacement-attempt",
           sessionId,
         }),
       );
@@ -1473,7 +1545,6 @@ describe("pairing and channel chat", () => {
         encodeSessionCompletedEvent({
           commandId: nextCommandId,
           kind: SESSION_COMPLETED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId,
           stopReason: "end_turn",
         }),
@@ -1488,7 +1559,7 @@ describe("pairing and channel chat", () => {
         expect.objectContaining({
           messages: expect.arrayContaining([
             expect.objectContaining({
-              attempt: expect.objectContaining({ kind: "completed" }),
+              attempt: expect.objectContaining({ kind: "succeeded" }),
               commandId: nextCommandId,
             }),
           ]),
@@ -1595,11 +1666,10 @@ describe("pairing and channel chat", () => {
       const healthResponse = await fetch(new URL("/health", origin));
       expect(healthResponse.status).toBe(200);
       await expect(healthResponse.json()).resolves.toEqual({
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         service: "mobius-relay",
         status: "ok",
       });
-      const pairingResponse = await fetch(new URL("/v1/pairings", origin), {
+      const pairingResponse = await fetch(new URL("/api/pairings", origin), {
         method: "POST",
       });
       expect(pairingResponse.status).toBe(201);
@@ -1620,6 +1690,12 @@ describe("pairing and channel chat", () => {
         "--workspace",
         repositoryRoot,
       ]);
+      expect(new URL(paired.channelUrl).pathname).toBe(
+        `/channels/${pairing.channelId}`,
+      );
+      expect(paired.config.relayUrl.pathname).toBe(
+        `/api/channels/${pairing.channelId}/daemon`,
+      );
       const initiallyResumed = await resumeLocalMachine([
         "--channel",
         pairing.channelId,
@@ -1648,7 +1724,7 @@ describe("pairing and channel chat", () => {
         mode: 0o600,
       });
       const repeatedClaimResponse = await fetch(
-        new URL("/v1/pairings/claim", origin),
+        new URL("/api/pairings/claim", origin),
         {
           body: JSON.stringify({
             agents: [
@@ -1666,14 +1742,14 @@ describe("pairing and channel chat", () => {
       expect(repeatedClaimResponse.status).toBe(400);
       const publicChannelResponse = await fetch(
         new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+          `/api/channels/${encodeURIComponent(pairing.channelId)}`,
           origin,
         ),
       );
       expect(publicChannelResponse.status).toBe(401);
       const authorizedChannelResponse = await fetch(
         new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+          `/api/channels/${encodeURIComponent(pairing.channelId)}`,
           origin,
         ),
         { headers: authenticatedHeaders(pairing) },
@@ -1722,7 +1798,7 @@ describe("pairing and channel chat", () => {
       expect(injectedCatalogUpdate.status).toBe(400);
       const wrongRoleResponse = await fetch(
         new URL(
-          `/v1/channels/${encodeURIComponent(pairing.channelId)}/daemon?token=invalid`,
+          `/api/channels/${encodeURIComponent(pairing.channelId)}/daemon?token=invalid`,
           origin,
         ),
       );
@@ -1741,7 +1817,7 @@ describe("pairing and channel chat", () => {
           await waitForRuntimeOnline(socket);
           const automaticallyProvisionedDescriptor = await fetch(
             new URL(
-              `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+              `/api/channels/${encodeURIComponent(pairing.channelId)}`,
               origin,
             ),
             { headers: authenticatedHeaders(pairing) },
@@ -1791,7 +1867,6 @@ describe("pairing and channel chat", () => {
                 bindingId: "workspace",
                 directoryId: "default",
                 kind: SESSION_PREPARE_KIND,
-                protocolVersion: MOBIUS_PROTOCOL_VERSION,
                 requestId: crypto.randomUUID(),
                 sessionId: usageSessionId,
               }),
@@ -1888,7 +1963,6 @@ describe("pairing and channel chat", () => {
           const encodedCancellation = encodeSessionCancelCommand({
             commandId: cancellablePrompt.commandId,
             kind: SESSION_CANCEL_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sessionId: cancellationSessionId,
           });
           socket.send(encodedCancellation);
@@ -1931,14 +2005,14 @@ describe("pairing and channel chat", () => {
                   prompt: "first",
                   response: "Codex turn 1: first",
                   sessionId: codexSessionId,
-                  attempt: expect.objectContaining({ kind: "completed" }),
+                  attempt: expect.objectContaining({ kind: "succeeded" }),
                 }),
                 expect.objectContaining({
                   agentId: "codex",
                   prompt: "second",
                   response: "Codex turn 2: second",
                   sessionId: codexSessionId,
-                  attempt: expect.objectContaining({ kind: "completed" }),
+                  attempt: expect.objectContaining({ kind: "succeeded" }),
                 }),
               ]),
             }),
@@ -1957,8 +2031,7 @@ describe("pairing and channel chat", () => {
               messages: expect.arrayContaining([
                 expect.objectContaining({
                   attempt: expect.objectContaining({
-                    kind: "completed",
-                    stopReason: "cancelled",
+                    kind: "cancelled",
                   }),
                   commandId: cancellablePrompt.commandId,
                   prompt: "wait until cancelled",
@@ -1990,7 +2063,7 @@ describe("pairing and channel chat", () => {
         await waitForRuntimeOnline(refreshedHost);
         const refreshedDescriptor = await fetch(
           new URL(
-            `/v1/channels/${encodeURIComponent(pairing.channelId)}`,
+            `/api/channels/${encodeURIComponent(pairing.channelId)}`,
             origin,
           ),
           { headers: authenticatedHeaders(pairing) },

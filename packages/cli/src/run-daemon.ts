@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { basename } from "node:path";
 
 import {
@@ -52,7 +51,6 @@ import {
   encodeSessionStartedEvent,
   encodeSessionUsageUpdatedEvent,
   encodeWorkspaceEntriesEvent,
-  MOBIUS_PROTOCOL_VERSION,
   NATIVE_SESSION_CANCEL_KIND,
   NATIVE_SESSION_REQUEST_KIND,
   RUNTIME_HEARTBEAT_ACK_KIND,
@@ -315,7 +313,6 @@ class DaemonInstallationObserver implements InstallationObserver {
         encodeAgentInstallAwaitingApprovalEvent({
           agentId: state.agentId,
           kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: state.requestId,
         }),
       );
@@ -329,7 +326,6 @@ class DaemonInstallationObserver implements InstallationObserver {
           encodeAgentInstallStartedEvent({
             agentId: state.agentId,
             kind: AGENT_INSTALL_STARTED_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: state.requestId,
           }),
         );
@@ -339,7 +335,6 @@ class DaemonInstallationObserver implements InstallationObserver {
         encodeAgentInstallProgressEvent({
           agentId: state.agentId,
           kind: AGENT_INSTALL_PROGRESS_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: state.requestId,
           stage: state.stage,
         }),
@@ -353,7 +348,6 @@ class DaemonInstallationObserver implements InstallationObserver {
           agentId: state.agentId,
           authenticationMayBeRequired: state.authenticationMayBeRequired,
           kind: AGENT_INSTALL_COMPLETED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: state.requestId,
         }),
       );
@@ -367,7 +361,6 @@ class DaemonInstallationObserver implements InstallationObserver {
           code: state.code,
           kind: AGENT_INSTALL_FAILED_KIND,
           message: state.message,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: state.requestId,
         }),
       );
@@ -379,7 +372,6 @@ class DaemonInstallationObserver implements InstallationObserver {
         encodeAgentInstallCancelledEvent({
           agentId: state.agentId,
           kind: AGENT_INSTALL_CANCELLED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: state.requestId,
         }),
       );
@@ -457,8 +449,9 @@ function recordSessionEvent(
   socket: WebSocket,
   sessionId: string,
   payload: string,
+  attemptId: string | null = null,
 ): void {
-  const envelope = outbox.enqueue(sessionId, payload);
+  const envelope = outbox.enqueue(sessionId, payload, attemptId);
   if (socket.readyState === WebSocket.OPEN) {
     socket.send(envelope);
   }
@@ -470,6 +463,7 @@ function reportFailure(
   command: SessionPromptCommand,
   code: string,
   message: string,
+  attemptId: string | null = null,
 ): void {
   recordSessionEvent(
     outbox,
@@ -480,9 +474,9 @@ function reportFailure(
       commandId: command.commandId,
       kind: SESSION_FAILED_KIND,
       message,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: command.sessionId,
     }),
+    attemptId,
   );
 }
 
@@ -523,7 +517,6 @@ function reportOperationFailure(
       code: operationErrorCode(error),
       kind: "session.operation.failed",
       message: operationErrorMessage(error),
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId,
       sessionId,
     }),
@@ -596,7 +589,6 @@ async function executeWorkspaceList(
         entries: listing.entries,
         kind: "workspace.entries",
         parentDirectoryId: listing.parentDirectoryId,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         requestId: command.requestId,
       }),
     );
@@ -618,7 +610,7 @@ async function executeSessionPrepare(
   try {
     const resolved = await resolveSessionDirectories(
       directories,
-      command.bindingId,
+      config.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
       signal,
@@ -632,7 +624,7 @@ async function executeSessionPrepare(
       signal,
     });
     const listing = await directories.list(
-      command.bindingId,
+      config.bindingId,
       command.directoryId,
       signal,
     );
@@ -656,7 +648,6 @@ async function executeSessionPrepare(
         directoryId: command.directoryId,
         directoryLabel: listing.directoryLabel,
         kind: "session.ready",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         requestId: command.requestId,
         restored: prepared.restored,
         sessionId: command.sessionId,
@@ -680,7 +671,7 @@ async function executeSessionConfigure(
   try {
     const resolved = await resolveSessionDirectories(
       directories,
-      command.bindingId,
+      config.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
       signal,
@@ -709,7 +700,6 @@ async function executeSessionConfigure(
       encodeSessionConfigUpdatedEvent({
         configOptions,
         kind: "session.config.updated",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         requestId: command.requestId,
         sessionId: command.sessionId,
       }),
@@ -727,23 +717,24 @@ async function executePrompt(
   directories: WorkspaceDirectoryService,
   audit: AuditStore,
   sessions: AcpSessionManager,
+  attemptId: string,
   signal: AbortSignal,
 ): Promise<void> {
   try {
     const resolved = await resolveSessionDirectories(
       directories,
-      command.bindingId,
+      config.bindingId,
       command.directoryId,
       command.additionalDirectoryIds,
       signal,
     );
     const agent = config.catalog.find(command.agentId);
-    const processAttemptId = randomUUID();
     audit.record({
       commandId: command.commandId,
       event: "session_authorized",
       sessionId: command.sessionId,
     });
+    outbox.transitionExecution(command.commandId, "running");
     recordSessionEvent(
       outbox,
       socket,
@@ -751,12 +742,11 @@ async function executePrompt(
       encodeSessionStartedEvent({
         commandId: command.commandId,
         kind: SESSION_STARTED_KIND,
-        processAttemptId,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        attemptId,
         sessionId: command.sessionId,
       }),
+      attemptId,
     );
-
     const result = await sessions.runPrompt({
       additionalDirectories: resolved.additionalDirectories,
       agent,
@@ -779,13 +769,13 @@ async function executePrompt(
             locations: activity.locations,
             name: activity.name,
             output: activity.output,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sequence: activity.sequence,
             sessionId: command.sessionId,
             status: activity.status,
             title: activity.title,
             toolKind: activity.toolKind,
           }),
+          attemptId,
         );
         return Promise.resolve();
       },
@@ -797,10 +787,10 @@ async function executePrompt(
           encodeAgentMessageDeltaEvent({
             commandId: command.commandId,
             kind: AGENT_MESSAGE_DELTA_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sessionId: command.sessionId,
             text,
           }),
+          attemptId,
         );
         return Promise.resolve();
       },
@@ -817,10 +807,14 @@ async function executePrompt(
       encodeSessionCompletedEvent({
         commandId: command.commandId,
         kind: SESSION_COMPLETED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: command.sessionId,
         stopReason: result.stopReason,
       }),
+      attemptId,
+    );
+    outbox.transitionExecution(
+      command.commandId,
+      result.stopReason === "cancelled" ? "cancelled" : "succeeded",
     );
     audit.record({
       commandId: command.commandId,
@@ -845,7 +839,9 @@ async function executePrompt(
       code === "session_operation_failed"
         ? "The local agent could not complete the request"
         : operationErrorMessage(error),
+      attemptId,
     );
+    outbox.transitionExecution(command.commandId, "failed");
     console.error("Mobius daemon command failed", error);
   }
 }
@@ -887,6 +883,7 @@ async function runRelayConnection(
   relayUrl.searchParams.set("liveness", "1");
   const socket = await connectRelay(relayUrl, signal);
   const activeTurns = new Map<string, ActiveDaemonTurn>();
+  const activeAttemptIds = new Map<string, string>();
   const connectionController = new AbortController();
   const nativeRequests = new Map<
     string,
@@ -898,7 +895,13 @@ async function runRelayConnection(
     }
   >();
   const record = (sessionId: string, payload: string): void => {
-    recordSessionEvent(outbox, socket, sessionId, payload);
+    recordSessionEvent(
+      outbox,
+      socket,
+      sessionId,
+      payload,
+      activeAttemptIds.get(sessionId) ?? null,
+    );
   };
   sessions.setObserver(new DaemonAcpObserver(record));
   installationObserver.connect(socket);
@@ -1249,18 +1252,21 @@ async function runRelayConnection(
           }
           const command = decodeSessionPromptCommand(encoded);
           if (activeTurns.has(command.commandId)) {
-            reportFailure(
-              outbox,
-              socket,
-              command,
-              "duplicate_command",
-              "The command is already running",
-            );
+            return;
+          }
+
+          const receipt = outbox.claimExecution(
+            command.commandId,
+            command.sessionId,
+            encoded,
+          );
+          if (receipt.kind === "duplicate") {
             return;
           }
 
           const turn = new ActiveDaemonTurn(command, new AbortController());
           activeTurns.set(command.commandId, turn);
+          activeAttemptIds.set(command.sessionId, receipt.attemptId);
           void executePrompt(
             outbox,
             socket,
@@ -1269,6 +1275,7 @@ async function runRelayConnection(
             directories,
             audit,
             sessions,
+            receipt.attemptId,
             turn.signal,
           )
             .catch((error: unknown) => {
@@ -1276,6 +1283,11 @@ async function runRelayConnection(
             })
             .finally(() => {
               activeTurns.delete(command.commandId);
+              if (
+                activeAttemptIds.get(command.sessionId) === receipt.attemptId
+              ) {
+                activeAttemptIds.delete(command.sessionId);
+              }
               connectionRefresh.afterTurnFinished();
             });
         } catch (error) {

@@ -5,24 +5,26 @@ import {
   decodeSessionEventAcknowledgement,
   decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
+  decodeSessionStartedEvent,
   encodeAgentActivityEvent,
   encodeAgentMessageDeltaEvent,
   encodeNativeSessionResult,
   encodeSessionCompletedEvent,
+  encodeSessionConfigUpdatedEvent,
   encodeSessionElicitationRequestedEvent,
   encodeSessionElicitationResolvedEvent,
   encodeSessionEventEnvelope,
+  encodeSessionInfoUpdatedEvent,
   encodeSessionReadyEvent,
   encodeSessionStartedEvent,
   encodeSessionUsageUpdatedEvent,
-  MOBIUS_PROTOCOL_VERSION,
   NATIVE_SESSION_REQUEST_KIND,
   SESSION_ELICITATION_RESPOND_KIND,
   SESSION_EVENT_ACK_KIND,
-  SESSION_EVENT_FORMAT_VERSION,
   SESSION_EVENT_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
+  SESSION_STARTED_KIND,
   type SessionPrepareCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -109,9 +111,11 @@ function setHappyDomUrl(url: URL): void {
 }
 
 class StatefulDaemon {
+  readonly #attemptIdsBySession = new Map<string, string>();
   readonly #messages: string[] = [];
   readonly #pending: PendingMessage[] = [];
   readonly #socket: WebSocket;
+  readonly #sourceSequences = new Map<string, number>();
 
   private constructor(socket: WebSocket) {
     this.#socket = socket;
@@ -215,14 +219,33 @@ class StatefulDaemon {
     payload: string,
   ): Promise<void> => {
     const eventId = crypto.randomUUID();
+    if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
+      this.#attemptIdsBySession.set(
+        sessionId,
+        decodeSessionStartedEvent(payload).attemptId,
+      );
+    }
+    const attemptId = this.#attemptIdsBySession.get(sessionId);
+    const sourceKey =
+      attemptId === undefined
+        ? `runtime:${sessionId}`
+        : `attempt:${sessionId}:${attemptId}`;
+    const sourceSequence = (this.#sourceSequences.get(sourceKey) ?? 0) + 1;
+    this.#sourceSequences.set(sourceKey, sourceSequence);
     this.#socket.send(
       encodeSessionEventEnvelope({
         eventId,
-        eventVersion: SESSION_EVENT_FORMAT_VERSION,
         kind: SESSION_EVENT_KIND,
         payload,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId,
+        source:
+          attemptId === undefined
+            ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
+            : {
+                attemptId,
+                kind: "attempt",
+                sourceSeq: sourceSequence.toString(),
+              },
       }),
     );
     const acknowledgement = decodeSessionEventAcknowledgement(
@@ -246,13 +269,13 @@ async function pairDaemon(): Promise<{
   readonly daemon: StatefulDaemon;
 }> {
   const createdResponse = await fetch(
-    new URL("/v1/pairings", window.location.origin),
+    new URL("/api/pairings", window.location.origin),
     { method: "POST" },
   );
   expect(createdResponse.status).toBe(201);
   const created = decodeCreatedPairing(await createdResponse.json());
   const claimResponse = await fetch(
-    new URL("/v1/pairings/claim", window.location.origin),
+    new URL("/api/pairings/claim", window.location.origin),
     {
       body: JSON.stringify({
         agents: [{ id: "codex", label: "Codex" }],
@@ -268,7 +291,7 @@ async function pairDaemon(): Promise<{
   expect(claimResponse.status).toBe(200);
   const claimed = decodeClaimedPairing(await claimResponse.json());
   const daemonUrl = new URL(
-    `/v1/channels/${claimed.channelId}/daemon`,
+    `/api/channels/${claimed.channelId}/daemon`,
     window.location.origin,
   );
   daemonUrl.protocol = "ws:";
@@ -323,7 +346,6 @@ async function sendReadySession(
       directoryId: prepare.directoryId,
       directoryLabel: "mobius",
       kind: "session.ready",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: prepare.requestId,
       restored: false,
       sessionId: prepare.sessionId,
@@ -354,8 +376,7 @@ async function completeRenderedPrompt(
     encodeSessionStartedEvent({
       commandId: prompt.commandId,
       kind: "session.started",
-      processAttemptId: crypto.randomUUID(),
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      attemptId: crypto.randomUUID(),
       sessionId: prompt.sessionId,
     }),
   );
@@ -364,7 +385,6 @@ async function completeRenderedPrompt(
     encodeAgentMessageDeltaEvent({
       commandId: prompt.commandId,
       kind: "agent.message.delta",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: prompt.sessionId,
       text: responseText,
     }),
@@ -374,7 +394,6 @@ async function completeRenderedPrompt(
     encodeSessionCompletedEvent({
       commandId: prompt.commandId,
       kind: "session.completed",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: prompt.sessionId,
       stopReason: "end_turn",
     }),
@@ -445,8 +464,7 @@ describe.sequential("Web application boundaries", () => {
         encodeSessionStartedEvent({
           commandId: prompt.commandId,
           kind: "session.started",
-          processAttemptId: "attempt-1",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
+          attemptId: "attempt-1",
           sessionId: prompt.sessionId,
         }),
       );
@@ -506,7 +524,6 @@ describe.sequential("Web application boundaries", () => {
           kind: "session.elicitation.requested",
           message: "Choose issue details",
           mode: "form",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: prepare.sessionId,
           url: "",
         }),
@@ -538,7 +555,6 @@ describe.sequential("Web application boundaries", () => {
           action: "accept",
           interactionId: response.interactionId,
           kind: "session.elicitation.resolved",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: response.sessionId,
         }),
       );
@@ -560,7 +576,6 @@ describe.sequential("Web application boundaries", () => {
           locations: ["package.json"],
           name: "read_file",
           output: "workspace manifest",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sequence: 0,
           sessionId: prompt.sessionId,
           status: "completed",
@@ -573,7 +588,6 @@ describe.sequential("Web application boundaries", () => {
         encodeAgentMessageDeltaEvent({
           commandId: prompt.commandId,
           kind: "agent.message.delta",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: prompt.sessionId,
           text: "Completed **safely**. [unsafe](javascript:alert(1)) <script>alert(1)</script>",
         }),
@@ -585,7 +599,6 @@ describe.sequential("Web application boundaries", () => {
           costCurrency: "USD",
           hasCost: true,
           kind: "session.usage.updated",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: prompt.sessionId,
           size: 200_000,
           source: "context",
@@ -597,7 +610,6 @@ describe.sequential("Web application boundaries", () => {
         encodeSessionCompletedEvent({
           commandId: prompt.commandId,
           kind: "session.completed",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: prompt.sessionId,
           stopReason: "end_turn",
         }),
@@ -688,7 +700,6 @@ describe.sequential("Web application boundaries", () => {
           ],
           kind: "native.session.result",
           nextCursor: null,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: listRequest.requestId,
           sessionId: listRequest.sessionId,
         }),
@@ -703,6 +714,7 @@ describe.sequential("Web application boundaries", () => {
       );
       expect(previewRequest).toMatchObject({
         action: "import",
+        directoryId: "saved-project",
         entryId: "saved-session",
       });
       if (previewRequest.action !== "import") {
@@ -731,7 +743,6 @@ describe.sequential("Web application boundaries", () => {
             truncated: false,
           },
           kind: "native.session.result",
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           reason: "continuation_unavailable",
           requestId: previewRequest.requestId,
           sessionId: previewRequest.sessionId,
@@ -755,6 +766,154 @@ describe.sequential("Web application boundaries", () => {
         `data:image/png;base64,${imageData}`,
       );
       expect(history.querySelector('img[src^="http"]')).toBeNull();
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a native Session is opened, When the Web app reloads, Then its title and transcript are restored from the canonical Session", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+      const sessionsButton = await screen.findByRole("button", {
+        name: "Local sessions",
+      });
+      await waitFor(() =>
+        expect(sessionsButton.hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(sessionsButton);
+      const sessionsDialog = await screen.findByRole("dialog", {
+        name: "Local sessions",
+      });
+      fireEvent.click(
+        within(sessionsDialog).getByRole("button", { name: "Codex" }),
+      );
+      const listRequest = decodeNativeSessionCommand(
+        await paired.daemon.receive(NATIVE_SESSION_REQUEST_KIND),
+      );
+      paired.daemon.send(
+        encodeNativeSessionResult({
+          action: "list",
+          capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            resumeSession: true,
+            unstableForkSession: true,
+          },
+          entries: [
+            {
+              additionalDirectories: [],
+              directoryId: "saved-project",
+              directoryLabel: "/workspace/saved-project",
+              entryId: "persistent-native-session",
+              title: "Persistent native title",
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+          ],
+          kind: "native.session.result",
+          nextCursor: null,
+          requestId: listRequest.requestId,
+          sessionId: listRequest.sessionId,
+        }),
+      );
+      fireEvent.click(
+        await within(sessionsDialog).findByRole("button", {
+          name: "Open Persistent native title",
+        }),
+      );
+      const openRequest = decodeNativeSessionCommand(
+        await paired.daemon.receive(NATIVE_SESSION_REQUEST_KIND),
+      );
+      if (openRequest.action !== "import") {
+        throw new Error("Expected a native Session import request");
+      }
+      const nativeHistory = {
+        coveredCommandIds: [],
+        messages: [
+          { role: "user" as const, text: "Persisted native question" },
+          { role: "assistant" as const, text: "Persisted native answer" },
+        ],
+        status: "available" as const,
+        truncated: false,
+      };
+      paired.daemon.send(
+        encodeNativeSessionResult({
+          action: "import",
+          history: nativeHistory,
+          kind: "native.session.result",
+          ready: {
+            additionalDirectories: [],
+            agentId: "codex",
+            agentName: "Codex",
+            agentVersion: "integration",
+            capabilities: {
+              additionalDirectories: true,
+              audioPrompt: false,
+              closeSession: true,
+              deleteSession: true,
+              embeddedContextPrompt: true,
+              imagePrompt: true,
+              listSessions: true,
+              loadSession: true,
+              resumeSession: true,
+              unstableForkSession: true,
+            },
+            commands: [],
+            configOptions: [],
+            directoryId: openRequest.directoryId,
+            directoryLabel: "/workspace/saved-project",
+            kind: "session.ready",
+            requestId: openRequest.requestId,
+            restored: true,
+            sessionId: openRequest.targetSessionId,
+          },
+          requestId: openRequest.requestId,
+          sessionId: openRequest.sessionId,
+          targetSessionId: openRequest.targetSessionId,
+          title: "Persistent native title",
+        }),
+      );
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Persistent native title",
+      });
+      await screen.findByText("Persisted native answer");
+
+      cleanup();
+      await closeMobiusTransport();
+      render(<App />);
+      const resumedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(resumedPreparation.sessionId).toBe(openRequest.targetSessionId);
+      await sendReadySession(paired.daemon, resumedPreparation);
+
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Persistent native title",
+      });
+      expect(await screen.findByText("Persisted native question")).toBeTruthy();
+      expect(await screen.findByText("Persisted native answer")).toBeTruthy();
     } finally {
       cleanup();
       await closeMobiusTransport();
@@ -826,6 +985,156 @@ describe.sequential("Web application boundaries", () => {
       expect(screen.getByRole("heading", { level: 1 }).textContent).toContain(
         "Newest persisted prompt",
       );
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a titled Session has no Turns, When the Web app reloads, Then the same Session remains visible and resumes preparation", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+      await paired.daemon.sendSessionEvent(
+        initialPreparation.sessionId,
+        encodeSessionInfoUpdatedEvent({
+          kind: "session.info.updated",
+          sessionId: initialPreparation.sessionId,
+          title: "Prepared empty Session",
+          updatedAt: "2026-09-06T12:00:00.000Z",
+        }),
+      );
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Prepared empty Session",
+      });
+
+      cleanup();
+      await closeMobiusTransport();
+      render(<App />);
+      const resumedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(resumedPreparation.sessionId).toBe(initialPreparation.sessionId);
+      await sendReadySession(paired.daemon, resumedPreparation);
+
+      const conversations = await screen.findByRole("navigation", {
+        name: "Conversations",
+      });
+      expect(
+        within(conversations).getByRole("button", {
+          name: /Prepared empty Session/,
+        }),
+      ).toBeTruthy();
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a prepared Session changes configuration, When the next Turn is sent and the page reloads, Then both use the new immutable binding", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+      await paired.daemon.sendSessionEvent(
+        initialPreparation.sessionId,
+        encodeSessionConfigUpdatedEvent({
+          configOptions: [
+            {
+              booleanValue: false,
+              category: "model",
+              currentValue: "configured",
+              description: "Execution model",
+              id: "model",
+              name: "Model",
+              type: "select",
+              values: [
+                {
+                  description: "Configured model",
+                  groupId: "models",
+                  groupName: "Models",
+                  name: "Configured",
+                  value: "configured",
+                },
+              ],
+            },
+          ],
+          kind: "session.config.updated",
+          requestId: "configuration-binding",
+          sessionId: initialPreparation.sessionId,
+        }),
+      );
+      await screen.findByRole("button", {
+        name: /Run settings: Configured/,
+      });
+
+      const promptInput = screen.getByRole("textbox", {
+        name: "Message the local agent",
+      });
+      fireEvent.change(promptInput, {
+        target: { value: "Use the configured binding" },
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      const prompt = decodeSessionPromptCommand(
+        await paired.daemon.receive(SESSION_PROMPT_KIND),
+      );
+      expect(prompt.bindingId).toBe("configuration-binding");
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeSessionStartedEvent({
+          attemptId: "configured-attempt",
+          commandId: prompt.commandId,
+          kind: "session.started",
+          sessionId: prompt.sessionId,
+        }),
+      );
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeSessionCompletedEvent({
+          commandId: prompt.commandId,
+          kind: "session.completed",
+          sessionId: prompt.sessionId,
+          stopReason: "end_turn",
+        }),
+      );
+
+      cleanup();
+      await closeMobiusTransport();
+      render(<App />);
+      const resumedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(resumedPreparation).toMatchObject({
+        bindingId: "configuration-binding",
+        sessionId: initialPreparation.sessionId,
+      });
+      await sendReadySession(paired.daemon, resumedPreparation);
     } finally {
       cleanup();
       await closeMobiusTransport();

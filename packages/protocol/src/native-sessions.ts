@@ -5,7 +5,6 @@ import {
   sessionReadyEventSchema,
 } from "./control-messages.ts";
 import { sessionHistorySchema } from "./session-history.ts";
-import { MOBIUS_PROTOCOL_VERSION } from "./version.ts";
 
 export const NATIVE_SESSION_REQUEST_KIND = "native.session.request";
 export const NATIVE_SESSION_RESULT_KIND = "native.session.result";
@@ -14,7 +13,6 @@ export const NATIVE_SESSION_CANCEL_KIND = "native.session.cancel";
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
 const directoryId = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/);
 const envelope = {
-  protocolVersion: z.literal(MOBIUS_PROTOCOL_VERSION),
   requestId: identifier,
   sessionId: identifier,
 };

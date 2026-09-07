@@ -48,7 +48,7 @@ export default defineConfig({
     port: webPort,
     proxy: {
       "/health": `http://127.0.0.1:${relayPort.toString()}`,
-      "/v1": {
+      "/api": {
         changeOrigin: true,
         target: `http://127.0.0.1:${relayPort.toString()}`,
         ws: true,

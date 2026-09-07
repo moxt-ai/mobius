@@ -415,14 +415,9 @@ function reconcileConversations(
     const recordedSession = sessionsById.get(conversation.sessionId);
     const withSession =
       recordedSession === undefined ||
-      !conversation.matchesPreparation(
-        recordedSession.agentId,
-        recordedSession.sessionId,
-        recordedSession.directoryId,
-        recordedSession.additionalDirectories.map(
-          (directory) => directory.directoryId,
-        ),
-      )
+      conversation.agentId !== recordedSession.agentId ||
+      conversation.sessionId !== recordedSession.sessionId ||
+      conversation.directoryId !== recordedSession.directoryId
         ? conversation
         : conversation.reconcileRecordedSession(recordedSession);
     const turns = turnsBySession.get(conversation.sessionId);
@@ -663,12 +658,18 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       conversations: replaceSessionConversation(
         state.conversations,
         event.sessionId,
-        (conversation) =>
-          conversation.session instanceof ReadySessionState
-            ? conversation.withSession(
-                conversation.session.withConfig(event.configOptions),
-              )
-            : conversation,
+        (conversation) => {
+          const configured =
+            conversation.session instanceof ReadySessionState
+              ? conversation.withSession(
+                  conversation.session.withConfig(event.configOptions),
+                )
+              : conversation;
+          return configured.withConfigBinding(
+            event.requestId,
+            conversation.configRevision + 1,
+          );
+        },
       ),
     }));
   },

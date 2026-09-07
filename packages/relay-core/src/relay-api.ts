@@ -1,4 +1,3 @@
-import { MOBIUS_PROTOCOL_VERSION } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 
 import {
@@ -17,6 +16,8 @@ import {
   validatePairingCode,
 } from "./pairing-directory.ts";
 import {
+  type AttemptReconciliationOutcome,
+  CreateSessionBindingRequest,
   CreateSessionRequest,
   ProjectScope,
   SessionRecordingPolicy,
@@ -209,7 +210,10 @@ function sessionError(error: unknown): Response {
   }
   if (error instanceof SessionRuntimeError) {
     const status =
-      error.code === "session_not_found" || error.code === "artifact_not_found"
+      error.code === "session_not_found" ||
+      error.code === "artifact_not_found" ||
+      error.code === "interaction_not_found" ||
+      error.code === "pending_work_not_found"
         ? 404
         : error.code === "session_access_denied"
           ? 403
@@ -218,7 +222,10 @@ function sessionError(error: unknown): Response {
             : error.code === "session_quota_exceeded"
               ? 429
               : error.code === "session_busy" ||
-                  error.code === "session_conflict"
+                  error.code === "session_conflict" ||
+                  error.code === "idempotency_conflict" ||
+                  error.code === "interaction_conflict" ||
+                  error.code === "event_source_conflict"
                 ? 409
                 : error.code === "content_too_large"
                   ? 413
@@ -305,18 +312,73 @@ function createRequest(
   );
 }
 
+function reconciliationOutcome(
+  body: Readonly<Record<string, unknown>>,
+): AttemptReconciliationOutcome {
+  const outcome = body["outcome"];
+  if (!isRecord(outcome) || typeof outcome["kind"] !== "string") {
+    throw new PairingDirectoryError(
+      "invalid_request",
+      "The reconciliation outcome is invalid",
+    );
+  }
+  if (outcome["kind"] === "running") {
+    assertExactKeys(outcome, ["kind"]);
+    return { kind: "running" };
+  }
+  if (outcome["kind"] === "cancelled") {
+    assertExactKeys(outcome, ["kind"]);
+    return { kind: "cancelled" };
+  }
+  if (outcome["kind"] === "succeeded") {
+    assertExactKeys(outcome, ["kind", "stopReason"]);
+    return {
+      kind: "succeeded",
+      stopReason: readString(outcome, "stopReason"),
+    };
+  }
+  if (outcome["kind"] === "failed") {
+    assertExactKeys(outcome, ["error", "kind"]);
+    const error = outcome["error"];
+    if (!isRecord(error)) {
+      throw new PairingDirectoryError(
+        "invalid_request",
+        "The reconciliation error is invalid",
+      );
+    }
+    assertExactKeys(error, ["code", "message", "retryable"]);
+    if (typeof error["retryable"] !== "boolean") {
+      throw new PairingDirectoryError(
+        "invalid_request",
+        "The reconciliation error is invalid",
+      );
+    }
+    return {
+      error: {
+        code: validateIdentifier(readString(error, "code"), "error_code"),
+        message: readString(error, "message", 2_000),
+        retryable: error["retryable"],
+      },
+      kind: "failed",
+    };
+  }
+  throw new PairingDirectoryError(
+    "invalid_request",
+    "The reconciliation outcome is invalid",
+  );
+}
+
 export function createRelayApp(dependencies: RelayDependencies): Hono {
   const app = new Hono();
 
   app.get("/health", (context) =>
     context.json({
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       service: "mobius-relay",
       status: "ok",
     }),
   );
 
-  app.post("/v1/pairings", async (context) => {
+  app.post("/api/pairings", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.createPairing(
@@ -330,7 +392,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/pairings/:pairingId", async (context) => {
+  app.get("/api/pairings/:pairingId", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.readPairingStatus(
@@ -345,7 +407,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.post("/v1/pairings/claim", async (context) => {
+  app.post("/api/pairings/claim", async (context) => {
     try {
       const body = await parseJsonBody(context.req.raw);
       assertExactKeys(body, [
@@ -376,7 +438,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.put("/v1/channels/:channelId/catalog", async (context) => {
+  app.put("/api/channels/:channelId/catalog", async (context) => {
     try {
       const body = await parseJsonBody(context.req.raw);
       assertExactKeys(body, ["agents", "installableAgents"]);
@@ -399,7 +461,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/channels/:channelId", async (context) => {
+  app.get("/api/channels/:channelId", async (context) => {
     try {
       return context.json(
         await dependencies.pairingDirectory.readChannel(
@@ -414,7 +476,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/channels/:channelId/host", async (context) => {
+  app.get("/api/channels/:channelId/host", async (context) => {
     try {
       const channelId = validateIdentifier(
         context.req.param("channelId"),
@@ -436,7 +498,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/channels/:channelId/daemon", async (context) => {
+  app.get("/api/channels/:channelId/daemon", async (context) => {
     try {
       const channelId = validateIdentifier(
         context.req.param("channelId"),
@@ -458,7 +520,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.post("/v1/projects/:projectId/sessions", async (context) => {
+  app.post("/api/projects/:projectId/sessions", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -481,7 +543,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/projects/:projectId/sessions", async (context) => {
+  app.get("/api/projects/:projectId/sessions", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -502,7 +564,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.post("/v1/projects/:projectId/session-imports", async (context) => {
+  app.post("/api/projects/:projectId/session-imports", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -526,7 +588,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     }
   });
 
-  app.get("/v1/projects/:projectId/sessions/:sessionId", async (context) => {
+  app.get("/api/projects/:projectId/sessions/:sessionId", async (context) => {
     try {
       const scope = await projectScope(
         dependencies,
@@ -547,7 +609,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
   });
 
   app.put(
-    "/v1/projects/:projectId/sessions/:sessionId/binding",
+    "/api/projects/:projectId/sessions/:sessionId/binding",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -556,12 +618,28 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
           context.req.raw,
         );
         const body = await parseJsonBody(context.req.raw);
-        assertExactKeys(body, ["runtimeId"]);
+        assertExactKeys(body, [
+          "agentRef",
+          "bindingId",
+          "configRevision",
+          "runtimeId",
+          "workspaceRef",
+        ]);
         return context.json(
-          await dependencies.sessionRuntime.bindSession(
+          await dependencies.sessionRuntime.setDefaultBinding(
             scope,
             validateIdentifier(context.req.param("sessionId"), "session_id"),
-            validateIdentifier(readString(body, "runtimeId"), "runtime_id"),
+            new CreateSessionBindingRequest(
+              validateIdentifier(readString(body, "bindingId"), "binding_id"),
+              validateIdentifier(readString(body, "runtimeId"), "runtime_id"),
+              validateIdentifier(readString(body, "agentRef"), "agent_ref"),
+              validateIdentifier(
+                readString(body, "workspaceRef"),
+                "workspace_ref",
+              ),
+              readInteger(body, "configRevision"),
+            ),
+            Date.now(),
             context.req.raw.signal,
           ),
         );
@@ -573,7 +651,135 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
   );
 
   app.get(
-    "/v1/projects/:projectId/sessions/:sessionId/messages",
+    "/api/projects/:projectId/sessions/:sessionId/turns/:turnId",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.readTurn(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            validateIdentifier(context.req.param("turnId"), "turn_id"),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.readAttempt(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            validateIdentifier(context.req.param("attemptId"), "attempt_id"),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.post(
+    "/api/channels/:channelId/sessions/:sessionId/attempts/:attemptId/reconciliation",
+    async (context) => {
+      try {
+        const access = await dependencies.pairingDirectory.authorizeDaemon(
+          validateIdentifier(context.req.param("channelId"), "channel_id"),
+          context.req.query("token") ?? bearerToken(context.req.raw),
+          context.req.raw.signal,
+        );
+        const body = await parseJsonBody(context.req.raw);
+        assertExactKeys(body, ["outcome"]);
+        return context.json(
+          await dependencies.sessionRuntime.reconcileAttempt(
+            new ProjectScope(access.tenantId, access.projectId),
+            access.runtimeId,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            validateIdentifier(context.req.param("attemptId"), "attempt_id"),
+            reconciliationOutcome(body),
+            Date.now(),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/projects/:projectId/sessions/:sessionId/interactions",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json({
+          interactions:
+            await dependencies.sessionRuntime.readPendingInteractions(
+              scope,
+              validateIdentifier(context.req.param("sessionId"), "session_id"),
+              context.req.raw.signal,
+            ),
+        });
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/projects/:projectId/sessions/:sessionId/interactions/:interactionId",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.readInteraction(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            validateIdentifier(
+              context.req.param("interactionId"),
+              "interaction_id",
+            ),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/projects/:projectId/sessions/:sessionId/messages",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -598,7 +804,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
   );
 
   app.get(
-    "/v1/projects/:projectId/sessions/:sessionId/events",
+    "/api/projects/:projectId/sessions/:sessionId/events",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -623,7 +829,7 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
   );
 
   app.get(
-    "/v1/projects/:projectId/sessions/:sessionId/activities/:activityId",
+    "/api/projects/:projectId/sessions/:sessionId/attempts/:attemptId/tool-calls/:toolCallId",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -632,10 +838,11 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
           context.req.raw,
         );
         return context.json(
-          await dependencies.sessionRuntime.readActivityDetail(
+          await dependencies.sessionRuntime.readToolCallDetail(
             scope,
             validateIdentifier(context.req.param("sessionId"), "session_id"),
-            validateIdentifier(context.req.param("activityId"), "activity_id"),
+            validateIdentifier(context.req.param("attemptId"), "attempt_id"),
+            validateIdentifier(context.req.param("toolCallId"), "tool_call_id"),
             context.req.raw.signal,
           ),
         );
@@ -647,7 +854,30 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
   );
 
   app.get(
-    "/v1/projects/:projectId/sessions/:sessionId/export",
+    "/api/projects/:projectId/sessions/:sessionId/native-history",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.readNativeHistory(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
+
+  app.get(
+    "/api/projects/:projectId/sessions/:sessionId/export",
     async (context) => {
       try {
         const scope = await projectScope(
@@ -669,26 +899,29 @@ export function createRelayApp(dependencies: RelayDependencies): Hono {
     },
   );
 
-  app.delete("/v1/projects/:projectId/sessions/:sessionId", async (context) => {
-    try {
-      const scope = await projectScope(
-        dependencies,
-        context.req.param("projectId"),
-        context.req.raw,
-      );
-      return context.json(
-        await dependencies.sessionRuntime.deleteSession(
-          scope,
-          validateIdentifier(context.req.param("sessionId"), "session_id"),
-          Date.now(),
-          context.req.raw.signal,
-        ),
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return sessionError(error);
-    }
-  });
+  app.delete(
+    "/api/projects/:projectId/sessions/:sessionId",
+    async (context) => {
+      try {
+        const scope = await projectScope(
+          dependencies,
+          context.req.param("projectId"),
+          context.req.raw,
+        );
+        return context.json(
+          await dependencies.sessionRuntime.deleteSession(
+            scope,
+            validateIdentifier(context.req.param("sessionId"), "session_id"),
+            Date.now(),
+            context.req.raw.signal,
+          ),
+        );
+      } catch (error) {
+        preserveCancellation(context.req.raw.signal, error);
+        return sessionError(error);
+      }
+    },
+  );
 
   return app;
 }

@@ -220,8 +220,8 @@ if (process.argv.includes("--version")) {
       const temporaryDirectory = await mkdtemp(
         join(tmpdir(), "mobius-agent-identity-"),
       );
-      const firstAgentPath = join(temporaryDirectory, "codex-v1");
-      const secondAgentPath = join(temporaryDirectory, "codex-v2");
+      const firstAgentPath = join(temporaryDirectory, "codex-first");
+      const secondAgentPath = join(temporaryDirectory, "codex-second");
       const codexLink = join(temporaryDirectory, "codex");
       const adapterPath = join(temporaryDirectory, "codex-acp");
       const manager = new AcpSessionManager();

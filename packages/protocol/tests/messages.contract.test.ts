@@ -20,7 +20,6 @@ import {
   encodeSessionEventEnvelope,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
-  MOBIUS_PROTOCOL_VERSION,
   ProtocolMessageError,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_HEARTBEAT_KIND,
@@ -30,7 +29,6 @@ import {
   type RuntimeLivenessReadyEvent,
   SESSION_CANCEL_KIND,
   SESSION_EVENT_ACK_KIND,
-  SESSION_EVENT_FORMAT_VERSION,
   SESSION_EVENT_KIND,
   SESSION_PROMPT_KIND,
   type SessionCancelCommand,
@@ -42,25 +40,26 @@ describe("reliable session event protocol", () => {
     const payload = encodeSessionStartedEvent({
       commandId: "command-1",
       kind: "session.started",
-      processAttemptId: "attempt-1",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
+      attemptId: "attempt-1",
       sessionId: "session-1",
     });
     const envelope = {
       eventId: "event-1",
-      eventVersion: SESSION_EVENT_FORMAT_VERSION,
       kind: SESSION_EVENT_KIND,
       payload,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
+      source: {
+        attemptId: "attempt-1",
+        kind: "attempt",
+        sourceSeq: "1",
+      },
     } as const;
     const acknowledgement = {
       cursor: "ZXZlbnQtY3Vyc29y",
       duplicate: true,
       eventId: envelope.eventId,
       kind: SESSION_EVENT_ACK_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
-      sequence: 12,
+      sequence: "12",
       sessionId: envelope.sessionId,
     } as const;
 
@@ -79,7 +78,6 @@ describe("runtime liveness protocol", () => {
   it("Given a liveness-capable relay, When its readiness signal crosses the daemon boundary, Then the capability round-trips exactly", () => {
     const event: RuntimeLivenessReadyEvent = {
       kind: RUNTIME_LIVENESS_READY_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
     };
 
     expect(
@@ -91,12 +89,10 @@ describe("runtime liveness protocol", () => {
     const heartbeat: RuntimeHeartbeatEvent = {
       heartbeatId: "heartbeat-1",
       kind: RUNTIME_HEARTBEAT_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
     };
     const acknowledgement: RuntimeHeartbeatAckEvent = {
       heartbeatId: heartbeat.heartbeatId,
       kind: RUNTIME_HEARTBEAT_ACK_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
     };
 
     expect(
@@ -127,7 +123,6 @@ describe("session prompt protocol", () => {
       ],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello from browser",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       resources: [
         {
           mimeType: "text/plain",
@@ -156,7 +151,6 @@ describe("session prompt protocol", () => {
       images: [],
       kind: SESSION_PROMPT_KIND,
       prompt: "hello from browser",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       resources: [],
       sessionId: "session-1",
     });
@@ -172,7 +166,6 @@ describe("session cancel protocol", () => {
     const command: SessionCancelCommand = {
       commandId: "command-1",
       kind: SESSION_CANCEL_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
     };
 
@@ -186,7 +179,6 @@ describe("session cancel protocol", () => {
       commandId: "command-1",
       cwd: "/tmp/untrusted",
       kind: SESSION_CANCEL_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: "session-1",
     });
 
@@ -227,7 +219,6 @@ describe("agent activity protocol", () => {
         kind: "recorded",
         output: "Complete test output",
       },
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sequence: 2,
       sessionId: "session-1",
       status: "completed",
@@ -252,7 +243,6 @@ describe("agent activity protocol", () => {
       locations: [],
       name: "read_file",
       output: "",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sequence: 0,
       sessionId: "session-1",
       status: "surprising",

@@ -4,7 +4,6 @@ import { join } from "node:path";
 
 import {
   decodeSessionEventEnvelope,
-  MOBIUS_PROTOCOL_VERSION,
   SESSION_EVENT_ACK_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it } from "vitest";
@@ -39,13 +38,45 @@ describe("durable daemon session event outbox", () => {
       duplicate: false,
       eventId: firstEnvelope.eventId,
       kind: SESSION_EVENT_ACK_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
-      sequence: 1,
+      sequence: "1",
       sessionId: firstEnvelope.sessionId,
     });
     expect(restarted.pending()).toEqual([secondEncoded]);
     expect(decodeSessionEventEnvelope(restarted.pending()[0] ?? "")).toEqual(
       decodeSessionEventEnvelope(secondEncoded),
+    );
+    restarted.close();
+  });
+
+  it("Given a durably claimed Turn, When the daemon restarts and receives the same dispatch, Then it returns the original Attempt receipt without authorizing a second execution", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "mobius-turn-receipt-"));
+    createdDirectories.push(directory);
+    const databasePath = join(directory, "audit.sqlite");
+    const command = JSON.stringify({ kind: "session.prompt", prompt: "run" });
+    const first = new SessionEventOutbox(databasePath);
+    const accepted = first.claimExecution("command-a", "session-a", command);
+    expect(accepted).toMatchObject({
+      commandId: "command-a",
+      kind: "accepted",
+      state: "dispatching",
+    });
+    first.transitionExecution("command-a", "running");
+    first.close();
+
+    const restarted = new SessionEventOutbox(databasePath);
+    expect(restarted.claimExecution("command-a", "session-a", command)).toEqual(
+      { ...accepted, kind: "duplicate", state: "running" },
+    );
+    expect(() =>
+      restarted.claimExecution(
+        "command-a",
+        "session-a",
+        JSON.stringify({ kind: "session.prompt", prompt: "changed" }),
+      ),
+    ).toThrow("conflicts with its durable receipt");
+    restarted.transitionExecution("command-a", "succeeded");
+    expect(() => restarted.transitionExecution("command-a", "running")).toThrow(
+      "transition is invalid",
     );
     restarted.close();
   });

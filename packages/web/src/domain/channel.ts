@@ -4,13 +4,8 @@ import type {
   NativeSessionHistory,
   PromptImage,
   PromptResource,
-  SessionCapabilities,
-  SessionCommand,
-  SessionConfigOption,
   SessionElicitationRequestedEvent,
   SessionPermissionRequestedEvent,
-  SessionUsageUpdatedEvent,
-  WorkspaceEntry,
 } from "@moxt-ai/mobius-web-sdk";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -184,6 +179,7 @@ export class CancelledAgentInstallationState extends RequestedAgentInstallationS
 
 export class RecordedActivity {
   readonly activityId: string;
+  readonly attemptId: string;
   readonly activityType: string;
   readonly input: string;
   readonly locations: readonly string[];
@@ -202,6 +198,7 @@ export class RecordedActivity {
 
   constructor(
     activityId: string,
+    attemptId: string,
     activityType: string,
     input: string,
     locations: readonly string[],
@@ -215,6 +212,7 @@ export class RecordedActivity {
     detailAvailability: RecordedActivity["detailAvailability"] = "inline",
   ) {
     this.activityId = activityId;
+    this.attemptId = attemptId;
     this.activityType = activityType;
     this.input = input;
     this.locations = locations;
@@ -249,63 +247,42 @@ export class RecordedContent {
 }
 
 export class RecordedSession {
-  readonly additionalDirectories: readonly WorkspaceEntry[];
   readonly agentId: string;
-  readonly agentName: string;
-  readonly agentVersion: string;
-  readonly capabilities: SessionCapabilities;
-  readonly commands: readonly SessionCommand[];
-  readonly configOptions: readonly SessionConfigOption[];
   readonly directoryId: string;
-  readonly directoryLabel: string;
-  readonly pendingElicitations: readonly SessionElicitationRequestedEvent[];
-  readonly pendingPermissions: readonly SessionPermissionRequestedEvent[];
-  readonly nativeHistory: NativeSessionHistory | null;
-  readonly status: "active" | "deleted";
-  readonly restored: boolean;
+  readonly bindingId: string;
+  readonly configRevision: number;
+  readonly elicitations: readonly SessionElicitationRequestedEvent[];
+  readonly runtimeId: string;
   readonly sessionId: string;
   readonly title: string;
   readonly updatedAt: string;
-  readonly usage: readonly SessionUsageUpdatedEvent[];
+  readonly nativeHistory: NativeSessionHistory | null;
+  readonly permissions: readonly SessionPermissionRequestedEvent[];
 
   constructor(
-    additionalDirectories: readonly WorkspaceEntry[],
     agentId: string,
-    agentName: string,
-    agentVersion: string,
-    capabilities: SessionCapabilities,
-    commands: readonly SessionCommand[],
-    configOptions: readonly SessionConfigOption[],
+    bindingId: string,
+    configRevision: number,
     directoryId: string,
-    directoryLabel: string,
-    pendingElicitations: readonly SessionElicitationRequestedEvent[],
-    pendingPermissions: readonly SessionPermissionRequestedEvent[],
-    restored: boolean,
+    runtimeId: string,
     sessionId: string,
     title: string,
     updatedAt: string,
-    usage: readonly SessionUsageUpdatedEvent[],
-    nativeHistory: NativeSessionHistory | null = null,
-    status: "active" | "deleted" = "active",
+    nativeHistory: NativeSessionHistory | null,
+    elicitations: readonly SessionElicitationRequestedEvent[] = [],
+    permissions: readonly SessionPermissionRequestedEvent[] = [],
   ) {
-    this.status = status;
-    this.nativeHistory = nativeHistory;
-    this.additionalDirectories = additionalDirectories;
     this.agentId = agentId;
-    this.agentName = agentName;
-    this.agentVersion = agentVersion;
-    this.capabilities = capabilities;
-    this.commands = commands;
-    this.configOptions = configOptions;
+    this.bindingId = bindingId;
+    this.configRevision = configRevision;
     this.directoryId = directoryId;
-    this.directoryLabel = directoryLabel;
-    this.pendingElicitations = pendingElicitations;
-    this.pendingPermissions = pendingPermissions;
-    this.restored = restored;
+    this.elicitations = elicitations;
+    this.runtimeId = runtimeId;
     this.sessionId = sessionId;
     this.title = title;
     this.updatedAt = updatedAt;
-    this.usage = usage;
+    this.nativeHistory = nativeHistory;
+    this.permissions = permissions;
   }
 }
 
@@ -316,6 +293,7 @@ export class ChannelConnection {
   readonly machineName: string;
   readonly hostToken: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
   readonly workspaceName: string;
 
@@ -327,6 +305,7 @@ export class ChannelConnection {
     hostToken: string,
     tenantId: string,
     projectId: string,
+    runtimeId: string,
     installableAgents: readonly InstallableAgentOption[] = [],
   ) {
     this.agents = agents;
@@ -335,6 +314,7 @@ export class ChannelConnection {
     this.machineName = machineName;
     this.hostToken = hostToken;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }
@@ -409,7 +389,7 @@ export class PendingRecordedTurn extends RecordedTurn {
 }
 
 export class RunningRecordedTurn extends RecordedTurn {
-  readonly processAttemptId: string;
+  readonly attemptId: string;
   readonly status = "running";
 
   constructor(
@@ -419,7 +399,7 @@ export class RunningRecordedTurn extends RecordedTurn {
     prompt: string,
     response: string,
     sessionId: string,
-    processAttemptId: string,
+    attemptId: string,
     activities: readonly RecordedActivity[] = [],
     images: readonly PromptImage[] = [],
     resources: readonly PromptResource[] = [],
@@ -437,12 +417,12 @@ export class RunningRecordedTurn extends RecordedTurn {
       resources,
       contents,
     );
-    this.processAttemptId = processAttemptId;
+    this.attemptId = attemptId;
   }
 }
 
 export class CompletedRecordedTurn extends RecordedTurn {
-  readonly processAttemptId: string;
+  readonly attemptId: string;
   readonly status = "completed";
   readonly stopReason: string;
 
@@ -453,7 +433,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
     prompt: string,
     response: string,
     sessionId: string,
-    processAttemptId: string,
+    attemptId: string,
     stopReason: string,
     activities: readonly RecordedActivity[] = [],
     images: readonly PromptImage[] = [],
@@ -472,7 +452,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
       resources,
       contents,
     );
-    this.processAttemptId = processAttemptId;
+    this.attemptId = attemptId;
     this.stopReason = stopReason;
   }
 }
@@ -534,6 +514,7 @@ export class CreatedPairing {
   readonly pollToken: string;
   readonly hostToken: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
 
   constructor(
@@ -545,6 +526,7 @@ export class CreatedPairing {
     hostToken: string,
     tenantId: string,
     projectId: string,
+    runtimeId: string,
   ) {
     this.pairingId = pairingId;
     this.pairingCode = pairingCode;
@@ -553,6 +535,7 @@ export class CreatedPairing {
     this.expiresAt = expiresAt;
     this.hostToken = hostToken;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
   }
 }

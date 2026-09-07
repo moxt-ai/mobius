@@ -1,8 +1,13 @@
 import {
   decodeAgentDisplayContentValue,
+  decodeInteraction,
+  decodeNativeSessionHistory,
   decodePromptImagesValue,
   decodePromptResourcesValue,
   decodeRecordedAgentContentValue,
+  type Interaction,
+  type SessionElicitationRequestedEvent,
+  type SessionPermissionRequestedEvent,
 } from "@moxt-ai/mobius-web-sdk";
 
 import {
@@ -23,6 +28,7 @@ import {
   PendingRecordedTurn,
   RecordedActivity,
   RecordedContent,
+  RecordedSession,
   type RecordedTurn,
   RunningRecordedTurn,
   WaitingBrowserPairingStatus,
@@ -246,6 +252,7 @@ function decodeRecordedActivity(value: unknown): RecordedActivity {
   }
   return new RecordedActivity(
     readIdentifier(value["activityId"], "agent activity"),
+    readIdentifier(value["attemptId"], "agent activity Attempt"),
     readAllowedString(
       value["activityType"],
       "agent activity type",
@@ -442,6 +449,7 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
   const hostToken = value["hostToken"];
   const tenantId = value["tenantId"];
   const projectId = value["projectId"];
+  const runtimeId = value["runtimeId"];
   if (
     typeof pairingId !== "string" ||
     !isIdentifier(pairingId) ||
@@ -456,7 +464,9 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
     typeof tenantId !== "string" ||
     !isIdentifier(tenantId) ||
     typeof projectId !== "string" ||
-    !isIdentifier(projectId)
+    !isIdentifier(projectId) ||
+    typeof runtimeId !== "string" ||
+    !isIdentifier(runtimeId)
   ) {
     throw new PairingApiError(
       "invalid_relay_response",
@@ -472,6 +482,7 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
     hostToken,
     tenantId,
     projectId,
+    runtimeId,
   );
 }
 
@@ -543,10 +554,13 @@ function decodeChannelConnection(
     );
   }
   const channelId = value["channelId"];
+  const runtimeId = value["runtimeId"];
   if (
     typeof channelId !== "string" ||
     !isIdentifier(channelId) ||
-    channelId !== expectedChannelId
+    channelId !== expectedChannelId ||
+    typeof runtimeId !== "string" ||
+    !isIdentifier(runtimeId)
   ) {
     throw new PairingApiError(
       "invalid_relay_response",
@@ -583,6 +597,7 @@ function decodeChannelConnection(
     credential.hostToken,
     credential.tenantId,
     credential.projectId,
+    runtimeId,
     installableAgents,
   );
 }
@@ -627,7 +642,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       prompt,
       response,
       sessionId,
-      readIdentifier(value["processAttemptId"], "history attempt"),
+      readIdentifier(value["attemptId"], "history attempt"),
       activities,
       images,
       resources,
@@ -642,7 +657,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
       prompt,
       response,
       sessionId,
-      readIdentifier(value["processAttemptId"], "history attempt"),
+      readIdentifier(value["attemptId"], "history attempt"),
       readString(value["stopReason"], "history stop reason", 64),
       activities,
       images,
@@ -674,7 +689,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
 
 export async function createBrowserPairing(): Promise<CreatedPairing> {
   const pairing = decodeCreatedPairing(
-    await requestJson(new URL("/v1/pairings", window.location.origin), {
+    await requestJson(new URL("/api/pairings", window.location.origin), {
       method: "POST",
     }),
   );
@@ -686,7 +701,7 @@ export async function readBrowserPairingStatus(
   pairing: CreatedPairing,
 ): Promise<BrowserPairingStatus> {
   const endpoint = new URL(
-    `/v1/pairings/${encodeURIComponent(pairing.pairingId)}`,
+    `/api/pairings/${encodeURIComponent(pairing.pairingId)}`,
     window.location.origin,
   );
   endpoint.searchParams.set("token", pairing.pollToken);
@@ -725,7 +740,7 @@ export async function readChannelConnection(
 ): Promise<ChannelConnection> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/v1/channels/${encodeURIComponent(channelId)}`,
+    `/api/channels/${encodeURIComponent(channelId)}`,
     window.location.origin,
   );
   return decodeChannelConnection(
@@ -747,6 +762,117 @@ export async function readChannelHistory(
   );
 }
 
+interface PendingSessionInteractions {
+  readonly elicitations: readonly SessionElicitationRequestedEvent[];
+  readonly permissions: readonly SessionPermissionRequestedEvent[];
+}
+
+function isAcceptedUrlResponse(interaction: Interaction): boolean {
+  if (
+    interaction.request.kind !== "elicitation" ||
+    interaction.request.mode !== "url" ||
+    interaction.state.kind !== "responded" ||
+    interaction.state.response.kind !== "elicitation"
+  ) {
+    return false;
+  }
+  try {
+    const response: unknown = JSON.parse(interaction.state.response.content);
+    return (
+      isRecord(response) &&
+      Object.keys(response).length === 2 &&
+      response["action"] === "accept" &&
+      typeof response["content"] === "string"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function decodePendingSessionInteractions(
+  value: unknown,
+  sessionId: string,
+  turns: readonly RecordedTurn[],
+): PendingSessionInteractions {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length !== 1 ||
+    !Array.isArray(value["interactions"]) ||
+    value["interactions"].length > 100
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid pending Interaction page.",
+    );
+  }
+  const commandIdsByAttempt = new Map(
+    turns
+      .filter((turn) => turn instanceof RunningRecordedTurn)
+      .map((turn) => [turn.attemptId, turn.commandId]),
+  );
+  const elicitations: SessionElicitationRequestedEvent[] = [];
+  const permissions: SessionPermissionRequestedEvent[] = [];
+  for (const candidate of value["interactions"]) {
+    let interaction: Interaction;
+    try {
+      interaction = decodeInteraction(candidate);
+    } catch (cause) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid pending Interaction.",
+        { cause },
+      );
+    }
+    if (
+      interaction.sessionId !== sessionId ||
+      (interaction.state.kind !== "pending" &&
+        interaction.state.kind !== "responded")
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an inconsistent pending Interaction.",
+      );
+    }
+    const commandId = commandIdsByAttempt.get(interaction.attemptId);
+    if (commandId === undefined) {
+      continue;
+    }
+    if (interaction.request.kind === "permission") {
+      if (interaction.state.kind === "pending") {
+        permissions.push({
+          commandId,
+          interactionId: interaction.interactionId,
+          kind: "session.permission.requested",
+          options: interaction.request.options,
+          sessionId,
+          title: interaction.request.title,
+          toolCallId: interaction.request.toolCallId,
+          toolKind: interaction.request.toolKind,
+        });
+      }
+      continue;
+    }
+    if (
+      interaction.state.kind === "pending" ||
+      isAcceptedUrlResponse(interaction)
+    ) {
+      elicitations.push({
+        accepted: interaction.state.kind === "responded",
+        commandId,
+        elicitationId: interaction.request.elicitationId,
+        fields: interaction.request.fields,
+        interactionId: interaction.interactionId,
+        kind: "session.elicitation.requested",
+        message: interaction.request.message,
+        mode: interaction.request.mode,
+        sessionId,
+        url: interaction.request.url,
+      });
+    }
+  }
+  return { elicitations, permissions };
+}
+
 async function readChannelHistoryWithSignal(
   channelId: string,
   signal: AbortSignal,
@@ -754,7 +880,7 @@ async function readChannelHistoryWithSignal(
   const credential = readChannelCredential(channelId);
   const headers = { authorization: `Bearer ${credential.hostToken}` };
   const directoryEndpoint = new URL(
-    `/v1/projects/${encodeURIComponent(credential.projectId)}/sessions`,
+    `/api/projects/${encodeURIComponent(credential.projectId)}/sessions`,
     window.location.origin,
   );
   directoryEndpoint.searchParams.set("limit", "100");
@@ -769,43 +895,125 @@ async function readChannelHistoryWithSignal(
       "The relay returned an invalid session directory.",
     );
   }
-  const sessionIds = directory["sessions"].map((session) => {
-    if (!isRecord(session)) {
-      throw new PairingApiError(
-        "invalid_relay_response",
-        "The relay returned an invalid session summary.",
-      );
-    }
-    return readIdentifier(session["sessionId"], "session identifier");
-  });
-  const pages = await Promise.all(
-    sessionIds.map(async (sessionId) => {
-      const endpoint = new URL(
-        `/v1/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/messages`,
+  const summaries = directory["sessions"].map((session) =>
+    decodeRecordedSession(session, credential),
+  );
+  const restored = await Promise.all(
+    summaries.map(async ({ hasNativeHistory, session }) => {
+      const messagesEndpoint = new URL(
+        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
         window.location.origin,
       );
-      endpoint.searchParams.set("limit", "100");
-      return await requestJson(endpoint, { headers, method: "GET" }, signal);
+      messagesEndpoint.searchParams.set("limit", "100");
+      const historyEndpoint = new URL(
+        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
+        window.location.origin,
+      );
+      const interactionsEndpoint = new URL(
+        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
+        window.location.origin,
+      );
+      const [page, nativeHistoryValue, interactionPage] = await Promise.all([
+        requestJson(messagesEndpoint, { headers, method: "GET" }, signal),
+        hasNativeHistory
+          ? requestJson(historyEndpoint, { headers, method: "GET" }, signal)
+          : Promise.resolve(null),
+        requestJson(interactionsEndpoint, { headers, method: "GET" }, signal),
+      ]);
+      if (!isRecord(page) || !Array.isArray(page["messages"])) {
+        throw new PairingApiError(
+          "invalid_relay_response",
+          "The relay returned an invalid message page.",
+        );
+      }
+      const turns = page["messages"].map(decodeSessionMessage);
+      const interactions = decodePendingSessionInteractions(
+        interactionPage,
+        session.sessionId,
+        turns,
+      );
+      return {
+        turns,
+        session: new RecordedSession(
+          session.agentId,
+          session.bindingId,
+          session.configRevision,
+          session.directoryId,
+          session.runtimeId,
+          session.sessionId,
+          session.title,
+          session.updatedAt,
+          nativeHistoryValue === null
+            ? null
+            : decodeNativeSessionHistory(nativeHistoryValue),
+          interactions.elicitations,
+          interactions.permissions,
+        ),
+      };
     }),
   );
+  const sessions = restored.map(({ session }) => session);
   const turns: RecordedTurn[] = [];
-  for (const page of pages) {
-    if (!isRecord(page) || !Array.isArray(page["messages"])) {
-      throw new PairingApiError(
-        "invalid_relay_response",
-        "The relay returned an invalid message page.",
-      );
-    }
-    const sessionTurns: RecordedTurn[] = [];
-    for (const message of page["messages"]) {
-      sessionTurns.push(decodeSessionMessage(message));
-    }
+  for (const { turns: sessionTurns } of restored) {
     sessionTurns.sort(
       (left, right) => left.createdAt.getTime() - right.createdAt.getTime(),
     );
     turns.push(...sessionTurns);
   }
-  return new ChannelHistory(turns);
+  return new ChannelHistory(turns, sessions);
+}
+
+function decodeRecordedSession(
+  value: unknown,
+  credential: BrowserChannelCredential,
+): { readonly hasNativeHistory: boolean; readonly session: RecordedSession } {
+  if (
+    !isRecord(value) ||
+    !isRecord(value["defaultBinding"]) ||
+    !isRecord(value["lifecycle"])
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid session summary.",
+    );
+  }
+  const sessionId = readIdentifier(value["sessionId"], "session identifier");
+  const agentId = readIdentifier(value["agentId"], "session Agent");
+  const runtimeId = readIdentifier(value["runtimeId"], "session Runtime");
+  const binding = value["defaultBinding"];
+  const configRevision = binding["configRevision"];
+  const hasNativeHistory = value["hasNativeHistory"];
+  if (
+    value["tenantId"] !== credential.tenantId ||
+    value["projectId"] !== credential.projectId ||
+    value["lifecycle"]["kind"] !== "ready" ||
+    binding["sessionId"] !== sessionId ||
+    binding["agentRef"] !== agentId ||
+    binding["runtimeId"] !== runtimeId ||
+    typeof configRevision !== "number" ||
+    !Number.isSafeInteger(configRevision) ||
+    configRevision < 0 ||
+    typeof hasNativeHistory !== "boolean"
+  ) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an inconsistent session summary.",
+    );
+  }
+  return {
+    hasNativeHistory,
+    session: new RecordedSession(
+      agentId,
+      readIdentifier(binding["bindingId"], "Session binding"),
+      configRevision,
+      readIdentifier(binding["workspaceRef"], "Session workspace"),
+      runtimeId,
+      sessionId,
+      readText(value["title"], "session title", 500),
+      readDate(value["updatedAt"], "session update time").toISOString(),
+      null,
+    ),
+  };
 }
 
 function decodeSessionMessage(value: unknown): RecordedTurn {
@@ -821,9 +1029,9 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
     commandId: value["commandId"],
     contents: [],
     createdAt: value["createdAt"],
-    images: [],
+    images: value["images"],
     prompt: value["prompt"],
-    resources: [],
+    resources: value["resources"],
     response: value["response"],
     sessionId: value["sessionId"],
   };
@@ -837,19 +1045,31 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
       "The relay returned an invalid execution attempt.",
     );
   }
-  if (attempt["kind"] === "running") {
+  if (
+    attempt["kind"] === "dispatching" ||
+    attempt["kind"] === "running" ||
+    attempt["kind"] === "waiting_input"
+  ) {
     return decodeRecordedTurn({
       ...base,
-      processAttemptId: attempt["processAttemptId"],
+      attemptId: attempt["attemptId"],
       status: "running",
     });
   }
-  if (attempt["kind"] === "completed") {
+  if (attempt["kind"] === "succeeded") {
     return decodeRecordedTurn({
       ...base,
-      processAttemptId: attempt["processAttemptId"],
+      attemptId: attempt["attemptId"],
       status: "completed",
       stopReason: attempt["stopReason"],
+    });
+  }
+  if (attempt["kind"] === "cancelled") {
+    return decodeRecordedTurn({
+      ...base,
+      attemptId: attempt["attemptId"],
+      status: "completed",
+      stopReason: "cancelled",
     });
   }
   if (attempt["kind"] === "failed") {
@@ -860,10 +1080,10 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
       status: "failed",
     });
   }
-  if (attempt["kind"] === "outcome_unknown") {
+  if (attempt["kind"] === "indeterminate") {
     return decodeRecordedTurn({
       ...base,
-      code: "outcome_unknown",
+      code: "indeterminate",
       message:
         "The runtime disconnected before the execution outcome was reconciled.",
       status: "failed",
@@ -933,15 +1153,16 @@ function decodeActivityDetail(value: unknown): ActivityDetailResult {
   };
 }
 
-export async function readActivityDetail(
+export async function readToolCallDetail(
   channelId: string,
   sessionId: string,
-  activityId: string,
+  attemptId: string,
+  toolCallId: string,
   signal: AbortSignal,
 ): Promise<ActivityDetailResult> {
   const credential = readChannelCredential(channelId);
   const endpoint = new URL(
-    `/v1/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/activities/${encodeURIComponent(activityId)}`,
+    `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
     window.location.origin,
   );
   return decodeActivityDetail(

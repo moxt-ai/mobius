@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
-import {
-  MOBIUS_PROTOCOL_VERSION,
-  type NativeSessionCommand,
-  type NativeSessionEntry,
-  type NativeSessionResult,
-  type SessionReadyEvent,
-  type WorkspaceEntry,
+import type {
+  NativeSessionCommand,
+  NativeSessionEntry,
+  NativeSessionResult,
+  SessionReadyEvent,
+  WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 import type { NativeSessionInfo } from "../acp/native-session.ts";
 import {
@@ -64,12 +63,12 @@ export class NativeSessionService {
   ): Promise<NativeSessionResult> => {
     signal.throwIfAborted();
     const cwd = await this.#directories.resolve(
-      command.bindingId,
+      this.#config.bindingId,
       command.directoryId,
       signal,
     );
     const additionalDirectories = await this.#directories.resolveMany(
-      command.bindingId,
+      this.#config.bindingId,
       command.additionalDirectoryIds,
       signal,
     );
@@ -88,26 +87,22 @@ export class NativeSessionService {
         {},
         "native_session_unsupported",
       );
-    const scope = JSON.stringify([
+    const entryScope = JSON.stringify([
       command.agentId,
       command.bindingId,
       command.sessionId,
-      cwd,
     ]);
+    const cursorScope = JSON.stringify([entryScope, cwd]);
     const envelope = {
       kind: "native.session.result",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: command.requestId,
       sessionId: command.sessionId,
-    } satisfies Pick<
-      NativeSessionResult,
-      "kind" | "protocolVersion" | "requestId" | "sessionId"
-    >;
+    } satisfies Pick<NativeSessionResult, "kind" | "requestId" | "sessionId">;
     if (command.action === "list") {
       let cursor: string | null = null;
       if (command.cursor !== null) {
         const known = this.#cursors.get(command.cursor);
-        if (known?.scope !== scope)
+        if (known?.scope !== cursorScope)
           throw new AcpExecutionError(
             "Refresh the native session list before continuing",
             {},
@@ -123,7 +118,7 @@ export class NativeSessionService {
         const entryId = randomUUID();
         if (this.#entries.size >= 5_000) this.#entries.clear();
         this.#entries.set(entryId, {
-          scope,
+          scope: entryScope,
           nativeSessionId: info.sessionId,
           cwd: authorized.cwd,
           additionalDirectories: authorized.additionalDirectories,
@@ -147,7 +142,10 @@ export class NativeSessionService {
           );
         nextCursor = randomUUID();
         if (this.#cursors.size >= 500) this.#cursors.clear();
-        this.#cursors.set(nextCursor, { scope, cursor: page.nextCursor });
+        this.#cursors.set(nextCursor, {
+          scope: cursorScope,
+          cursor: page.nextCursor,
+        });
       }
       this.record(command, "native_sessions_listed");
       return {
@@ -159,11 +157,17 @@ export class NativeSessionService {
       };
     }
     const selected = this.#entries.get(command.entryId);
-    if (selected?.scope !== scope)
+    if (selected?.scope !== entryScope)
       throw new AcpExecutionError(
         "Select a session from a fresh native session list",
         {},
         "native_session_not_found",
+      );
+    if (selected.cwd !== cwd)
+      throw new AcpExecutionError(
+        "The selected session belongs to a different workspace. Refresh the list before continuing.",
+        {},
+        "native_session_target_changed",
       );
     const target = await this.resolveTarget(command, options, selected);
     if (command.action === "delete") {
@@ -279,7 +283,6 @@ export class NativeSessionService {
       directoryId: target.directoryId,
       directoryLabel: target.directoryLabel,
       kind: "session.ready",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: command.requestId,
       restored: true,
       sessionId: opened.sessionId,

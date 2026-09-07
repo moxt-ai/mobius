@@ -28,7 +28,7 @@ import { cn } from "@/lib/utils";
 import { describeAgentActivities } from "@/services/activity-presentation";
 import {
   type ActivityDetailResult,
-  readActivityDetail,
+  readToolCallDetail,
 } from "@/services/pairing-api";
 
 type ActivityDetailLoadState =
@@ -266,9 +266,10 @@ function ActivityLine({
     detailController.current = controller;
     detailLoadKind.current = "loading";
     setDetailLoad({ kind: "loading" });
-    void readActivityDetail(
+    void readToolCallDetail(
       channelId,
       sessionId,
+      activity.attemptId,
       activity.activityId,
       controller.signal,
     ).then(
@@ -293,7 +294,13 @@ function ActivityLine({
         });
       },
     );
-  }, [activity.activityId, activity.detailAvailability, channelId, sessionId]);
+  }, [
+    activity.activityId,
+    activity.attemptId,
+    activity.detailAvailability,
+    channelId,
+    sessionId,
+  ]);
   useEffect(() => {
     return () => detailController.current?.abort();
   }, []);

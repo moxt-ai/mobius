@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 
 import {
   encodeRuntimeHeartbeatEvent,
-  MOBIUS_PROTOCOL_VERSION,
   RUNTIME_HEARTBEAT_KIND,
   type RuntimeHeartbeatAckEvent,
 } from "@moxt-ai/mobius-protocol";
@@ -133,7 +132,6 @@ export class RelayConnectionLiveness {
       encodeRuntimeHeartbeatEvent({
         heartbeatId,
         kind: RUNTIME_HEARTBEAT_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
       }),
     );
   };

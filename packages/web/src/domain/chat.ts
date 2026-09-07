@@ -167,6 +167,10 @@ export abstract class AgentSessionState {
   readonly permissions: readonly SessionPermissionRequestedEvent[];
   readonly restored: boolean;
   readonly usage: SessionUsageState;
+  abstract readonly withInteractions: (
+    elicitations: readonly SessionElicitationRequestedEvent[],
+    permissions: readonly SessionPermissionRequestedEvent[],
+  ) => AgentSessionState;
 
   protected constructor(
     agentName: string,
@@ -198,19 +202,28 @@ class UnpreparedSessionState extends AgentSessionState {
   readonly label = "Agent settings not loaded";
   readonly updatedAt = "";
 
-  constructor() {
+  constructor(
+    elicitations: readonly SessionElicitationRequestedEvent[] = [],
+    permissions: readonly SessionPermissionRequestedEvent[] = [],
+  ) {
     super(
       "",
       "",
       EMPTY_CAPABILITIES,
       [],
       [],
-      [],
-      [],
+      elicitations,
+      permissions,
       false,
       new UnknownSessionUsage(),
     );
   }
+
+  readonly withInteractions = (
+    elicitations: readonly SessionElicitationRequestedEvent[],
+    permissions: readonly SessionPermissionRequestedEvent[],
+  ): UnpreparedSessionState =>
+    new UnpreparedSessionState(elicitations, permissions);
 }
 
 class PreparingSessionState extends AgentSessionState {
@@ -220,19 +233,28 @@ class PreparingSessionState extends AgentSessionState {
   readonly label = "Loading agent settings";
   readonly updatedAt = "";
 
-  constructor() {
+  constructor(
+    elicitations: readonly SessionElicitationRequestedEvent[] = [],
+    permissions: readonly SessionPermissionRequestedEvent[] = [],
+  ) {
     super(
       "",
       "",
       EMPTY_CAPABILITIES,
       [],
       [],
-      [],
-      [],
+      elicitations,
+      permissions,
       false,
       new UnknownSessionUsage(),
     );
   }
+
+  readonly withInteractions = (
+    elicitations: readonly SessionElicitationRequestedEvent[],
+    permissions: readonly SessionPermissionRequestedEvent[],
+  ): PreparingSessionState =>
+    new PreparingSessionState(elicitations, permissions);
 }
 
 export class SessionPreparationFailedState extends AgentSessionState {
@@ -243,20 +265,30 @@ export class SessionPreparationFailedState extends AgentSessionState {
   readonly label = "Agent settings unavailable";
   readonly updatedAt = "";
 
-  constructor(error: string) {
+  constructor(
+    error: string,
+    elicitations: readonly SessionElicitationRequestedEvent[] = [],
+    permissions: readonly SessionPermissionRequestedEvent[] = [],
+  ) {
     super(
       "",
       "",
       EMPTY_CAPABILITIES,
       [],
       [],
-      [],
-      [],
+      elicitations,
+      permissions,
       false,
       new UnknownSessionUsage(),
     );
     this.error = error;
   }
+
+  readonly withInteractions = (
+    elicitations: readonly SessionElicitationRequestedEvent[],
+    permissions: readonly SessionPermissionRequestedEvent[],
+  ): SessionPreparationFailedState =>
+    new SessionPreparationFailedState(this.error, elicitations, permissions);
 }
 
 export class DeletedSessionState extends AgentSessionState {
@@ -279,6 +311,8 @@ export class DeletedSessionState extends AgentSessionState {
       new UnknownSessionUsage(),
     );
   }
+
+  readonly withInteractions = (): DeletedSessionState => this;
 }
 
 export class ReadySessionState extends AgentSessionState {
@@ -329,25 +363,6 @@ export class ReadySessionState extends AgentSessionState {
     );
   }
 
-  static fromRecorded(recorded: RecordedSession): ReadySessionState {
-    const usage = recorded.usage.reduce<SessionUsageState>(
-      (previous, event) => previous.withUpdate(event),
-      new UnknownSessionUsage(),
-    );
-    return new ReadySessionState(
-      recorded.agentName,
-      recorded.agentVersion,
-      recorded.capabilities,
-      recorded.commands,
-      recorded.configOptions,
-      recorded.pendingElicitations,
-      recorded.pendingPermissions,
-      recorded.restored,
-      usage,
-      recorded.updatedAt,
-    );
-  }
-
   readonly withCommands = (
     commands: readonly SessionCommand[],
   ): ReadySessionState =>
@@ -375,6 +390,23 @@ export class ReadySessionState extends AgentSessionState {
       configOptions,
       this.elicitations,
       this.permissions,
+      this.restored,
+      this.usage,
+      this.updatedAt,
+    );
+
+  readonly withInteractions = (
+    elicitations: readonly SessionElicitationRequestedEvent[],
+    permissions: readonly SessionPermissionRequestedEvent[],
+  ): ReadySessionState =>
+    new ReadySessionState(
+      this.agentName,
+      this.agentVersion,
+      this.capabilities,
+      this.commands,
+      this.configOptions,
+      elicitations,
+      permissions,
       this.restored,
       this.usage,
       this.updatedAt,
@@ -891,6 +923,8 @@ export class Conversation {
   readonly additionalDirectories: readonly WorkspaceEntry[];
   readonly agentId: string;
   readonly agentLabel: string;
+  readonly bindingId: string;
+  readonly configRevision: number;
   readonly draft: string;
   readonly draftImages: readonly PromptImage[];
   readonly draftResources: readonly PromptResource[];
@@ -945,10 +979,14 @@ export class Conversation {
     additionalDirectories: readonly WorkspaceEntry[] = [],
     draftImages: readonly PromptImage[] = [],
     draftResources: readonly PromptResource[] = [],
+    bindingId = "workspace",
+    configRevision = 1,
   ) {
     this.additionalDirectories = additionalDirectories;
     this.agentId = agentId;
     this.agentLabel = agentLabel;
+    this.bindingId = bindingId;
+    this.configRevision = configRevision;
     this.directoryId = directoryId;
     this.directoryLabel = directoryLabel;
     this.id = id;
@@ -1028,16 +1066,13 @@ export class Conversation {
       if (turn instanceof PendingRecordedTurn) {
         state = new PendingTurnState();
       } else if (turn instanceof RunningRecordedTurn) {
-        state = new RunningTurnState(turn.processAttemptId);
+        state = new RunningTurnState(turn.attemptId);
       } else if (turn instanceof CompletedRecordedTurn) {
         if (turn.stopReason === "cancelled") {
-          state = new StoppedTurnState(turn.processAttemptId);
+          state = new StoppedTurnState(turn.attemptId);
           fallbackText = "The agent stopped before returning text.";
         } else {
-          state = new CompletedTurnState(
-            turn.processAttemptId,
-            turn.stopReason,
-          );
+          state = new CompletedTurnState(turn.attemptId, turn.stopReason);
           fallbackText = "The agent completed without returning text.";
         }
       } else if (turn instanceof FailedRecordedTurn) {
@@ -1083,9 +1118,7 @@ export class Conversation {
             recorded.sessionId,
             recorded.sessionId,
             "New chat",
-            recorded.nativeHistory === null
-              ? "No messages yet"
-              : "Previous Agent conversation",
+            "No messages yet",
             "",
             [],
           )
@@ -1096,21 +1129,21 @@ export class Conversation {
       base.id,
       base.sessionId,
       recorded.title.length > 0 ? recorded.title : base.title,
-      base.preview,
+      recorded.nativeHistory === null ? base.preview : "Continue Agent context",
       base.draft,
       mergeNativeHistory(
         recorded.sessionId,
         recorded.nativeHistory,
         base.messages,
       ),
-      recorded.status === "deleted"
-        ? new DeletedSessionState()
-        : ReadySessionState.fromRecorded(recorded),
+      new UnpreparedSessionState(recorded.elicitations, recorded.permissions),
       recorded.directoryId,
-      recorded.directoryLabel,
-      recorded.additionalDirectories,
+      recorded.directoryId,
+      [],
       base.draftImages,
       base.draftResources,
+      recorded.bindingId,
+      recorded.configRevision,
     );
   }
 
@@ -1163,6 +1196,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
@@ -1175,21 +1210,24 @@ export class Conversation {
       this.id,
       this.sessionId,
       recorded.title.length > 0 ? recorded.title : this.title,
-      this.preview,
+      recorded.nativeHistory === null ? this.preview : "Continue Agent context",
       this.draft,
-      mergeNativeHistory(
-        recorded.sessionId,
-        recorded.nativeHistory,
-        this.messages,
+      mergeNativeHistory(this.sessionId, recorded.nativeHistory, this.messages),
+      this.session.withInteractions(
+        recorded.elicitations,
+        recorded.permissions,
       ),
-      recorded.status === "deleted"
-        ? new DeletedSessionState()
-        : ReadySessionState.fromRecorded(recorded),
       recorded.directoryId,
-      recorded.directoryLabel,
-      recorded.additionalDirectories,
+      this.directoryId === recorded.directoryId
+        ? this.directoryLabel
+        : recorded.directoryId,
+      this.directoryId === recorded.directoryId
+        ? this.additionalDirectories
+        : [],
       this.draftImages,
       this.draftResources,
+      recorded.bindingId,
+      recorded.configRevision,
     );
 
   readonly withNativeHistory = (history: NativeSessionHistory): Conversation =>
@@ -1208,6 +1246,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly addTurn = (
@@ -1232,6 +1272,8 @@ export class Conversation {
       this.additionalDirectories,
       [],
       [],
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly replaceAgentMessage = (
@@ -1257,6 +1299,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly addDraftImage = (image: PromptImage): Conversation =>
@@ -1275,6 +1319,8 @@ export class Conversation {
       this.additionalDirectories,
       [...this.draftImages.filter((entry) => entry.name !== image.name), image],
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly addDraftResource = (resource: PromptResource): Conversation =>
@@ -1296,6 +1342,8 @@ export class Conversation {
         ...this.draftResources.filter((entry) => entry.name !== resource.name),
         resource,
       ],
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly applyReady = (event: SessionReadyEvent): Conversation => {
@@ -1313,7 +1361,10 @@ export class Conversation {
             this.session.usage,
             this.session.updatedAt,
           )
-        : ReadySessionState.fromReady(event);
+        : ReadySessionState.fromReady(event).withInteractions(
+            this.session.elicitations,
+            this.session.permissions,
+          );
     return new Conversation(
       this.agentId,
       this.agentLabel,
@@ -1329,14 +1380,27 @@ export class Conversation {
       event.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
   readonly markSessionFailed = (error: string): Conversation =>
-    this.withSession(new SessionPreparationFailedState(error));
+    this.withSession(
+      new SessionPreparationFailedState(
+        error,
+        this.session.elicitations,
+        this.session.permissions,
+      ),
+    );
 
   readonly markSessionPreparing = (): Conversation =>
-    this.withSession(new PreparingSessionState());
+    this.withSession(
+      new PreparingSessionState(
+        this.session.elicitations,
+        this.session.permissions,
+      ),
+    );
 
   readonly removeDraftImage = (name: string): Conversation =>
     new Conversation(
@@ -1354,6 +1418,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages.filter((image) => image.name !== name),
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly removeDraftResource = (name: string): Conversation =>
@@ -1372,6 +1438,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources.filter((resource) => resource.name !== name),
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly runningTurn = (): PendingTurn => {
@@ -1405,6 +1473,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
 
   readonly selectPrimaryDirectory = (
@@ -1430,6 +1500,8 @@ export class Conversation {
       ),
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
@@ -1466,6 +1538,8 @@ export class Conversation {
       additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
@@ -1488,6 +1562,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
@@ -1519,6 +1595,8 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
     );
   };
 
@@ -1538,6 +1616,31 @@ export class Conversation {
       this.additionalDirectories,
       this.draftImages,
       this.draftResources,
+      this.bindingId,
+      this.configRevision,
+    );
+
+  readonly withConfigBinding = (
+    bindingId: string,
+    configRevision: number,
+  ): Conversation =>
+    new Conversation(
+      this.agentId,
+      this.agentLabel,
+      this.id,
+      this.sessionId,
+      this.title,
+      this.preview,
+      this.draft,
+      this.messages,
+      this.session,
+      this.directoryId,
+      this.directoryLabel,
+      this.additionalDirectories,
+      this.draftImages,
+      this.draftResources,
+      bindingId,
+      configRevision,
     );
 }
 

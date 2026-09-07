@@ -24,22 +24,31 @@ export interface CreatedPairing {
   readonly pairingId: string;
   readonly pollToken: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
 }
 
 export interface ClaimedPairing {
   readonly channelId: string;
   readonly daemonToken: string;
+  readonly runtimeId: string;
 }
 
 export class VerifiedChannelAccess {
   readonly channelId: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
 
-  constructor(channelId: string, tenantId: string, projectId: string) {
+  constructor(
+    channelId: string,
+    runtimeId: string,
+    tenantId: string,
+    projectId: string,
+  ) {
     this.channelId = channelId;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
   }
 }
@@ -50,6 +59,7 @@ export class ChannelDescriptor {
   readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly tenantId: string;
   readonly workspaceName: string;
 
@@ -60,6 +70,7 @@ export class ChannelDescriptor {
     workspaceName: string,
     tenantId: string,
     projectId: string,
+    runtimeId: string,
     installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     this.agents = agents;
@@ -67,6 +78,7 @@ export class ChannelDescriptor {
     this.installableAgents = installableAgents;
     this.machineName = machineName;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }
@@ -96,6 +108,7 @@ export class PairedPairingStatus extends PairingStatus {
   readonly installableAgents: readonly InstallableAgentDescriptor[];
   readonly machineName: string;
   readonly projectId: string;
+  readonly runtimeId: string;
   readonly status = "paired";
   readonly tenantId: string;
   readonly workspaceName: string;
@@ -107,6 +120,7 @@ export class PairedPairingStatus extends PairingStatus {
     workspaceName: string,
     tenantId: string,
     projectId: string,
+    runtimeId: string,
     installableAgents: readonly InstallableAgentDescriptor[] = [],
   ) {
     super();
@@ -115,6 +129,7 @@ export class PairedPairingStatus extends PairingStatus {
     this.installableAgents = installableAgents;
     this.machineName = machineName;
     this.projectId = projectId;
+    this.runtimeId = runtimeId;
     this.tenantId = tenantId;
     this.workspaceName = workspaceName;
   }

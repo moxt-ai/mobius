@@ -53,25 +53,40 @@ import {
   type SessionFailedEvent,
   type SessionStartedEvent,
 } from "./messages.ts";
-import { MOBIUS_PROTOCOL_VERSION } from "./version.ts";
-
 export const SESSION_EVENT_KIND = "session.event";
 export const SESSION_EVENT_ACK_KIND = "session.event.ack";
 export const SESSION_EVENT_COMMITTED_KIND = "session.event.committed";
-export const SESSION_EVENT_FORMAT_VERSION = 1;
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const CURSOR_PATTERN = /^[A-Za-z0-9_-]{1,512}$/;
 const MAX_RECORDED_EVENT_LENGTH = 8 * 1024 * 1024;
+const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
+
+const eventSourceSchema = z.discriminatedUnion("kind", [
+  z
+    .strictObject({
+      attemptId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+      kind: z.literal("attempt"),
+      sourceSeq: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
+    })
+    .readonly(),
+  z
+    .strictObject({
+      kind: z.literal("runtime"),
+      sourceSeq: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
+    })
+    .readonly(),
+]);
+
+export type SessionEventSource = z.infer<typeof eventSourceSchema>;
 
 const eventEnvelopeSchema = z
   .strictObject({
     eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
-    eventVersion: z.literal(SESSION_EVENT_FORMAT_VERSION),
     kind: z.literal(SESSION_EVENT_KIND),
     payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-    protocolVersion: z.literal(MOBIUS_PROTOCOL_VERSION),
     sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+    source: eventSourceSchema,
   })
   .readonly();
 
@@ -79,13 +94,12 @@ const committedEventSchema = z
   .strictObject({
     cursor: z.string().min(1).max(512).regex(CURSOR_PATTERN),
     eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
-    eventVersion: z.literal(SESSION_EVENT_FORMAT_VERSION),
     kind: z.literal(SESSION_EVENT_COMMITTED_KIND),
     payload: z.string().min(2).max(MAX_RECORDED_EVENT_LENGTH),
-    protocolVersion: z.literal(MOBIUS_PROTOCOL_VERSION),
     recordedAt: z.string().datetime({ offset: true }),
-    sequence: z.number().int().positive().safe(),
+    sequence: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
     sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+    source: eventSourceSchema,
   })
   .readonly();
 
@@ -95,8 +109,7 @@ const eventAcknowledgementSchema = z
     duplicate: z.boolean(),
     eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
     kind: z.literal(SESSION_EVENT_ACK_KIND),
-    protocolVersion: z.literal(MOBIUS_PROTOCOL_VERSION),
-    sequence: z.number().int().positive().safe(),
+    sequence: z.string().min(1).max(40).regex(DECIMAL_SEQUENCE_PATTERN),
     sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
   })
   .readonly();

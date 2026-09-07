@@ -3,8 +3,9 @@ import type {
   VerifiedChannelAccess,
 } from "@moxt-ai/mobius-relay-core";
 
-export const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
+const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 export const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
+export const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
 export const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
 
 export class CloudflareChannelRuntime implements ChannelRuntime {
@@ -36,6 +37,7 @@ export class CloudflareChannelRuntime implements ChannelRuntime {
     headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
     headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
     headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
+    headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
     const forwarded = new Request(request, { headers, signal });
     const objectId = this.#namespace.idFromName(access.channelId);
     const response = await this.#namespace.get(objectId).fetch(forwarded);

@@ -45,7 +45,9 @@ and are exercised by matching public API scenarios.
 For Cloudflare deployment, the Web build is uploaded as Worker Static Assets in
 the same deployment as the Relay. API and WebSocket requests continue into the
 Worker, while browser assets are served at the Worker origin. The browser derives
-the relay WebSocket URL from that origin. A bare origin renders the pairing page.
+the relay WebSocket URL from that origin. The single current Relay API is exposed
+under `/api`; it has no Mobius format or route-version branches. A bare origin
+renders the pairing page.
 A successful one-time claim gives the browser an independent
 `/channels/<channel-id>` route. The Web application reads the paired machine and
 agent catalog from D1 through the Relay whenever that route opens, so it works in
@@ -54,8 +56,8 @@ is only an address and does not grant access. User and team identity remain a
 required layer before credentials are shared outside a trusted group.
 
 Session identity and durable history are independent of connection channels.
-Commands have accepted, running, completed, failed, or outcome-unknown attempt
-states. The daemon writes protocol-versioned events through a durable SQLite
+Turns and Attempts have explicit queued, running, waiting, terminal, or
+indeterminate lifecycle states. The daemon writes validated events through a durable SQLite
 outbox; Relay acknowledgements are emitted only after the authoritative event,
 projection, and archive job commit. Reconnection retransmits the same event IDs,
 so it repairs delivery without rerunning a command. Clients catch up with ordered
@@ -70,8 +72,9 @@ backpressure when their bounded queue is full.
 
 Every session operation receives Tenant / Project from verified credentials.
 Recording level, retention, hot event capacity, detail size, and active-session
-quota are explicit policies. Export format v2 contains authoritative command and
-activity projections, retained committed events, and integrity-checked content;
+quota are explicit policies. The single current export format contains
+authoritative Turns, Attempts, Interactions, receipts, bindings, retained
+committed events, bounded projections, and integrity-checked content;
 imports validate the complete schema and never copy credentials. Deletion removes
 hot rows, indexes, manifests, and archived objects before publishing a terminal
 deleted lifecycle.

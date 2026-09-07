@@ -3,7 +3,6 @@ import {
   decodeRuntimeHeartbeatEvent,
   encodeRuntimeHeartbeatAckEvent,
   encodeRuntimeLivenessReadyEvent,
-  MOBIUS_PROTOCOL_VERSION,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_HEARTBEAT_KIND,
   RUNTIME_LIVENESS_READY_KIND,
@@ -15,8 +14,8 @@ import {
   ProjectScope,
 } from "@moxt-ai/mobius-relay-core";
 import {
-  INTERNAL_CHANNEL_ID_HEADER,
   INTERNAL_PROJECT_ID_HEADER,
+  INTERNAL_RUNTIME_ID_HEADER,
   INTERNAL_TENANT_ID_HEADER,
 } from "../cloudflare-channel-runtime.ts";
 import { CloudflareSessionRuntime } from "../cloudflare-session-runtime.ts";
@@ -35,6 +34,8 @@ interface RuntimeRelayEnvironment extends SessionConfigurationEnvironment {
 
 type SocketAttachment =
   | {
+      readonly connectionEpoch: number;
+      readonly connectionId: string;
       readonly projectId: string;
       readonly role: "daemon" | "replaced-daemon";
       readonly runtimeId: string;
@@ -55,6 +56,8 @@ function readAttachment(value: unknown): SocketAttachment {
   const runtimeId = Reflect.get(value, "runtimeId");
   const tenantId = Reflect.get(value, "tenantId");
   const projectId = Reflect.get(value, "projectId");
+  const connectionEpoch = Reflect.get(value, "connectionEpoch");
+  const connectionId = Reflect.get(value, "connectionId");
   if (
     (role !== "daemon" && role !== "host" && role !== "replaced-daemon") ||
     typeof runtimeId !== "string" ||
@@ -63,14 +66,40 @@ function readAttachment(value: unknown): SocketAttachment {
   ) {
     throw new Error("Invalid WebSocket attachment");
   }
-  return { projectId, role, runtimeId, tenantId };
+  if (role === "host") {
+    return { projectId, role, runtimeId, tenantId };
+  }
+  if (
+    typeof connectionEpoch !== "number" ||
+    !Number.isSafeInteger(connectionEpoch) ||
+    connectionEpoch < 1 ||
+    typeof connectionId !== "string" ||
+    connectionId.length === 0
+  ) {
+    throw new Error("Invalid daemon WebSocket attachment");
+  }
+  return {
+    connectionEpoch,
+    connectionId,
+    projectId,
+    role,
+    runtimeId,
+    tenantId,
+  };
+}
+
+interface CurrentRuntimeConnection {
+  readonly connectionEpoch: number;
+  readonly connectionId: string;
+  readonly runtimeId: string;
+  readonly state: "offline" | "online";
 }
 
 function accessFromRequest(request: Request): {
   readonly runtimeId: string;
   readonly scope: ProjectScope;
 } {
-  const runtimeId = request.headers.get(INTERNAL_CHANNEL_ID_HEADER);
+  const runtimeId = request.headers.get(INTERNAL_RUNTIME_ID_HEADER);
   const tenantId = request.headers.get(INTERNAL_TENANT_ID_HEADER);
   const projectId = request.headers.get(INTERNAL_PROJECT_ID_HEADER);
   if (runtimeId === null || tenantId === null || projectId === null) {
@@ -124,11 +153,23 @@ class CloudflareChannelPeers implements ChannelPeers {
 }
 
 export class RuntimeRelay {
+  #daemonMessageTail: Promise<void> = Promise.resolve();
   readonly #peers: CloudflareChannelPeers;
   readonly #sessions: CloudflareSessionRuntime;
   readonly #state: DurableObjectState;
 
   constructor(state: DurableObjectState, environment: RuntimeRelayEnvironment) {
+    state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_connection_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        runtime_id TEXT NOT NULL,
+        connection_epoch INTEGER NOT NULL,
+        connection_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('online', 'offline')),
+        connected_at INTEGER NOT NULL,
+        disconnected_at INTEGER
+      ) STRICT;
+    `);
     this.#peers = new CloudflareChannelPeers(state);
     this.#sessions = new CloudflareSessionRuntime(
       environment.SESSION_RELAY,
@@ -176,15 +217,41 @@ export class RuntimeRelay {
   }
 
   async webSocketMessage(socket: WebSocket, message: unknown): Promise<void> {
-    await this.withSocketSignal(socket, async (signal) => {
-      const attachment = readAttachment(socket.deserializeAttachment());
-      const channelSocket = new CloudflareChannelSocket(socket);
-      const scope = new ProjectScope(attachment.tenantId, attachment.projectId);
-      if (attachment.role === "replaced-daemon") {
-        socket.close(1012, "Daemon connection replaced");
-        return;
-      }
-      if (attachment.role === "daemon") {
+    const attachment = readAttachment(socket.deserializeAttachment());
+    if (attachment.role === "host") {
+      await this.withSocketSignal(socket, async (signal) => {
+        const channelSocket = new CloudflareChannelSocket(socket);
+        const scope = new ProjectScope(
+          attachment.tenantId,
+          attachment.projectId,
+        );
+        await this.actor(attachment.runtimeId, scope).receiveHostMessage(
+          channelSocket,
+          message,
+          signal,
+        );
+      });
+      return;
+    }
+    const operation = this.#daemonMessageTail.then(async () => {
+      await this.withSocketSignal(socket, async (signal) => {
+        const channelSocket = new CloudflareChannelSocket(socket);
+        const scope = new ProjectScope(
+          attachment.tenantId,
+          attachment.projectId,
+        );
+        if (attachment.role === "replaced-daemon") {
+          socket.close(1012, "Daemon connection replaced");
+          return;
+        }
+        if (!this.isCurrentConnection(attachment)) {
+          socket.serializeAttachment({
+            ...attachment,
+            role: "replaced-daemon",
+          });
+          socket.close(1012, "Daemon connection replaced");
+          return;
+        }
         if (typeof message === "string") {
           try {
             if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
@@ -193,7 +260,6 @@ export class RuntimeRelay {
                 encodeRuntimeHeartbeatAckEvent({
                   heartbeatId: heartbeat.heartbeatId,
                   kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                  protocolVersion: MOBIUS_PROTOCOL_VERSION,
                 }),
               );
               return;
@@ -208,19 +274,25 @@ export class RuntimeRelay {
           message,
           signal,
         );
-        return;
-      }
-      await this.actor(attachment.runtimeId, scope).receiveHostMessage(
-        channelSocket,
-        message,
-        signal,
-      );
+      });
     });
+    this.#daemonMessageTail = operation.catch(() => undefined);
+    await operation;
   }
 
   async webSocketClose(socket: WebSocket): Promise<void> {
     const attachment = readAttachment(socket.deserializeAttachment());
-    if (attachment.role === "daemon") {
+    if (attachment.role === "daemon" && this.isCurrentConnection(attachment)) {
+      this.#state.storage.sql.exec(
+        `UPDATE runtime_connection_state
+         SET state = 'offline', disconnected_at = ?
+         WHERE singleton = 1 AND runtime_id = ? AND connection_epoch = ?
+           AND connection_id = ?`,
+        Date.now(),
+        attachment.runtimeId,
+        attachment.connectionEpoch,
+        attachment.connectionId,
+      );
       await this.actor(
         attachment.runtimeId,
         new ProjectScope(attachment.tenantId, attachment.projectId),
@@ -241,11 +313,31 @@ export class RuntimeRelay {
     livenessRequested: boolean,
     signal: AbortSignal,
   ): Promise<Response> => {
-    const previousSockets = this.#state.getWebSockets(DAEMON_TAG);
+    const previousSockets = this.#state
+      .getWebSockets(DAEMON_TAG)
+      .filter((socket) => {
+        const attachment = readAttachment(socket.deserializeAttachment());
+        return (
+          attachment.role === "daemon" && socket.readyState === WebSocket.OPEN
+        );
+      });
+    const previous = this.currentConnection();
+    if (previous !== null && previous.runtimeId !== runtimeId) {
+      return Response.json(
+        {
+          error: {
+            code: "runtime_identity_conflict",
+            message: "The Channel is already assigned to another Runtime",
+          },
+        },
+        { status: 409 },
+      );
+    }
+    const connectionEpoch = (previous?.connectionEpoch ?? 0) + 1;
+    const connectionId = `cnn_${crypto.randomUUID()}`;
     const pair = new WebSocketPair();
     const client = pair[0];
     const server = pair[1];
-    await this.actor(runtimeId, scope).attachDaemon(signal);
     for (const socket of previousSockets) {
       const attachment = readAttachment(socket.deserializeAttachment());
       socket.serializeAttachment({
@@ -255,17 +347,44 @@ export class RuntimeRelay {
       socket.close(1012, "Daemon connection replaced");
     }
     server.serializeAttachment({
+      connectionEpoch,
+      connectionId,
       projectId: scope.projectId,
       role: "daemon",
       runtimeId,
       tenantId: scope.tenantId,
     });
     this.#state.acceptWebSocket(server, [DAEMON_TAG]);
+    this.#state.storage.sql.exec(
+      `INSERT INTO runtime_connection_state (
+         singleton, runtime_id, connection_epoch, connection_id, state,
+         connected_at, disconnected_at
+       ) VALUES (1, ?, ?, ?, 'online', ?, NULL)
+       ON CONFLICT(singleton) DO UPDATE SET
+         runtime_id = excluded.runtime_id,
+         connection_epoch = excluded.connection_epoch,
+         connection_id = excluded.connection_id,
+         state = excluded.state,
+         connected_at = excluded.connected_at,
+         disconnected_at = NULL`,
+      runtimeId,
+      connectionEpoch,
+      connectionId,
+      Date.now(),
+    );
+    try {
+      await this.actor(runtimeId, scope).attachDaemon(
+        previousSockets.length > 0,
+        signal,
+      );
+    } catch (error) {
+      server.close(1011, "Runtime attachment failed");
+      throw error;
+    }
     if (livenessRequested) {
       server.send(
         encodeRuntimeLivenessReadyEvent({
           kind: RUNTIME_LIVENESS_READY_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
         }),
       );
     }
@@ -292,6 +411,49 @@ export class RuntimeRelay {
       signal,
     );
     return new Response(null, { status: 101, webSocket: client });
+  };
+
+  private readonly currentConnection = (): CurrentRuntimeConnection | null => {
+    const row = this.#state.storage.sql
+      .exec(
+        `SELECT runtime_id, connection_epoch, connection_id, state
+         FROM runtime_connection_state WHERE singleton = 1`,
+      )
+      .toArray()[0];
+    if (row === undefined) {
+      return null;
+    }
+    const runtimeId = row["runtime_id"];
+    const connectionEpoch = row["connection_epoch"];
+    const connectionId = row["connection_id"];
+    const state = row["state"];
+    if (
+      typeof runtimeId !== "string" ||
+      typeof connectionEpoch !== "number" ||
+      !Number.isSafeInteger(connectionEpoch) ||
+      connectionEpoch < 1 ||
+      typeof connectionId !== "string" ||
+      (state !== "online" && state !== "offline")
+    ) {
+      throw new Error("The durable Runtime connection state is invalid");
+    }
+    return { connectionEpoch, connectionId, runtimeId, state };
+  };
+
+  private readonly isCurrentConnection = (
+    attachment: Readonly<{
+      connectionEpoch: number;
+      connectionId: string;
+      runtimeId: string;
+    }>,
+  ): boolean => {
+    const current = this.currentConnection();
+    return (
+      current?.state === "online" &&
+      current.runtimeId === attachment.runtimeId &&
+      current.connectionEpoch === attachment.connectionEpoch &&
+      current.connectionId === attachment.connectionId
+    );
   };
 
   private readonly actor = (

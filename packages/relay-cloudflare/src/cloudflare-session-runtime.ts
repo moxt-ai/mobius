@@ -1,19 +1,37 @@
 import {
+  type Attempt,
   decodeAgentActivityEvent,
+  decodeAttempt as decodeAttemptResource,
+  decodeCommandReceipt,
   decodeCommittedSessionEvent,
+  decodeInteraction,
+  decodeInteractionResponse,
+  decodeNativeSessionHistory,
+  decodePendingWork,
+  decodePromptImagesValue,
+  decodePromptResourcesValue,
+  decodeSessionBinding,
   decodeSessionPromptCommand,
+  decodeTurn,
   encodeSessionEventEnvelope,
   encodeSessionPromptCommand,
+  type Interaction,
+  type InteractionResponse,
+  type NativeSessionHistory,
+  type PendingWork,
   type SessionEventEnvelope,
   type SessionPromptCommand,
+  type Turn,
 } from "@moxt-ai/mobius-protocol";
 import {
   type ActivityDetail,
+  type AttemptReconciliationOutcome,
   type CommittedEventResult,
+  type CreateSessionBindingRequest,
   type CreateSessionRequest,
+  type InteractionResponseAcceptance,
+  type PendingDaemonDelivery,
   type ProjectScope,
-  SESSION_EXPORT_FORMAT_VERSION,
-  type SessionCommandAcceptance,
   type SessionDirectoryPage,
   type SessionEventPage,
   type SessionExport,
@@ -24,6 +42,7 @@ import {
   type SessionRuntime,
   SessionRuntimeError,
   type SessionSummary,
+  type TurnAcceptance,
   validateCreateSessionRequest,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -43,6 +62,18 @@ type SessionReservation =
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(
+  value: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return (
+    actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+  );
 }
 
 function readString(
@@ -74,6 +105,20 @@ function readNumber(
   return field;
 }
 
+function readBoolean(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): boolean {
+  const field = value[key];
+  if (typeof field !== "boolean") {
+    throw new SessionRuntimeError(
+      "session_storage_unavailable",
+      "The session storage returned an invalid record",
+    );
+  }
+  return field;
+}
+
 function decodeLifecycle(value: unknown): SessionLifecycle {
   if (!isRecord(value)) {
     throw new SessionRuntimeError(
@@ -82,7 +127,7 @@ function decodeLifecycle(value: unknown): SessionLifecycle {
     );
   }
   const kind = value["kind"];
-  if (kind === "active") {
+  if (kind === "ready") {
     return { kind };
   }
   if (kind === "deleting") {
@@ -98,13 +143,18 @@ function decodeLifecycle(value: unknown): SessionLifecycle {
 }
 
 function decodeSummary(value: unknown): SessionSummary {
-  if (!isRecord(value) || !isRecord(value["policy"])) {
+  if (
+    !isRecord(value) ||
+    !isRecord(value["policy"]) ||
+    !isRecord(value["defaultBinding"])
+  ) {
     throw new SessionRuntimeError(
       "session_storage_unavailable",
       "The session summary is invalid",
     );
   }
   const policy = value["policy"];
+  const defaultBinding = value["defaultBinding"];
   const level = policy["level"];
   if (level !== "full" && level !== "summary") {
     throw new SessionRuntimeError(
@@ -115,10 +165,26 @@ function decodeSummary(value: unknown): SessionSummary {
   return {
     agentId: readString(value, "agentId"),
     createdAt: readString(value, "createdAt"),
+    createdBy: readString(value, "createdBy"),
+    defaultBinding: {
+      agentRef: readString(defaultBinding, "agentRef"),
+      bindingId: readString(defaultBinding, "bindingId"),
+      configRevision: readNumber(defaultBinding, "configRevision"),
+      createdAt: readString(defaultBinding, "createdAt"),
+      runtimeId: readString(defaultBinding, "runtimeId"),
+      sessionId: readString(defaultBinding, "sessionId"),
+      workspaceRef: readString(defaultBinding, "workspaceRef"),
+    },
+    hasNativeHistory: readBoolean(value, "hasNativeHistory"),
+    lastCommittedSeq: readString(value, "lastCommittedSeq"),
     lifecycle: decodeLifecycle(value["lifecycle"]),
     policy: {
       contentLimitBytes: readNumber(policy, "contentLimitBytes"),
       hotEventLimit: readNumber(policy, "hotEventLimit"),
+      idempotencyRetentionMilliseconds: readNumber(
+        policy,
+        "idempotencyRetentionMilliseconds",
+      ),
       level,
       retentionMilliseconds: readNumber(policy, "retentionMilliseconds"),
     },
@@ -142,35 +208,74 @@ function decodeAttempt(value: unknown): SessionMessage["attempt"] {
     );
   }
   const kind = value["kind"];
+  if (kind === "dispatching") {
+    return {
+      attemptId: readString(value, "attemptId"),
+      dispatchedAt: readString(value, "dispatchedAt"),
+      kind,
+    };
+  }
   if (kind === "running") {
     return {
       kind,
-      processAttemptId: readString(value, "processAttemptId"),
+      attemptId: readString(value, "attemptId"),
       startedAt: readString(value, "startedAt"),
     };
   }
-  if (kind === "completed") {
+  if (kind === "waiting_input") {
+    const interactionIds = value["interactionIds"];
+    if (
+      !Array.isArray(interactionIds) ||
+      interactionIds.length === 0 ||
+      interactionIds.some(
+        (interactionId) =>
+          typeof interactionId !== "string" || interactionId.length === 0,
+      )
+    ) {
+      throw new SessionRuntimeError(
+        "session_storage_unavailable",
+        "The waiting Attempt is invalid",
+      );
+    }
+    return {
+      attemptId: readString(value, "attemptId"),
+      interactionIds: interactionIds.filter(
+        (interactionId) => typeof interactionId === "string",
+      ),
+      kind,
+      startedAt: readString(value, "startedAt"),
+    };
+  }
+  if (kind === "succeeded") {
     return {
       completedAt: readString(value, "completedAt"),
       kind,
-      processAttemptId: readString(value, "processAttemptId"),
+      attemptId: readString(value, "attemptId"),
       startedAt: readString(value, "startedAt"),
       stopReason: readString(value, "stopReason"),
     };
   }
-  if (kind === "outcome_unknown") {
+  if (kind === "indeterminate") {
     return {
-      disconnectedAt: readString(value, "disconnectedAt"),
+      detectedAt: readString(value, "detectedAt"),
       kind,
-      processAttemptId: readString(value, "processAttemptId"),
+      attemptId: readString(value, "attemptId"),
+      startedAt: readString(value, "startedAt"),
+    };
+  }
+  if (kind === "cancelled") {
+    return {
+      attemptId: readString(value, "attemptId"),
+      cancelledAt: readString(value, "cancelledAt"),
+      kind,
       startedAt: readString(value, "startedAt"),
     };
   }
   if (kind === "failed") {
-    const processAttemptId = value["processAttemptId"];
+    const attemptId = value["attemptId"];
     const startedAt = value["startedAt"];
     if (
-      (processAttemptId !== null && typeof processAttemptId !== "string") ||
+      (attemptId !== null && typeof attemptId !== "string") ||
       (startedAt !== null && typeof startedAt !== "string")
     ) {
       throw new SessionRuntimeError(
@@ -183,7 +288,7 @@ function decodeAttempt(value: unknown): SessionMessage["attempt"] {
       failedAt: readString(value, "failedAt"),
       kind,
       message: readString(value, "message", true),
-      processAttemptId,
+      attemptId,
       startedAt,
     };
   }
@@ -229,6 +334,7 @@ function decodeMessage(value: unknown): SessionMessage {
       detailAvailability;
     return {
       activityId: readString(activity, "activityId"),
+      attemptId: readString(activity, "attemptId"),
       activityType: readString(activity, "activityType"),
       detailAvailability: availability,
       input: readString(activity, "input", true),
@@ -238,6 +344,7 @@ function decodeMessage(value: unknown): SessionMessage {
       sequence: readNumber(activity, "sequence"),
       status: readString(activity, "status"),
       title: readString(activity, "title"),
+      toolCallId: readString(activity, "toolCallId"),
       toolKind: readString(activity, "toolKind", true),
     };
   });
@@ -247,7 +354,9 @@ function decodeMessage(value: unknown): SessionMessage {
     attempt: decodeAttempt(value["attempt"]),
     commandId: readString(value, "commandId"),
     createdAt: readString(value, "createdAt"),
+    images: decodePromptImagesValue(value["images"]),
     prompt: readString(value, "prompt", true),
+    resources: decodePromptResourcesValue(value["resources"]),
     response: readString(value, "response", true),
     sessionId: readString(value, "sessionId"),
   };
@@ -340,13 +449,26 @@ function decodeDetail(value: unknown): ActivityDetail {
 function decodeExport(value: unknown): SessionExport {
   if (
     !isRecord(value) ||
-    value["formatVersion"] !== SESSION_EXPORT_FORMAT_VERSION ||
-    !Array.isArray(value["activities"]) ||
+    !hasExactKeys(value, [
+      "artifacts",
+      "bindings",
+      "commandReceipts",
+      "events",
+      "interactions",
+      "minimumSequence",
+      "nativeHistory",
+      "nextSequence",
+      "session",
+      "toolCallViews",
+      "turns",
+    ]) ||
+    !Array.isArray(value["toolCallViews"]) ||
     !Array.isArray(value["artifacts"]) ||
-    !Array.isArray(value["commands"]) ||
-    !Array.isArray(value["events"]) ||
-    typeof value["bindingId"] !== "string" ||
-    typeof value["directoryId"] !== "string"
+    !Array.isArray(value["bindings"]) ||
+    !Array.isArray(value["commandReceipts"]) ||
+    !Array.isArray(value["interactions"]) ||
+    !Array.isArray(value["turns"]) ||
+    !Array.isArray(value["events"])
   ) {
     throw new SessionRuntimeError(
       "session_storage_unavailable",
@@ -362,17 +484,32 @@ function decodeExport(value: unknown): SessionExport {
     }
     const contentEncoding: "identity" = "identity";
     return {
-      activityId: readString(artifact, "activityId"),
+      attemptId: readString(artifact, "attemptId"),
       artifactId: readString(artifact, "artifactId"),
       byteLength: readNumber(artifact, "byteLength"),
       contentBase64: readString(artifact, "contentBase64", true),
       contentEncoding,
       mediaType: readString(artifact, "mediaType"),
       sha256: readString(artifact, "sha256"),
+      toolCallId: readString(artifact, "toolCallId"),
     };
   });
   return {
-    activities: value["activities"].map((activity) => {
+    artifacts,
+    bindings: value["bindings"].map(decodeSessionBinding),
+    commandReceipts: value["commandReceipts"].map(decodeCommandReceipt),
+    events: value["events"].map((event) =>
+      decodeCommittedSessionEvent(JSON.stringify(event)),
+    ),
+    interactions: value["interactions"].map(decodeInteraction),
+    minimumSequence: readString(value, "minimumSequence"),
+    nativeHistory:
+      value["nativeHistory"] === null
+        ? null
+        : decodeNativeSessionHistory(value["nativeHistory"]),
+    nextSequence: readString(value, "nextSequence"),
+    session: decodeSummary(value["session"]),
+    toolCallViews: value["toolCallViews"].map((activity) => {
       if (!isRecord(activity)) {
         throw new SessionRuntimeError(
           "session_storage_unavailable",
@@ -380,13 +517,12 @@ function decodeExport(value: unknown): SessionExport {
         );
       }
       return {
+        attemptId: readString(activity, "attemptId"),
         event: decodeAgentActivityEvent(JSON.stringify(activity["event"])),
-        eventSequence: readNumber(activity, "eventSequence"),
+        eventSequence: readString(activity, "eventSequence"),
       };
     }),
-    artifacts,
-    bindingId: value["bindingId"],
-    commands: value["commands"].map((command) => {
+    turns: value["turns"].map((command) => {
       if (!isRecord(command) || !isRecord(command["state"])) {
         throw new SessionRuntimeError(
           "session_storage_unavailable",
@@ -399,20 +535,13 @@ function decodeExport(value: unknown): SessionExport {
         createdAt: readString(command, "createdAt"),
         response: readString(command, "response", true),
         state:
-          state["kind"] === "accepted"
-            ? { kind: "accepted" }
-            : (decodeAttempt(state) ?? { kind: "accepted" }),
+          state["kind"] === "queued"
+            ? { kind: "queued" }
+            : (decodeAttempt(state) ?? { kind: "queued" }),
+        turn: decodeTurn(command["turn"]),
         updatedAt: readString(command, "updatedAt"),
       };
     }),
-    directoryId: value["directoryId"],
-    events: value["events"].map((event) =>
-      decodeCommittedSessionEvent(JSON.stringify(event)),
-    ),
-    formatVersion: SESSION_EXPORT_FORMAT_VERSION,
-    minimumSequence: readNumber(value, "minimumSequence"),
-    nextSequence: readNumber(value, "nextSequence"),
-    session: decodeSummary(value["session"]),
   };
 }
 
@@ -424,6 +553,11 @@ function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
     case "invalid_cursor":
     case "invalid_export":
     case "invalid_page_size":
+    case "idempotency_conflict":
+    case "interaction_conflict":
+    case "interaction_not_found":
+    case "event_source_conflict":
+    case "pending_work_not_found":
     case "session_access_denied":
     case "session_busy":
     case "session_conflict":
@@ -479,7 +613,6 @@ function encodeDirectoryCursor(
 ): string {
   return btoa(
     JSON.stringify({
-      formatVersion: 1,
       projectId: scope.projectId,
       sessionId,
       tenantId: scope.tenantId,
@@ -504,7 +637,12 @@ function decodeDirectoryCursor(
     const value: unknown = JSON.parse(atob(`${base64}${padding}`));
     if (
       !isRecord(value) ||
-      value["formatVersion"] !== 1 ||
+      !hasExactKeys(value, [
+        "projectId",
+        "sessionId",
+        "tenantId",
+        "updatedAt",
+      ]) ||
       value["tenantId"] !== scope.tenantId ||
       value["projectId"] !== scope.projectId ||
       typeof value["sessionId"] !== "string" ||
@@ -557,13 +695,13 @@ export class CloudflareSessionRuntime implements SessionRuntime {
     return summary;
   };
 
-  readonly acceptCommand = async (
+  readonly acceptTurn = async (
     scope: ProjectScope,
     runtimeId: string,
     command: SessionPromptCommand,
     now: number,
     signal: AbortSignal,
-  ): Promise<SessionCommandAcceptance> => {
+  ): Promise<TurnAcceptance> => {
     const encodedCommand = encodeSessionPromptCommand(command);
     await this.reserveSession(scope, command.sessionId, now, signal);
     const value = await this.request(
@@ -584,22 +722,35 @@ export class CloudflareSessionRuntime implements SessionRuntime {
     }
     if (value["kind"] === "accepted") {
       await this.refreshDirectory(scope, command.sessionId, signal);
-      return { kind: "accepted" };
+      return {
+        kind: "accepted",
+        pendingWork: decodePendingWork(value["pendingWork"]),
+        turn: decodeTurn(value["turn"]),
+      };
     }
     const state = value["state"];
     if (
-      state !== "accepted" &&
+      state !== "queued" &&
       state !== "running" &&
-      state !== "completed" &&
+      state !== "succeeded" &&
       state !== "failed" &&
-      state !== "outcome_unknown"
+      state !== "cancelled" &&
+      state !== "indeterminate"
     ) {
       throw new SessionRuntimeError(
         "session_storage_unavailable",
         "The duplicate command state is invalid",
       );
     }
-    return { kind: "duplicate", state };
+    return {
+      kind: "duplicate",
+      pendingWork:
+        value["pendingWork"] === null
+          ? null
+          : decodePendingWork(value["pendingWork"]),
+      state,
+      turn: decodeTurn(value["turn"]),
+    };
   };
 
   readonly commitEvent = async (
@@ -629,23 +780,61 @@ export class CloudflareSessionRuntime implements SessionRuntime {
     return { committed, duplicate: value["duplicate"] };
   };
 
-  readonly bindSession = async (
+  readonly setDefaultBinding = async (
     scope: ProjectScope,
     sessionId: string,
-    runtimeId: string,
+    binding: CreateSessionBindingRequest,
+    now: number,
     signal: AbortSignal,
   ): Promise<SessionSummary> => {
     const summary = decodeSummary(
       await this.request(
         scope,
         sessionId,
-        "bind",
-        { runtimeId, sessionId },
+        "set-binding",
+        { binding, now, sessionId },
         signal,
       ),
     );
     await this.updateDirectory(summary);
     return summary;
+  };
+
+  readonly acceptInteractionResponse = async (
+    scope: ProjectScope,
+    sessionId: string,
+    interactionId: string,
+    responderId: string,
+    response: InteractionResponse,
+    deliveryPayload: string,
+    now: number,
+    signal: AbortSignal,
+  ): Promise<InteractionResponseAcceptance> => {
+    const value = await this.request(
+      scope,
+      sessionId,
+      "accept-interaction-response",
+      {
+        deliveryPayload,
+        interactionId,
+        now,
+        responderId,
+        response: decodeInteractionResponse(response),
+        sessionId,
+      },
+      signal,
+    );
+    if (!isRecord(value) || typeof value["duplicate"] !== "boolean") {
+      throw new SessionRuntimeError(
+        "session_storage_unavailable",
+        "The Interaction response acceptance is invalid",
+      );
+    }
+    return {
+      duplicate: value["duplicate"],
+      interaction: decodeInteraction(value["interaction"]),
+      pendingWork: decodePendingWork(value["pendingWork"]),
+    };
   };
 
   readonly readSession = async (
@@ -659,6 +848,217 @@ export class CloudflareSessionRuntime implements SessionRuntime {
     await this.updateDirectory(summary);
     return summary;
   };
+
+  readonly readNativeHistory = async (
+    scope: ProjectScope,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<NativeSessionHistory | null> => {
+    const value = await this.request(
+      scope,
+      sessionId,
+      "native-history",
+      { sessionId },
+      signal,
+    );
+    return value === null ? null : decodeNativeSessionHistory(value);
+  };
+
+  readonly recordNativeHistory = async (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    title: string,
+    history: NativeSessionHistory,
+    now: number,
+    signal: AbortSignal,
+  ): Promise<SessionSummary> => {
+    const summary = decodeSummary(
+      await this.request(
+        scope,
+        sessionId,
+        "record-native-history",
+        {
+          history: decodeNativeSessionHistory(history),
+          now,
+          runtimeId,
+          sessionId,
+          title,
+        },
+        signal,
+      ),
+    );
+    await this.updateDirectory(summary);
+    return summary;
+  };
+
+  readonly readTurn = async (
+    scope: ProjectScope,
+    sessionId: string,
+    turnId: string,
+    signal: AbortSignal,
+  ): Promise<Turn> =>
+    decodeTurn(
+      await this.request(
+        scope,
+        sessionId,
+        "turn",
+        { sessionId, turnId },
+        signal,
+      ),
+    );
+
+  readonly readAttempt = async (
+    scope: ProjectScope,
+    sessionId: string,
+    attemptId: string,
+    signal: AbortSignal,
+  ): Promise<Attempt> =>
+    decodeAttemptResource(
+      await this.request(
+        scope,
+        sessionId,
+        "attempt",
+        { attemptId, sessionId },
+        signal,
+      ),
+    );
+
+  readonly readInteraction = async (
+    scope: ProjectScope,
+    sessionId: string,
+    interactionId: string,
+    signal: AbortSignal,
+  ): Promise<Interaction> =>
+    decodeInteraction(
+      await this.request(
+        scope,
+        sessionId,
+        "interaction",
+        { interactionId, sessionId },
+        signal,
+      ),
+    );
+
+  readonly readPendingInteractions = async (
+    scope: ProjectScope,
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<readonly Interaction[]> => {
+    const value = await this.request(
+      scope,
+      sessionId,
+      "pending-interactions",
+      { sessionId },
+      signal,
+    );
+    if (!Array.isArray(value)) {
+      throw new SessionRuntimeError(
+        "session_storage_unavailable",
+        "The pending Interaction list is invalid",
+      );
+    }
+    return value.map(decodeInteraction);
+  };
+
+  readonly listPendingDaemonDeliveries = async (
+    scope: ProjectScope,
+    runtimeId: string,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<readonly PendingDaemonDelivery[]> => {
+    signal.throwIfAborted();
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+      throw new SessionRuntimeError(
+        "invalid_page_size",
+        "The page size must be between 1 and 100",
+      );
+    }
+    const rows = await this.#database
+      .prepare(
+        `SELECT session_id FROM session_directory
+         WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'ready'
+         ORDER BY updated_at DESC, session_id DESC
+         LIMIT 500`,
+      )
+      .bind(scope.tenantId, scope.projectId)
+      .all<{ readonly session_id: string }>();
+    const deliveries: PendingDaemonDelivery[] = [];
+    for (const row of rows.results) {
+      signal.throwIfAborted();
+      const value = await this.request(
+        scope,
+        row.session_id,
+        "pending-daemon-deliveries",
+        { limit: limit - deliveries.length, runtimeId },
+        signal,
+      );
+      if (!Array.isArray(value)) {
+        throw new SessionRuntimeError(
+          "session_storage_unavailable",
+          "The pending Interaction response list is invalid",
+        );
+      }
+      for (const entry of value) {
+        if (
+          !isRecord(entry) ||
+          (entry["interactionId"] !== null &&
+            typeof entry["interactionId"] !== "string") ||
+          typeof entry["payload"] !== "string"
+        ) {
+          throw new SessionRuntimeError(
+            "session_storage_unavailable",
+            "A pending Interaction response is invalid",
+          );
+        }
+        deliveries.push({
+          interactionId: entry["interactionId"],
+          payload: entry["payload"],
+          pendingWork: decodePendingWork(entry["pendingWork"]),
+        });
+        if (deliveries.length === limit) {
+          return deliveries;
+        }
+      }
+    }
+    return deliveries;
+  };
+
+  readonly markPendingWorkCompleted = async (
+    scope: ProjectScope,
+    sessionId: string,
+    workId: string,
+    now: number,
+    signal: AbortSignal,
+  ): Promise<PendingWork> =>
+    decodePendingWork(
+      await this.request(
+        scope,
+        sessionId,
+        "complete-pending-work",
+        { now, sessionId, workId },
+        signal,
+      ),
+    );
+
+  readonly reconcileAttempt = async (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    attemptId: string,
+    outcome: AttemptReconciliationOutcome,
+    now: number,
+    signal: AbortSignal,
+  ): Promise<Attempt> =>
+    decodeAttemptResource(
+      await this.request(
+        scope,
+        sessionId,
+        "reconcile",
+        { attemptId, now, outcome, runtimeId, sessionId },
+        signal,
+      ),
+    );
 
   readonly listSessions = async (
     scope: ProjectScope,
@@ -760,10 +1160,11 @@ export class CloudflareSessionRuntime implements SessionRuntime {
       ),
     );
 
-  readonly readActivityDetail = async (
+  readonly readToolCallDetail = async (
     scope: ProjectScope,
     sessionId: string,
-    activityId: string,
+    attemptId: string,
+    toolCallId: string,
     signal: AbortSignal,
   ): Promise<ActivityDetail> =>
     decodeDetail(
@@ -771,7 +1172,7 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         scope,
         sessionId,
         "detail",
-        { activityId, sessionId },
+        { attemptId, sessionId, toolCallId },
         signal,
       ),
     );
@@ -874,7 +1275,7 @@ export class CloudflareSessionRuntime implements SessionRuntime {
       .prepare(
         `SELECT session_id FROM session_directory
          WHERE tenant_id = ? AND project_id = ? AND runtime_id = ?
-           AND lifecycle = 'active'
+           AND lifecycle = 'ready'
          LIMIT 500`,
       )
       .bind(scope.tenantId, scope.projectId, runtimeId)

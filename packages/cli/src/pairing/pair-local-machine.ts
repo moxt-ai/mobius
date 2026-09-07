@@ -30,7 +30,11 @@ const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const MAX_CONNECTION_FILE_LENGTH = 16 * 1024;
-const CLAIM_RESPONSE_KEYS: readonly string[] = ["channelId", "daemonToken"];
+const CLAIM_RESPONSE_KEYS: readonly string[] = [
+  "channelId",
+  "daemonToken",
+  "runtimeId",
+];
 const SAVED_CONNECTION_KEYS: readonly string[] = [
   "defaultWorkspace",
   "channelId",
@@ -47,6 +51,7 @@ interface PairCommandOptions {
 interface ClaimPairingResponse {
   readonly channelId: string;
   readonly daemonToken: string;
+  readonly runtimeId: string;
 }
 
 interface SavedConnection {
@@ -275,18 +280,21 @@ function decodeClaimResponse(value: unknown): ClaimPairingResponse {
   }
   const channelId = value["channelId"];
   const daemonToken = value["daemonToken"];
+  const runtimeId = value["runtimeId"];
   if (
     typeof channelId !== "string" ||
     !IDENTIFIER_PATTERN.test(channelId) ||
     typeof daemonToken !== "string" ||
-    !TOKEN_PATTERN.test(daemonToken)
+    !TOKEN_PATTERN.test(daemonToken) ||
+    typeof runtimeId !== "string" ||
+    !IDENTIFIER_PATTERN.test(runtimeId)
   ) {
     throw new PairingClientError(
       "invalid_relay_response",
       "The relay returned an invalid pairing response",
     );
   }
-  return { channelId, daemonToken };
+  return { channelId, daemonToken, runtimeId };
 }
 
 async function claimPairing(
@@ -300,7 +308,7 @@ async function claimPairing(
     id: agent.id,
     label: agent.label,
   }));
-  const endpoint = new URL("/v1/pairings/claim", options.relayOrigin);
+  const endpoint = new URL("/api/pairings/claim", options.relayOrigin);
   let response: Response;
   try {
     response = await fetch(endpoint, {
@@ -465,7 +473,7 @@ function buildPairedDaemon(
 ): PairedDaemon {
   assertInventoryUsable(inventory);
   const relayUrl = new URL(
-    `/v1/channels/${encodeURIComponent(connection.channelId)}/daemon`,
+    `/api/channels/${encodeURIComponent(connection.channelId)}/daemon`,
     connection.relayOrigin,
   );
   relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";

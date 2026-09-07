@@ -53,7 +53,7 @@ export function loadDaemonConfig(): DaemonConfig {
   const relayUrl = new URL(
     // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
     process.env["MOBIUS_RELAY_URL"] ??
-      "ws://127.0.0.1:8787/v1/channels/local/daemon",
+      "ws://127.0.0.1:8787/api/channels/local/daemon",
   );
   relayUrl.searchParams.set(
     "token",

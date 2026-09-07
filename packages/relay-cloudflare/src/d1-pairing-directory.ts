@@ -29,6 +29,7 @@ interface PairingChannelRow {
   readonly installable_agents_json: string;
   readonly machine_name: string;
   readonly project_id: string;
+  readonly runtime_id: string;
   readonly status: string;
   readonly tenant_id: string;
   readonly workspace_name: string;
@@ -37,11 +38,13 @@ interface PairingChannelRow {
 interface AuthorizedChannelRow {
   readonly channel_id: string;
   readonly project_id: string;
+  readonly runtime_id: string;
   readonly tenant_id: string;
 }
 
 interface ClaimedChannelRow {
   readonly channel_id: string;
+  readonly runtime_id: string;
 }
 
 interface PublicChannelRow {
@@ -50,6 +53,7 @@ interface PublicChannelRow {
   readonly installable_agents_json: string;
   readonly machine_name: string;
   readonly project_id: string;
+  readonly runtime_id: string;
   readonly tenant_id: string;
   readonly workspace_name: string;
 }
@@ -71,7 +75,7 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT channel_id, tenant_id, project_id FROM pairing_channels
+        `SELECT channel_id, runtime_id, tenant_id, project_id FROM pairing_channels
          WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`,
       )
       .bind(channelId, tokenHash)
@@ -91,6 +95,7 @@ export class D1PairingDirectory implements PairingDirectory {
     }
     return new VerifiedChannelAccess(
       row.channel_id,
+      row.runtime_id,
       row.tenant_id,
       row.project_id,
     );
@@ -106,7 +111,7 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT channel_id, tenant_id, project_id FROM pairing_channels
+        `SELECT channel_id, runtime_id, tenant_id, project_id FROM pairing_channels
          WHERE channel_id = ? AND host_token_hash = ? AND status = 'paired'`,
       )
       .bind(channelId, tokenHash)
@@ -120,6 +125,7 @@ export class D1PairingDirectory implements PairingDirectory {
     }
     return new VerifiedChannelAccess(
       row.channel_id,
+      row.runtime_id,
       row.tenant_id,
       row.project_id,
     );
@@ -173,7 +179,7 @@ export class D1PairingDirectory implements PairingDirectory {
          WHERE pairing_code_hash = ?
            AND status = 'pending'
            AND expires_at > ?
-         RETURNING channel_id`,
+         RETURNING channel_id, runtime_id`,
       )
       .bind(
         await hashSecret(daemonToken),
@@ -194,7 +200,11 @@ export class D1PairingDirectory implements PairingDirectory {
         "The pairing code is invalid or expired",
       );
     }
-    return { channelId: claimed.channel_id, daemonToken };
+    return {
+      channelId: claimed.channel_id,
+      daemonToken,
+      runtimeId: claimed.runtime_id,
+    };
   };
 
   readonly createPairing = async (
@@ -207,6 +217,7 @@ export class D1PairingDirectory implements PairingDirectory {
     const pollToken = createRandomToken(32);
     const hostToken = createRandomToken(32);
     const channelId = `chn_${createRandomToken(18)}`;
+    const runtimeId = `rnt_${createRandomToken(18)}`;
     const tenantId = `tnt_${createRandomToken(18)}`;
     const projectId = `prj_${createRandomToken(18)}`;
     const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
@@ -218,19 +229,21 @@ export class D1PairingDirectory implements PairingDirectory {
           pairing_code_hash,
           poll_token_hash,
           channel_id,
+          runtime_id,
           tenant_id,
           project_id,
           host_token_hash,
           status,
           created_at,
           expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       )
       .bind(
         pairingId,
         await hashSecret(pairingCode),
         await hashSecret(pollToken),
         channelId,
+        runtimeId,
         tenantId,
         projectId,
         await hashSecret(hostToken),
@@ -248,6 +261,7 @@ export class D1PairingDirectory implements PairingDirectory {
       pairingId,
       pollToken,
       projectId,
+      runtimeId,
       tenantId,
     };
   };
@@ -262,7 +276,7 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT channel_id, machine_name, workspace_name, agents_json,
+        `SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json,
                 installable_agents_json, tenant_id, project_id
          FROM pairing_channels
          WHERE channel_id = ? AND host_token_hash = ? AND status = 'paired'`,
@@ -289,6 +303,7 @@ export class D1PairingDirectory implements PairingDirectory {
       row.workspace_name,
       row.tenant_id,
       row.project_id,
+      row.runtime_id,
       parseInstallableAgents(row.installable_agents_json),
     );
   };
@@ -301,7 +316,7 @@ export class D1PairingDirectory implements PairingDirectory {
     signal.throwIfAborted();
     const row = await this.database
       .prepare(
-        `SELECT status, channel_id, expires_at, machine_name, workspace_name,
+        `SELECT status, channel_id, runtime_id, expires_at, machine_name, workspace_name,
                 agents_json, installable_agents_json, tenant_id, project_id
          FROM pairing_channels
          WHERE pairing_id = ? AND poll_token_hash = ?`,
@@ -324,6 +339,7 @@ export class D1PairingDirectory implements PairingDirectory {
         row.workspace_name,
         row.tenant_id,
         row.project_id,
+        row.runtime_id,
         parseInstallableAgents(row.installable_agents_json),
       );
     }

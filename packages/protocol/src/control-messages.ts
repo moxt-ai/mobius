@@ -2,7 +2,6 @@ import { z } from "zod";
 
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { promptMetadataSchema, promptUsageSchema } from "./prompt-usage.ts";
-import { MOBIUS_PROTOCOL_VERSION } from "./version.ts";
 
 export const WORKSPACE_LIST_KIND = "workspace.list";
 export const WORKSPACE_ENTRIES_KIND = "workspace.entries";
@@ -42,7 +41,6 @@ const DIRECTORY_IDENTIFIER = z
   .regex(DIRECTORY_IDENTIFIER_PATTERN);
 const SHORT_TEXT = z.string().max(500);
 const LONG_TEXT = z.string().max(100_000);
-const PROTOCOL_VERSION = z.literal(MOBIUS_PROTOCOL_VERSION);
 
 const workspaceEntrySchema = z
   .strictObject({
@@ -107,7 +105,7 @@ const sessionCommandSchema = z
 
 export type SessionCommand = z.infer<typeof sessionCommandSchema>;
 
-const permissionOptionSchema = z
+export const permissionOptionSchema = z
   .strictObject({
     kind: z.enum([
       "allow_once",
@@ -132,7 +130,7 @@ const elicitationOptionSchema = z
 
 export type SessionElicitationOption = z.infer<typeof elicitationOptionSchema>;
 
-const elicitationFieldSchema = z
+export const elicitationFieldSchema = z
   .strictObject({
     defaultBooleanValue: z.boolean(),
     defaultNumberValue: z.number().finite(),
@@ -235,7 +233,6 @@ const workspaceListCommandSchema = z
     bindingId: IDENTIFIER,
     directoryId: DIRECTORY_IDENTIFIER,
     kind: z.literal(WORKSPACE_LIST_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
   })
   .readonly();
@@ -250,7 +247,6 @@ const workspaceEntriesEventSchema = z
     entries: z.array(workspaceEntrySchema).max(500).readonly(),
     kind: z.literal(WORKSPACE_ENTRIES_KIND),
     parentDirectoryId: z.string().max(2_048),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
   })
   .readonly();
@@ -269,7 +265,6 @@ const sessionPrepareCommandSchema = z
   .strictObject({
     ...sessionIdentityFields,
     kind: z.literal(SESSION_PREPARE_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
   })
   .readonly();
@@ -288,7 +283,6 @@ export const sessionReadyEventSchema = z
     directoryId: DIRECTORY_IDENTIFIER,
     directoryLabel: z.string().min(1).max(2_048),
     kind: z.literal(SESSION_READY_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
     restored: z.boolean(),
     sessionId: IDENTIFIER,
@@ -303,7 +297,6 @@ const sessionConfigureCommandSchema = z
     booleanValue: z.boolean(),
     configId: z.string().min(1).max(128),
     kind: z.literal(SESSION_CONFIGURE_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
     value: z.string().max(500),
     valueType: z.enum(["boolean", "select"]),
@@ -318,7 +311,6 @@ const sessionConfigUpdatedEventSchema = z
   .strictObject({
     configOptions: z.array(configOptionSchema).max(100).readonly(),
     kind: z.literal(SESSION_CONFIG_UPDATED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
     sessionId: IDENTIFIER,
   })
@@ -334,7 +326,6 @@ const sessionContextUsageUpdatedEventSchema = z
     costCurrency: z.string().max(16),
     hasCost: z.boolean(),
     kind: z.literal(SESSION_USAGE_UPDATED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     size: z.number().int().nonnegative(),
     source: z.literal("context").default("context"),
@@ -351,7 +342,6 @@ const sessionPromptUsageUpdatedEventSchema = z
     _meta: promptMetadataSchema.nullable(),
     commandId: IDENTIFIER,
     kind: z.literal(SESSION_USAGE_UPDATED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     source: z.literal("prompt"),
     usage: promptUsageSchema.nullable(),
@@ -377,7 +367,6 @@ const sessionCommandsUpdatedEventSchema = z
   .strictObject({
     commands: z.array(sessionCommandSchema).max(500).readonly(),
     kind: z.literal(SESSION_COMMANDS_UPDATED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -389,7 +378,6 @@ export type SessionCommandsUpdatedEvent = z.infer<
 const sessionInfoUpdatedEventSchema = z
   .strictObject({
     kind: z.literal(SESSION_INFO_UPDATED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     title: z.string().max(500).nullable(),
     updatedAt: z.string().max(128),
@@ -406,7 +394,6 @@ const sessionPermissionRequestedEventSchema = z
     interactionId: IDENTIFIER,
     kind: z.literal(SESSION_PERMISSION_REQUESTED_KIND),
     options: z.array(permissionOptionSchema).min(1).max(20).readonly(),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     title: z.string().min(1).max(500),
     toolCallId: z.string().min(1).max(255),
@@ -424,7 +411,6 @@ const sessionPermissionRespondCommandSchema = z
     kind: z.literal(SESSION_PERMISSION_RESPOND_KIND),
     optionId: z.string().max(255),
     outcome: z.enum(["cancelled", "selected"]),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -439,7 +425,6 @@ const sessionPermissionResolvedEventSchema = z
     kind: z.literal(SESSION_PERMISSION_RESOLVED_KIND),
     optionId: z.string().max(255),
     outcome: z.enum(["cancelled", "selected"]),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -458,7 +443,6 @@ const sessionElicitationRequestedEventSchema = z
     kind: z.literal(SESSION_ELICITATION_REQUESTED_KIND),
     message: z.string().min(1).max(2_000),
     mode: z.enum(["form", "url"]),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
     url: z.string().max(4_096),
   })
@@ -474,7 +458,6 @@ const sessionElicitationRespondCommandSchema = z
     content: z.string().max(100_000),
     interactionId: IDENTIFIER,
     kind: z.literal(SESSION_ELICITATION_RESPOND_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -488,7 +471,6 @@ const sessionElicitationResolvedEventSchema = z
     action: z.enum(["accept", "cancel", "decline", "complete"]),
     interactionId: IDENTIFIER,
     kind: z.literal(SESSION_ELICITATION_RESOLVED_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -502,7 +484,6 @@ const sessionOperationFailedEventSchema = z
     code: IDENTIFIER,
     kind: z.literal(SESSION_OPERATION_FAILED_KIND),
     message: z.string().min(1).max(500),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
     sessionId: z.string().max(128),
   })
@@ -519,7 +500,6 @@ const agentContentEventSchema = z
     contentId: IDENTIFIER,
     kind: z.literal(AGENT_CONTENT_KIND),
     messageId: z.string().max(255),
-    protocolVersion: PROTOCOL_VERSION,
     sessionId: IDENTIFIER,
   })
   .readonly();
@@ -528,7 +508,6 @@ export type AgentContentEvent = z.infer<typeof agentContentEventSchema>;
 
 const agentInstallIdentityFields = {
   agentId: IDENTIFIER,
-  protocolVersion: PROTOCOL_VERSION,
   requestId: IDENTIFIER,
 };
 
@@ -546,7 +525,6 @@ export type AgentInstallRequestCommand = z.infer<
 const agentInstallCancelCommandSchema = z
   .strictObject({
     kind: z.literal(AGENT_INSTALL_CANCEL_KIND),
-    protocolVersion: PROTOCOL_VERSION,
     requestId: IDENTIFIER,
   })
   .readonly();

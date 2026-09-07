@@ -11,7 +11,6 @@ import {
   decodeRuntimeHeartbeatEvent,
   encodeRuntimeHeartbeatAckEvent,
   encodeWorkspaceListCommand,
-  MOBIUS_PROTOCOL_VERSION,
   RUNTIME_HEARTBEAT_ACK_KIND,
   RUNTIME_HEARTBEAT_KIND,
   RUNTIME_LIVENESS_READY_KIND,
@@ -158,7 +157,7 @@ describe("daemon relay connection liveness", () => {
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
-        request.url === "/v1/channels/heartbeat-channel/catalog"
+        request.url === "/api/channels/heartbeat-channel/catalog"
       ) {
         request.resume();
         response.writeHead(204);
@@ -206,7 +205,6 @@ describe("daemon relay connection liveness", () => {
         socket,
         JSON.stringify({
           kind: RUNTIME_LIVENESS_READY_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
         }),
       );
       upgradeWaiters.shift()?.();
@@ -231,7 +229,7 @@ describe("daemon relay connection liveness", () => {
       auditDatabasePath,
       channelId: "heartbeat-channel",
       relayUrl: new URL(
-        `ws://127.0.0.1:${readPort(relay)}/v1/channels/heartbeat-channel/daemon`,
+        `ws://127.0.0.1:${readPort(relay)}/api/channels/heartbeat-channel/daemon`,
       ),
     });
 
@@ -261,7 +259,6 @@ describe("daemon relay connection liveness", () => {
         encodeRuntimeHeartbeatAckEvent({
           heartbeatId: firstHeartbeat.heartbeatId,
           kind: RUNTIME_HEARTBEAT_ACK_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
         }),
       );
       writeServerTextFrame(
@@ -270,7 +267,6 @@ describe("daemon relay connection liveness", () => {
           bindingId: "workspace",
           directoryId: "default",
           kind: WORKSPACE_LIST_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: "acknowledgement-barrier",
         }),
       );
@@ -332,7 +328,7 @@ describe("daemon relay connection liveness", () => {
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
-        request.url === "/v1/channels/liveness-channel/catalog"
+        request.url === "/api/channels/liveness-channel/catalog"
       ) {
         request.resume();
         response.writeHead(204);
@@ -378,7 +374,6 @@ describe("daemon relay connection liveness", () => {
           bindingId: "workspace",
           directoryId: "default",
           kind: WORKSPACE_LIST_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId: `connection-${clientFrames.length.toString()}`,
         }),
       );
@@ -405,7 +400,7 @@ describe("daemon relay connection liveness", () => {
       auditDatabasePath,
       channelId: "liveness-channel",
       relayUrl: new URL(
-        `ws://127.0.0.1:${readPort(relay)}/v1/channels/liveness-channel/daemon`,
+        `ws://127.0.0.1:${readPort(relay)}/api/channels/liveness-channel/daemon`,
       ),
     });
 
@@ -440,8 +435,8 @@ describe("daemon relay connection liveness", () => {
       expect({ connectionCount, requestedUrls }).toEqual({
         connectionCount: 2,
         requestedUrls: [
-          "/v1/channels/liveness-channel/daemon?liveness=1",
-          "/v1/channels/liveness-channel/daemon?liveness=1",
+          "/api/channels/liveness-channel/daemon?liveness=1",
+          "/api/channels/liveness-channel/daemon?liveness=1",
         ],
       });
     } finally {

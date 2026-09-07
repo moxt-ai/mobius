@@ -34,7 +34,6 @@ import {
   type SessionPromptCommand,
   type SessionStartedEvent,
 } from "../messages.ts";
-import { MOBIUS_PROTOCOL_VERSION } from "../version.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
@@ -300,13 +299,6 @@ function readBoolean(
   return field;
 }
 
-function assertProtocolVersion(value: Readonly<Record<string, unknown>>): void {
-  // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
-  if (value["protocolVersion"] !== MOBIUS_PROTOCOL_VERSION) {
-    throw new ProtocolMessageError("Unsupported protocol version");
-  }
-}
-
 function assertKind(
   value: Readonly<Record<string, unknown>>,
   expectedKind: string,
@@ -334,11 +326,9 @@ export function decodeSessionPromptCommand(
     "images",
     "kind",
     "prompt",
-    "protocolVersion",
     "resources",
     "sessionId",
   ]);
-  assertProtocolVersion(value);
   assertKind(value, SESSION_PROMPT_KIND);
 
   const prompt = readText(value, "prompt", MAX_PROMPT_LENGTH);
@@ -371,7 +361,6 @@ export function decodeSessionPromptCommand(
     images,
     kind: SESSION_PROMPT_KIND,
     prompt,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     resources,
     sessionId: readIdentifier(value, "sessionId"),
   };
@@ -381,28 +370,24 @@ export function decodeSessionCancelCommand(
   encoded: string,
 ): SessionCancelCommand {
   const value = parseJson(encoded);
-  assertExactKeys(value, ["commandId", "kind", "protocolVersion", "sessionId"]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["commandId", "kind", "sessionId"]);
   assertKind(value, SESSION_CANCEL_KIND);
 
   return {
     commandId: readIdentifier(value, "commandId"),
     kind: SESSION_CANCEL_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sessionId: readIdentifier(value, "sessionId"),
   };
 }
 
 export function decodeRuntimeStatusEvent(encoded: string): RuntimeStatusEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, ["kind", "online", "protocolVersion", "runtimeId"]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["kind", "online", "runtimeId"]);
   assertKind(value, RUNTIME_STATUS_KIND);
 
   return {
     kind: RUNTIME_STATUS_KIND,
     online: readBoolean(value, "online"),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     runtimeId: readIdentifier(value, "runtimeId"),
   };
 }
@@ -411,28 +396,22 @@ export function decodeRuntimeLivenessReadyEvent(
   encoded: string,
 ): RuntimeLivenessReadyEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, ["kind", "protocolVersion"]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["kind"]);
   assertKind(value, RUNTIME_LIVENESS_READY_KIND);
 
-  return {
-    kind: RUNTIME_LIVENESS_READY_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
-  };
+  return { kind: RUNTIME_LIVENESS_READY_KIND };
 }
 
 export function decodeRuntimeHeartbeatEvent(
   encoded: string,
 ): RuntimeHeartbeatEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, ["heartbeatId", "kind", "protocolVersion"]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["heartbeatId", "kind"]);
   assertKind(value, RUNTIME_HEARTBEAT_KIND);
 
   return {
     heartbeatId: readIdentifier(value, "heartbeatId"),
     kind: RUNTIME_HEARTBEAT_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
   };
 }
 
@@ -440,14 +419,12 @@ export function decodeRuntimeHeartbeatAckEvent(
   encoded: string,
 ): RuntimeHeartbeatAckEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, ["heartbeatId", "kind", "protocolVersion"]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["heartbeatId", "kind"]);
   assertKind(value, RUNTIME_HEARTBEAT_ACK_KIND);
 
   return {
     heartbeatId: readIdentifier(value, "heartbeatId"),
     kind: RUNTIME_HEARTBEAT_ACK_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
   };
 }
 
@@ -455,21 +432,13 @@ export function decodeSessionStartedEvent(
   encoded: string,
 ): SessionStartedEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, [
-    "commandId",
-    "kind",
-    "processAttemptId",
-    "protocolVersion",
-    "sessionId",
-  ]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["commandId", "kind", "attemptId", "sessionId"]);
   assertKind(value, SESSION_STARTED_KIND);
 
   return {
     commandId: readIdentifier(value, "commandId"),
     kind: SESSION_STARTED_KIND,
-    processAttemptId: readIdentifier(value, "processAttemptId"),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
+    attemptId: readIdentifier(value, "attemptId"),
     sessionId: readIdentifier(value, "sessionId"),
   };
 }
@@ -478,20 +447,12 @@ export function decodeAgentMessageDeltaEvent(
   encoded: string,
 ): AgentMessageDeltaEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, [
-    "commandId",
-    "kind",
-    "protocolVersion",
-    "sessionId",
-    "text",
-  ]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["commandId", "kind", "sessionId", "text"]);
   assertKind(value, AGENT_MESSAGE_DELTA_KIND);
 
   return {
     commandId: readIdentifier(value, "commandId"),
     kind: AGENT_MESSAGE_DELTA_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sessionId: readIdentifier(value, "sessionId"),
     text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
   };
@@ -510,14 +471,12 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     "locations",
     "name",
     "output",
-    "protocolVersion",
     "sequence",
     "sessionId",
     "status",
     "title",
     "toolKind",
   ]);
-  assertProtocolVersion(value);
   assertKind(value, AGENT_ACTIVITY_KIND);
 
   return {
@@ -531,7 +490,6 @@ export function decodeAgentActivityEvent(encoded: string): AgentActivityEvent {
     locations: readLocations(value),
     name: readText(value, "name", 128),
     output: readText(value, "output", AGENT_ACTIVITY_DETAIL_LIMIT),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sequence: readSequence(value, "sequence"),
     sessionId: readIdentifier(value, "sessionId"),
     status: readAllowedString(value, "status", ACTIVITY_STATUSES),
@@ -544,20 +502,12 @@ export function decodeSessionCompletedEvent(
   encoded: string,
 ): SessionCompletedEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, [
-    "commandId",
-    "kind",
-    "protocolVersion",
-    "sessionId",
-    "stopReason",
-  ]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["commandId", "kind", "sessionId", "stopReason"]);
   assertKind(value, SESSION_COMPLETED_KIND);
 
   return {
     commandId: readIdentifier(value, "commandId"),
     kind: SESSION_COMPLETED_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sessionId: readIdentifier(value, "sessionId"),
     stopReason: readString(value, "stopReason", 64),
   };
@@ -565,15 +515,7 @@ export function decodeSessionCompletedEvent(
 
 export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
   const value = parseJson(encoded);
-  assertExactKeys(value, [
-    "code",
-    "commandId",
-    "kind",
-    "message",
-    "protocolVersion",
-    "sessionId",
-  ]);
-  assertProtocolVersion(value);
+  assertExactKeys(value, ["code", "commandId", "kind", "message", "sessionId"]);
   assertKind(value, SESSION_FAILED_KIND);
 
   return {
@@ -581,7 +523,6 @@ export function decodeSessionFailedEvent(encoded: string): SessionFailedEvent {
     commandId: readIdentifier(value, "commandId"),
     kind: SESSION_FAILED_KIND,
     message: readString(value, "message", 500),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sessionId: readIdentifier(value, "sessionId"),
   };
 }

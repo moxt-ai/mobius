@@ -4,7 +4,6 @@ import {
   type CancelRequest,
   connectMobiusClient,
   type ElicitationResponseRequest,
-  MOBIUS_PROTOCOL_VERSION,
   type MobiusClient,
   MobiusClientError,
   type NativeSessionCommand,
@@ -35,7 +34,7 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
   const relayUrl = new URL(window.location.origin);
-  relayUrl.pathname = `/v1/channels/${encodeURIComponent(connection.channelId)}/host`;
+  relayUrl.pathname = `/api/channels/${encodeURIComponent(connection.channelId)}/host`;
   relayUrl.searchParams.set("token", connection.hostToken);
   relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return relayUrl.toString();
@@ -340,7 +339,7 @@ export async function prepareActiveSession(
         (directory) => directory.directoryId,
       ),
       agentId: conversation.agentId,
-      bindingId: "workspace",
+      bindingId: conversation.bindingId,
       directoryId: conversation.directoryId,
       sessionId: conversation.sessionId,
     });
@@ -369,8 +368,16 @@ export async function listWorkspace(
 
 type NativeSessionAction =
   | { readonly action: "list"; readonly cursor: string | null }
-  | { readonly action: "import" | "fork"; readonly entryId: string }
-  | { readonly action: "delete"; readonly entryId: string };
+  | {
+      readonly action: "fork" | "import";
+      readonly directoryId: string;
+      readonly entryId: string;
+    }
+  | {
+      readonly action: "delete";
+      readonly directoryId: string;
+      readonly entryId: string;
+    };
 
 export interface NativeSessionScope {
   readonly agentId: string;
@@ -387,10 +394,10 @@ export async function manageNativeSession(
     additionalDirectoryIds: [],
     agentId: scope.agentId,
     bindingId: "workspace",
-    directoryId: scope.directoryId,
+    directoryId:
+      action.action === "list" ? scope.directoryId : action.directoryId,
     sessionId: scope.sessionId,
     requestId: crypto.randomUUID(),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     kind: "native.session.request",
   } satisfies Omit<NativeSessionCommand, "action">;
   switch (action.action) {
@@ -463,7 +470,7 @@ export async function configureSessionOption(
         (directory) => directory.directoryId,
       ),
       agentId: conversation.agentId,
-      bindingId: "workspace",
+      bindingId: conversation.bindingId,
       booleanValue,
       configId: currentOption.id,
       directoryId: conversation.directoryId,
@@ -548,7 +555,7 @@ export async function sendPrompt(prompt: string): Promise<void> {
         (directory) => directory.directoryId,
       ),
       agentId: turn.agentId,
-      bindingId: "workspace",
+      bindingId: conversation.bindingId,
       commandId: turn.commandId,
       directoryId: conversation.directoryId,
       images: conversation.draftImages,
@@ -560,6 +567,7 @@ export async function sendPrompt(prompt: string): Promise<void> {
               turn,
               new RecordedActivity(
                 activity.activityId,
+                attemptId,
                 activity.activityType,
                 activity.input,
                 activity.locations,
@@ -579,9 +587,9 @@ export async function sendPrompt(prompt: string): Promise<void> {
         onDelta: (text) => {
           useChatStore.getState().appendAgentText(turn, text);
         },
-        onStarted: (processAttemptId) => {
-          attemptId = processAttemptId;
-          useChatStore.getState().startAgentTurn(turn, processAttemptId);
+        onStarted: (startedAttemptId) => {
+          attemptId = startedAttemptId;
+          useChatStore.getState().startAgentTurn(turn, startedAttemptId);
         },
       },
       prompt: normalizedPrompt,
@@ -645,7 +653,6 @@ export async function installLocalAgent(agentId: string): Promise<void> {
       code: failure.code,
       kind: "agent.install.failed",
       message: failure.message,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId,
     });
   }

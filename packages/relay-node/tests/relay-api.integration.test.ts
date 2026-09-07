@@ -5,10 +5,8 @@ import { join } from "node:path";
 import {
   AGENT_ACTIVITY_KIND,
   AGENT_MESSAGE_DELTA_KIND,
-  MOBIUS_PROTOCOL_VERSION,
   type RecordedSessionEvent,
   SESSION_COMPLETED_KIND,
-  SESSION_EVENT_FORMAT_VERSION,
   SESSION_EVENT_KIND,
   SESSION_PROMPT_KIND,
   SESSION_STARTED_KIND,
@@ -30,6 +28,8 @@ const fixedTime = Date.parse("2026-09-06T00:00:00.000Z");
 const token = "node-test-token-abcdefghijklmnopqrstuvwxyz";
 const scope = new ProjectScope("tenant-node", "project-node");
 const createdDirectories: string[] = [];
+const attemptIdsBySession = new Map<string, string>();
+const sourceSequences = new Map<string, number>();
 
 class ScopedPairingDirectory implements PairingDirectory {
   readonly authorizeDaemon = async (): Promise<never> => {
@@ -109,11 +109,24 @@ function prompt(sessionId: string): SessionPromptCommand {
     bindingId: "workspace",
     commandId: "node-command",
     directoryId: "root",
-    images: [],
+    images: [
+      {
+        data: "aW1hZ2UtYnl0ZXM=",
+        mimeType: "image/png",
+        name: "diagram.png",
+      },
+    ],
     kind: SESSION_PROMPT_KIND,
     prompt: "inspect the Node deployment",
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
-    resources: [],
+    resources: [
+      {
+        mimeType: "text/plain",
+        name: "notes.txt",
+        text: "retained attachment",
+        type: "embedded",
+        uri: "file:///notes.txt",
+      },
+    ],
     sessionId,
   };
 }
@@ -123,13 +136,37 @@ function envelope(
   eventId: string,
   event: RecordedSessionEvent,
 ): SessionEventEnvelope {
+  const attemptId =
+    event.kind === SESSION_STARTED_KIND
+      ? event.attemptId
+      : "commandId" in event
+        ? attemptIdsBySession.get(sessionId)
+        : undefined;
+  if (event.kind === SESSION_STARTED_KIND) {
+    attemptIdsBySession.set(sessionId, event.attemptId);
+  }
+  if ("commandId" in event && attemptId === undefined) {
+    throw new Error("An execution event has no Attempt source identity");
+  }
+  const sourceKey =
+    attemptId === undefined
+      ? `runtime:${sessionId}`
+      : `attempt:${sessionId}:${attemptId}`;
+  const sourceSequence = (sourceSequences.get(sourceKey) ?? 0) + 1;
+  sourceSequences.set(sourceKey, sourceSequence);
   return {
     eventId,
-    eventVersion: SESSION_EVENT_FORMAT_VERSION,
     kind: SESSION_EVENT_KIND,
     payload: JSON.stringify(event),
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     sessionId,
+    source:
+      attemptId === undefined
+        ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
+        : {
+            attemptId,
+            kind: "attempt",
+            sourceSeq: sourceSequence.toString(),
+          },
   };
 }
 
@@ -144,7 +181,7 @@ async function createSession(
   sessionId: string,
 ): Promise<Response> {
   return await relay.fetch(
-    authorized(`/v1/projects/${scope.projectId}/sessions`, {
+    authorized(`/api/projects/${scope.projectId}/sessions`, {
       body: JSON.stringify({
         agentId: "codex",
         bindingId: "workspace",
@@ -195,7 +232,7 @@ describe("Node public Relay API", () => {
     expect((await createSession(relay, "node-session-b")).status).toBe(201);
 
     const command = prompt(sessionId);
-    await relay.sessionRuntime.acceptCommand(
+    await relay.sessionRuntime.acceptTurn(
       scope,
       "runtime-node",
       command,
@@ -206,8 +243,7 @@ describe("Node public Relay API", () => {
       envelope(sessionId, "node-started", {
         commandId: command.commandId,
         kind: SESSION_STARTED_KIND,
-        processAttemptId: "node-attempt",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
+        attemptId: "node-attempt",
         sessionId,
       }),
       envelope(sessionId, "node-activity", {
@@ -226,7 +262,6 @@ describe("Node public Relay API", () => {
         locations: [],
         name: "terminal",
         output: "Full output is available on demand",
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sequence: 0,
         sessionId,
         status: "completed",
@@ -236,14 +271,12 @@ describe("Node public Relay API", () => {
       envelope(sessionId, "node-delta", {
         commandId: command.commandId,
         kind: AGENT_MESSAGE_DELTA_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId,
         text: "Node response",
       }),
       envelope(sessionId, "node-completed", {
         commandId: command.commandId,
         kind: SESSION_COMPLETED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId,
         stopReason: "end_turn",
       }),
@@ -260,7 +293,7 @@ describe("Node public Relay API", () => {
     await relay.sessionRuntime.runArchiveWork(scope, sessionId, signal);
 
     const directoryPage = await relay.fetch(
-      authorized(`/v1/projects/${scope.projectId}/sessions?limit=1`),
+      authorized(`/api/projects/${scope.projectId}/sessions?limit=1`),
     );
     await expect(directoryPage.json()).resolves.toMatchObject({
       nextCursor: expect.any(String),
@@ -268,17 +301,24 @@ describe("Node public Relay API", () => {
     });
     const messages = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/messages?limit=1`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/messages?limit=1`,
       ),
     );
     await expect(messages.json()).resolves.toMatchObject({
-      messages: [{ commandId: command.commandId, response: "Node response" }],
+      messages: [
+        {
+          commandId: command.commandId,
+          images: command.images,
+          resources: command.resources,
+          response: "Node response",
+        },
+      ],
       nextCursor: null,
     });
 
     const firstEvents = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/events?limit=1`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/events?limit=1`,
       ),
     );
     const firstPage: unknown = await firstEvents.json();
@@ -296,7 +336,7 @@ describe("Node public Relay API", () => {
     }
     const catchup = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/events?limit=10&cursor=${encodeURIComponent(firstPage.cursor)}`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/events?limit=10&cursor=${encodeURIComponent(firstPage.cursor)}`,
       ),
     );
     await expect(catchup.json()).resolves.toMatchObject({
@@ -309,7 +349,7 @@ describe("Node public Relay API", () => {
     });
     const detail = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/activities/node-activity`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/attempts/node-attempt/tool-calls/node-activity`,
       ),
     );
     await expect(detail.json()).resolves.toMatchObject({
@@ -320,14 +360,14 @@ describe("Node public Relay API", () => {
 
     const unauthorized = await relay.fetch(
       new Request(
-        `https://node.relay.test/v1/projects/${scope.projectId}/sessions`,
+        `https://node.relay.test/api/projects/${scope.projectId}/sessions`,
         { headers: { authorization: `Bearer ${"z".repeat(32)}` } },
       ),
     );
     expect(unauthorized.status).toBe(401);
     const invalidCursor = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/events?cursor=invalid`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/events?cursor=invalid`,
       ),
     );
     expect(invalidCursor.status).toBe(400);
@@ -335,7 +375,7 @@ describe("Node public Relay API", () => {
       error: { code: "invalid_cursor" },
     });
     const oversizedBody = await relay.fetch(
-      authorized(`/v1/projects/${scope.projectId}/sessions`, {
+      authorized(`/api/projects/${scope.projectId}/sessions`, {
         body: JSON.stringify({ padding: "😀".repeat(5_000) }),
         headers: { "content-type": "application/json" },
         method: "POST",
@@ -350,14 +390,14 @@ describe("Node public Relay API", () => {
     });
 
     const deleted = await relay.fetch(
-      authorized(`/v1/projects/${scope.projectId}/sessions/${sessionId}`, {
+      authorized(`/api/projects/${scope.projectId}/sessions/${sessionId}`, {
         method: "DELETE",
       }),
     );
     expect(deleted.status).toBe(200);
     const afterDelete = await relay.fetch(
       authorized(
-        `/v1/projects/${scope.projectId}/sessions/${sessionId}/messages`,
+        `/api/projects/${scope.projectId}/sessions/${sessionId}/messages`,
       ),
     );
     expect(afterDelete.status).toBe(410);

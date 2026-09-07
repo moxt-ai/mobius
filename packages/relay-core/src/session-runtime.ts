@@ -1,11 +1,19 @@
 import type {
   AgentActivityEvent,
+  Attempt,
+  CommandReceipt,
   CommittedSessionEvent,
+  DomainError,
+  Interaction,
+  InteractionResponse,
+  NativeSessionHistory,
+  PendingWork,
+  SessionLifecycle as ResourceSessionLifecycle,
+  SessionBinding,
   SessionEventEnvelope,
   SessionPromptCommand,
+  Turn,
 } from "@moxt-ai/mobius-protocol";
-
-export const SESSION_EXPORT_FORMAT_VERSION = 2;
 
 export class SessionQuotaPolicy {
   readonly activeSessionsPerProject: number;
@@ -47,6 +55,7 @@ export class ProjectScope {
 export class SessionRecordingPolicy {
   readonly contentLimitBytes: number;
   readonly hotEventLimit: number;
+  readonly idempotencyRetentionMilliseconds: number;
   readonly level: "full" | "summary";
   readonly retentionMilliseconds: number;
 
@@ -55,11 +64,35 @@ export class SessionRecordingPolicy {
     retentionMilliseconds: number,
     hotEventLimit: number,
     contentLimitBytes: number,
+    idempotencyRetentionMilliseconds = retentionMilliseconds,
   ) {
     this.contentLimitBytes = contentLimitBytes;
     this.hotEventLimit = hotEventLimit;
+    this.idempotencyRetentionMilliseconds = idempotencyRetentionMilliseconds;
     this.level = level;
     this.retentionMilliseconds = retentionMilliseconds;
+  }
+}
+
+export class CreateSessionBindingRequest {
+  readonly agentRef: string;
+  readonly bindingId: string;
+  readonly configRevision: number;
+  readonly runtimeId: string;
+  readonly workspaceRef: string;
+
+  constructor(
+    bindingId: string,
+    runtimeId: string,
+    agentRef: string,
+    workspaceRef: string,
+    configRevision = 1,
+  ) {
+    this.agentRef = agentRef;
+    this.bindingId = bindingId;
+    this.configRevision = configRevision;
+    this.runtimeId = runtimeId;
+    this.workspaceRef = workspaceRef;
   }
 }
 
@@ -71,6 +104,7 @@ export class CreateSessionRequest {
   readonly runtimeId: string;
   readonly sessionId: string;
   readonly title: string;
+  readonly createdBy: string;
 
   constructor(
     sessionId: string,
@@ -80,6 +114,7 @@ export class CreateSessionRequest {
     directoryId: string,
     policy: SessionRecordingPolicy,
     title = "",
+    createdBy = "project-client",
   ) {
     this.agentId = agentId;
     this.bindingId = bindingId;
@@ -88,21 +123,33 @@ export class CreateSessionRequest {
     this.runtimeId = runtimeId;
     this.sessionId = sessionId;
     this.title = title;
+    this.createdBy = createdBy;
+  }
+
+  get binding(): CreateSessionBindingRequest {
+    return new CreateSessionBindingRequest(
+      this.bindingId,
+      this.runtimeId,
+      this.agentId,
+      this.directoryId,
+    );
   }
 }
 
-export type SessionLifecycle =
-  | { readonly kind: "active" }
-  | { readonly kind: "deleting"; readonly requestedAt: string }
-  | { readonly completedAt: string; readonly kind: "deleted" };
+export type SessionLifecycle = ResourceSessionLifecycle;
 
 export interface SessionSummary {
   readonly agentId: string;
   readonly createdAt: string;
+  readonly createdBy: string;
+  readonly defaultBinding: SessionBinding;
+  readonly hasNativeHistory: boolean;
+  readonly lastCommittedSeq: string;
   readonly lifecycle: SessionLifecycle;
   readonly policy: {
     readonly contentLimitBytes: number;
     readonly hotEventLimit: number;
+    readonly idempotencyRetentionMilliseconds: number;
     readonly level: "full" | "summary";
     readonly retentionMilliseconds: number;
   };
@@ -121,35 +168,53 @@ export interface SessionDirectoryPage {
 
 export type AttemptSummary =
   | {
+      readonly attemptId: string;
+      readonly dispatchedAt: string;
+      readonly kind: "dispatching";
+    }
+  | {
+      readonly attemptId: string;
       readonly kind: "running";
-      readonly processAttemptId: string;
       readonly startedAt: string;
     }
   | {
+      readonly attemptId: string;
       readonly completedAt: string;
-      readonly kind: "completed";
-      readonly processAttemptId: string;
+      readonly kind: "succeeded";
       readonly startedAt: string;
       readonly stopReason: string;
+    }
+  | {
+      readonly attemptId: string;
+      readonly cancelledAt: string;
+      readonly kind: "cancelled";
+      readonly startedAt: string;
+    }
+  | {
+      readonly attemptId: string;
+      readonly interactionIds: readonly string[];
+      readonly kind: "waiting_input";
+      readonly startedAt: string;
     }
   | {
       readonly code: string;
       readonly failedAt: string;
       readonly kind: "failed";
       readonly message: string;
-      readonly processAttemptId: string | null;
+      readonly attemptId: string | null;
       readonly startedAt: string | null;
     }
   | {
-      readonly disconnectedAt: string;
-      readonly kind: "outcome_unknown";
-      readonly processAttemptId: string;
+      readonly attemptId: string;
+      readonly detectedAt: string;
+      readonly kind: "indeterminate";
       readonly startedAt: string;
     };
 
 export interface SessionMessage {
   readonly activities: readonly {
     readonly activityId: string;
+    readonly attemptId: string;
     readonly activityType: string;
     readonly detailAvailability: "available" | "truncated" | "unrecorded";
     readonly input: string;
@@ -159,13 +224,16 @@ export interface SessionMessage {
     readonly sequence: number;
     readonly status: string;
     readonly title: string;
+    readonly toolCallId: string;
     readonly toolKind: string;
   }[];
   readonly agentId: string;
   readonly attempt: AttemptSummary | null;
   readonly commandId: string;
   readonly createdAt: string;
+  readonly images: SessionPromptCommand["images"];
   readonly prompt: string;
+  readonly resources: SessionPromptCommand["resources"];
   readonly response: string;
   readonly sessionId: string;
 }
@@ -198,56 +266,75 @@ export type ActivityDetail =
   | { readonly kind: "unrecorded" }
   | { readonly deletedAt: string; readonly kind: "deleted" };
 
-export interface AcceptedSessionCommand {
+export interface AcceptedTurn {
   readonly kind: "accepted";
+  readonly pendingWork: PendingWork;
+  readonly turn: Turn;
 }
 
-export interface DuplicateSessionCommand {
+export interface DuplicateTurn {
   readonly kind: "duplicate";
-  readonly state:
-    | "accepted"
-    | "completed"
-    | "failed"
-    | "outcome_unknown"
-    | "running";
+  readonly pendingWork: PendingWork | null;
+  readonly state: Turn["state"]["kind"];
+  readonly turn: Turn;
 }
 
-export type SessionCommandAcceptance =
-  | AcceptedSessionCommand
-  | DuplicateSessionCommand;
+export type TurnAcceptance = AcceptedTurn | DuplicateTurn;
+
+export type AttemptReconciliationOutcome =
+  | { readonly kind: "running" }
+  | { readonly kind: "succeeded"; readonly stopReason: string }
+  | { readonly error: DomainError; readonly kind: "failed" }
+  | { readonly kind: "cancelled" };
 
 export interface CommittedEventResult {
   readonly committed: CommittedSessionEvent;
   readonly duplicate: boolean;
 }
 
+export interface InteractionResponseAcceptance {
+  readonly duplicate: boolean;
+  readonly interaction: Interaction;
+  readonly pendingWork: PendingWork;
+}
+
+export interface PendingDaemonDelivery {
+  readonly interactionId: string | null;
+  readonly payload: string;
+  readonly pendingWork: PendingWork;
+}
+
 export interface SessionExport {
-  readonly activities: readonly {
+  readonly bindings: readonly SessionBinding[];
+  readonly commandReceipts: readonly CommandReceipt[];
+  readonly toolCallViews: readonly {
+    readonly attemptId: string;
     readonly event: AgentActivityEvent;
-    readonly eventSequence: number;
+    readonly eventSequence: string;
   }[];
   readonly artifacts: readonly {
-    readonly activityId: string;
+    readonly attemptId: string;
     readonly artifactId: string;
     readonly byteLength: number;
     readonly contentBase64: string;
     readonly contentEncoding: "identity";
     readonly mediaType: string;
     readonly sha256: string;
+    readonly toolCallId: string;
   }[];
-  readonly bindingId: string;
-  readonly commands: readonly {
+  readonly turns: readonly {
     readonly command: SessionPromptCommand;
     readonly createdAt: string;
     readonly response: string;
-    readonly state: AttemptSummary | { readonly kind: "accepted" };
+    readonly state: AttemptSummary | { readonly kind: "queued" };
+    readonly turn: Turn;
     readonly updatedAt: string;
   }[];
-  readonly directoryId: string;
   readonly events: readonly CommittedSessionEvent[];
-  readonly formatVersion: typeof SESSION_EXPORT_FORMAT_VERSION;
-  readonly minimumSequence: number;
-  readonly nextSequence: number;
+  readonly interactions: readonly Interaction[];
+  readonly minimumSequence: string;
+  readonly nativeHistory: NativeSessionHistory | null;
+  readonly nextSequence: string;
   readonly session: SessionSummary;
 }
 
@@ -256,9 +343,14 @@ export class SessionRuntimeError extends Error {
     | "artifact_not_found"
     | "content_too_large"
     | "cursor_expired"
+    | "event_source_conflict"
     | "invalid_cursor"
     | "invalid_export"
     | "invalid_page_size"
+    | "idempotency_conflict"
+    | "interaction_conflict"
+    | "interaction_not_found"
+    | "pending_work_not_found"
     | "session_access_denied"
     | "session_busy"
     | "session_conflict"
@@ -280,17 +372,28 @@ export class SessionRuntimeError extends Error {
 }
 
 export interface SessionRuntime {
-  readonly acceptCommand: (
+  readonly acceptInteractionResponse: (
+    scope: ProjectScope,
+    sessionId: string,
+    interactionId: string,
+    responderId: string,
+    response: InteractionResponse,
+    deliveryPayload: string,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<InteractionResponseAcceptance>;
+  readonly acceptTurn: (
     scope: ProjectScope,
     runtimeId: string,
     command: SessionPromptCommand,
     now: number,
     signal: AbortSignal,
-  ) => Promise<SessionCommandAcceptance>;
-  readonly bindSession: (
+  ) => Promise<TurnAcceptance>;
+  readonly setDefaultBinding: (
     scope: ProjectScope,
     sessionId: string,
-    runtimeId: string,
+    binding: CreateSessionBindingRequest,
+    now: number,
     signal: AbortSignal,
   ) => Promise<SessionSummary>;
   readonly commitEvent: (
@@ -329,21 +432,58 @@ export interface SessionRuntime {
     limit: number,
     signal: AbortSignal,
   ) => Promise<SessionDirectoryPage>;
+  readonly listPendingDaemonDeliveries: (
+    scope: ProjectScope,
+    runtimeId: string,
+    limit: number,
+    signal: AbortSignal,
+  ) => Promise<readonly PendingDaemonDelivery[]>;
+  readonly markPendingWorkCompleted: (
+    scope: ProjectScope,
+    sessionId: string,
+    workId: string,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<PendingWork>;
+  readonly readAttempt: (
+    scope: ProjectScope,
+    sessionId: string,
+    attemptId: string,
+    signal: AbortSignal,
+  ) => Promise<Attempt>;
+  readonly readInteraction: (
+    scope: ProjectScope,
+    sessionId: string,
+    interactionId: string,
+    signal: AbortSignal,
+  ) => Promise<Interaction>;
+  readonly readPendingInteractions: (
+    scope: ProjectScope,
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<readonly Interaction[]>;
   readonly readSession: (
     scope: ProjectScope,
     sessionId: string,
     signal: AbortSignal,
   ) => Promise<SessionSummary>;
+  readonly readTurn: (
+    scope: ProjectScope,
+    sessionId: string,
+    turnId: string,
+    signal: AbortSignal,
+  ) => Promise<Turn>;
   readonly markRuntimeDisconnected: (
     scope: ProjectScope,
     runtimeId: string,
     now: number,
     signal: AbortSignal,
   ) => Promise<readonly CommittedSessionEvent[]>;
-  readonly readActivityDetail: (
+  readonly readToolCallDetail: (
     scope: ProjectScope,
     sessionId: string,
-    activityId: string,
+    attemptId: string,
+    toolCallId: string,
     signal: AbortSignal,
   ) => Promise<ActivityDetail>;
   readonly readEvents: (
@@ -360,4 +500,27 @@ export interface SessionRuntime {
     limit: number,
     signal: AbortSignal,
   ) => Promise<SessionMessagePage>;
+  readonly readNativeHistory: (
+    scope: ProjectScope,
+    sessionId: string,
+    signal: AbortSignal,
+  ) => Promise<NativeSessionHistory | null>;
+  readonly recordNativeHistory: (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    title: string,
+    history: NativeSessionHistory,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<SessionSummary>;
+  readonly reconcileAttempt: (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    attemptId: string,
+    outcome: AttemptReconciliationOutcome,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<Attempt>;
 }

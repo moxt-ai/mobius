@@ -20,7 +20,6 @@ import {
   type AgentContentEvent,
   type AgentPromptResponse,
   decodeAgentPromptResponse,
-  MOBIUS_PROTOCOL_VERSION,
   type NativeSessionHistory,
   type PromptImage,
   type PromptResource,
@@ -1493,7 +1492,6 @@ class AcpProcessSession implements AcpClientHandler {
           _meta: result._meta ?? null,
           commandId: options.commandId,
           kind: SESSION_USAGE_UPDATED_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: this.#mobiusSessionId,
           source: "prompt",
           usage: result.usage ?? null,
@@ -1561,7 +1559,6 @@ class AcpProcessSession implements AcpClientHandler {
       kind: SESSION_PERMISSION_RESOLVED_KIND,
       optionId: options.outcome === "selected" ? options.optionId : "",
       outcome: options.outcome,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: this.#mobiusSessionId,
     });
   };
@@ -1609,7 +1606,6 @@ class AcpProcessSession implements AcpClientHandler {
       action: options.action,
       interactionId: options.interactionId,
       kind: SESSION_ELICITATION_RESOLVED_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: this.#mobiusSessionId,
     });
   };
@@ -1649,7 +1645,6 @@ class AcpProcessSession implements AcpClientHandler {
         interactionId,
         kind: SESSION_PERMISSION_REQUESTED_KIND,
         options,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
         title: truncate(request.toolCall.title ?? "Permission required", 500),
         toolCallId: truncate(request.toolCall.toolCallId, 255),
@@ -1710,7 +1705,6 @@ class AcpProcessSession implements AcpClientHandler {
         kind: SESSION_ELICITATION_REQUESTED_KIND,
         message: truncate(request.message, 2_000),
         mode: request.mode,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
         url:
           request.mode === "url" &&
@@ -1739,7 +1733,6 @@ class AcpProcessSession implements AcpClientHandler {
       action: "complete",
       interactionId,
       kind: SESSION_ELICITATION_RESOLVED_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: this.#mobiusSessionId,
     });
   };
@@ -1790,7 +1783,6 @@ class AcpProcessSession implements AcpClientHandler {
           contentId: `content-${crypto.randomUUID()}`,
           kind: AGENT_CONTENT_KIND,
           messageId: truncate(update.messageId ?? "", 255),
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: this.#mobiusSessionId,
         });
       }
@@ -1839,7 +1831,6 @@ class AcpProcessSession implements AcpClientHandler {
       await this.#getObserver().onCommands({
         commands,
         kind: SESSION_COMMANDS_UPDATED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
       });
       return;
@@ -1870,7 +1861,6 @@ class AcpProcessSession implements AcpClientHandler {
       }
       await this.#getObserver().onInfo({
         kind: SESSION_INFO_UPDATED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
         title: this.#sessionTitle,
         updatedAt: this.#sessionUpdatedAt,
@@ -1883,7 +1873,6 @@ class AcpProcessSession implements AcpClientHandler {
         costCurrency: truncate(update.cost?.currency ?? "", 16),
         hasCost: update.cost !== undefined && update.cost !== null,
         kind: SESSION_USAGE_UPDATED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
         size: Math.max(0, Math.trunc(update.size)),
         source: "context",
@@ -1960,7 +1949,6 @@ class AcpProcessSession implements AcpClientHandler {
     await this.#getObserver().onConfig({
       configOptions: this.#configOptions,
       kind: SESSION_CONFIG_UPDATED_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       requestId: `agent-update-${crypto.randomUUID()}`,
       sessionId: this.#mobiusSessionId,
     });
@@ -1977,7 +1965,6 @@ class AcpProcessSession implements AcpClientHandler {
       kind: SESSION_PERMISSION_RESOLVED_KIND,
       optionId: "",
       outcome: "cancelled",
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: this.#mobiusSessionId,
     });
   };
@@ -1992,7 +1979,6 @@ class AcpProcessSession implements AcpClientHandler {
       action: "cancel",
       interactionId,
       kind: SESSION_ELICITATION_RESOLVED_KIND,
-      protocolVersion: MOBIUS_PROTOCOL_VERSION,
       sessionId: this.#mobiusSessionId,
     });
   };
@@ -2013,7 +1999,6 @@ class AcpProcessSession implements AcpClientHandler {
         action: "cancel",
         interactionId,
         kind: SESSION_ELICITATION_RESOLVED_KIND,
-        protocolVersion: MOBIUS_PROTOCOL_VERSION,
         sessionId: this.#mobiusSessionId,
       });
     }

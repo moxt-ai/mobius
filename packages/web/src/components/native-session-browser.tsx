@@ -268,7 +268,7 @@ function NativeSessionList({
     try {
       const result = await manageNativeSession(
         scope,
-        { action, entryId: entry.entryId },
+        { action, directoryId: entry.directoryId, entryId: entry.entryId },
         controller.signal,
       );
       controller.signal.throwIfAborted();

@@ -12,7 +12,6 @@ import { fileURLToPath } from "node:url";
 import {
   AGENT_INSTALL_REQUEST_KIND,
   type AgentInstallRequestCommand,
-  MOBIUS_PROTOCOL_VERSION,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -217,7 +216,7 @@ if (process.argv.includes("--version")) {
 async function writeInstallationGrant(stateDirectory: string): Promise<void> {
   await writeFile(
     join(stateDirectory, "installation-grants.json"),
-    `${JSON.stringify({ agents: ["codex"], version: 1 })}\n`,
+    `${JSON.stringify({ agents: ["codex"] })}\n`,
     { mode: 0o600 },
   );
 }
@@ -226,7 +225,6 @@ function request(requestId: string): AgentInstallRequestCommand {
   return {
     agentId: "codex",
     kind: AGENT_INSTALL_REQUEST_KIND,
-    protocolVersion: MOBIUS_PROTOCOL_VERSION,
     requestId,
   };
 }

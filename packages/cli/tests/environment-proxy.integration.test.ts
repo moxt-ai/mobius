@@ -67,6 +67,7 @@ describe("CLI environment proxy", () => {
         JSON.stringify({
           channelId: "proxy-channel",
           daemonToken: "a".repeat(32),
+          runtimeId: "proxy-runtime",
         }),
       );
     });

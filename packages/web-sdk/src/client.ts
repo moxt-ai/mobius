@@ -68,7 +68,6 @@ import {
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeWorkspaceListCommand,
-  MOBIUS_PROTOCOL_VERSION,
   NATIVE_SESSION_CANCEL_KIND,
   NATIVE_SESSION_REQUEST_KIND,
   NATIVE_SESSION_RESULT_KIND,
@@ -151,7 +150,7 @@ export interface PromptObserver {
   readonly onActivity?: (activity: AgentActivityEvent) => void;
   readonly onContent?: (content: AgentContentEvent) => void;
   readonly onDelta?: (text: string) => void;
-  readonly onStarted?: (processAttemptId: string) => void;
+  readonly onStarted?: (attemptId: string) => void;
 }
 
 export interface CancelRequest {
@@ -351,7 +350,6 @@ export class MobiusClient {
           bindingId: request.bindingId,
           directoryId: request.directoryId,
           kind: WORKSPACE_LIST_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId,
         }),
       ),
@@ -374,7 +372,6 @@ export class MobiusClient {
           bindingId: request.bindingId,
           directoryId: request.directoryId,
           kind: SESSION_PREPARE_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId,
           sessionId: request.sessionId,
         }),
@@ -403,7 +400,6 @@ export class MobiusClient {
             this.#socket.send(
               encodeNativeSessionCancel({
                 kind: NATIVE_SESSION_CANCEL_KIND,
-                protocolVersion: MOBIUS_PROTOCOL_VERSION,
                 requestId: command.requestId,
                 sessionId: command.sessionId,
               }),
@@ -430,7 +426,6 @@ export class MobiusClient {
           configId: request.configId,
           directoryId: request.directoryId,
           kind: SESSION_CONFIGURE_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           requestId,
           sessionId: request.sessionId,
           value: request.value,
@@ -454,7 +449,6 @@ export class MobiusClient {
           kind: SESSION_PERMISSION_RESPOND_KIND,
           optionId: request.optionId,
           outcome: request.outcome,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: request.sessionId,
         }),
       ),
@@ -474,7 +468,6 @@ export class MobiusClient {
           content: request.content,
           interactionId: request.interactionId,
           kind: SESSION_ELICITATION_RESPOND_KIND,
-          protocolVersion: MOBIUS_PROTOCOL_VERSION,
           sessionId: request.sessionId,
         }),
       ),
@@ -496,7 +489,6 @@ export class MobiusClient {
           encodeSessionCancelCommand({
             commandId: request.commandId,
             kind: SESSION_CANCEL_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             sessionId: request.sessionId,
           }),
         ),
@@ -524,7 +516,6 @@ export class MobiusClient {
         encodeOutboundMessage(() =>
           encodeAgentInstallCancelCommand({
             kind: AGENT_INSTALL_CANCEL_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId: request.requestId,
           }),
         ),
@@ -640,7 +631,6 @@ export class MobiusClient {
           encodeAgentInstallRequestCommand({
             agentId: request.agentId,
             kind: AGENT_INSTALL_REQUEST_KIND,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
             requestId,
           }),
         ),
@@ -666,6 +656,20 @@ export class MobiusClient {
 
     const commandId = request.commandId ?? crypto.randomUUID();
     const sessionId = request.sessionId ?? crypto.randomUUID();
+    const outbound = encodeOutboundMessage(() =>
+      encodeSessionPromptCommand({
+        additionalDirectoryIds: request.additionalDirectoryIds ?? [],
+        agentId: request.agentId,
+        bindingId: request.bindingId,
+        commandId,
+        directoryId: request.directoryId ?? "default",
+        images: request.images ?? [],
+        kind: SESSION_PROMPT_KIND,
+        prompt: request.prompt,
+        resources: request.resources ?? [],
+        sessionId,
+      }),
+    );
     let cleanupPrompt = (): void => undefined;
 
     const result = new Promise<PromptResult>((resolve, reject) => {
@@ -693,7 +697,7 @@ export class MobiusClient {
           if (kind === SESSION_STARTED_KIND) {
             const message = decodeSessionStartedEvent(encoded);
             if (message.commandId === commandId) {
-              request.observer?.onStarted?.(message.processAttemptId);
+              request.observer?.onStarted?.(message.attemptId);
             }
             return;
           }
@@ -758,23 +762,7 @@ export class MobiusClient {
     });
 
     try {
-      this.#socket.send(
-        encodeOutboundMessage(() =>
-          encodeSessionPromptCommand({
-            additionalDirectoryIds: request.additionalDirectoryIds ?? [],
-            agentId: request.agentId,
-            bindingId: request.bindingId,
-            commandId,
-            directoryId: request.directoryId ?? "default",
-            images: request.images ?? [],
-            kind: SESSION_PROMPT_KIND,
-            prompt: request.prompt,
-            protocolVersion: MOBIUS_PROTOCOL_VERSION,
-            resources: request.resources ?? [],
-            sessionId,
-          }),
-        ),
-      );
+      this.#socket.send(outbound);
     } catch (error) {
       cleanupPrompt();
       throw new MobiusClientError(
