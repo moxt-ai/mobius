@@ -133,6 +133,7 @@ describe("CLI environment proxy", () => {
     const previousLowerHttpsProxy = process.env["https_proxy"];
     const previousLowerNoProxy = process.env["no_proxy"];
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousPath = process.env["PATH"];
     const proxyUrl = `http://127.0.0.1:${readPort(proxyServer)}`;
 
     process.env["HTTP_PROXY"] = proxyUrl;
@@ -142,6 +143,7 @@ describe("CLI environment proxy", () => {
     delete process.env["https_proxy"];
     delete process.env["no_proxy"];
     process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+    process.env["PATH"] = "";
 
     try {
       const { pairLocalMachine } = await import(
@@ -209,6 +211,11 @@ describe("CLI environment proxy", () => {
         delete process.env["MOBIUS_STATE_DIRECTORY"];
       } else {
         process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+      }
+      if (previousPath === undefined) {
+        delete process.env["PATH"];
+      } else {
+        process.env["PATH"] = previousPath;
       }
       await Promise.all([
         closeServer(pairingServer, pairingSockets),

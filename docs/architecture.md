@@ -14,7 +14,7 @@ Pairing page / channel Web app
   -> paired Local Daemon
   -> verified local Agent catalog + execution authorization
   -> ACP v1 over JSON-RPC and stdio
-  -> discovered Codex, Claude Code, or Pi adapter + Agent CLI
+  -> discovered built-in Agent CLI + optional ACP adapter
 ```
 
 `packages/relay-core` owns the Hono HTTP routes, input validation, pairing and
@@ -92,9 +92,9 @@ deleted lifecycle.
 The daemon owns local path resolution, authorization, sandboxing, process
 lifecycle, long-lived ACP conversation sessions, approved agent selection,
 software installation, and audit records. Remote input is never an authorization
-decision at the local execution boundary. Agent identifiers map only to the
-built-in Codex, Claude Code, and Pi specifications; remote clients cannot provide
-commands, URLs, versions, arguments, environment values, or executable paths.
+decision at the local execution boundary. Agent identifiers map only to built-in
+local specifications; remote clients cannot provide commands, URLs, versions,
+arguments, environment values, or executable paths.
 
 ## Local Agent catalog and installation trust boundary
 
@@ -105,11 +105,12 @@ identity, runs each Agent's fixed bounded version probe, supplies the resolved
 Agent path to the adapter, and completes a bounded ACP initialize handshake. Pi
 uses `PI_ACP_PI_COMMAND` to bind the verified executable and must also finish a
 bounded `/session` prompt through `pi-acp -> pi --mode rpc`. The resulting
-candidate pair is accepted only after the complete probe: an invalid automatic
-external candidate can fall back to the private cache, while an explicit
-override never silently falls back. Before each new adapter process, both
-identities are revalidated; a changed runtime is rejected without touching an
-existing conversation.
+candidate pair is accepted only after the complete probe. Cursor CLI, Grok Build,
+and WorkBuddy use native ACP entrypoints and must create a session during
+readiness probing. An invalid automatic external candidate can fall back to the
+private cache, while an explicit override never silently falls back. Before each
+new adapter process, both identities are revalidated; a changed runtime is
+rejected without touching an existing conversation.
 
 Daemon startup includes one local-only adapter provisioning transition:
 
@@ -169,10 +170,15 @@ dependencies, disable lifecycle scripts, validate package name/version/bin
 containment in a staging directory, and publish with an atomic rename. Pi's
 managed Agent and adapter are independent versioned dependency units; both direct
 npm artifacts are matched against built-in SRI and registry tarball values before
-the complete bridge can become ready. A failed
-staging install cannot replace an existing cache entry. Installation request IDs
-are idempotent for the daemon lifetime, and all cross-Relay progress and failure
-events use bounded stages and sanitized stable codes.
+the complete bridge can become ready. Managed Grok Build additionally requires an
+exact platform package, then runs only its pinned postinstall script with an
+allowlisted environment into a private `GROK_HOME`. Managed WorkBuddy validates
+the pinned CodeBuddy Code package and its dependency closure. Cursor CLI has no
+managed recipe, so only a locally installed, fully probed executable can become
+ready. A failed staging install cannot replace an existing cache entry.
+Installation request IDs are idempotent for the daemon lifetime, and all
+cross-Relay progress and failure events use bounded stages and sanitized stable
+codes.
 
 ## Workspace ownership
 

@@ -297,7 +297,15 @@ if (process.argv.includes("--version")) {
       });
       expect(
         inventory.unavailable.map((agent) => agent.specification.id),
-      ).toEqual(["claude", "pi", "deepseek-harness", "opencode"]);
+      ).toEqual([
+        "claude",
+        "pi",
+        "deepseek-harness",
+        "opencode",
+        "cursor",
+        "grok-build",
+        "workbuddy",
+      ]);
 
       const chunks: string[] = [];
       await manager.runPrompt({

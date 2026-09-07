@@ -37,6 +37,8 @@ export class ManagedNpmPackageDefinition {
 
 export class SriManagedNpmPackageDefinition extends ManagedNpmPackageDefinition {
   readonly integrity: string;
+  readonly requiredDependencies: readonly SriManagedNpmDependencyDefinition[] =
+    Object.freeze([]);
   readonly tarballUrl: string;
 
   constructor(
@@ -49,6 +51,25 @@ export class SriManagedNpmPackageDefinition extends ManagedNpmPackageDefinition 
     super(packageName, version, executableName);
     this.integrity = integrity;
     this.tarballUrl = tarballUrl;
+  }
+}
+
+export class SriManagedNpmDependencyDefinition {
+  readonly integrity: string;
+  readonly packageName: string;
+  readonly tarballUrl: string;
+  readonly version: string;
+
+  constructor(
+    packageName: string,
+    version: string,
+    integrity: string,
+    tarballUrl: string,
+  ) {
+    this.integrity = integrity;
+    this.packageName = packageName;
+    this.tarballUrl = tarballUrl;
+    this.version = version;
   }
 }
 
@@ -136,9 +157,17 @@ function readBinPath(
   );
 }
 
-function verifyPackageLock(
+interface PinnedNpmArtifact {
+  readonly integrity: string;
+  readonly packageName: string;
+  readonly tarballUrl: string;
+  readonly version: string;
+}
+
+function verifyPackageLockEntry(
   lock: Readonly<Record<string, unknown>>,
-  definition: SriManagedNpmPackageDefinition,
+  definition: PinnedNpmArtifact,
+  verifyDependencyClosure: boolean,
 ): void {
   if (lock["lockfileVersion"] !== 3) {
     throw new ManagedNpmPackageError(
@@ -158,7 +187,7 @@ function verifyPackageLock(
   let matches = 0;
   for (const [key, candidate] of Object.entries(packages)) {
     const normalizedKey = key.replaceAll("\\", "/");
-    if (definition.verifyDependencyClosure && normalizedKey.length > 0) {
+    if (verifyDependencyClosure && normalizedKey.length > 0) {
       let resolved: URL;
       try {
         if (
@@ -212,6 +241,36 @@ function verifyPackageLock(
   }
 }
 
+async function verifyRequiredDependency(
+  rootPath: string,
+  lock: Readonly<Record<string, unknown>>,
+  definition: SriManagedNpmDependencyDefinition,
+): Promise<void> {
+  const dependencyRoot = await realpath(
+    packagePath(rootPath, definition.packageName),
+  );
+  if (!isContainedPath(rootPath, dependencyRoot)) {
+    throw new ManagedNpmPackageError(
+      "managed_package_verification_failed",
+      "The required managed npm dependency escaped its private cache",
+    );
+  }
+  const metadata = await readJsonRecord(
+    join(dependencyRoot, "package.json"),
+    PACKAGE_METADATA_LIMIT_BYTES,
+  );
+  if (
+    metadata["name"] !== definition.packageName ||
+    metadata["version"] !== definition.version
+  ) {
+    throw new ManagedNpmPackageError(
+      "managed_package_verification_failed",
+      "The required managed npm dependency identity is invalid",
+    );
+  }
+  verifyPackageLockEntry(lock, definition, false);
+}
+
 export async function validateManagedNpmPackage(
   root: string,
   definition: ManagedNpmPackageDefinition,
@@ -258,13 +317,18 @@ async function validateManagedNpmPackageContents(
     );
   }
   if (definition instanceof SriManagedNpmPackageDefinition) {
-    verifyPackageLock(
-      await readJsonRecord(
-        join(rootPath, "package-lock.json"),
-        PACKAGE_LOCK_LIMIT_BYTES,
-      ),
-      definition,
+    const lock = await readJsonRecord(
+      join(rootPath, "package-lock.json"),
+      PACKAGE_LOCK_LIMIT_BYTES,
     );
+    verifyPackageLockEntry(
+      lock,
+      definition,
+      definition.verifyDependencyClosure,
+    );
+    for (const dependency of definition.requiredDependencies) {
+      await verifyRequiredDependency(rootPath, lock, dependency);
+    }
   }
   const declaredBin = readBinPath(metadata, definition.executableName);
   const executable = await resolveExecutablePath(

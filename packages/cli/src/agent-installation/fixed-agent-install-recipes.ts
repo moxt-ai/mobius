@@ -1,15 +1,17 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { AgentInstallationStage } from "@moxt-ai/mobius-protocol";
 import {
   type ResolvedExecutable,
-  resolveExecutablePath,
   runBoundedProcess,
 } from "../process/executable.ts";
-import type { InstallationAudit } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
 import { DEEPSEEK_HARNESS_PACKAGE } from "./deepseek-managed-package.ts";
+import {
+  type AgentInstallRecipeOptions,
+  FixedAgentInstallRecipe,
+} from "./fixed-agent-install-recipe.ts";
+import { GrokBuildInstallRecipe } from "./grok-build-install-recipe.ts";
 import {
   ManagedAgentArchiveError,
   type ManagedAgentArchiveInstallationPort,
@@ -26,54 +28,12 @@ import {
 } from "./opencode-managed-release.ts";
 import { PI_AGENT_PACKAGE } from "./pi-managed-packages.ts";
 import { downloadVerifiedFile } from "./verified-download.ts";
+import { WorkBuddyInstallRecipe } from "./workbuddy-install-recipe.ts";
 
 const INSTALLER_DOWNLOAD_LIMIT_BYTES = 1024 * 1024;
 const INSTALLER_DOWNLOAD_TIMEOUT_MILLISECONDS = 60_000;
 const AGENT_INSTALL_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 const MINIMAL_PATH = "/usr/bin:/bin";
-
-export interface AgentInstallRecipeOptions {
-  readonly audit: InstallationAudit;
-  readonly environment: Readonly<NodeJS.ProcessEnv>;
-  readonly report: (stage: AgentInstallationStage) => Promise<void>;
-  readonly requestId: string;
-  readonly signal: AbortSignal;
-  readonly stateDirectory: string;
-}
-
-export abstract class FixedAgentInstallRecipe {
-  abstract readonly id: string;
-  abstract readonly label: string;
-  abstract readonly releaseChannel: string;
-  abstract readonly install: (
-    options: AgentInstallRecipeOptions,
-  ) => Promise<ResolvedExecutable>;
-
-  protected readonly assertSupportedPlatform = (): void => {
-    if (
-      (process.platform !== "darwin" && process.platform !== "linux") ||
-      (process.arch !== "arm64" && process.arch !== "x64")
-    ) {
-      throw new InstallationManagerError(
-        "unsupported_install_platform",
-        "This Agent installation recipe does not support the local platform",
-      );
-    }
-  };
-
-  protected readonly requireInstalledExecutable = async (
-    path: string,
-  ): Promise<ResolvedExecutable> => {
-    const executable = await resolveExecutablePath(path);
-    if (executable === null) {
-      throw new InstallationManagerError(
-        "agent_verification_failed",
-        "The Agent installer did not produce a valid executable",
-      );
-    }
-    return executable;
-  };
-}
 
 class CodexInstallRecipe extends FixedAgentInstallRecipe {
   readonly id = "codex";
@@ -486,5 +446,12 @@ export function fixedAgentInstallRecipes(): readonly FixedAgentInstallRecipe[] {
     new PiInstallRecipe(),
     new DeepSeekHarnessInstallRecipe(),
     new OpenCodeInstallRecipe(),
+    new GrokBuildInstallRecipe(),
+    new WorkBuddyInstallRecipe(),
   ]);
 }
+
+export type { AgentInstallRecipeOptions } from "./fixed-agent-install-recipe.ts";
+export { FixedAgentInstallRecipe } from "./fixed-agent-install-recipe.ts";
+export { GrokBuildInstallRecipe } from "./grok-build-install-recipe.ts";
+export { WorkBuddyInstallRecipe } from "./workbuddy-install-recipe.ts";

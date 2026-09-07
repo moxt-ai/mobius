@@ -309,6 +309,30 @@ if (process.argv.includes("--version")) {
             recoveryCommand: "",
             status: "missing_agent",
           },
+          {
+            code: "agent_not_found",
+            id: "cursor",
+            label: "Cursor CLI",
+            message: "Agent executable not found",
+            recoveryCommand: "",
+            status: "missing_agent",
+          },
+          {
+            code: "agent_not_found",
+            id: "grok-build",
+            label: "Grok Build",
+            message: "Agent executable not found",
+            recoveryCommand: "",
+            status: "missing_agent",
+          },
+          {
+            code: "agent_not_found",
+            id: "workbuddy",
+            label: "WorkBuddy",
+            message: "Agent executable not found",
+            recoveryCommand: "",
+            status: "missing_agent",
+          },
         ],
       });
       expect(result.stdout).not.toContain(temporaryDirectory);

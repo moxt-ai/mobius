@@ -221,11 +221,13 @@ describe("daemon relay connection liveness", () => {
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
     const previousNoProxy = process.env["NO_PROXY"];
     const previousLowerNoProxy = process.env["no_proxy"];
+    const previousPath = process.env["PATH"];
     process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
     process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
     process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
     process.env["NO_PROXY"] = "127.0.0.1,localhost";
     process.env["no_proxy"] = "127.0.0.1,localhost";
+    process.env["PATH"] = "";
     const config = createDaemonConfig({
       defaultWorkspace,
       auditDatabasePath,
@@ -317,6 +319,7 @@ describe("daemon relay connection liveness", () => {
       );
       restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
       restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+      restoreEnvironmentVariable("PATH", previousPath);
       await rm(stateDirectory, { force: true, recursive: true });
     }
   });
@@ -401,11 +404,13 @@ describe("daemon relay connection liveness", () => {
     const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
     const previousNoProxy = process.env["NO_PROXY"];
     const previousLowerNoProxy = process.env["no_proxy"];
+    const previousPath = process.env["PATH"];
     process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
     process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
     process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
     process.env["NO_PROXY"] = "127.0.0.1,localhost";
     process.env["no_proxy"] = "127.0.0.1,localhost";
+    process.env["PATH"] = "";
     const config = createDaemonConfig({
       defaultWorkspace,
       auditDatabasePath,
@@ -477,6 +482,7 @@ describe("daemon relay connection liveness", () => {
       );
       restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
       restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+      restoreEnvironmentVariable("PATH", previousPath);
       await rm(stateDirectory, { force: true, recursive: true });
     }
   });

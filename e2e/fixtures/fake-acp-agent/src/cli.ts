@@ -489,6 +489,37 @@ acp
               }),
         },
       },
+      authMethods:
+        agentName === "Cursor CLI"
+          ? [
+              {
+                description: "Use the existing local Cursor login",
+                id: "cursor_login",
+                name: "Cursor Login",
+              },
+            ]
+          : agentName === "Grok Build"
+            ? [
+                {
+                  description: "Use an xAI API key",
+                  id: "xai.api_key",
+                  name: "xAI API key",
+                },
+                {
+                  description: "Use the existing local Grok login",
+                  id: "grok.com",
+                  name: "Grok",
+                },
+              ]
+            : agentName === "WorkBuddy"
+              ? [
+                  {
+                    description: "Use the existing local WorkBuddy login",
+                    id: "external",
+                    name: "External login",
+                  },
+                ]
+              : [],
       agentInfo: { name: "Mobius test agent", version: readAgentVersion() },
       protocolVersion: acp.PROTOCOL_VERSION,
     };
@@ -986,6 +1017,75 @@ acp
         }
         await context.client.notify(acp.methods.client.elicitation.complete, {
           elicitationId,
+        });
+      }
+      if (prompt === "exercise Cursor extensions") {
+        const question: unknown = await context.client.request(
+          "cursor/ask_question",
+          {
+            questions: [
+              {
+                allowMultiple: false,
+                id: "mode",
+                options: [
+                  { id: "agent", label: "Agent" },
+                  { id: "plan", label: "Plan" },
+                ],
+                prompt: "Which mode should be used?",
+              },
+            ],
+            title: "Choose a mode",
+            toolCallId: "cursor-question",
+          },
+        );
+        const questionOutcome = isRecord(question)
+          ? question["outcome"]
+          : undefined;
+        if (
+          !isRecord(questionOutcome) ||
+          questionOutcome["outcome"] !== "skipped"
+        ) {
+          throw new Error("Cursor question extension was not safely skipped");
+        }
+        const plan: unknown = await context.client.request(
+          "cursor/create_plan",
+          {
+            name: "Verify Mobius",
+            plan: "Run the integration scenario",
+            todos: [
+              {
+                content: "Run the integration scenario",
+                id: "verify",
+                status: "pending",
+              },
+            ],
+            toolCallId: "cursor-plan",
+          },
+        );
+        const planOutcome = isRecord(plan) ? plan["outcome"] : undefined;
+        if (!isRecord(planOutcome) || planOutcome["outcome"] !== "cancelled") {
+          throw new Error("Cursor plan extension was not safely cancelled");
+        }
+        await context.client.notify("cursor/update_todos", {
+          merge: false,
+          todos: [
+            {
+              content: "Run the integration scenario",
+              id: "verify",
+              status: "completed",
+            },
+          ],
+          toolCallId: "cursor-todos",
+        });
+        await context.client.notify("cursor/task", {
+          description: "Inspect the repository",
+          prompt: "Find the Agent catalog",
+          subagentType: "explore",
+          toolCallId: "cursor-task",
+        });
+        await context.client.notify("cursor/generate_image", {
+          description: "A generated test image",
+          toolCallId: "cursor-image",
         });
       }
 

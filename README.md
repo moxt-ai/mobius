@@ -96,11 +96,9 @@ Implemented local integrations:
 - Pi coding agent through `pi-acp`
 - DeepSeek Harness through `dsh --profile acp`
 - OpenCode through `opencode acp`
-
-Additional integration targets include:
-
-- `cursor-cli`
-- `grok-build`
+- Cursor CLI through `cursor-agent acp`
+- Grok Build through `grok agent stdio`
+- WorkBuddy through CodeBuddy Code's `codebuddy --acp`
 
 Cloud-based integration targets:
 
@@ -143,11 +141,11 @@ terminal open. Pass `--workspace <directory>` to choose a different default.
 When developing the CLI from this checkout, the equivalent command is
 `pnpm mobius pair ...`.
 The browser then moves to an independent `/channels/<channel-id>` route. Every new
-conversation can select a locally verified Codex, Claude Code, Pi, DeepSeek
-Harness, or OpenCode integration; the selection is locked after its first message
-so the ACP session remains coherent across turns. Conversations run independently,
-so a user can switch chats, create another chat, and start a second agent task while
-an earlier conversation is still working.
+conversation can select any locally verified built-in Agent integration; the
+selection is locked after its first message so the ACP session remains coherent
+across turns. Conversations run independently, so a user can switch chats, create
+another chat, and start a second agent task while an earlier conversation is still
+working.
 
 The channel sidebar links directly to Agent settings and to
 `/channels/<channel-id>/access`. Agent settings shows verified local Agents
@@ -174,16 +172,19 @@ restart a previously paired daemon, use the channel identifier shown in its URL:
 npx --yes @moxt-ai/mobius start --channel <channel-id>
 ```
 
-Mobius does not bundle Codex, Claude Code, Pi, DeepSeek Harness, OpenCode, or
-their platform binaries. Pairing and every saved-channel start discover each
-Agent's direct ACP command or CLI-plus-adapter pair, run bounded version probes,
-and complete an ACP initialize handshake. Pi also has to create a session and
-finish a bounded `/session` conformance prompt through `pi-acp -> pi --mode rpc`.
+Mobius does not bundle the supported Agent CLIs or their platform binaries.
+Pairing and every saved-channel start discover each Agent's direct ACP command or
+CLI-plus-adapter pair, run bounded version probes, and complete an ACP initialize
+handshake. Pi also has to create a session and finish a bounded `/session`
+conformance prompt through `pi-acp -> pi --mode rpc`.
 DeepSeek Harness runs directly as `dsh --profile acp`; Mobius uses the `dsh` CLI
 version because the current ACP profile reports its internal bridge version.
 OpenCode runs directly as `opencode acp` with its own auto-update disabled while
-Mobius owns the process. Only complete integrations are advertised. Inspect the
-local result without pairing:
+Mobius owns the process. Cursor CLI, Grok Build, and WorkBuddy run through their
+native ACP entrypoints with automatic updates disabled; readiness also requires
+successful session creation. Cursor's optional question and plan extensions are
+safely declined during discovery and normal turns. Only complete integrations are
+advertised. Inspect the local result without pairing:
 
 ```bash
 npx --yes @moxt-ai/mobius agents
@@ -197,6 +198,9 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 - `MOBIUS_PI_PATH` and `MOBIUS_PI_ACP_PATH`
 - `MOBIUS_DEEPSEEK_HARNESS_PATH`
 - `MOBIUS_OPENCODE_PATH`
+- `MOBIUS_CURSOR_PATH`
+- `MOBIUS_GROK_BUILD_PATH`
+- `MOBIUS_WORKBUDDY_PATH`
 
 Automatic lookup uses the `PATH` inherited by the Mobius process. An explicit
 override is authoritative and fails closed; an automatically found executable
@@ -231,8 +235,14 @@ before an installer starts. The initial recipes use the documented
 [Claude Code native stable channel](https://code.claude.com/docs/en/installation),
 plus the exact `@earendil-works/pi-coding-agent@0.85.0` and
 `@deepseek-ai/dsh@0.1.2-rc.1` packages and checksum-pinned OpenCode platform
-archives. The Pi and DeepSeek recipes disable npm lifecycle scripts and verify
-the published package SRI. DeepSeek also installs the lockfile's platform
+archives. Grok Build uses the exact `@xai-official/grok@1.0.21` package and its
+matching integrity-pinned platform package. WorkBuddy uses the exact
+`@tencent-ai/codebuddy-code@2.146.0` package. Cursor CLI remains local-only
+because its official multi-file distribution is outside the single-artifact
+managed installer boundary. The npm recipes disable lifecycle scripts and verify
+the published package SRI. Grok's one required, pinned postinstall step runs with
+an allowlisted environment and writes only to an isolated managed `GROK_HOME`.
+DeepSeek also installs the lockfile's platform
 optional dependencies because its `sharp` and `koffi` runtimes require them,
 pins dependency resolution to the audited release window, and rejects any
 dependency without registry origin and SHA-512 integrity. Pi and separate
@@ -263,9 +273,11 @@ and is revoked by removing an ID or the file. It cannot change a release
 channel, command, URL, arguments, or installation target. Local provider
 credentials remain with the Agent process and never cross the Relay. Pi
 authentication is a local terminal action through `pi-acp --terminal-login`;
-OpenCode uses `opencode auth login`. DeepSeek Harness reads credentials from its
-validated local home or launch environment; use the local `dsh web` Models page
-or `DEEPSEEK_API_KEY` to configure the default route. `mobius agents` reports ACP
+OpenCode uses `opencode auth login`, Cursor uses `cursor-agent login`, Grok Build
+uses `grok login`, and WorkBuddy opens its local sign-in through `codebuddy`.
+DeepSeek Harness reads credentials from its validated local home or launch
+environment; use the local `dsh web` Models page or `DEEPSEEK_API_KEY` to
+configure the default route. `mobius agents` reports ACP
 authentication failures as `authentication_required` without exposing a
 credential or local path. Pairing authorizes this channel to request work within
 the operating-system permissions of the user running Mobius. Agent-specific
