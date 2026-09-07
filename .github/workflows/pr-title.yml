@@ -26,4 +26,6 @@ jobs:
 
       - name: Preserve the validated title gate for the merge group
         if: github.event_name == 'merge_group'
+        # Queue admission already requires the pull-request title check, while
+        # the synthetic merge-group SHA still needs the same required context.
         run: echo "Pull request titles were validated before entering the merge queue."

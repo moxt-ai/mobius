@@ -354,10 +354,10 @@ function ChannelRoute() {
           channelId,
           controller.signal,
         );
-        const [connection, history] = await Promise.all([
-          readChannelConnection(channelId),
-          readChannelHistory(channelId),
-        ]);
+        // Validate the channel-scoped credential before using it for broader
+        // project history reads so revoked access reports the channel boundary.
+        const connection = await readChannelConnection(channelId);
+        const history = await readChannelHistory(channelId);
         if (active) {
           setState(new ReadyChannelRouteState(connection, history));
         }
