@@ -110,10 +110,18 @@ import {
   WORKSPACE_LIST_KIND,
   type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
+import ReconnectingWebSocket, {
+  type CloseEvent as ReconnectingCloseEvent,
+} from "partysocket/ws";
 
 const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
+const MAX_RECONNECTION_DELAY_MILLISECONDS = 10_000;
+const MIN_RECONNECTION_DELAY_MILLISECONDS = 500;
 const OPERATION_TIMEOUT_MILLISECONDS = 120_000;
 const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
+const TERMINAL_RELAY_CLOSE_CODES: ReadonlySet<number> = new Set([
+  1002, 1003, 1007, 1008, 4003, 4008,
+]);
 
 export interface ConnectMobiusClientOptions {
   readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
@@ -264,7 +272,20 @@ function encodeOutboundMessage(encode: () => string): string {
   }
 }
 
-function waitForOpen(socket: WebSocket): Promise<void> {
+function sendImmediately(socket: ReconnectingWebSocket, message: string): void {
+  if (!socket.send(message)) {
+    throw new MobiusClientError(
+      "connection_closed",
+      "Relay connection closed before the message was sent",
+    );
+  }
+}
+
+function shouldReconnectAfterClose(event: ReconnectingCloseEvent): boolean {
+  return !TERMINAL_RELAY_CLOSE_CODES.has(event.code);
+}
+
+function waitForOpen(socket: ReconnectingWebSocket): Promise<void> {
   if (socket.readyState === WebSocket.OPEN) {
     return Promise.resolve();
   }
@@ -282,9 +303,21 @@ function waitForOpen(socket: WebSocket): Promise<void> {
 
     const cleanup = (): void => {
       window.clearTimeout(timeout);
-      socket.removeEventListener("open", handleOpen);
-      socket.removeEventListener("error", handleError);
       socket.removeEventListener("close", handleClose);
+      socket.removeEventListener("open", handleOpen);
+    };
+
+    const handleClose = (event: ReconnectingCloseEvent): void => {
+      if (shouldReconnectAfterClose(event)) {
+        return;
+      }
+      cleanup();
+      reject(
+        new MobiusClientError(
+          "connection_rejected",
+          "The relay rejected the WebSocket connection",
+        ),
+      );
     };
 
     const handleOpen = (): void => {
@@ -292,29 +325,8 @@ function waitForOpen(socket: WebSocket): Promise<void> {
       resolve();
     };
 
-    const handleError = (): void => {
-      cleanup();
-      reject(
-        new MobiusClientError(
-          "connection_failed",
-          "Could not connect to the relay",
-        ),
-      );
-    };
-
-    const handleClose = (): void => {
-      cleanup();
-      reject(
-        new MobiusClientError(
-          "connection_closed",
-          "Relay connection closed before it was ready",
-        ),
-      );
-    };
-
-    socket.addEventListener("open", handleOpen);
-    socket.addEventListener("error", handleError);
     socket.addEventListener("close", handleClose);
+    socket.addEventListener("open", handleOpen);
   });
 }
 
@@ -323,9 +335,12 @@ export class MobiusClient {
   readonly #onProtocolError: (error: MobiusClientError) => void;
   readonly #onStatus: (online: boolean) => void;
   readonly #options: ConnectMobiusClientOptions;
-  readonly #socket: WebSocket;
+  readonly #socket: ReconnectingWebSocket;
 
-  constructor(socket: WebSocket, options: ConnectMobiusClientOptions) {
+  constructor(
+    socket: ReconnectingWebSocket,
+    options: ConnectMobiusClientOptions,
+  ) {
     this.#options = options;
     this.#onActivity = options.onActivity ?? (() => undefined);
     this.#onProtocolError = options.onProtocolError ?? (() => undefined);
@@ -397,7 +412,8 @@ export class MobiusClient {
       () => {
         try {
           if (this.#socket.readyState === WebSocket.OPEN)
-            this.#socket.send(
+            sendImmediately(
+              this.#socket,
               encodeNativeSessionCancel({
                 kind: NATIVE_SESSION_CANCEL_KIND,
                 requestId: command.requestId,
@@ -484,7 +500,8 @@ export class MobiusClient {
       );
     }
     try {
-      this.#socket.send(
+      sendImmediately(
+        this.#socket,
         encodeOutboundMessage(() =>
           encodeSessionCancelCommand({
             commandId: request.commandId,
@@ -512,7 +529,8 @@ export class MobiusClient {
       );
     }
     try {
-      this.#socket.send(
+      sendImmediately(
+        this.#socket,
         encodeOutboundMessage(() =>
           encodeAgentInstallCancelCommand({
             kind: AGENT_INSTALL_CANCEL_KIND,
@@ -626,7 +644,8 @@ export class MobiusClient {
       },
     );
     try {
-      this.#socket.send(
+      sendImmediately(
+        this.#socket,
         encodeOutboundMessage(() =>
           encodeAgentInstallRequestCommand({
             agentId: request.agentId,
@@ -762,7 +781,7 @@ export class MobiusClient {
     });
 
     try {
-      this.#socket.send(outbound);
+      sendImmediately(this.#socket, outbound);
     } catch (error) {
       cleanupPrompt();
       throw new MobiusClientError(
@@ -866,7 +885,7 @@ export class MobiusClient {
       signal?.addEventListener("abort", handleAbort, { once: true });
     });
     try {
-      this.#socket.send(outbound);
+      sendImmediately(this.#socket, outbound);
     } catch (error) {
       cleanupRequest();
       throw new MobiusClientError(
@@ -1008,7 +1027,14 @@ export class MobiusClient {
 export async function connectMobiusClient(
   options: ConnectMobiusClientOptions,
 ): Promise<MobiusClient> {
-  const socket = new WebSocket(options.relayUrl);
+  const socket = new ReconnectingWebSocket(options.relayUrl, [], {
+    connectionTimeout: CONNECTION_TIMEOUT_MILLISECONDS,
+    maxEnqueuedMessages: 0,
+    maxReconnectionDelay: MAX_RECONNECTION_DELAY_MILLISECONDS,
+    minReconnectionDelay:
+      MIN_RECONNECTION_DELAY_MILLISECONDS * (1 + Math.random()),
+    shouldReconnectOnClose: shouldReconnectAfterClose,
+  });
   const client = new MobiusClient(socket, options);
 
   try {

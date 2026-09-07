@@ -9,6 +9,10 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
-    "@moxt-ai/mobius-protocol": "workspace:*"
+    "@moxt-ai/mobius-protocol": "workspace:*",
+    "partysocket": "1.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3"
   }
 }

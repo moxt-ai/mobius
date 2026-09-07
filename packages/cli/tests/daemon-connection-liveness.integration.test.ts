@@ -319,20 +319,29 @@ describe("daemon relay connection liveness", () => {
     }
   });
 
-  it("Given an idle daemon connection, When its safe refresh deadline arrives, Then the daemon reconnects before an upstream idle timeout", async () => {
+  it("Given the Agent catalog endpoint is temporarily unavailable, When the daemon starts and later refreshes an idle connection, Then its relay connection remains available", async () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-daemon-liveness-"),
     );
     const defaultWorkspace = join(stateDirectory, "workspace");
     await mkdir(defaultWorkspace);
+    let catalogRequestCount = 0;
+    let observeCatalogFailure = (): void => undefined;
+    const catalogFailure = new Promise<void>((resolve) => {
+      observeCatalogFailure = resolve;
+    });
     const relay = createServer((request, response) => {
       if (
         request.method === "PUT" &&
         request.url === "/mobius/api/channels/liveness-channel/catalog"
       ) {
+        catalogRequestCount += 1;
         request.resume();
-        response.writeHead(204);
+        response.writeHead(catalogRequestCount === 1 ? 503 : 204);
         response.end();
+        if (catalogRequestCount === 1) {
+          observeCatalogFailure();
+        }
         return;
       }
       response.writeHead(426);
@@ -410,6 +419,7 @@ describe("daemon relay connection liveness", () => {
     const daemon = runDaemon(config, audit, cancellation.signal);
 
     try {
+      await catalogFailure;
       await firstConnection;
       const firstResponse = clientFrames[0];
       if (firstResponse === undefined) {
@@ -432,7 +442,8 @@ describe("daemon relay connection liveness", () => {
         WORKSPACE_ENTRIES_KIND,
       );
 
-      expect({ connectionCount, requestedUrls }).toEqual({
+      expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
+        catalogRequestCount: 2,
         connectionCount: 2,
         requestedUrls: [
           "/mobius/api/channels/liveness-channel/daemon?liveness=1",

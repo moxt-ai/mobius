@@ -67,7 +67,7 @@ describe("Mobius CLI", () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (
         request.method === "PUT" &&
-        url.pathname === `/api/channels/${channelId}/catalog` &&
+        url.pathname === `/mobius/api/channels/${channelId}/catalog` &&
         url.searchParams.get("token") === daemonToken
       ) {
         request.resume();
@@ -89,7 +89,7 @@ describe("Mobius CLI", () => {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (
         typeof key !== "string" ||
-        url.pathname !== `/api/channels/${channelId}/daemon` ||
+        url.pathname !== `/mobius/api/channels/${channelId}/daemon` ||
         url.searchParams.get("token") !== daemonToken
       ) {
         socket.destroy();

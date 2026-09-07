@@ -877,6 +877,34 @@ function waitForRelayRetry(
   });
 }
 
+async function publishAgentCatalogUntilAvailable(
+  config: DaemonConfig,
+  signal: AbortSignal,
+  timer: DaemonTimer,
+): Promise<void> {
+  try {
+    await publishAgentCatalog(config, signal);
+    return;
+  } catch {
+    if (signal.aborted) {
+      return;
+    }
+    console.warn("Mobius daemon is waiting to publish its Agent catalog");
+  }
+
+  while (!signal.aborted) {
+    await waitForRelayRetry(signal, timer);
+    try {
+      await publishAgentCatalog(config, signal);
+      return;
+    } catch {
+      if (signal.aborted) {
+        return;
+      }
+    }
+  }
+}
+
 async function runRelayConnection(
   config: DaemonConfig,
   directories: WorkspaceDirectoryService,
@@ -1396,11 +1424,15 @@ export async function runDaemon(
       )}\n\n`,
     );
   };
+  const catalogPublication = publishAgentCatalogUntilAvailable(
+    config,
+    signal,
+    timer,
+  );
 
   try {
     while (!signal.aborted) {
       try {
-        await publishAgentCatalog(config, signal);
         await runRelayConnection(
           config,
           directories,
@@ -1429,15 +1461,19 @@ export async function runDaemon(
     }
   } finally {
     try {
-      await installations.close();
+      await catalogPublication;
     } finally {
       try {
-        await sessions.close();
+        await installations.close();
       } finally {
         try {
-          sessionStore.close();
+          await sessions.close();
         } finally {
-          outbox.close();
+          try {
+            sessionStore.close();
+          } finally {
+            outbox.close();
+          }
         }
       }
     }
