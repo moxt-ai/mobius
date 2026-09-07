@@ -12,6 +12,7 @@ import {
   SESSION_EVENT_KIND,
   SESSION_PROMPT_KIND,
   SESSION_STARTED_KIND,
+  type SessionConfigOption,
   type SessionPrepareCommand,
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
@@ -300,6 +301,7 @@ export function saveBrowserCredential(
 export async function sendReadySession(
   daemon: StatefulDaemon,
   prepare: SessionPrepareCommand,
+  configOptions: readonly SessionConfigOption[] = [],
 ): Promise<void> {
   await daemon.sendSessionEvent(
     prepare.sessionId,
@@ -321,7 +323,7 @@ export async function sendReadySession(
         unstableForkSession: true,
       },
       commands: [],
-      configOptions: [],
+      configOptions,
       directoryId: prepare.directoryId,
       directoryLabel: "mobius",
       kind: "session.ready",

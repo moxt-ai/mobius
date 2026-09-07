@@ -28,6 +28,16 @@ function firstCategory(
   return options.find((option) => option.category === category);
 }
 
+export function isModelConfigurationOption(
+  option: SessionConfigOption,
+): boolean {
+  return (
+    option.category === "model" ||
+    option.category === "thought_level" ||
+    option.category === "model_config"
+  );
+}
+
 export function summarizeSessionConfig(
   options: readonly SessionConfigOption[],
 ): SessionConfigSummary {
@@ -61,11 +71,7 @@ export function summarizeSessionConfig(
 }
 
 function sectionId(option: SessionConfigOption): SessionConfigSection["id"] {
-  if (
-    option.category === "model" ||
-    option.category === "thought_level" ||
-    option.category === "model_config"
-  ) {
+  if (isModelConfigurationOption(option)) {
     return "model";
   }
   if (option.category === "mode" || option.category === "collaboration_mode") {

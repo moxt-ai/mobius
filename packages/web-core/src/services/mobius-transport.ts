@@ -12,6 +12,7 @@ import {
   type PromptRequest,
   type PromptResult,
   type SessionConfigOption,
+  type SessionConfigUpdatedEvent,
   type SessionConfigureRequest,
   type SessionPrepareRequest,
   type SessionReadyEvent,
@@ -30,6 +31,11 @@ import {
   UnavailableRuntimeState,
 } from "@/domain/chat";
 import { readChannelConnection } from "@/services/pairing-api";
+import { isModelConfigurationOption } from "@/services/session-config-presentation";
+import {
+  readSessionModelPreferences,
+  saveSessionModelPreferences,
+} from "@/services/session-model-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
@@ -43,6 +49,19 @@ function createRelayUrl(connection: ChannelConnection): string {
 function failureMessage(error: unknown): string {
   const failure = boundaryFailure(error);
   return `${failure.code}: ${failure.message}`;
+}
+
+function modelConfigurationPriority(category: string): number {
+  if (category === "model") {
+    return 0;
+  }
+  if (category === "thought_level") {
+    return 1;
+  }
+  if (category === "model_config") {
+    return 2;
+  }
+  return 3;
 }
 
 interface BoundaryFailure {
@@ -71,7 +90,7 @@ abstract class TransportConnection {
   abstract readonly close: () => Promise<void>;
   abstract readonly configure: (
     request: SessionConfigureRequest,
-  ) => Promise<void>;
+  ) => Promise<SessionConfigUpdatedEvent>;
   abstract readonly elicit: (
     request: ElicitationResponseRequest,
   ) => Promise<void>;
@@ -104,7 +123,8 @@ class DisconnectedTransport extends TransportConnection {
 
   readonly close = (): Promise<void> => Promise.resolve();
 
-  readonly configure = (): Promise<void> => this.notInitialized();
+  readonly configure = (): Promise<SessionConfigUpdatedEvent> =>
+    this.notInitialized();
 
   readonly elicit = (): Promise<void> => this.notInitialized();
 
@@ -131,6 +151,7 @@ class DisconnectedTransport extends TransportConnection {
 class ConnectedTransport extends TransportConnection {
   readonly #channelId: string;
   readonly #client: Promise<MobiusClient>;
+  readonly #preparingRequestIds = new Set<string>();
 
   constructor(connection: ChannelConnection, onActivity: () => void) {
     super();
@@ -204,7 +225,9 @@ class ConnectedTransport extends TransportConnection {
         }
       },
       onReady: (event) => {
-        useChatStore.getState().applySessionReady(event);
+        if (!this.#preparingRequestIds.has(event.requestId)) {
+          useChatStore.getState().applySessionReady(event);
+        }
       },
       onUsage: (event) => {
         useChatStore.getState().applySessionUsage(event);
@@ -252,9 +275,15 @@ class ConnectedTransport extends TransportConnection {
 
   readonly configure = async (
     request: SessionConfigureRequest,
-  ): Promise<void> => {
+  ): Promise<SessionConfigUpdatedEvent> => {
     const client = await this.#client;
-    await client.configureSession(request);
+    const configured = await client.configureSession(request);
+    saveSessionModelPreferences(
+      this.#channelId,
+      request.agentId,
+      configured.configOptions,
+    );
+    return configured;
   };
 
   readonly elicit = async (
@@ -288,8 +317,75 @@ class ConnectedTransport extends TransportConnection {
   readonly prepare = async (
     request: SessionPrepareRequest,
   ): Promise<SessionReadyEvent> => {
-    const client = await this.#client;
-    return await client.prepareSession(request);
+    const requestId = request.requestId ?? crypto.randomUUID();
+    this.#preparingRequestIds.add(requestId);
+    try {
+      const client = await this.#client;
+      const ready = await client.prepareSession({ ...request, requestId });
+      if (ready.restored) {
+        return ready;
+      }
+      const preferenceOrder = new Map(
+        ready.configOptions.map((option) => [
+          option.id,
+          modelConfigurationPriority(option.category),
+        ]),
+      );
+      const preferences = readSessionModelPreferences(
+        this.#channelId,
+        request.agentId,
+      ).toSorted(
+        (left, right) =>
+          (preferenceOrder.get(left.configId) ?? 3) -
+          (preferenceOrder.get(right.configId) ?? 3),
+      );
+      let bindingId = request.bindingId;
+      let configOptions = ready.configOptions;
+      for (const preference of preferences) {
+        const option = configOptions.find(
+          (candidate) => candidate.id === preference.configId,
+        );
+        if (
+          option === undefined ||
+          option.type !== preference.valueType ||
+          !isModelConfigurationOption(option)
+        ) {
+          continue;
+        }
+        if (option.type === "select") {
+          if (
+            option.currentValue === preference.value ||
+            !option.values.some(
+              (candidate) => candidate.value === preference.value,
+            )
+          ) {
+            continue;
+          }
+        } else if (option.booleanValue === preference.booleanValue) {
+          continue;
+        }
+        const configured = await client.configureSession({
+          ...request,
+          bindingId,
+          booleanValue: preference.booleanValue,
+          configId: option.id,
+          value: preference.value,
+          valueType: option.type,
+        });
+        bindingId = configured.requestId;
+        configOptions = configured.configOptions;
+        saveSessionModelPreferences(
+          this.#channelId,
+          request.agentId,
+          configOptions,
+        );
+      }
+      return configOptions === ready.configOptions
+        ? ready
+        : { ...ready, configOptions };
+    } finally {
+      this.#preparingRequestIds.delete(requestId);
+    }
   };
 
   readonly prompt = async (request: PromptRequest): Promise<PromptResult> => {
