@@ -40,6 +40,18 @@ const EMPTY_CAPABILITIES: SessionCapabilities = {
   unstableForkSession: false,
 };
 
+function restoreAdditionalDirectories(
+  directoryIds: readonly string[],
+  existing: readonly WorkspaceEntry[] = [],
+): readonly WorkspaceEntry[] {
+  return directoryIds.map((directoryId) => {
+    const current = existing.find(
+      (directory) => directory.directoryId === directoryId,
+    );
+    return current ?? { directoryId, name: directoryId };
+  });
+}
+
 export abstract class SessionUsageState {
   abstract readonly available: boolean;
   abstract readonly context: SessionContextUsageUpdatedEvent | null;
@@ -753,7 +765,13 @@ function mergeNativeHistory(
   if (history === null) return messages;
   const covered = new Set(
     history.status === "available"
-      ? history.coveredCommandIds.flatMap((id) => [`${id}:user`, `${id}:agent`])
+      ? [
+          ...history.coveredCommandIds.flatMap((id) => [
+            `${id}:user`,
+            `${id}:agent`,
+          ]),
+          ...history.coveredMessageIds,
+        ]
       : [],
   );
   return [
@@ -1139,7 +1157,7 @@ export class Conversation {
       new UnpreparedSessionState(recorded.elicitations, recorded.permissions),
       recorded.directoryId,
       recorded.directoryId,
-      [],
+      restoreAdditionalDirectories(recorded.additionalDirectoryIds),
       base.draftImages,
       base.draftResources,
       recorded.bindingId,
@@ -1203,8 +1221,16 @@ export class Conversation {
 
   readonly reconcileRecordedSession = (
     recorded: RecordedSession,
-  ): Conversation =>
-    new Conversation(
+    recordedTurns: readonly RecordedTurn[],
+  ): Conversation => {
+    const additionalDirectories =
+      recorded.additionalDirectoryIds.length > 0 || recordedTurns.length > 0
+        ? restoreAdditionalDirectories(
+            recorded.additionalDirectoryIds,
+            this.additionalDirectories,
+          )
+        : this.additionalDirectories;
+    return new Conversation(
       this.agentId,
       this.agentLabel,
       this.id,
@@ -1222,13 +1248,14 @@ export class Conversation {
         ? this.directoryLabel
         : recorded.directoryId,
       this.directoryId === recorded.directoryId
-        ? this.additionalDirectories
-        : [],
+        ? additionalDirectories
+        : restoreAdditionalDirectories(recorded.additionalDirectoryIds),
       this.draftImages,
       this.draftResources,
       recorded.bindingId,
       recorded.configRevision,
     );
+  };
 
   readonly withNativeHistory = (history: NativeSessionHistory): Conversation =>
     new Conversation(

@@ -227,6 +227,7 @@ export interface SessionMessage {
     readonly toolCallId: string;
     readonly toolKind: string;
   }[];
+  readonly additionalDirectoryIds: readonly string[];
   readonly agentId: string;
   readonly attempt: AttemptSummary | null;
   readonly commandId: string;

@@ -77,6 +77,15 @@ const sessionHistorySchema = z
           .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/))
           .max(10_000)
           .readonly(),
+        coveredMessageIds: z
+          .array(
+            z
+              .string()
+              .regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}:(?:user|agent)$/),
+          )
+          .max(20_000)
+          .readonly()
+          .default([]),
       })
       .readonly(),
     z.strictObject({ status: z.literal("unavailable") }).readonly(),

@@ -126,6 +126,7 @@ function decodeHistory(
       messages,
       truncated,
       coveredCommandIds: [],
+      coveredMessageIds: [],
     },
   };
 }

@@ -414,25 +414,25 @@ function reconcileConversations(
   }
   const reconciled = conversations.map((conversation) => {
     const recordedSession = sessionsById.get(conversation.sessionId);
+    const recordedTurns = turnsBySession.get(conversation.sessionId) ?? [];
     const withSession =
       recordedSession === undefined ||
       conversation.agentId !== recordedSession.agentId ||
       conversation.sessionId !== recordedSession.sessionId ||
       conversation.directoryId !== recordedSession.directoryId
         ? conversation
-        : conversation.reconcileRecordedSession(recordedSession);
-    const turns = turnsBySession.get(conversation.sessionId);
-    if (turns === undefined) {
+        : conversation.reconcileRecordedSession(recordedSession, recordedTurns);
+    if (recordedTurns.length === 0) {
       return withSession;
     }
-    const firstTurn = turns[0];
+    const firstTurn = recordedTurns[0];
     if (firstTurn === undefined) {
       return conversation;
     }
     try {
       return withSession.reconcileRecordedTurns(
         readAgent(agents, firstTurn.agentId),
-        turns,
+        recordedTurns,
       );
     } catch {
       return withSession;

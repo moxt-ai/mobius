@@ -1095,6 +1095,7 @@ describe.sequential("Cloudflare session deployment", () => {
         action: "import",
         history: {
           coveredCommandIds: [],
+          coveredMessageIds: [],
           messages: [
             { role: "user", text: "Persist this native question" },
             { role: "assistant", text: "Persist this native answer" },

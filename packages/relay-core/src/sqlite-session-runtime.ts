@@ -5097,6 +5097,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
     });
     return {
       activities,
+      additionalDirectoryIds: command.additionalDirectoryIds,
       agentId: command.agentId,
       attempt: this.attemptFromRow(row),
       commandId: command.commandId,

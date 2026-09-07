@@ -247,6 +247,7 @@ export class RecordedContent {
 }
 
 export class RecordedSession {
+  readonly additionalDirectoryIds: readonly string[];
   readonly agentId: string;
   readonly directoryId: string;
   readonly bindingId: string;
@@ -271,7 +272,9 @@ export class RecordedSession {
     nativeHistory: NativeSessionHistory | null,
     elicitations: readonly SessionElicitationRequestedEvent[] = [],
     permissions: readonly SessionPermissionRequestedEvent[] = [],
+    additionalDirectoryIds: readonly string[] = [],
   ) {
+    this.additionalDirectoryIds = [...additionalDirectoryIds];
     this.agentId = agentId;
     this.bindingId = bindingId;
     this.configRevision = configRevision;

@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
+  completeRenderedPrompt,
   pairDaemon,
   saveBrowserCredential,
   sendReadySession,
@@ -27,6 +28,150 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Native Session boundaries", () => {
+  it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const preparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, preparation);
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Explain the existing workspace",
+        "Inspecting the workspace. CLAUDE_FRAGMENTED_OK",
+      );
+
+      const sessionsButton = await screen.findByRole("button", {
+        name: "Local sessions",
+      });
+      await waitFor(() =>
+        expect(sessionsButton.hasAttribute("disabled")).toBe(false),
+      );
+      fireEvent.click(sessionsButton);
+      const sessionsDialog = await screen.findByRole("dialog", {
+        name: "Local sessions",
+      });
+      fireEvent.click(
+        within(sessionsDialog).getByRole("button", { name: "Codex" }),
+      );
+      const listRequest = decodeNativeSessionCommand(
+        await paired.daemon.receive(NATIVE_SESSION_REQUEST_KIND),
+      );
+      paired.daemon.send(
+        encodeNativeSessionResult({
+          action: "list",
+          capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            resumeSession: true,
+            unstableForkSession: true,
+          },
+          entries: [
+            {
+              additionalDirectories: [],
+              directoryId: preparation.directoryId,
+              directoryLabel: "/workspace/existing",
+              entryId: "existing-native-session",
+              title: "Existing native conversation",
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+          ],
+          kind: "native.session.result",
+          nextCursor: null,
+          requestId: listRequest.requestId,
+          sessionId: listRequest.sessionId,
+        }),
+      );
+      fireEvent.click(
+        await within(sessionsDialog).findByRole("button", {
+          name: "Open Existing native conversation",
+        }),
+      );
+      const openRequest = decodeNativeSessionCommand(
+        await paired.daemon.receive(NATIVE_SESSION_REQUEST_KIND),
+      );
+      if (openRequest.action !== "import") {
+        throw new Error("Expected a native Session import request");
+      }
+      paired.daemon.send(
+        encodeNativeSessionResult({
+          action: "import",
+          history: {
+            coveredCommandIds: [],
+            coveredMessageIds: [],
+            messages: [
+              {
+                role: "assistant",
+                text: "Inspecting the workspace. ",
+              },
+              { role: "assistant", text: "CLAUDE_FRAGMENTED_OK" },
+            ],
+            status: "available",
+            truncated: true,
+          },
+          kind: "native.session.result",
+          ready: {
+            additionalDirectories: [],
+            agentId: "codex",
+            agentName: "Codex",
+            agentVersion: "integration",
+            capabilities: {
+              additionalDirectories: true,
+              audioPrompt: false,
+              closeSession: true,
+              deleteSession: true,
+              embeddedContextPrompt: true,
+              imagePrompt: true,
+              listSessions: true,
+              loadSession: true,
+              resumeSession: true,
+              unstableForkSession: true,
+            },
+            commands: [],
+            configOptions: [],
+            directoryId: preparation.directoryId,
+            directoryLabel: "/workspace/existing",
+            kind: "session.ready",
+            requestId: openRequest.requestId,
+            restored: true,
+            sessionId: preparation.sessionId,
+          },
+          requestId: openRequest.requestId,
+          sessionId: openRequest.sessionId,
+          targetSessionId: openRequest.targetSessionId,
+          title: "Existing native conversation",
+        }),
+      );
+
+      await waitFor(() => {
+        expect(
+          screen.getAllByText("Explain the existing workspace"),
+        ).toHaveLength(1);
+        expect(screen.getAllByText(/CLAUDE_FRAGMENTED_OK/)).toHaveLength(1);
+        expect(screen.queryByText(/history_sync_failed:/)).toBeNull();
+      });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
   it("Given an Agent has saved history with image references, When a user previews that session, Then the Web app shows only a safe recent transcript", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(
@@ -119,6 +264,7 @@ describe.sequential("Native Session boundaries", () => {
           entryId: "saved-session",
           history: {
             coveredCommandIds: [],
+            coveredMessageIds: [],
             messages: [
               { role: "user", text: "Older message outside the preview" },
               ...Array.from({ length: 9 }, (_, index) => ({
@@ -240,6 +386,7 @@ describe.sequential("Native Session boundaries", () => {
       }
       const nativeHistory = {
         coveredCommandIds: [],
+        coveredMessageIds: [],
         messages: [
           { role: "user" as const, text: "Persisted native question" },
           { role: "assistant" as const, text: "Persisted native answer" },

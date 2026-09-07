@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -6,6 +6,20 @@ import { join, resolve } from "node:path";
 const DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024;
 const PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS = 1_000;
 const PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS = 5_000;
+const PROCESS_TABLE_TIMEOUT_MILLISECONDS = 1_000;
+const PROCESS_TABLE_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+const PROCESS_EXIT_CHECK_ATTEMPTS = 8;
+const GRACEFUL_STOP_SIGNAL = 15;
+const FORCED_STOP_SIGNAL = 9;
+
+export interface ProcessTreeIdentity {
+  readonly processGroupId: number;
+  readonly processId: number;
+}
+
+interface ProcessTableEntry extends ProcessTreeIdentity {
+  readonly parentProcessId: number;
+}
 
 export class ExecutableIdentity {
   readonly changedAtMilliseconds: number;
@@ -185,6 +199,163 @@ function appendBounded(
   return nextBytes;
 }
 
+function parseProcessTable(output: string): readonly ProcessTableEntry[] {
+  const entries: ProcessTableEntry[] = [];
+  for (const line of output.split("\n")) {
+    const groups = /^\s*(?<pid>\d+)\s+(?<ppid>\d+)\s+(?<pgid>\d+)\s*$/.exec(
+      line,
+    )?.groups;
+    if (groups === undefined) {
+      continue;
+    }
+    const processId = Number(groups["pid"]);
+    const parentProcessId = Number(groups["ppid"]);
+    const processGroupId = Number(groups["pgid"]);
+    if (
+      !Number.isSafeInteger(processId) ||
+      processId <= 0 ||
+      !Number.isSafeInteger(parentProcessId) ||
+      parentProcessId < 0 ||
+      !Number.isSafeInteger(processGroupId) ||
+      processGroupId <= 0
+    ) {
+      continue;
+    }
+    entries.push({ parentProcessId, processGroupId, processId });
+  }
+  return entries;
+}
+
+function readProcessTable(): Promise<readonly ProcessTableEntry[]> {
+  if (process.platform === "win32") {
+    return Promise.resolve([]);
+  }
+  const executable = process.platform === "darwin" ? "/bin/ps" : "/usr/bin/ps";
+  return new Promise((resolveTable) => {
+    execFile(
+      executable,
+      ["-axo", "pid=,ppid=,pgid="],
+      {
+        encoding: "utf8",
+        maxBuffer: PROCESS_TABLE_OUTPUT_LIMIT_BYTES,
+        signal: AbortSignal.timeout(PROCESS_TABLE_TIMEOUT_MILLISECONDS),
+        timeout: PROCESS_TABLE_TIMEOUT_MILLISECONDS,
+      },
+      (error, stdout) => {
+        resolveTable(error === null ? parseProcessTable(stdout) : []);
+      },
+    );
+  });
+}
+
+function selectProcessTree(
+  entries: readonly ProcessTableEntry[],
+  rootProcessId: number,
+): readonly ProcessTreeIdentity[] {
+  const processIds = new Set([rootProcessId]);
+  let previousSize = 0;
+  while (previousSize !== processIds.size) {
+    previousSize = processIds.size;
+    for (const entry of entries) {
+      if (processIds.has(entry.parentProcessId)) {
+        processIds.add(entry.processId);
+      }
+    }
+  }
+  return entries
+    .filter((entry) => processIds.has(entry.processId))
+    .map((entry) => ({
+      processGroupId: entry.processGroupId,
+      processId: entry.processId,
+    }));
+}
+
+function mergeProcessTrees(
+  captured: readonly ProcessTreeIdentity[],
+  current: readonly ProcessTreeIdentity[],
+): readonly ProcessTreeIdentity[] {
+  const processes = new Map<number, ProcessTreeIdentity>();
+  for (const identity of captured) {
+    processes.set(identity.processId, identity);
+  }
+  for (const identity of current) {
+    processes.set(identity.processId, identity);
+  }
+  return [...processes.values()];
+}
+
+export async function captureProcessTree(
+  child: ReturnType<typeof spawn>,
+): Promise<readonly ProcessTreeIdentity[]> {
+  if (process.platform === "win32" || child.pid === undefined) {
+    return [];
+  }
+  return selectProcessTree(await readProcessTable(), child.pid);
+}
+
+function signalDetachedProcessGroups(
+  processes: readonly ProcessTreeIdentity[],
+  rootProcessId: number,
+  signal: number,
+): void {
+  const processIds = new Set(processes.map((identity) => identity.processId));
+  const signalledGroups = new Set<number>();
+  for (const identity of processes) {
+    if (
+      identity.processGroupId === rootProcessId ||
+      !processIds.has(identity.processGroupId) ||
+      signalledGroups.has(identity.processGroupId)
+    ) {
+      continue;
+    }
+    try {
+      process.kill(-identity.processGroupId, signal);
+      signalledGroups.add(identity.processGroupId);
+    } catch {
+      // A concurrently exited group no longer needs cleanup.
+    }
+  }
+  for (const identity of processes) {
+    if (
+      identity.processId === rootProcessId ||
+      identity.processGroupId === rootProcessId ||
+      signalledGroups.has(identity.processGroupId)
+    ) {
+      continue;
+    }
+    try {
+      process.kill(identity.processId, signal);
+    } catch {
+      // A concurrently exited process no longer needs cleanup.
+    }
+  }
+}
+
+function processExists(processId: number): boolean {
+  try {
+    process.kill(processId, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function waitForCapturedProcessesExit(
+  processes: readonly ProcessTreeIdentity[],
+  rootProcessId: number,
+): Promise<boolean> {
+  const processIds = processes
+    .map((identity) => identity.processId)
+    .filter((processId) => processId !== rootProcessId);
+  for (let attempt = 0; attempt < PROCESS_EXIT_CHECK_ATTEMPTS; attempt += 1) {
+    if (processIds.every((processId) => !processExists(processId))) {
+      return true;
+    }
+    await readProcessTable();
+  }
+  return processIds.every((processId) => !processExists(processId));
+}
+
 function terminateProcess(child: ReturnType<typeof spawn>): void {
   if (
     child.exitCode !== null ||
@@ -225,24 +396,37 @@ function forceTerminateProcess(child: ReturnType<typeof spawn>): void {
 
 export async function stopProcessTree(
   child: ReturnType<typeof spawn>,
+  capturedProcesses: readonly ProcessTreeIdentity[] = [],
 ): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
+  const childProcessId = child.pid;
+  if (childProcessId === undefined) {
     return;
   }
+  const childExited = child.exitCode !== null || child.signalCode !== null;
+  if (childExited && capturedProcesses.length === 0) {
+    return;
+  }
+  const processes = mergeProcessTrees(
+    capturedProcesses,
+    childExited ? [] : await captureProcessTree(child),
+  );
+  signalDetachedProcessGroups(processes, childProcessId, GRACEFUL_STOP_SIGNAL);
   terminateProcess(child);
-  const exitedAfterTermination = await waitForProcessExit(
-    child,
-    PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS,
-  );
-  if (exitedAfterTermination) {
+  const [exitedAfterTermination, descendantsExitedAfterTermination] =
+    await Promise.all([
+      waitForProcessExit(child, PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS),
+      waitForCapturedProcessesExit(processes, childProcessId),
+    ]);
+  if (exitedAfterTermination && descendantsExitedAfterTermination) {
     return;
   }
+  signalDetachedProcessGroups(processes, childProcessId, FORCED_STOP_SIGNAL);
   forceTerminateProcess(child);
-  const exitedAfterForce = await waitForProcessExit(
-    child,
-    PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS,
-  );
-  if (!exitedAfterForce) {
+  const [exitedAfterForce, descendantsExitedAfterForce] = await Promise.all([
+    waitForProcessExit(child, PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS),
+    waitForCapturedProcessesExit(processes, childProcessId),
+  ]);
+  if (!exitedAfterForce || !descendantsExitedAfterForce) {
     throw new ProcessExecutionError(
       "process_termination_timeout",
       "The executable process could not be stopped",

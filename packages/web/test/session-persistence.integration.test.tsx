@@ -2,14 +2,17 @@ import {
   decodeSessionConfigureCommand,
   decodeSessionPrepareCommand,
   decodeSessionPromptCommand,
+  decodeWorkspaceListCommand,
   encodeSessionCompletedEvent,
   encodeSessionConfigUpdatedEvent,
   encodeSessionInfoUpdatedEvent,
   encodeSessionStartedEvent,
+  encodeWorkspaceEntriesEvent,
   SESSION_CONFIGURE_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
   type SessionConfigOption,
+  WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import {
   cleanup,
@@ -23,6 +26,8 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
+import { readChannelHistory } from "@/services/pairing-api";
+import { useChatStore } from "@/store/chat-store";
 import {
   completeRenderedPrompt,
   pairDaemon,
@@ -169,6 +174,167 @@ describe.sequential("Session persistence boundaries", () => {
       await screen.findByRole("button", {
         name: /Run settings: Test Large/,
       });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given an additional workspace is selected before the first prompt, When background history refreshes before preparation completes, Then the local identity remains ready to use", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Workspace directory:/ }),
+      );
+      const workspaceRequest = decodeWorkspaceListCommand(
+        await paired.daemon.receive(WORKSPACE_LIST_KIND),
+      );
+      paired.daemon.send(
+        encodeWorkspaceEntriesEvent({
+          bindingId: workspaceRequest.bindingId,
+          directoryId: workspaceRequest.directoryId,
+          directoryLabel: "/workspace",
+          entries: [
+            {
+              directoryId: "shared-policy-workspace",
+              name: "Shared policy workspace",
+            },
+          ],
+          kind: "workspace.entries",
+          parentDirectoryId: "",
+          requestId: workspaceRequest.requestId,
+        }),
+      );
+      const picker = await screen.findByRole("dialog", {
+        name: "Choose workspace",
+      });
+      fireEvent.click(
+        await within(picker).findByRole("button", {
+          name: "Add Shared policy workspace as an additional directory",
+        }),
+      );
+      const selectedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(selectedPreparation.additionalDirectoryIds).toEqual([
+        "shared-policy-workspace",
+      ]);
+      fireEvent.click(
+        within(picker).getByRole("button", {
+          name: "Close directory browser",
+        }),
+      );
+
+      useChatStore
+        .getState()
+        .reconcileHistory(await readChannelHistory(paired.channelId));
+
+      expect(
+        screen.getByRole("button", {
+          name: "Remove Shared policy workspace",
+        }),
+      ).toBeTruthy();
+      await sendReadySession(paired.daemon, selectedPreparation);
+      await screen.findByRole("button", { name: /Run settings:/ });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a prompted Session uses an additional workspace, When the Web app reloads, Then preparation retains the immutable workspace identity", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Workspace directory:/ }),
+      );
+      const workspaceRequest = decodeWorkspaceListCommand(
+        await paired.daemon.receive(WORKSPACE_LIST_KIND),
+      );
+      paired.daemon.send(
+        encodeWorkspaceEntriesEvent({
+          bindingId: workspaceRequest.bindingId,
+          directoryId: workspaceRequest.directoryId,
+          directoryLabel: "/workspace",
+          entries: [
+            {
+              directoryId: "shared-policy-workspace",
+              name: "Shared policy workspace",
+            },
+          ],
+          kind: "workspace.entries",
+          parentDirectoryId: "",
+          requestId: workspaceRequest.requestId,
+        }),
+      );
+      const picker = await screen.findByRole("dialog", {
+        name: "Choose workspace",
+      });
+      fireEvent.click(
+        await within(picker).findByRole("button", {
+          name: "Add Shared policy workspace as an additional directory",
+        }),
+      );
+      const selectedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(selectedPreparation.additionalDirectoryIds).toEqual([
+        "shared-policy-workspace",
+      ]);
+      await sendReadySession(paired.daemon, selectedPreparation);
+      fireEvent.click(
+        within(picker).getByRole("button", {
+          name: "Close directory browser",
+        }),
+      );
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Use the shared policy workspace",
+        "SHARED-POLICY-USED",
+      );
+
+      cleanup();
+      await closeMobiusTransport();
+      render(<App />);
+      const resumedPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(resumedPreparation).toMatchObject({
+        additionalDirectoryIds: ["shared-policy-workspace"],
+        sessionId: selectedPreparation.sessionId,
+      });
+      await sendReadySession(paired.daemon, resumedPreparation);
+      await screen.findByRole("button", { name: /Run settings:/ });
     } finally {
       cleanup();
       await closeMobiusTransport();

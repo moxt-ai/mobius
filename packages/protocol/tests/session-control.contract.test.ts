@@ -77,10 +77,22 @@ it("Given incoming saved history contains an unsafe or oversized image, When the
         status: "available",
         truncated: false,
         coveredCommandIds: [],
+        coveredMessageIds: [],
         messages: [{ role: "user", text: "Selected image", images: [image] }],
       }),
     ).toThrow(ProtocolMessageError);
   }
+});
+
+it("Given saved history predates per-message coverage, When a current client decodes it, Then the missing coverage defaults to empty", () => {
+  expect(
+    decodeNativeSessionHistory({
+      status: "available",
+      truncated: false,
+      coveredCommandIds: [],
+      messages: [{ role: "assistant", text: "Earlier answer" }],
+    }),
+  ).toMatchObject({ coveredMessageIds: [] });
 });
 
 describe("ACP session control protocol contract", () => {

@@ -306,7 +306,9 @@ export async function sendReadySession(
   await daemon.sendSessionEvent(
     prepare.sessionId,
     encodeSessionReadyEvent({
-      additionalDirectories: [],
+      additionalDirectories: prepare.additionalDirectoryIds.map(
+        (directoryId) => ({ directoryId, name: directoryId }),
+      ),
       agentId: prepare.agentId,
       agentName: "Codex",
       agentVersion: "integration",

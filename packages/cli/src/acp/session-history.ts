@@ -92,5 +92,6 @@ export class AcpHistoryReplay {
     messages: [...this.#messages],
     truncated: this.#truncated,
     coveredCommandIds: [],
+    coveredMessageIds: [],
   });
 }

@@ -30,6 +30,7 @@ import {
   decodeWorkspaceEntriesEvent,
   decodeWorkspaceListCommand,
   encodeCommittedSessionEvent,
+  encodeNativeSessionResult,
   encodeRuntimeStatusEvent,
   encodeSessionEventAcknowledgement,
   encodeSessionFailedEvent,
@@ -37,6 +38,7 @@ import {
   NATIVE_SESSION_CANCEL_KIND,
   NATIVE_SESSION_REQUEST_KIND,
   NATIVE_SESSION_RESULT_KIND,
+  type NativeSessionHistory,
   ProtocolMessageError,
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
@@ -57,12 +59,70 @@ import {
   CreateSessionBindingRequest,
   CreateSessionRequest,
   type ProjectScope,
+  type SessionMessage,
   SessionRecordingPolicy,
   type SessionRuntime,
   SessionRuntimeError,
 } from "./session-runtime.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
+const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
+
+function reconcileNativeHistoryCoverage(
+  history: NativeSessionHistory,
+  messages: readonly SessionMessage[],
+): NativeSessionHistory {
+  if (history.status !== "available") {
+    return history;
+  }
+  let historyIndex = history.messages.length;
+  const coveredCommandIds: string[] = [];
+  const coveredMessageIds: string[] = [];
+  for (const message of messages) {
+    let assistantStartIndex = historyIndex;
+    while (
+      assistantStartIndex > 0 &&
+      history.messages[assistantStartIndex - 1]?.role === "assistant"
+    ) {
+      assistantStartIndex -= 1;
+    }
+    if (assistantStartIndex === historyIndex) {
+      break;
+    }
+    const assistantText = history.messages
+      .slice(assistantStartIndex, historyIndex)
+      .map((entry) => entry.text)
+      .join("");
+    const user = history.messages[assistantStartIndex - 1];
+    if (
+      user?.role === "user" &&
+      user.text === message.prompt &&
+      assistantText === message.response &&
+      message.images.length === 0 &&
+      message.resources.length === 0
+    ) {
+      coveredCommandIds.push(message.commandId);
+      coveredMessageIds.push(
+        `${message.commandId}:user`,
+        `${message.commandId}:agent`,
+      );
+      historyIndex = assistantStartIndex - 1;
+      continue;
+    }
+    if (
+      history.truncated &&
+      assistantStartIndex === 0 &&
+      assistantText.length >= MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS &&
+      message.response.endsWith(assistantText)
+    ) {
+      coveredMessageIds.push(`${message.commandId}:agent`);
+      historyIndex = 0;
+      continue;
+    }
+    break;
+  }
+  return { ...history, coveredCommandIds, coveredMessageIds };
+}
 
 function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
   if (
@@ -210,6 +270,7 @@ export class ChannelActor {
       }
       if (kind === NATIVE_SESSION_RESULT_KIND) {
         const result = decodeNativeSessionResult(message);
+        let forwardedMessage = message;
         if (result.action === "import" || result.action === "fork") {
           const target = await this.#runtime.readSession(
             this.#scope,
@@ -244,15 +305,30 @@ export class ChannelActor {
               signal,
             );
           }
+          const messages = await this.#runtime.readMessages(
+            this.#scope,
+            result.ready.sessionId,
+            null,
+            100,
+            signal,
+          );
+          const history = reconcileNativeHistoryCoverage(
+            result.history,
+            messages.messages,
+          );
           await this.#runtime.recordNativeHistory(
             this.#scope,
             this.#runtimeId,
             result.ready.sessionId,
             result.title,
-            result.history,
+            history,
             this.#clock.now(),
             signal,
           );
+          forwardedMessage = encodeNativeSessionResult({
+            ...result,
+            history,
+          });
         } else if (result.action === "preview") {
           await this.#runtime.deleteSession(
             this.#scope,
@@ -261,7 +337,7 @@ export class ChannelActor {
             signal,
           );
         }
-        this.broadcast(this.#peers.hosts(), message);
+        this.broadcast(this.#peers.hosts(), forwardedMessage);
         return;
       }
       this.validateDaemonControl(kind, message);

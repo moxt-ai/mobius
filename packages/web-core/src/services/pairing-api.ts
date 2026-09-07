@@ -38,6 +38,7 @@ import {
 
 const REQUEST_TIMEOUT_MILLISECONDS = 20_000;
 const CHANNEL_CREDENTIAL_PREFIX = "mobius:channel-credential:";
+const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set([
   "pending",
@@ -231,6 +232,72 @@ function readIdentifier(value: unknown, field: string): string {
     );
   }
   return value;
+}
+
+function readAdditionalDirectoryIds(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.length > 16) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned invalid additional Session workspaces.",
+    );
+  }
+  const directoryIds: string[] = [];
+  for (const directoryId of value) {
+    if (
+      typeof directoryId !== "string" ||
+      !DIRECTORY_IDENTIFIER_PATTERN.test(directoryId)
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid additional Session workspace.",
+      );
+    }
+    directoryIds.push(directoryId);
+  }
+  if (new Set(directoryIds).size !== directoryIds.length) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned duplicate additional Session workspaces.",
+    );
+  }
+  return directoryIds;
+}
+
+function readSessionAdditionalDirectoryIds(
+  messages: readonly unknown[],
+): readonly string[] {
+  const first = messages[0];
+  if (first === undefined) {
+    return [];
+  }
+  if (!isRecord(first)) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid session message.",
+    );
+  }
+  const recorded = readAdditionalDirectoryIds(first["additionalDirectoryIds"]);
+  for (const message of messages.slice(1)) {
+    if (!isRecord(message)) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned an invalid session message.",
+      );
+    }
+    const directoryIds = readAdditionalDirectoryIds(
+      message["additionalDirectoryIds"],
+    );
+    if (
+      recorded.length !== directoryIds.length ||
+      recorded.some((directoryId, index) => directoryId !== directoryIds[index])
+    ) {
+      throw new PairingApiError(
+        "invalid_relay_response",
+        "The relay returned inconsistent additional Session workspaces.",
+      );
+    }
+  }
+  return recorded;
 }
 
 function readAllowedString(
@@ -1239,6 +1306,18 @@ function decodePendingSessionInteractions(
   return { elicitations, permissions };
 }
 
+interface RestoredChannelSession {
+  readonly session: RecordedSession;
+  readonly turns: RecordedTurn[];
+}
+
+function isConcurrentSessionRemoval(error: unknown): boolean {
+  return (
+    error instanceof PairingApiError &&
+    (error.code === "session_not_found" || error.code === "session_deleted")
+  );
+}
+
 async function readChannelHistoryWithSignal(
   channelId: string,
   signal: AbortSignal,
@@ -1264,60 +1343,78 @@ async function readChannelHistoryWithSignal(
   const summaries = directory["sessions"].map((session) =>
     decodeRecordedSession(session, credential),
   );
-  const restored = await Promise.all(
+  const restoredBySessionId = new Map<string, RestoredChannelSession>();
+  await Promise.all(
     summaries.map(async ({ hasNativeHistory, session }) => {
-      const messagesEndpoint = new URL(
-        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
-        window.location.origin,
-      );
-      messagesEndpoint.searchParams.set("limit", "100");
-      const historyEndpoint = new URL(
-        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
-        window.location.origin,
-      );
-      const interactionsEndpoint = new URL(
-        `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
-        window.location.origin,
-      );
-      const [page, nativeHistoryValue, interactionPage] = await Promise.all([
-        requestJson(messagesEndpoint, { headers, method: "GET" }, signal),
-        hasNativeHistory
-          ? requestJson(historyEndpoint, { headers, method: "GET" }, signal)
-          : Promise.resolve(null),
-        requestJson(interactionsEndpoint, { headers, method: "GET" }, signal),
-      ]);
-      if (!isRecord(page) || !Array.isArray(page["messages"])) {
-        throw new PairingApiError(
-          "invalid_relay_response",
-          "The relay returned an invalid message page.",
+      try {
+        const messagesEndpoint = new URL(
+          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
+          window.location.origin,
         );
-      }
-      const turns = page["messages"].map(decodeSessionMessage);
-      const interactions = decodePendingSessionInteractions(
-        interactionPage,
-        session.sessionId,
-        turns,
-      );
-      return {
-        turns,
-        session: new RecordedSession(
-          session.agentId,
-          session.bindingId,
-          session.configRevision,
-          session.directoryId,
-          session.runtimeId,
+        messagesEndpoint.searchParams.set("limit", "100");
+        const historyEndpoint = new URL(
+          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
+          window.location.origin,
+        );
+        const interactionsEndpoint = new URL(
+          `/api/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
+          window.location.origin,
+        );
+        const [page, nativeHistoryValue, interactionPage] = await Promise.all([
+          requestJson(messagesEndpoint, { headers, method: "GET" }, signal),
+          hasNativeHistory
+            ? requestJson(historyEndpoint, { headers, method: "GET" }, signal)
+            : Promise.resolve(null),
+          requestJson(interactionsEndpoint, { headers, method: "GET" }, signal),
+        ]);
+        if (!isRecord(page) || !Array.isArray(page["messages"])) {
+          throw new PairingApiError(
+            "invalid_relay_response",
+            "The relay returned an invalid message page.",
+          );
+        }
+        const additionalDirectoryIds = readSessionAdditionalDirectoryIds(
+          page["messages"],
+        );
+        const turns = page["messages"].map(decodeSessionMessage);
+        const interactions = decodePendingSessionInteractions(
+          interactionPage,
           session.sessionId,
-          session.title,
-          session.updatedAt,
-          nativeHistoryValue === null
-            ? null
-            : decodeNativeSessionHistory(nativeHistoryValue),
-          interactions.elicitations,
-          interactions.permissions,
-        ),
-      };
+          turns,
+        );
+        restoredBySessionId.set(session.sessionId, {
+          turns,
+          session: new RecordedSession(
+            session.agentId,
+            session.bindingId,
+            session.configRevision,
+            session.directoryId,
+            session.runtimeId,
+            session.sessionId,
+            session.title,
+            session.updatedAt,
+            nativeHistoryValue === null
+              ? null
+              : decodeNativeSessionHistory(nativeHistoryValue),
+            interactions.elicitations,
+            interactions.permissions,
+            additionalDirectoryIds,
+          ),
+        });
+      } catch (error) {
+        if (!isConcurrentSessionRemoval(error)) {
+          throw error;
+        }
+      }
     }),
   );
+  const restored: RestoredChannelSession[] = [];
+  for (const { session } of summaries) {
+    const value = restoredBySessionId.get(session.sessionId);
+    if (value !== undefined) {
+      restored.push(value);
+    }
+  }
   const sessions = restored.map(({ session }) => session);
   const turns: RecordedTurn[] = [];
   for (const { turns: sessionTurns } of restored) {

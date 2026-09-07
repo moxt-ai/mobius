@@ -454,12 +454,19 @@ child.once("exit", (code) => process.exit(code ?? 84));
   });
 
   it("Given a turn is running, When it is cancelled, Then ACP stops that turn and keeps the session usable", async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-acp-cancel-resume-"),
+    );
     const manager = new AcpSessionManager();
-    const agent = new LocalAgentDefinition("codex", "Codex", process.execPath, [
-      fakeAgentPath,
-      "--agent-name",
+    const agent = new LocalAgentDefinition(
+      "codex",
       "Codex",
-    ]);
+      process.execPath,
+      [fakeAgentPath, "--agent-name", "Codex"],
+      {
+        MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
+      },
+    );
     const activityStarted = Promise.withResolvers<void>();
 
     try {
@@ -467,7 +474,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         additionalDirectories: [],
         agent,
         commandId: "command-cancelled",
-        cwd: process.cwd(),
+        cwd: temporaryDirectory,
         images: [],
         onActivity: () => {
           activityStarted.resolve();
@@ -491,7 +498,7 @@ child.once("exit", (code) => process.exit(code ?? 84));
         additionalDirectories: [],
         agent,
         commandId: "command-continue",
-        cwd: process.cwd(),
+        cwd: temporaryDirectory,
         images: [],
         onActivity: () => Promise.resolve(),
         onText: (text) => {
@@ -506,8 +513,114 @@ child.once("exit", (code) => process.exit(code ?? 84));
       expect(nextChunks.join("")).toBe("Codex turn 2: continue");
     } finally {
       await manager.close();
+      await rm(temporaryDirectory, { force: true, recursive: true });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "Given an ACP Agent leaves a tool subprocess alive after cancelling, When the turn is cancelled, Then Mobius releases the process tree and resumes the saved session",
+    async () => {
+      const temporaryDirectory = await mkdtemp(
+        join(tmpdir(), "mobius-acp-cancel-tree-"),
+      );
+      const manager = new AcpSessionManager();
+      const adapterPath = join(temporaryDirectory, "codex-acp");
+      const childPidPath = join(temporaryDirectory, "tool-child.pid");
+      await writeFile(
+        adapterPath,
+        `#!${process.execPath}
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+const childPidPath = process.env.MOBIUS_TEST_CHILD_PID_FILE;
+if (childPidPath === undefined) process.exit(81);
+const tool = spawn(process.execPath, ["-e", "setInterval(() => undefined, 60000)"], {
+  detached: true,
+  env: process.env,
+  stdio: "ignore",
+});
+if (tool.pid === undefined) process.exit(82);
+writeFileSync(childPidPath, tool.pid.toString());
+const agent = spawn(process.execPath, [${JSON.stringify(fakeAgentPath)}, "--agent-name", "Codex"], {
+  env: process.env,
+  stdio: "inherit",
+});
+agent.once("error", () => process.exit(83));
+agent.once("exit", (code) => process.exit(code ?? 84));
+`,
+        { mode: 0o700 },
+      );
+      await chmod(adapterPath, 0o700);
+      const agent = new LocalAgentDefinition(
+        "codex",
+        "Codex",
+        adapterPath,
+        [],
+        {
+          MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory,
+          MOBIUS_TEST_CHILD_PID_FILE: childPidPath,
+        },
+      );
+      const activityStarted = Promise.withResolvers<void>();
+      let childPid = 0;
+
+      try {
+        const cancelledTurn = manager.runPrompt({
+          additionalDirectories: [],
+          agent,
+          commandId: "command-cancelled-tree",
+          cwd: temporaryDirectory,
+          images: [],
+          onActivity: () => {
+            activityStarted.resolve();
+            return Promise.resolve();
+          },
+          onText: () => Promise.resolve(),
+          prompt: "wait until cancelled",
+          resources: [],
+          sessionId: "cancelled-tree-conversation",
+          signal: new AbortController().signal,
+        });
+        await activityStarted.promise;
+        childPid = Number.parseInt(await readFile(childPidPath, "utf8"), 10);
+        expect(Number.isSafeInteger(childPid)).toBe(true);
+
+        await manager.cancelPrompt("cancelled-tree-conversation");
+
+        await expect(cancelledTurn).resolves.toEqual({
+          stopReason: "cancelled",
+        });
+        expect(processExists(childPid)).toBe(false);
+        const nextChunks: string[] = [];
+        await manager.runPrompt({
+          additionalDirectories: [],
+          agent,
+          commandId: "command-after-tree-cancel",
+          cwd: temporaryDirectory,
+          images: [],
+          onActivity: () => Promise.resolve(),
+          onText: (text) => {
+            nextChunks.push(text);
+            return Promise.resolve();
+          },
+          prompt: "continue",
+          resources: [],
+          sessionId: "cancelled-tree-conversation",
+          signal: new AbortController().signal,
+        });
+        expect(nextChunks.join("")).toBe("Codex turn 2: continue");
+      } finally {
+        await manager.close();
+        if (childPid > 0 && processExists(childPid)) {
+          try {
+            process.kill(-childPid, "SIGKILL");
+          } catch {
+            // A concurrently exited test process no longer needs cleanup.
+          }
+        }
+        await rm(temporaryDirectory, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("Given an existing Agent conversation, When a caller changes its Agent identity, Then the local boundary rejects the request", async () => {
     const manager = new AcpSessionManager();

@@ -50,6 +50,8 @@ import {
 
 import type { LocalAgentDefinition } from "../config.ts";
 import {
+  captureProcessTree,
+  type ProcessTreeIdentity,
   revalidateExecutable,
   stopProcessTree,
 } from "../process/executable.ts";
@@ -1557,13 +1559,17 @@ class AcpProcessSession implements AcpClientHandler {
   };
 
   readonly cancel = async (): Promise<void> => {
-    await this.cancelPendingInteractions();
-    if (!this.#turn.running) {
-      return;
+    const capturedProcesses = await captureProcessTree(this.#child);
+    try {
+      await this.cancelPendingInteractions();
+      if (this.#turn.running) {
+        await this.#connection.agent.notify(methods.agent.session.cancel, {
+          sessionId: this.#nativeSessionId,
+        });
+      }
+    } finally {
+      await this.closeProcess(capturedProcesses);
     }
-    await this.#connection.agent.notify(methods.agent.session.cancel, {
-      sessionId: this.#nativeSessionId,
-    });
   };
 
   readonly respondPermission = async (
@@ -1946,9 +1952,14 @@ class AcpProcessSession implements AcpClientHandler {
     await this.closeProcess();
   };
 
-  readonly closeProcess = async (): Promise<void> => {
-    this.#connection.close();
-    await stopProcessTree(this.#child);
+  readonly closeProcess = async (
+    capturedProcesses: readonly ProcessTreeIdentity[] = [],
+  ): Promise<void> => {
+    try {
+      await stopProcessTree(this.#child, capturedProcesses);
+    } finally {
+      this.#connection.close();
+    }
   };
 
   readonly race = async <T>(
@@ -2282,7 +2293,13 @@ export class AcpSessionManager {
     this.#cancellationRequests.add(sessionId);
     const runtime = this.#sessions.get(sessionId);
     if (runtime !== undefined) {
-      await runtime.cancel();
+      try {
+        await runtime.cancel();
+      } finally {
+        if (this.#sessions.get(sessionId) === runtime) {
+          this.#sessions.delete(sessionId);
+        }
+      }
     }
   };
 
@@ -2343,7 +2360,21 @@ export class AcpSessionManager {
       if (this.#cancellationRequests.has(options.sessionId)) {
         return { stopReason: "cancelled" };
       }
-      return await runtime.prompt(boundedOptions);
+      try {
+        const result = await runtime.prompt(boundedOptions);
+        return this.#cancellationRequests.has(options.sessionId)
+          ? { stopReason: "cancelled" }
+          : result;
+      } catch (error) {
+        if (this.#cancellationRequests.has(options.sessionId)) {
+          if (this.#sessions.get(options.sessionId) === runtime) {
+            this.#sessions.delete(options.sessionId);
+          }
+          await runtime.closeProcess();
+          return { stopReason: "cancelled" };
+        }
+        throw error;
+      }
     } catch (error) {
       const failedRuntime = this.#sessions.get(options.sessionId);
       if (failedRuntime !== undefined) {

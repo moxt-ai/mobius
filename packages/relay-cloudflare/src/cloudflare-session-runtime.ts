@@ -49,6 +49,7 @@ import {
 const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const MAX_INTERNAL_RESPONSE_LENGTH = 96 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 
 interface DirectoryRow extends Record<string, unknown> {
   readonly session_id: string;
@@ -117,6 +118,36 @@ function readBoolean(
     );
   }
   return field;
+}
+
+function readDirectoryIdentifiers(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): readonly string[] {
+  const field = value[key];
+  if (!Array.isArray(field) || field.length > 16) {
+    throw new SessionRuntimeError(
+      "session_storage_unavailable",
+      "The session storage returned an invalid record",
+    );
+  }
+  const identifiers: string[] = [];
+  const unique = new Set<string>();
+  for (const identifier of field) {
+    if (
+      typeof identifier !== "string" ||
+      !DIRECTORY_IDENTIFIER_PATTERN.test(identifier) ||
+      unique.has(identifier)
+    ) {
+      throw new SessionRuntimeError(
+        "session_storage_unavailable",
+        "The session storage returned an invalid record",
+      );
+    }
+    identifiers.push(identifier);
+    unique.add(identifier);
+  }
+  return identifiers;
 }
 
 function decodeLifecycle(value: unknown): SessionLifecycle {
@@ -350,6 +381,10 @@ function decodeMessage(value: unknown): SessionMessage {
   });
   return {
     activities,
+    additionalDirectoryIds: readDirectoryIdentifiers(
+      value,
+      "additionalDirectoryIds",
+    ),
     agentId: readString(value, "agentId"),
     attempt: decodeAttempt(value["attempt"]),
     commandId: readString(value, "commandId"),
