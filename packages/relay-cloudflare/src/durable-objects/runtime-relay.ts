@@ -303,6 +303,32 @@ export class RuntimeRelay {
       });
       return;
     }
+    // Liveness control traffic must not wait behind durable session writes.
+    if (attachment.role === "daemon" && typeof message === "string") {
+      try {
+        if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
+          if (!this.isCurrentConnection(attachment)) {
+            socket.serializeAttachment({
+              ...attachment,
+              role: "replaced-daemon",
+            });
+            socket.close(1012, "Daemon connection replaced");
+            return;
+          }
+          const heartbeat = decodeRuntimeHeartbeatEvent(message);
+          socket.send(
+            encodeRuntimeHeartbeatAckEvent({
+              heartbeatId: heartbeat.heartbeatId,
+              kind: RUNTIME_HEARTBEAT_ACK_KIND,
+            }),
+          );
+          return;
+        }
+      } catch {
+        socket.close(1008, "Invalid protocol message");
+        return;
+      }
+    }
     const operation = this.#daemonMessageTail.then(async () => {
       await this.withSocketSignal(socket, async (signal) => {
         const channelSocket = new CloudflareChannelSocket(socket);
@@ -321,23 +347,6 @@ export class RuntimeRelay {
           });
           socket.close(1012, "Daemon connection replaced");
           return;
-        }
-        if (typeof message === "string") {
-          try {
-            if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
-              const heartbeat = decodeRuntimeHeartbeatEvent(message);
-              socket.send(
-                encodeRuntimeHeartbeatAckEvent({
-                  heartbeatId: heartbeat.heartbeatId,
-                  kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                }),
-              );
-              return;
-            }
-          } catch {
-            socket.close(1008, "Invalid protocol message");
-            return;
-          }
         }
         await this.actor(attachment.runtimeId, scope).receiveDaemonMessage(
           channelSocket,

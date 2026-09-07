@@ -4452,8 +4452,13 @@ export class SqliteSessionRuntime implements SessionRuntime {
       );
       return;
     }
+    // A reconnecting owner can drain its contiguous durable outbox without
+    // reviving an indeterminate Attempt. Only a terminal event resolves it.
     if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
-      this.requireCommandState(key, sessionId, event.commandId, ["running"]);
+      this.requireCommandState(key, sessionId, event.commandId, [
+        "running",
+        "indeterminate",
+      ]);
       this.#database.run(
         `UPDATE turns
          SET response = substr(response || ?, 1, 100000), updated_at = ?
@@ -4467,7 +4472,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
         key,
         sessionId,
         event.commandId,
-        ["running"],
+        ["running", "indeterminate"],
       );
       const attemptId = rowNullableString(command, "attempt_id");
       if (attemptId === null) {
@@ -4541,7 +4546,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
         key,
         sessionId,
         event.commandId,
-        ["running"],
+        ["running", "indeterminate"],
       );
       const attemptId = rowNullableString(command, "attempt_id");
       if (attemptId === null) {
@@ -4557,7 +4562,9 @@ export class SqliteSessionRuntime implements SessionRuntime {
       )[0];
       if (
         attempt === undefined ||
-        !["running", "waiting_input"].includes(rowString(attempt, "state"))
+        !["running", "waiting_input", "indeterminate"].includes(
+          rowString(attempt, "state"),
+        )
       ) {
         throw new SessionRuntimeError(
           "session_conflict",
@@ -4614,6 +4621,15 @@ export class SqliteSessionRuntime implements SessionRuntime {
           requestJson,
         ],
       );
+      if (rowString(attempt, "state") === "indeterminate") {
+        this.#database.run(
+          `UPDATE interactions
+           SET state = 'cancelled', resolved_at = ?
+           WHERE scope_key = ? AND session_id = ? AND interaction_id = ?`,
+          [now, key, sessionId, event.interactionId],
+        );
+        return;
+      }
       const interactionIds = [
         ...identifierArrayFromJson(
           rowString(attempt, "waiting_interaction_ids_json"),
@@ -4647,6 +4663,19 @@ export class SqliteSessionRuntime implements SessionRuntime {
       }
       const interactionState = rowString(interaction, "state");
       const interactionRequest = interactionFromRow(interaction).request;
+      if (interactionState === "cancelled") {
+        const attempt = this.#database.query(
+          `SELECT state FROM attempts
+           WHERE scope_key = ? AND session_id = ? AND attempt_id = ?`,
+          [key, sessionId, rowString(interaction, "attempt_id")],
+        )[0];
+        if (
+          attempt !== undefined &&
+          rowString(attempt, "state") === "indeterminate"
+        ) {
+          return;
+        }
+      }
       const urlElicitation =
         interactionRequest.kind === "elicitation" &&
         interactionRequest.mode === "url";
@@ -4717,7 +4746,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
         key,
         sessionId,
         event.commandId,
-        ["running"],
+        ["running", "indeterminate"],
       );
       this.#database.run(
         `UPDATE turns
@@ -4737,7 +4766,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
         `UPDATE attempts
          SET state = ?, completed_at = ?, stop_reason = ?, updated_at = ?
          WHERE scope_key = ? AND session_id = ? AND turn_id = ?
-           AND state IN ('running', 'waiting_input')`,
+           AND state IN ('running', 'waiting_input', 'indeterminate')`,
         [
           event.stopReason === "cancelled" ? "cancelled" : "succeeded",
           now,
@@ -4762,7 +4791,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
         key,
         sessionId,
         event.commandId,
-        ["queued", "running"],
+        ["queued", "running", "indeterminate"],
       );
       if (rowString(command, "state") === "queued") {
         if (attemptSourceId === null) {
@@ -4813,7 +4842,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
          SET state = 'failed', completed_at = ?, error_code = ?,
              error_message = ?, updated_at = ?
          WHERE scope_key = ? AND session_id = ? AND turn_id = ?
-           AND state IN ('running', 'waiting_input')`,
+           AND state IN ('running', 'waiting_input', 'indeterminate')`,
         [
           now,
           event.code,

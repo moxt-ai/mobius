@@ -8,9 +8,12 @@ import {
   decodeAgentInstallProgressEvent,
   decodeAgentInstallRequestCommand,
   decodeCommittedSessionEvent,
+  decodeMessageKind,
   decodeNativeSessionCommand,
   decodeNativeSessionResult,
   decodeRecordedSessionEvent,
+  decodeRuntimeHeartbeatAckEvent,
+  decodeRuntimeLivenessReadyEvent,
   decodeRuntimeStatusEvent,
   decodeSessionEventAcknowledgement,
   decodeSessionFailedEvent,
@@ -20,11 +23,15 @@ import {
   encodeAgentInstallRequestCommand,
   encodeNativeSessionCommand,
   encodeNativeSessionResult,
+  encodeRuntimeHeartbeatEvent,
   encodeSessionEventEnvelope,
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   type NativeSessionResult,
   type RecordedSessionEvent,
+  RUNTIME_HEARTBEAT_ACK_KIND,
+  RUNTIME_HEARTBEAT_KIND,
+  RUNTIME_LIVENESS_READY_KIND,
   SESSION_COMPLETED_KIND,
   SESSION_EVENT_KIND,
   SESSION_INFO_UPDATED_KIND,
@@ -765,6 +772,106 @@ describe.sequential("Cloudflare session deployment", () => {
       ]);
     });
     replacement.socket.close(1000, "Connection epoch test complete");
+  });
+
+  it("Given session persistence is backlogged, When the daemon sends a heartbeat, Then liveness is acknowledged before the event backlog drains", async () => {
+    const pairing = await pairChannel();
+    const sessionId = "heartbeat-backlog-session";
+    expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+    const daemon = await openChannelSocket(
+      `/mobius/api/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}&liveness=1`,
+    );
+    expect(
+      decodeRuntimeLivenessReadyEvent(await daemon.messages.next()),
+    ).toEqual({ kind: RUNTIME_LIVENESS_READY_KIND });
+    const host = await openChannelSocket(
+      `/mobius/api/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+    );
+    expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(
+      true,
+    );
+
+    try {
+      const command = prompt(
+        sessionId,
+        "heartbeat-backlog-command",
+        "stream a busy response",
+      );
+      await submitPrompt(host, daemon, command);
+      await commit(
+        host,
+        daemon,
+        envelope(sessionId, "heartbeat-backlog-started", {
+          attemptId: "heartbeat-backlog-attempt",
+          commandId: command.commandId,
+          kind: SESSION_STARTED_KIND,
+          sessionId,
+        }),
+      );
+      const bufferedEvents = Array.from({ length: 24 }, (_, index) =>
+        envelope(sessionId, `heartbeat-backlog-activity-${index.toString()}`, {
+          activityId: "heartbeat-backlog-activity",
+          activityType: "tool",
+          commandId: command.commandId,
+          content: [],
+          detail: { kind: "unrecorded" },
+          input: "{}",
+          kind: AGENT_ACTIVITY_KIND,
+          locations: [],
+          name: "terminal",
+          output: `progress ${index.toString()}`,
+          sequence: index,
+          sessionId,
+          status: "running",
+          title: "Run terminal command",
+          toolKind: "execute",
+        }),
+      );
+      for (const bufferedEvent of bufferedEvents) {
+        daemon.socket.send(encodeSessionEventEnvelope(bufferedEvent));
+      }
+      const heartbeatId = "heartbeat-during-persistence-backlog";
+      daemon.socket.send(
+        encodeRuntimeHeartbeatEvent({
+          heartbeatId,
+          kind: RUNTIME_HEARTBEAT_KIND,
+        }),
+      );
+
+      const acknowledgements = [];
+      for (;;) {
+        const daemonResponse = await daemon.messages.next();
+        if (decodeMessageKind(daemonResponse) === RUNTIME_HEARTBEAT_ACK_KIND) {
+          expect(
+            decodeRuntimeHeartbeatAckEvent(daemonResponse).heartbeatId,
+          ).toBe(heartbeatId);
+          break;
+        }
+        acknowledgements.push(
+          decodeSessionEventAcknowledgement(daemonResponse),
+        );
+      }
+      expect(acknowledgements.length).toBeLessThan(bufferedEvents.length);
+      while (acknowledgements.length < bufferedEvents.length) {
+        acknowledgements.push(
+          decodeSessionEventAcknowledgement(await daemon.messages.next()),
+        );
+      }
+      const committedEvents = await Promise.all(
+        bufferedEvents.map(async () =>
+          decodeCommittedSessionEvent(await host.messages.next()),
+        ),
+      );
+      expect(new Set(acknowledgements.map(({ eventId }) => eventId))).toEqual(
+        new Set(bufferedEvents.map(({ eventId }) => eventId)),
+      );
+      expect(new Set(committedEvents.map(({ eventId }) => eventId))).toEqual(
+        new Set(bufferedEvents.map(({ eventId }) => eventId)),
+      );
+    } finally {
+      host.socket.close(1000, "Heartbeat backlog test complete");
+      daemon.socket.close(1000, "Heartbeat backlog test complete");
+    }
   });
 
   it("Given independent sessions on one runtime, When history pages and a reconnect cursor are read, Then records stay ordered while duplicate delivery never reruns a command", async () => {

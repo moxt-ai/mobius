@@ -43,6 +43,7 @@ import {
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
   encodeSessionEventEnvelope,
+  encodeSessionFailedEvent,
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
@@ -1394,6 +1395,227 @@ describe("pairing and channel chat", () => {
       ).toBe(heartbeatId);
     } finally {
       daemon?.close(1000, "Liveness E2E complete");
+      await stopProcess(wrangler);
+      if (previousStateDirectory === undefined) {
+        delete process.env["MOBIUS_STATE_DIRECTORY"];
+      } else {
+        process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+      }
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+      await rm(temporaryDirectory, { recursive: true });
+    }
+  });
+
+  it("Given a running Attempt becomes indeterminate with buffered events, When its owning daemon reconnects and replays them, Then the terminal outcome commits without taking the Runtime offline", {
+    timeout: 30_000,
+  }, async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-buffered-recovery-e2e-"),
+    );
+    const port = await reservePort();
+    const origin = `http://127.0.0.1:${port.toString()}`;
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
+    process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
+    const wrangler = spawn(
+      pnpmCommand,
+      [
+        "wrangler",
+        "dev",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        port.toString(),
+        "--persist-to",
+        join(temporaryDirectory, "wrangler-state"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const sockets: WebSocket[] = [];
+
+    try {
+      await waitForRelay(wrangler);
+      const pairingResponse = await fetch(
+        new URL("/mobius/api/pairings", origin),
+        { method: "POST" },
+      );
+      const pairing = decodeBrowserPairing(await pairingResponse.json());
+      const paired = await pairLocalMachine([
+        "--url",
+        origin,
+        "--code",
+        pairing.pairingCode,
+        "--workspace",
+        repositoryRoot,
+      ]);
+      const staleDaemon = new WebSocket(paired.config.relayUrl);
+      sockets.push(staleDaemon);
+      await waitForSocketOpen(staleDaemon);
+      const host = new WebSocket(hostSocketUrl(pairing, origin));
+      sockets.push(host);
+      await waitForRuntimeOnline(host);
+
+      const commandId = crypto.randomUUID();
+      const sessionId = crypto.randomUUID();
+      const promptReceived = waitForProtocolKind(
+        staleDaemon,
+        SESSION_PROMPT_KIND,
+      );
+      host.send(
+        encodeSessionPromptCommand({
+          additionalDirectoryIds: [],
+          agentId: "codex",
+          bindingId: "workspace",
+          commandId,
+          directoryId: "default",
+          images: [],
+          kind: SESSION_PROMPT_KIND,
+          prompt: "continue until the connection drops",
+          resources: [],
+          sessionId,
+        }),
+      );
+      expect(decodeSessionPromptCommand(await promptReceived).commandId).toBe(
+        commandId,
+      );
+      const startReceived = waitForProtocolKind(host, SESSION_STARTED_KIND);
+      sendSessionEvent(
+        staleDaemon,
+        sessionId,
+        encodeSessionStartedEvent({
+          attemptId: "buffered-recovery-attempt",
+          commandId,
+          kind: SESSION_STARTED_KIND,
+          sessionId,
+        }),
+      );
+      await startReceived;
+
+      const offline = waitForProtocolKind(host, RUNTIME_STATUS_KIND);
+      staleDaemon.close(1000, "Simulate a lost daemon connection");
+      expect(decodeRuntimeStatusEvent(await offline).online).toBe(false);
+      const replacementOnline = waitForRuntimeOnline(host);
+      const replacementDaemon = new WebSocket(paired.config.relayUrl);
+      sockets.push(replacementDaemon);
+      await waitForSocketOpen(replacementDaemon);
+      await replacementOnline;
+
+      const activityReceived = waitForProtocolKind(host, AGENT_ACTIVITY_KIND);
+      const deltaReceived = waitForProtocolKind(host, AGENT_MESSAGE_DELTA_KIND);
+      sendSessionEvent(
+        replacementDaemon,
+        sessionId,
+        encodeAgentActivityEvent({
+          activityId: "buffered-recovery-activity",
+          activityType: "tool",
+          commandId,
+          content: [],
+          detail: { kind: "unrecorded" },
+          input: "{}",
+          kind: AGENT_ACTIVITY_KIND,
+          locations: [],
+          name: "terminal",
+          output: "buffered progress",
+          sequence: 0,
+          sessionId,
+          status: "running",
+          title: "Run terminal command",
+          toolKind: "execute",
+        }),
+      );
+      sendSessionEvent(
+        replacementDaemon,
+        sessionId,
+        encodeAgentMessageDeltaEvent({
+          commandId,
+          kind: AGENT_MESSAGE_DELTA_KIND,
+          sessionId,
+          text: "buffered before disconnect",
+        }),
+      );
+      const [activityPayload, deltaPayload] = await Promise.all([
+        activityReceived,
+        deltaReceived,
+      ]);
+      expect(decodeAgentActivityEvent(activityPayload)).toMatchObject({
+        activityId: "buffered-recovery-activity",
+        output: "buffered progress",
+      });
+      expect(decodeAgentMessageDeltaEvent(deltaPayload).text).toBe(
+        "buffered before disconnect",
+      );
+      const indeterminateHistory = await fetch(
+        projectSessionUrl(pairing, origin, sessionId, "/messages"),
+        { headers: authenticatedHeaders(pairing) },
+      );
+      await expect(indeterminateHistory.json()).resolves.toEqual(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              attempt: expect.objectContaining({ kind: "indeterminate" }),
+              commandId,
+              response: "buffered before disconnect",
+            }),
+          ]),
+        }),
+      );
+
+      const failureReceived = waitForProtocolKind(host, SESSION_FAILED_KIND);
+      sendSessionEvent(
+        replacementDaemon,
+        sessionId,
+        encodeSessionFailedEvent({
+          code: "acp_execution_failed",
+          commandId,
+          kind: SESSION_FAILED_KIND,
+          message: "ACP agent execution failed",
+          sessionId,
+        }),
+      );
+      const failurePayload = await failureReceived;
+      expect(decodeSessionFailedEvent(failurePayload)).toMatchObject({
+        code: "acp_execution_failed",
+        commandId,
+      });
+      expect(replacementDaemon.readyState).toBe(WebSocket.OPEN);
+
+      const historyResponse = await fetch(
+        projectSessionUrl(pairing, origin, sessionId, "/messages"),
+        { headers: authenticatedHeaders(pairing) },
+      );
+      expect(historyResponse.status).toBe(200);
+      await expect(historyResponse.json()).resolves.toEqual(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              attempt: expect.objectContaining({
+                code: "acp_execution_failed",
+                kind: "failed",
+              }),
+              activities: expect.arrayContaining([
+                expect.objectContaining({
+                  activityId: "buffered-recovery-activity",
+                  output: "buffered progress",
+                }),
+              ]),
+              commandId,
+              response: "buffered before disconnect",
+            }),
+          ]),
+        }),
+      );
+    } finally {
+      for (const socket of sockets) {
+        socket.close(1000, "Buffered recovery E2E complete");
+      }
       await stopProcess(wrangler);
       if (previousStateDirectory === undefined) {
         delete process.env["MOBIUS_STATE_DIRECTORY"];
