@@ -1,4 +1,11 @@
-import { LoaderCircle, MessageSquare, Plus, Settings, X } from "lucide-react";
+import {
+  LoaderCircle,
+  MessageSquare,
+  Plus,
+  Settings,
+  Smartphone,
+  X,
+} from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useRef } from "react";
 import { Link, NavLink } from "react-router";
 
@@ -9,6 +16,7 @@ import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
+  channelAccessRoutePath,
   channelSettingsRoutePath,
   sessionRoutePath,
   sessionSettingsRoutePath,
@@ -63,17 +71,17 @@ function MobiusMark() {
 interface ConversationSidebarProps {
   readonly channelId: string;
   readonly layout: DesktopSidebarLayoutState;
+  readonly managementPageOpen: boolean;
   readonly onCreateConversation: () => void;
   readonly onLayoutChange: (layout: DesktopSidebarLayoutState) => void;
-  readonly settingsOpen: boolean;
 }
 
 export function ConversationSidebar({
   channelId,
   layout,
+  managementPageOpen,
   onCreateConversation,
   onLayoutChange,
-  settingsOpen,
 }: ConversationSidebarProps) {
   const conversations = useChatStore((state) => state.conversations);
   const activeConversationId = useChatStore(
@@ -93,6 +101,7 @@ export function ConversationSidebar({
     (conversation) => !conversation.isRunning,
   );
   const displayWidth = sidebarDisplayWidth(layout);
+  const accessPath = channelAccessRoutePath(channelId);
   const activeSessionId = conversations.find(
     (conversation) => conversation.id === activeConversationId,
   )?.sessionId;
@@ -280,7 +289,7 @@ export function ConversationSidebar({
                 ⌘ N
               </kbd>
             </Button>
-            {!settingsOpen && <NativeSessionBrowser />}
+            {!managementPageOpen && <NativeSessionBrowser />}
           </div>
 
           <nav
@@ -312,12 +321,28 @@ export function ConversationSidebar({
             </section>
           </nav>
 
-          {!settingsOpen && <AgentInstallationSidebarPanel />}
+          {!managementPageOpen && <AgentInstallationSidebarPanel />}
 
           <nav
-            aria-label="Channel settings"
+            aria-label="Channel navigation"
             className="border-t-[0.5px] border-black/6 px-3 py-2.5"
           >
+            <NavLink
+              className={({ isActive }) =>
+                cn(
+                  "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  isActive && "bg-black/8 hover:bg-black/8",
+                )
+              }
+              end
+              onClick={closeSidebar}
+              to={accessPath}
+            >
+              <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
+                <Smartphone aria-hidden="true" className="size-3.5" />
+              </span>
+              Access from other devices
+            </NavLink>
             <NavLink
               className={({ isActive }) =>
                 cn(

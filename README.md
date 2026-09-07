@@ -149,19 +149,20 @@ so the ACP session remains coherent across turns. Conversations run independentl
 so a user can switch chats, create another chat, and start a second agent task while
 an earlier conversation is still working.
 
-The channel sidebar links to `/channels/<channel-id>/settings`, where the user can
-see verified local Agents separately from supported integrations that still need
-installation or recovery. Missing integrations use the same locally authorized
-install, retry, progress, and cancellation flow. The page intentionally does not
-expose local Agent paths, versions, provider credentials, or a remote uninstall
-action.
+The channel sidebar links directly to Agent settings and to
+`/channels/<channel-id>/access`. Agent settings shows verified local Agents
+separately from supported integrations that still need installation or recovery.
+Missing integrations use the same locally authorized install, retry, progress,
+and cancellation flow. The page intentionally does not expose local Agent paths,
+versions, provider credentials, or a remote uninstall action.
 
 The pairing browser stores an owner host credential for the channel. The normal
 URL contains only the channel address, so opening it in another browser without
-a credential cannot submit work or read persisted history. From Channel
-settings, the owner can create an accountless access link that expires after ten
-minutes and works once. Its secret stays in the URL fragment, is stored only as
-a hash by the Relay, and is exchanged for a distinct linked-device credential.
+a credential cannot submit work or read persisted history. On the Access from
+other devices page, the owner can create an accountless access link that expires
+after ten minutes and works once. Its secret stays in the URL fragment, is stored
+only as a hash by the Relay, and is exchanged for a distinct linked-device
+credential.
 The owner can list and revoke linked devices without rotating its own credential;
 revocation also closes an active linked-device WebSocket. These links are bearer
 capabilities for trusted device transfer, not user or team identity.

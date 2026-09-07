@@ -11,7 +11,6 @@ import {
 import { Link } from "react-router";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
-import { ChannelAccessPanel } from "@/components/channel-access-panel";
 import { Button } from "@/components/ui/button";
 import type {
   AgentInstallationViewState,
@@ -30,7 +29,6 @@ function countLabel(count: number, singular: string): string {
 
 interface AgentSettingsViewProps {
   readonly agents: readonly AgentOption[];
-  readonly channelId: string;
   readonly desktopSidebarCollapsed: boolean;
   readonly installableAgents: readonly InstallableAgentOption[];
   readonly installations: readonly AgentInstallationViewState[];
@@ -46,7 +44,6 @@ interface AgentSettingsViewProps {
 
 function AgentSettingsView({
   agents,
-  channelId,
   desktopSidebarCollapsed,
   installableAgents,
   installations,
@@ -164,8 +161,6 @@ function AgentSettingsView({
               </div>
             </div>
           </section>
-
-          <ChannelAccessPanel channelId={channelId} key={channelId} />
 
           <section aria-labelledby="ready-agents-heading" className="mt-10">
             <div className="flex items-end justify-between gap-4">
@@ -308,7 +303,6 @@ export function AgentSettingsPage({
   return (
     <AgentSettingsView
       agents={agents}
-      channelId={channelId}
       desktopSidebarCollapsed={desktopSidebarCollapsed}
       installableAgents={installableAgents}
       installations={installations}
@@ -322,6 +316,7 @@ export function AgentSettingsPage({
       runtimeCanSend={runtime.canSend}
       runtimeLabel={runtime.label}
       sidebarOpen={sidebarOpen}
+      key={channelId}
     />
   );
 }

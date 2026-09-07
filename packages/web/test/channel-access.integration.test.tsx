@@ -24,16 +24,57 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Channel access boundaries", () => {
-  it("Given an owned paired Channel, When its one-time access link is opened in another browser, Then that browser receives revocable access without a Mobius account", async () => {
+  it("Given an owned paired Channel, When device access is opened from the conversation sidebar, Then it appears outside Agent settings", async () => {
     const paired = await pairDaemon();
     const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
+    const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
     window.history.replaceState(null, "", settingsPath);
     window.localStorage.clear();
     saveBrowserCredential(paired.channelId, paired.credential);
     render(<App />);
 
     try {
-      await screen.findByRole("heading", { name: "Agent settings" });
+      await screen.findByRole("heading", { level: 1, name: "Agent settings" });
+      expect(
+        screen.queryByRole("button", {
+          name: "Create one-time access link",
+        }),
+      ).toBeNull();
+
+      fireEvent.click(
+        screen.getByRole("link", { name: "Access from other devices" }),
+      );
+
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Access from other devices",
+      });
+      expect(window.location.pathname).toBe(accessPath);
+      expect(
+        await screen.findByRole("button", {
+          name: "Create one-time access link",
+        }),
+      ).toBeTruthy();
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given an owned paired Channel, When its one-time access link is opened in another browser, Then that browser receives revocable access without a Mobius account", async () => {
+    const paired = await pairDaemon();
+    const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
+    window.history.replaceState(null, "", accessPath);
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Access from other devices",
+      });
       fireEvent.click(
         await screen.findByRole("button", {
           name: "Create one-time access link",
@@ -70,7 +111,7 @@ describe.sequential("Channel access boundaries", () => {
       await closeMobiusTransport();
       window.localStorage.clear();
       saveBrowserCredential(paired.channelId, paired.credential);
-      window.history.replaceState(null, "", settingsPath);
+      window.history.replaceState(null, "", accessPath);
       render(<App />);
 
       const linkedDevices = await screen.findByRole("list", {
@@ -98,7 +139,7 @@ describe.sequential("Channel access boundaries", () => {
         `mobius:channel-credential:${paired.channelId}`,
         linkedCredential,
       );
-      window.history.replaceState(null, "", settingsPath);
+      window.history.replaceState(null, "", accessPath);
       render(<App />);
 
       expect(
@@ -111,7 +152,7 @@ describe.sequential("Channel access boundaries", () => {
       await closeMobiusTransport();
       window.localStorage.clear();
       saveBrowserCredential(paired.channelId, paired.credential);
-      window.history.replaceState(null, "", settingsPath);
+      window.history.replaceState(null, "", accessPath);
       render(<App />);
 
       fireEvent.click(

@@ -7,6 +7,7 @@ export {
   AgentSettingsPage,
   AgentSettingsPage as Integration,
 } from "./components/agent-settings-page";
+export { ChannelAccessPage } from "./components/channel-access-panel";
 export { ChatComposer } from "./components/chat-composer";
 export { ChatHeader } from "./components/chat-header";
 export { ChatMessageList } from "./components/chat-message-list";

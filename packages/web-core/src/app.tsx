@@ -20,6 +20,7 @@ import {
 } from "react-router";
 import { AgentInstallationPage } from "@/components/agent-installation-panel";
 import { AgentSettingsPage } from "@/components/agent-settings-page";
+import { ChannelAccessPage } from "@/components/channel-access-panel";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatHeader } from "@/components/chat-header";
 import { ChatMessageList } from "@/components/chat-message-list";
@@ -172,12 +173,14 @@ function ChannelWorkspace({
   const navigate = useNavigate();
   const mainContentRef = useRef<HTMLElement>(null);
   const channelIndexMatch = useMatch("/channels/:channelId");
+  const accessOpen = useMatch("/channels/:channelId/access") !== null;
   const legacySettingsMatch = useMatch("/channels/:channelId/settings");
   const sessionSettingsMatch = useMatch(
     "/channels/:channelId/sessions/:sessionId/settings",
   );
   const settingsOpen =
     legacySettingsMatch !== null || sessionSettingsMatch !== null;
+  const managementPageOpen = accessOpen || settingsOpen;
   const [sidebarLayout, setSidebarLayout] =
     useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
@@ -280,15 +283,19 @@ function ChannelWorkspace({
         className="fixed top-3 left-3 z-50 -translate-y-[180%] rounded-lg bg-[#2fb872] px-[13px] py-[9px] text-[13px] font-semibold text-[#062f1c] no-underline transition-transform duration-150 motion-reduce:transition-none focus:translate-y-0"
         href="#main-content"
       >
-        {settingsOpen ? "Skip to Agent settings" : "Skip to conversation"}
+        {accessOpen
+          ? "Skip to device access"
+          : settingsOpen
+            ? "Skip to Agent settings"
+            : "Skip to conversation"}
       </a>
       <div className="flex h-dvh w-full bg-background">
         <ConversationSidebar
           channelId={connection.channelId}
           layout={sidebarLayout}
+          managementPageOpen={managementPageOpen}
           onCreateConversation={createAndOpenConversation}
           onLayoutChange={setSidebarLayout}
-          settingsOpen={settingsOpen}
         />
         <main
           className="flex min-h-0 min-w-0 flex-1 flex-col bg-background outline-none"
@@ -543,6 +550,17 @@ function AgentSettingsRoutePage() {
   );
 }
 
+function ChannelAccessRoutePage() {
+  const context = useOutletContext<ChatProps>();
+  return (
+    <ChannelAccessPage
+      channelId={context.channelId}
+      desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+      onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+    />
+  );
+}
+
 function ChannelRouteNotFound() {
   return (
     <ChannelContentError
@@ -558,6 +576,7 @@ function AppRoutes() {
       <Route element={<PairingPage />} path="/" />
       <Route element={<ChannelRoute />} path="/channels/:channelId">
         <Route element={<ChannelIndexRoute />} index />
+        <Route element={<ChannelAccessRoutePage />} path="access" />
         <Route element={<LegacyAgentSettingsRoute />} path="settings" />
         <Route element={<SessionRoute />} path="sessions/:sessionId">
           <Route element={<ConversationRoutePage />} index />

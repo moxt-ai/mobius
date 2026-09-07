@@ -1,13 +1,18 @@
 import {
+  ArrowLeft,
   Check,
   Copy,
   Link2,
   LoaderCircle,
+  Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   RefreshCw,
   Smartphone,
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import type {
@@ -20,6 +25,7 @@ import {
   readLinkedChannelDevices,
   revokeLinkedChannelDevice,
 } from "@/services/pairing-api";
+import { useChatStore } from "@/store/chat-store";
 
 abstract class DeviceDirectoryState {}
 
@@ -124,11 +130,7 @@ function deviceLabel(device: LinkedChannelDevice): string {
   return `Linked device ${device.credentialId.slice(-6)}`;
 }
 
-export function ChannelAccessPanel({
-  channelId,
-}: {
-  readonly channelId: string;
-}) {
+function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
   const [controller] = useState(() => new AbortController());
   const [directory, setDirectory] = useState<DeviceDirectoryState>(
     new LoadingDeviceDirectoryState(),
@@ -223,17 +225,17 @@ export function ChannelAccessPanel({
   };
 
   return (
-    <section aria-labelledby="channel-access-heading" className="mt-10">
+    <section aria-labelledby="channel-access-heading">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="max-w-2xl">
           <p className="text-[11px] font-semibold tracking-[0.08em] text-[#218854] uppercase">
             Channel capability
           </p>
           <h2
-            className="mt-2 text-xl font-semibold tracking-[-0.025em]"
+            className="mt-2 text-[28px] leading-9 font-semibold tracking-[-0.035em]"
             id="channel-access-heading"
           >
-            Access from other devices
+            Share this channel
           </h2>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             Create a link that works once for 10 minutes. The new browser gets
@@ -429,5 +431,80 @@ export function ChannelAccessPanel({
         </p>
       )}
     </section>
+  );
+}
+
+export function ChannelAccessPage({
+  channelId,
+  desktopSidebarCollapsed,
+  onToggleDesktopSidebar,
+}: {
+  readonly channelId: string;
+  readonly desktopSidebarCollapsed: boolean;
+  readonly onToggleDesktopSidebar: () => void;
+}) {
+  const setSidebarOpen = useChatStore((state) => state.setSidebarOpen);
+  const sidebarOpen = useChatStore((state) => state.sidebarOpen);
+
+  return (
+    <>
+      <header className="chat-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
+        <Button
+          aria-controls="conversation-sidebar"
+          aria-expanded={sidebarOpen}
+          aria-label="Open conversation sidebar"
+          className="mr-[7px] size-11 lg:hidden"
+          id="conversation-sidebar-trigger"
+          onClick={() => setSidebarOpen(true)}
+          size="icon"
+          variant="ghost"
+        >
+          <Menu aria-hidden="true" className="size-[18px]" />
+        </Button>
+        <Button
+          aria-label={
+            desktopSidebarCollapsed
+              ? "Show conversation sidebar"
+              : "Hide conversation sidebar"
+          }
+          className="mr-2 hidden lg:inline-flex"
+          onClick={onToggleDesktopSidebar}
+          size="icon"
+          title={
+            desktopSidebarCollapsed
+              ? "Show conversation sidebar"
+              : "Hide conversation sidebar"
+          }
+          variant="ghost"
+        >
+          {desktopSidebarCollapsed ? (
+            <PanelLeftOpen aria-hidden="true" className="size-4" />
+          ) : (
+            <PanelLeftClose aria-hidden="true" className="size-4" />
+          )}
+        </Button>
+        <span className="inline-flex size-8 shrink-0 items-center justify-center rounded-[9px] bg-[#eefaf3] text-[#218854]">
+          <Smartphone aria-hidden="true" className="size-4" />
+        </span>
+        <h1 className="ml-2 min-w-0 truncate text-sm font-semibold tracking-[-0.01em]">
+          Access from other devices
+        </h1>
+        <Link
+          aria-label="Back to chat"
+          className="ml-auto inline-flex size-11 shrink-0 items-center justify-center rounded-lg text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none sm:min-h-11 sm:w-auto sm:gap-1.5 sm:px-3"
+          relative="path"
+          to=".."
+        >
+          <ArrowLeft aria-hidden="true" className="size-3.5" />
+          <span className="hidden sm:inline">Back to chat</span>
+        </Link>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[920px] px-5 py-8 sm:px-8 sm:py-10">
+          <ChannelAccessPanel channelId={channelId} key={channelId} />
+        </div>
+      </div>
+    </>
   );
 }
