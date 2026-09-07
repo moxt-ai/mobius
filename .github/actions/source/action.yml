@@ -1,0 +1,12 @@
+name: Release source
+description: Expose this pinned repository to Mobius Cloud release orchestration
+outputs:
+  path:
+    description: Absolute repository path on the runner
+    value: ${{ steps.source.outputs.path }}
+runs:
+  using: composite
+  steps:
+    - id: source
+      shell: bash
+      run: echo "path=$(realpath "$GITHUB_ACTION_PATH/../../..")" >> "$GITHUB_OUTPUT"

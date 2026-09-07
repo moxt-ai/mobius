@@ -33,15 +33,22 @@ account. Retain the printed target and Wrangler output as the deployment audit.
 To apply a release to every shard in an environment:
 
 ```bash
-set -euo pipefail
-inventory=/path/to/mobius-cloud/infra/d1-shards.json
-for shard in $(jq -r '.staging[].id' "$inventory"); do
-  pnpm db:shard "$inventory" staging "$shard" --remote
-done
+pnpm db:environment /path/to/mobius-cloud/infra/d1-shards.json staging --remote
 ```
 
-Each business runs this command from its own release independently. Serialize
-releases of the same business targeting the same database. Number new SQL files
+The command validates a nonempty environment and applies its shards serially.
+A migration failure stops the command before the next shard or Worker deployment.
+Mobius Cloud CI runs the command with `--local` against its shared-shard inventory.
+Cloud CD runs it with `--remote` for both businesses before deploying the Cloud
+Worker. This command is only for the new Cloud-managed shards.
+
+The internal `.github/actions/source` action exposes this pinned repository to
+Cloud's workflow. It contains no build, migration, or deployment orchestration.
+Cloud selects the source revision and serializes its releases per environment.
+This repository's existing standalone Worker deployment remains independent and
+uses its original configuration, database, bucket, domain, and CI workflow.
+
+Number new SQL files
 in this repository and let Wrangler apply only files absent from
 `mobius_migrations`; do not rewrite an initial migration after it has been
 applied to a shared shard. Stop a rollout if any target fails.
@@ -49,8 +56,9 @@ applied to a shared shard. Stop a rollout if any target fails.
 ## Rollout boundary
 
 These commands target the new Cloud inventory, independently of the existing
-Worker deployment configuration and database bindings. The existing deployment
-path is unchanged. No old database or migration history is read, copied, renamed,
+Worker deployment configuration and database bindings. The existing standalone
+deployment path is unchanged. Cloud CD does not migrate its database or deploy
+its Worker. No old database or migration history is read, copied, renamed,
 or deleted by the new command.
 
 The new shards start empty and receive each business's initial schema. Independent

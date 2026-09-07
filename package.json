@@ -10,6 +10,7 @@
   },
   "scripts": {
     "db:shard": "bash scripts/migrate-shard.sh",
+    "db:environment": "bash scripts/migrate-environment.sh",
     "dev": "pnpm dev:relay",
     "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
     "dev:web": "pnpm --filter @moxt-ai/mobius-web dev",
