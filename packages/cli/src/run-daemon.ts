@@ -3,7 +3,6 @@ import { styleText } from "node:util";
 
 import {
   AGENT_ACTIVITY_KIND,
-  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
   AGENT_INSTALL_CANCEL_KIND,
   AGENT_INSTALL_CANCELLED_KIND,
   AGENT_INSTALL_COMPLETED_KIND,
@@ -30,7 +29,6 @@ import {
   decodeWorkspaceListCommand,
   encodeAgentActivityEvent,
   encodeAgentContentEvent,
-  encodeAgentInstallAwaitingApprovalEvent,
   encodeAgentInstallCancelledEvent,
   encodeAgentInstallCompletedEvent,
   encodeAgentInstallFailedEvent,
@@ -96,7 +94,6 @@ import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import {
   type AgentInstallation,
   AgentInstallationManager,
-  AwaitingLocalApproval,
   CancelledInstallation,
   FailedInstallation,
   type InstallationAudit,
@@ -107,7 +104,6 @@ import {
 } from "./agent-installation/agent-installation-manager.ts";
 import { AutomaticAdapterProvisioner } from "./agent-installation/automatic-adapter-provisioner.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
-import { ConsoleInstallationAuthorizer } from "./agent-installation/local-installation-authorizer.ts";
 import { ManagedAdapterInstaller } from "./agent-installation/managed-adapter-installer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
@@ -306,17 +302,6 @@ class DaemonInstallationObserver implements InstallationObserver {
       return Promise.resolve();
     }
     if (state instanceof RequestedInstallation) {
-      return Promise.resolve();
-    }
-    if (state instanceof AwaitingLocalApproval) {
-      this.#send(
-        socket,
-        encodeAgentInstallAwaitingApprovalEvent({
-          agentId: state.agentId,
-          kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
-          requestId: state.requestId,
-        }),
-      );
       return Promise.resolve();
     }
     if (state instanceof RunningInstallation) {
@@ -1403,7 +1388,6 @@ export async function runDaemon(
   );
   const installations = new AgentInstallationManager(
     specifications,
-    new ConsoleInstallationAuthorizer(stateDirectory),
     installationExecutor,
     installationObserver,
     installationAudit,

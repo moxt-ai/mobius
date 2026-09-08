@@ -517,10 +517,9 @@ function decodeInstallableAgents(
   for (const candidate of value) {
     if (
       !isRecord(candidate) ||
-      Object.keys(candidate).length !== 3 ||
+      Object.keys(candidate).length !== 2 ||
       !Object.hasOwn(candidate, "id") ||
-      !Object.hasOwn(candidate, "label") ||
-      !Object.hasOwn(candidate, "requiresLocalApproval")
+      !Object.hasOwn(candidate, "label")
     ) {
       throw new PairingApiError(
         "invalid_relay_response",
@@ -529,15 +528,13 @@ function decodeInstallableAgents(
     }
     const id = candidate["id"];
     const label = candidate["label"];
-    const requiresLocalApproval = candidate["requiresLocalApproval"];
     if (
       typeof id !== "string" ||
       !isIdentifier(id) ||
       identifiers.has(id) ||
       typeof label !== "string" ||
       label.trim().length === 0 ||
-      label.length > 80 ||
-      typeof requiresLocalApproval !== "boolean"
+      label.length > 80
     ) {
       throw new PairingApiError(
         "invalid_relay_response",
@@ -545,9 +542,7 @@ function decodeInstallableAgents(
       );
     }
     identifiers.add(id);
-    agents.push(
-      new InstallableAgentOption(id, label.trim(), requiresLocalApproval),
-    );
+    agents.push(new InstallableAgentOption(id, label.trim()));
   }
   return agents;
 }

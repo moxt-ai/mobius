@@ -318,7 +318,6 @@ async function claimPairing(
         installableAgents: installableAgents.map((agent) => ({
           id: agent.id,
           label: agent.label,
-          requiresLocalApproval: agent.requiresLocalApproval,
         })),
         machineName: hostname(),
         pairingCode: options.code,

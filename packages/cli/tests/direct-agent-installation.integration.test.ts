@@ -44,7 +44,6 @@ import {
   OpenCodeInstallRecipe,
 } from "../src/agent-installation/fixed-agent-install-recipes.ts";
 import { FixedInstallationExecutor } from "../src/agent-installation/fixed-installation-executor.ts";
-import { ConsoleInstallationAuthorizer } from "../src/agent-installation/local-installation-authorizer.ts";
 import type { AdapterInstallationPort } from "../src/agent-installation/managed-adapter-installer.ts";
 import {
   type ManagedAgentArchiveDefinition,
@@ -236,17 +235,6 @@ class LocalArchiveDownloader implements ManagedAgentArchiveDownloadPort {
   };
 }
 
-async function writeInstallationGrant(
-  stateDirectory: string,
-  agentId: string,
-): Promise<void> {
-  await writeFile(
-    join(stateDirectory, "installation-grants.json"),
-    `${JSON.stringify({ agents: [agentId] })}\n`,
-    { mode: 0o600 },
-  );
-}
-
 function request(
   requestId: string,
   agentId: string,
@@ -261,16 +249,9 @@ async function installThroughLocalBoundary(
   observer: RecordingInstallationObserver,
   audit: RecordingInstallationAudit,
 ): Promise<LocalAgentCatalog> {
-  await writeInstallationGrant(stateDirectory, specification.id);
   const catalog = new LocalAgentCatalog(
     [],
-    [
-      new InstallableAgentDefinition(
-        specification.id,
-        specification.label,
-        false,
-      ),
-    ],
+    [new InstallableAgentDefinition(specification.id, specification.label)],
   );
   const environment = {
     MOBIUS_STATE_DIRECTORY: stateDirectory,
@@ -278,7 +259,6 @@ async function installThroughLocalBoundary(
   };
   const manager = new AgentInstallationManager(
     [specification],
-    new ConsoleInstallationAuthorizer(stateDirectory),
     new FixedInstallationExecutor(
       {
         audit,
@@ -419,7 +399,7 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
     (process.platform === "darwin" || process.platform === "linux") &&
       (process.arch === "arm64" || process.arch === "x64"),
   )(
-    "Given DeepSeek Harness installation is locally approved, When its fixed recipe completes, Then the exact package starts under a separate managed DSH_HOME without an adapter",
+    "Given the Web user confirms DeepSeek Harness installation, When its fixed recipe completes, Then the exact package starts under a separate managed DSH_HOME without an adapter",
     async () => {
       const stateDirectory = await mkdtemp(
         join(tmpdir(), "mobius-deepseek-install-"),
@@ -478,7 +458,7 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
     (process.platform === "darwin" || process.platform === "linux") &&
       (process.arch === "arm64" || process.arch === "x64"),
   )(
-    "Given OpenCode installation is locally approved, When its fixed recipe completes, Then the checksum-pinned platform archive starts directly with auto-update disabled",
+    "Given the Web user confirms OpenCode installation, When its fixed recipe completes, Then the checksum-pinned platform archive starts directly with auto-update disabled",
     async () => {
       const stateDirectory = await mkdtemp(
         join(tmpdir(), "mobius-opencode-install-"),

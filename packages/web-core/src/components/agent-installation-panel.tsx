@@ -13,7 +13,6 @@ import { Button } from "@/components/ui/button";
 import {
   type AgentInstallationViewState,
   FailedAgentInstallationState,
-  IdleAgentInstallationState,
   type InstallableAgentOption,
   SucceededAgentInstallationState,
 } from "@/domain/channel";
@@ -47,7 +46,6 @@ export function AgentInstallationCardsView({
         const installation = installations.find(
           (candidate) => candidate.agentId === agent.id,
         );
-        const idle = installation instanceof IdleAgentInstallationState;
         const succeeded =
           installation instanceof SucceededAgentInstallationState;
         const failed = installation instanceof FailedAgentInstallationState;
@@ -112,11 +110,6 @@ export function AgentInstallationCardsView({
                   {failed ? "Retry" : succeeded ? "Ready" : "Install"}
                 </Button>
               )}
-              {agent.requiresLocalApproval && idle && (
-                <span className="text-[10px] leading-4 text-muted-foreground">
-                  Local approval required
-                </span>
-              )}
             </div>
           </article>
         );
@@ -174,7 +167,7 @@ export function AgentInstallationPage({
         </h1>
         <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
           {machineName} is paired, but no verified Agent is ready yet.
-          Installation runs on that machine only after local authorization.
+          Installation runs on that machine after you confirm it here.
         </p>
         {!runtime.canSend && (
           <p className="mt-3 text-xs font-medium text-[#a85d00]">

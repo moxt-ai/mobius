@@ -23,8 +23,6 @@ export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
 export const AGENT_CONTENT_KIND = "agent.content";
 export const AGENT_INSTALL_REQUEST_KIND = "agent.install.request";
 export const AGENT_INSTALL_CANCEL_KIND = "agent.install.cancel";
-export const AGENT_INSTALL_AWAITING_APPROVAL_KIND =
-  "agent.install.awaiting_approval";
 export const AGENT_INSTALL_STARTED_KIND = "agent.install.started";
 export const AGENT_INSTALL_PROGRESS_KIND = "agent.install.progress";
 export const AGENT_INSTALL_COMPLETED_KIND = "agent.install.completed";
@@ -533,17 +531,6 @@ export type AgentInstallCancelCommand = z.infer<
   typeof agentInstallCancelCommandSchema
 >;
 
-const agentInstallAwaitingApprovalEventSchema = z
-  .strictObject({
-    ...agentInstallIdentityFields,
-    kind: z.literal(AGENT_INSTALL_AWAITING_APPROVAL_KIND),
-  })
-  .readonly();
-
-export type AgentInstallAwaitingApprovalEvent = z.infer<
-  typeof agentInstallAwaitingApprovalEventSchema
->;
-
 const agentInstallStartedEventSchema = z
   .strictObject({
     ...agentInstallIdentityFields,
@@ -785,13 +772,6 @@ export const decodeAgentInstallCancelCommand = (
 export const encodeAgentInstallCancelCommand = (
   message: AgentInstallCancelCommand,
 ): string => encode(message, agentInstallCancelCommandSchema);
-export const decodeAgentInstallAwaitingApprovalEvent = (
-  encoded: string,
-): AgentInstallAwaitingApprovalEvent =>
-  decode(encoded, agentInstallAwaitingApprovalEventSchema);
-export const encodeAgentInstallAwaitingApprovalEvent = (
-  message: AgentInstallAwaitingApprovalEvent,
-): string => encode(message, agentInstallAwaitingApprovalEventSchema);
 export const decodeAgentInstallStartedEvent = (
   encoded: string,
 ): AgentInstallStartedEvent => decode(encoded, agentInstallStartedEventSchema);

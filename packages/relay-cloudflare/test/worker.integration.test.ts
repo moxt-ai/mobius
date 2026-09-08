@@ -51,7 +51,6 @@ const installableAgents = [
   {
     id: "claude-code",
     label: "Claude Code",
-    requiresLocalApproval: true,
   },
 ];
 const attemptIdsBySession = new Map<string, string>();
@@ -579,6 +578,35 @@ describe.sequential("Cloudflare session deployment", () => {
     });
     expect(record?.daemon_token_hash).not.toBe(claimed.daemonToken);
     expect(ownerCredential?.token_hash).not.toBe(created.hostToken);
+  });
+
+  it("Given a persisted catalog predates Web-confirmed installation, When its Channel is read, Then obsolete local-approval metadata is omitted", async () => {
+    const pairing = await pairChannel();
+    await env.DIRECTORY_DATABASE.prepare(
+      `UPDATE pairing_channels
+       SET installable_agents_json = ?
+       WHERE channel_id = ?`,
+    )
+      .bind(
+        JSON.stringify([
+          {
+            id: "claude-code",
+            label: "Claude Code",
+            requiresLocalApproval: true,
+          },
+        ]),
+        pairing.created.channelId,
+      )
+      .run();
+
+    const response = await exports.default.fetch(
+      `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`,
+      { headers: authorization(pairing.created) },
+    );
+    expect(response.status).toBe(200);
+    const descriptor: unknown = await response.json();
+    expect(descriptor).toMatchObject({ installableAgents });
+    expect(JSON.stringify(descriptor)).not.toContain("requiresLocalApproval");
   });
 
   it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {

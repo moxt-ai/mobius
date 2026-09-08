@@ -1,5 +1,3 @@
-import { readGrantedAgents } from "../agent-installation/installation-grants.ts";
-import { readStateDirectory } from "../storage/state-directory.ts";
 import { LocalAgentInventory } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
@@ -36,17 +34,8 @@ export async function discoverLocalAgentInventory(
       async (specification) => await discoverAgent(specification, options),
     ),
   );
-  let grantedAgents: ReadonlySet<string> = new Set<string>();
-  try {
-    grantedAgents = await readGrantedAgents(
-      readStateDirectory(options.environment),
-    );
-  } catch {
-    // An invalid local grant is ignored so it can never widen installation authority.
-  }
   return new LocalAgentInventory(
     discoveries,
-    grantedAgents,
     options.platform,
     options.architecture,
   );

@@ -160,7 +160,7 @@ describe("Grok Build managed installation", () => {
     (process.platform === "darwin" || process.platform === "linux") &&
       (process.arch === "arm64" || process.arch === "x64"),
   )(
-    "Given Grok Build installation is locally approved, When its fixed recipe completes, Then the root and platform packages are pinned and ACP runs under an isolated managed GROK_HOME",
+    "Given the Web user confirms Grok Build installation, When its fixed recipe completes, Then the root and platform packages are pinned and ACP runs under an isolated managed GROK_HOME",
     async () => {
       const stateDirectory = await mkdtemp(
         join(tmpdir(), "mobius-grok-managed-"),

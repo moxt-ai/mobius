@@ -2,7 +2,6 @@ export type {
   AgentActivityEvent,
   AgentContentEvent,
   AgentDisplayContent,
-  AgentInstallAwaitingApprovalEvent,
   AgentInstallationStage,
   AgentInstallCancelledEvent,
   AgentInstallCompletedEvent,

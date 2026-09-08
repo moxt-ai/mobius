@@ -14,7 +14,6 @@ export interface AgentDescriptor {
 export interface InstallableAgentDescriptor {
   readonly id: string;
   readonly label: string;
-  readonly requiresLocalApproval: boolean;
 }
 
 export interface CreatedPairing {
@@ -333,11 +332,32 @@ export function parseInstallableAgents(
       { cause: error },
     );
   }
-  return validateInstallableAgents(value);
+  return validateInstallableAgents(normalizePersistedInstallableAgents(value));
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizePersistedInstallableAgents(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  // Existing D1 rows may still contain the retired local-approval flag. New
+  // catalog requests remain strict and cannot submit this legacy shape.
+  return value.map((candidate) => {
+    if (
+      isRecord(candidate) &&
+      Object.keys(candidate).length === 3 &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label") &&
+      Object.hasOwn(candidate, "requiresLocalApproval") &&
+      typeof candidate["requiresLocalApproval"] === "boolean"
+    ) {
+      return { id: candidate["id"], label: candidate["label"] };
+    }
+    return candidate;
+  });
 }
 
 export function validateAgents(value: unknown): readonly AgentDescriptor[] {
@@ -397,10 +417,9 @@ export function validateInstallableAgents(
   for (const candidate of value) {
     if (
       !isRecord(candidate) ||
-      Object.keys(candidate).length !== 3 ||
+      Object.keys(candidate).length !== 2 ||
       !Object.hasOwn(candidate, "id") ||
-      !Object.hasOwn(candidate, "label") ||
-      !Object.hasOwn(candidate, "requiresLocalApproval")
+      !Object.hasOwn(candidate, "label")
     ) {
       throw new PairingDirectoryError(
         "invalid_agents",
@@ -409,14 +428,12 @@ export function validateInstallableAgents(
     }
     const id = candidate["id"];
     const label = candidate["label"];
-    const requiresLocalApproval = candidate["requiresLocalApproval"];
     if (
       typeof id !== "string" ||
       !IDENTIFIER_PATTERN.test(id) ||
       typeof label !== "string" ||
       label.trim().length === 0 ||
       label.length > 80 ||
-      typeof requiresLocalApproval !== "boolean" ||
       identifiers.has(id)
     ) {
       throw new PairingDirectoryError(
@@ -425,7 +442,7 @@ export function validateInstallableAgents(
       );
     }
     identifiers.add(id);
-    agents.push({ id, label: label.trim(), requiresLocalApproval });
+    agents.push({ id, label: label.trim() });
   }
   return agents;
 }

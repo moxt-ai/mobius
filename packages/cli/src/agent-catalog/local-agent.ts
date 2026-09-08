@@ -63,12 +63,10 @@ export class LocalAgentDefinition {
 export class InstallableAgentDefinition {
   readonly id: string;
   readonly label: string;
-  readonly requiresLocalApproval: boolean;
 
-  constructor(id: string, label: string, requiresLocalApproval = true) {
+  constructor(id: string, label: string) {
     this.id = id;
     this.label = label;
-    this.requiresLocalApproval = requiresLocalApproval;
   }
 }
 

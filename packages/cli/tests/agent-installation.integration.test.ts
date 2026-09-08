@@ -17,7 +17,6 @@ import {
 import { describe, expect, it } from "vitest";
 import {
   CodexAgentSpecification,
-  discoverLocalAgentInventory,
   PiAgentSpecification,
 } from "../src/agent-catalog/discover-local-agents.ts";
 import {
@@ -39,8 +38,6 @@ import {
   fixedAgentInstallRecipes,
 } from "../src/agent-installation/fixed-agent-install-recipes.ts";
 import { FixedInstallationExecutor } from "../src/agent-installation/fixed-installation-executor.ts";
-import { readGrantedAgents } from "../src/agent-installation/installation-grants.ts";
-import { ConsoleInstallationAuthorizer } from "../src/agent-installation/local-installation-authorizer.ts";
 import {
   type AdapterInstallationPort,
   ManagedAdapterInstaller,
@@ -219,17 +216,6 @@ if (process.argv.includes("--version")) {
   await chmod(path, 0o700);
 }
 
-async function writeInstallationGrant(
-  stateDirectory: string,
-  agentId = "codex",
-): Promise<void> {
-  await writeFile(
-    join(stateDirectory, "installation-grants.json"),
-    `${JSON.stringify({ agents: [agentId] })}\n`,
-    { mode: 0o600 },
-  );
-}
-
 function request(
   requestId: string,
   agentId = "codex",
@@ -241,7 +227,7 @@ function request(
   };
 }
 
-describe("local Agent installation authorization", () => {
+describe("local Agent installation", () => {
   it("Given Pi installation is selected, When its fixed recipe and adapter installer run, Then exact verified packages are installed without lifecycle scripts in separate private caches", async () => {
     const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-install-"));
     const executableDirectory = join(stateDirectory, "bin");
@@ -334,13 +320,12 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
       if (recipe === undefined) {
         throw new Error("Pi installation recipe is unavailable");
       }
-      await writeInstallationGrant(stateDirectory, "pi");
       const specification = new PiAgentSpecification();
       const observer = new RecordingInstallationObserver();
       const audit = new RecordingInstallationAudit();
       const catalog = new LocalAgentCatalog(
         [],
-        [new InstallableAgentDefinition("pi", "Pi", false)],
+        [new InstallableAgentDefinition("pi", "Pi")],
       );
       const environment = {
         MOBIUS_STATE_DIRECTORY: stateDirectory,
@@ -348,7 +333,6 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
       };
       const manager = new AgentInstallationManager(
         [specification],
-        new ConsoleInstallationAuthorizer(stateDirectory),
         new FixedInstallationExecutor(
           {
             defaultWorkspace: stateDirectory,
@@ -468,73 +452,7 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
     }
   });
 
-  it.skipIf(process.stdin.isTTY || process.stdout.isTTY)(
-    "Given no locally configured capability grant in a headless daemon, When authorization is requested, Then installation is denied without execution",
-    async () => {
-      const stateDirectory = await mkdtemp(
-        join(tmpdir(), "mobius-install-authorization-"),
-      );
-      try {
-        const authorizer = new ConsoleInstallationAuthorizer(stateDirectory);
-        await expect(
-          authorizer.authorize(
-            "codex",
-            "Codex",
-            "install-headless",
-            new AbortController().signal,
-          ),
-        ).resolves.toBe(false);
-      } finally {
-        await rm(stateDirectory, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it.runIf(
-    (process.platform === "darwin" || process.platform === "linux") &&
-      (process.arch === "arm64" || process.arch === "x64"),
-  )(
-    "Given a private narrow Codex grant, When local grants are resolved, Then it cannot authorize Claude Code or widen the recipe",
-    async () => {
-      const stateDirectory = await mkdtemp(
-        join(tmpdir(), "mobius-install-grant-"),
-      );
-      try {
-        await writeInstallationGrant(stateDirectory);
-
-        const grants = await readGrantedAgents(stateDirectory);
-
-        expect([...grants]).toEqual(["codex"]);
-        expect(grants.has("claude")).toBe(false);
-        await expect(
-          new ConsoleInstallationAuthorizer(stateDirectory).authorize(
-            "codex",
-            "Codex",
-            "install-granted",
-            new AbortController().signal,
-          ),
-        ).resolves.toBe(true);
-        const inventory = await discoverLocalAgentInventory({
-          defaultWorkspace: stateDirectory,
-          environment: {
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: "",
-          },
-          signal: new AbortController().signal,
-        });
-        expect(
-          inventory.installable.find((agent) => agent.id === "codex"),
-        ).toMatchObject({ requiresLocalApproval: false });
-        expect(
-          inventory.installable.find((agent) => agent.id === "claude"),
-        ).toMatchObject({ requiresLocalApproval: true });
-      } finally {
-        await rm(stateDirectory, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it("Given the local user approves Codex installation, When the fixed execution path completes, Then the Agent and adapter pass ACP verification before the catalog is published", async () => {
+  it("Given the Web user confirms Codex installation, When the request reaches the local daemon, Then the fixed recipe starts without another approval and publishes the verified Agent", async () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-fixed-installation-"),
     );
@@ -549,7 +467,6 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
     );
     let publications = 0;
     try {
-      await writeInstallationGrant(stateDirectory);
       const executor = new FixedInstallationExecutor(
         {
           defaultWorkspace: stateDirectory,
@@ -569,7 +486,6 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
       );
       const manager = new AgentInstallationManager(
         [specification],
-        new ConsoleInstallationAuthorizer(stateDirectory),
         executor,
         observer,
         audit,
@@ -621,7 +537,7 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
     }
   });
 
-  it("Given an external adapter is present but ACP-incompatible, When installation is approved, Then Mobius keeps the verified Agent and falls back to its pinned private adapter", async () => {
+  it("Given an external adapter is present but ACP-incompatible, When the Web user confirms installation, Then Mobius keeps the verified Agent and falls back to its pinned private adapter", async () => {
     const stateDirectory = await mkdtemp(
       join(tmpdir(), "mobius-adapter-fallback-"),
     );
@@ -637,7 +553,6 @@ writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
       [new InstallableAgentDefinition("codex", "Codex")],
     );
     try {
-      await writeInstallationGrant(stateDirectory);
       await mkdir(executableDirectory, { mode: 0o700, recursive: true });
       await writeFile(
         agentPath,
@@ -686,7 +601,6 @@ if (process.argv.includes("--version")) {
       );
       const manager = new AgentInstallationManager(
         [specification],
-        new ConsoleInstallationAuthorizer(stateDirectory),
         executor,
         observer,
       );

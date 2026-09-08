@@ -244,7 +244,15 @@ class StatefulDaemon {
   };
 }
 
-export async function pairDaemon(): Promise<{
+export interface PairDaemonOptions {
+  readonly agents?: readonly Readonly<{ id: string; label: string }>[];
+  readonly installableAgents?: readonly Readonly<{
+    id: string;
+    label: string;
+  }>[];
+}
+
+export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
   readonly channelId: string;
   readonly credential: CreatedPairing;
   readonly daemon: StatefulDaemon;
@@ -259,8 +267,8 @@ export async function pairDaemon(): Promise<{
     new URL(`${MOBIUS_API_PREFIX}/pairings/claim`, window.location.origin),
     {
       body: JSON.stringify({
-        agents: [{ id: "codex", label: "Codex" }],
-        installableAgents: [],
+        agents: options.agents ?? [{ id: "codex", label: "Codex" }],
+        installableAgents: options.installableAgents ?? [],
         machineName: "Integration machine",
         pairingCode: created.pairingCode,
         workspaceName: "mobius",

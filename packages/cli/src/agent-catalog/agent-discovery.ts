@@ -95,7 +95,6 @@ export class LocalAgentInventory {
 
   constructor(
     discoveries: readonly AgentDiscovery[],
-    grantedAgents: ReadonlySet<string> = new Set<string>(),
     platform: NodeJS.Platform = process.platform,
     architecture: NodeJS.Architecture = process.arch,
   ) {
@@ -127,7 +126,6 @@ export class LocalAgentInventory {
             new InstallableAgentDefinition(
               discovery.specification.id,
               discovery.specification.label,
-              !grantedAgents.has(discovery.specification.id),
             ),
         ),
     );

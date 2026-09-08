@@ -2,14 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   AGENT_CONTENT_KIND,
-  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
   AGENT_INSTALL_REQUEST_KIND,
   type AgentContentEvent,
   type AgentDisplayContent,
-  type AgentInstallAwaitingApprovalEvent,
   type AgentInstallRequestCommand,
   decodeAgentContentEvent,
-  decodeAgentInstallAwaitingApprovalEvent,
   decodeAgentInstallRequestCommand,
   decodeNativeSessionHistory,
   decodeSessionConfigureCommand,
@@ -20,7 +17,6 @@ import {
   decodeSessionUsageUpdatedEvent,
   decodeWorkspaceListCommand,
   encodeAgentContentEvent,
-  encodeAgentInstallAwaitingApprovalEvent,
   encodeAgentInstallRequestCommand,
   encodeSessionConfigureCommand,
   encodeSessionElicitationRequestedEvent,
@@ -212,22 +208,11 @@ describe("ACP session control protocol contract", () => {
       kind: AGENT_INSTALL_REQUEST_KIND,
       requestId: "install-1",
     };
-    const awaitingApproval: AgentInstallAwaitingApprovalEvent = {
-      agentId: "codex",
-      kind: AGENT_INSTALL_AWAITING_APPROVAL_KIND,
-      requestId: "install-1",
-    };
-
     expect(
       decodeAgentInstallRequestCommand(
         encodeAgentInstallRequestCommand(command),
       ),
     ).toEqual(command);
-    expect(
-      decodeAgentInstallAwaitingApprovalEvent(
-        encodeAgentInstallAwaitingApprovalEvent(awaitingApproval),
-      ),
-    ).toEqual(awaitingApproval);
   });
 
   it("Given an installation request contains executable configuration, When the local boundary decodes it, Then the request is rejected before recipe resolution", () => {

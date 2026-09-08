@@ -1,5 +1,4 @@
 import {
-  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
   AGENT_INSTALL_CANCEL_KIND,
   AGENT_INSTALL_CANCELLED_KIND,
   AGENT_INSTALL_COMPLETED_KIND,
@@ -7,7 +6,6 @@ import {
   AGENT_INSTALL_PROGRESS_KIND,
   AGENT_INSTALL_REQUEST_KIND,
   AGENT_INSTALL_STARTED_KIND,
-  decodeAgentInstallAwaitingApprovalEvent,
   decodeAgentInstallCancelCommand,
   decodeAgentInstallCancelledEvent,
   decodeAgentInstallCompletedEvent,
@@ -636,9 +634,6 @@ export class ChannelActor {
         return;
       case SESSION_OPERATION_FAILED_KIND:
         decodeSessionOperationFailedEvent(message);
-        return;
-      case AGENT_INSTALL_AWAITING_APPROVAL_KIND:
-        decodeAgentInstallAwaitingApprovalEvent(message);
         return;
       case AGENT_INSTALL_STARTED_KIND:
         decodeAgentInstallStartedEvent(message);

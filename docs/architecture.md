@@ -130,10 +130,9 @@ standalone `agents` diagnostic remain read-only. After startup, the catalog
 changes only after a verified local installation or recovery request.
 
 The ready and installable catalogs are separate contracts. The daemon publishes
-only IDs, labels, and whether a local confirmation is required through a
-daemon-token-authenticated endpoint before opening its WebSocket. A runtime
-online event tells Web to refetch the descriptor. Zero ready Agents is valid
-when a supported fixed recipe is installable.
+only IDs and labels through a daemon-token-authenticated endpoint before opening
+its WebSocket. A runtime online event tells Web to refetch the descriptor. Zero
+ready Agents is valid when a supported fixed recipe is installable.
 
 Web presents the same contracts on the channel Agent settings route. Ready
 entries are view-only and link back to chat; installable entries can request,
@@ -146,8 +145,8 @@ Installation follows the local execution-boundary pipeline:
 ```text
 requestId + registered agentId from Web
   -> strict protocol validation
-  -> built-in recipe and private target resolution
-  -> per-request terminal confirmation or narrow local grant
+  -> local Agent ID and platform authorization against the built-in catalog
+  -> built-in fixed recipe and private target resolution
   -> bounded official download or npm install, integrity verification, and subprocess execution
   -> pinned private ACP adapter staging and atomic publication
   -> normal Agent and ACP discovery
@@ -155,15 +154,18 @@ requestId + registered agentId from Web
   -> local audit event
 ```
 
-The Relay authenticates and routes installation messages but never authorizes or
-executes them. The channel URL is a bearer capability and therefore cannot grant
-software-installation authority. Installer processes receive a minimal
-allowlisted environment with no channel token, Agent credential, or unrelated
-Mobius variable. Downloads enforce TLS, approved initial and redirect hosts,
-size and time limits, and a recorded SHA-256 digest. Vendor checksum or signature
-checks remain active when the fixed vendor installer provides them. Temporary
-directories, subprocess trees, output buffers, overall deadlines, and one-job
-per-Agent concurrency slots are owned and released by the local daemon.
+The Relay authenticates and routes installation messages but never executes
+them. A Web click confirms one request; the local daemon remains the final
+authority and rejects any Agent ID or platform outside its built-in installation
+catalog before resolving a fixed recipe. The host credential cannot provide or
+alter a command, version, URL, argument, environment value, or target. Installer
+processes receive a minimal allowlisted environment with no channel token, Agent
+credential, or unrelated Mobius variable. Downloads enforce TLS, approved
+initial and redirect hosts, size and time limits, and a recorded SHA-256 digest.
+Vendor checksum or signature checks remain active when the fixed vendor
+installer provides them. Temporary directories, subprocess trees, output
+buffers, overall deadlines, and one-job per-Agent concurrency slots are owned
+and released by the local daemon.
 
 Managed adapters use exact package versions, omit optional platform Agent
 dependencies, disable lifecycle scripts, validate package name/version/bin

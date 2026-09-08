@@ -2137,7 +2137,22 @@ child.once("exit", (code) => process.exit(code ?? 93));
           {
             id: "claude",
             label: "Claude Code",
-            requiresLocalApproval: true,
+          },
+          {
+            id: "deepseek-harness",
+            label: "DeepSeek Harness",
+          },
+          {
+            id: "opencode",
+            label: "OpenCode",
+          },
+          {
+            id: "grok-build",
+            label: "Grok Build",
+          },
+          {
+            id: "workbuddy",
+            label: "WorkBuddy",
           },
         ],
         machineName: expect.any(String),
@@ -2205,7 +2220,12 @@ child.once("exit", (code) => process.exit(code ?? 93));
               { id: "claude", label: "Claude Code" },
               { id: "pi", label: "Pi" },
             ],
-            installableAgents: [],
+            installableAgents: [
+              { id: "deepseek-harness", label: "DeepSeek Harness" },
+              { id: "opencode", label: "OpenCode" },
+              { id: "grok-build", label: "Grok Build" },
+              { id: "workbuddy", label: "WorkBuddy" },
+            ],
           });
           await expect(
             readFile(packageManagerRecordPath, "utf8"),
@@ -2456,7 +2476,12 @@ child.once("exit", (code) => process.exit(code ?? 93));
             { id: "claude", label: "Claude Code" },
             { id: "pi", label: "Pi" },
           ],
-          installableAgents: [],
+          installableAgents: [
+            { id: "deepseek-harness", label: "DeepSeek Harness" },
+            { id: "opencode", label: "OpenCode" },
+            { id: "grok-build", label: "Grok Build" },
+            { id: "workbuddy", label: "WorkBuddy" },
+          ],
         });
         await expect(
           runBrowserPrompt(refreshedHost, "pi", piSessionId, "third"),

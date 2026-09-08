@@ -26,14 +26,6 @@ export class RequestedInstallation extends AgentInstallation {
   }
 }
 
-export class AwaitingLocalApproval extends AgentInstallation {
-  readonly status = "awaiting_local_approval";
-
-  constructor(requestId: string, agentId: string) {
-    super(requestId, agentId);
-  }
-}
-
 export class RunningInstallation extends AgentInstallation {
   readonly stage: AgentInstallationStage;
   readonly status = "running";
@@ -92,15 +84,6 @@ export class InstallationManagerError extends Error {
   }
 }
 
-export interface InstallationAuthorizer {
-  readonly authorize: (
-    agentId: string,
-    label: string,
-    requestId: string,
-    signal: AbortSignal,
-  ) => Promise<boolean>;
-}
-
 export interface InstallationExecutor {
   readonly execute: (
     agentId: string,
@@ -141,12 +124,15 @@ class InstallationJob {
   }
 }
 
-function specificationFor(
+function authorizedSpecificationFor(
   specifications: readonly LocalAgentSpecification[],
   agentId: string,
 ): LocalAgentSpecification | null {
   for (const specification of specifications) {
-    if (specification.id === agentId) {
+    if (
+      specification.id === agentId &&
+      specification.supportsInstallation(process.platform, process.arch)
+    ) {
       return specification;
     }
   }
@@ -167,7 +153,6 @@ function executionFailure(error: unknown): InstallationManagerError {
 export class AgentInstallationManager {
   readonly #activeAgents = new Map<string, string>();
   readonly #audit: InstallationAudit;
-  readonly #authorizer: InstallationAuthorizer;
   readonly #executor: InstallationExecutor;
   readonly #jobs = new Map<string, InstallationJob>();
   readonly #observer: InstallationObserver;
@@ -175,13 +160,11 @@ export class AgentInstallationManager {
 
   constructor(
     specifications: readonly LocalAgentSpecification[],
-    authorizer: InstallationAuthorizer,
     executor: InstallationExecutor,
     observer: InstallationObserver,
     audit: InstallationAudit = new NullInstallationAudit(),
   ) {
     this.#audit = audit;
-    this.#authorizer = authorizer;
     this.#executor = executor;
     this.#observer = observer;
     this.#specifications = Object.freeze([...specifications]);
@@ -218,7 +201,7 @@ export class AgentInstallationManager {
       command.agentId,
     );
 
-    const specification = specificationFor(
+    const specification = authorizedSpecificationFor(
       this.#specifications,
       command.agentId,
     );
@@ -337,45 +320,14 @@ export class AgentInstallationManager {
     }, INSTALLATION_DEADLINE_MILLISECONDS);
     const signal = job.controller.signal;
     try {
-      await this.#transition(
-        job,
-        new AwaitingLocalApproval(job.requestId, job.agentId),
-      );
-      this.#audit.record(
-        "agent_installation_awaiting_approval",
-        job.requestId,
-        job.agentId,
-      );
-      const approved = await this.#authorizer.authorize(
-        specification.id,
-        specification.label,
-        job.requestId,
-        signal,
-      );
       signal.throwIfAborted();
-      if (!approved) {
-        const denied = new FailedInstallation(
-          job.requestId,
-          job.agentId,
-          "installation_not_authorized",
-          "Installation was not approved on the local machine",
-        );
-        await this.#transition(job, denied);
-        this.#audit.record(
-          "agent_installation_denied",
-          job.requestId,
-          job.agentId,
-        );
-        job.completion.resolve(denied);
-        return;
-      }
       this.#audit.record(
         "agent_installation_authorized",
         job.requestId,
-        job.agentId,
+        specification.id,
       );
       await this.#executor.execute(
-        job.agentId,
+        specification.id,
         job.requestId,
         async (stage) => {
           signal.throwIfAborted();

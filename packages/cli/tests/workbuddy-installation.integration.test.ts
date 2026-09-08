@@ -124,7 +124,7 @@ describe("WorkBuddy managed installation", () => {
     (process.platform === "darwin" || process.platform === "linux") &&
       (process.arch === "arm64" || process.arch === "x64"),
   )(
-    "Given WorkBuddy installation is locally approved, When its fixed recipe completes, Then the integrity-pinned CodeBuddy Code package is published only after ACP verification",
+    "Given the Web user confirms WorkBuddy installation, When its fixed recipe completes, Then the integrity-pinned CodeBuddy Code package is published only after ACP verification",
     async () => {
       const stateDirectory = await mkdtemp(
         join(tmpdir(), "mobius-workbuddy-managed-"),

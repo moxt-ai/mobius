@@ -226,11 +226,12 @@ prints the exact lightweight adapter recovery command when applicable, while
 automatic adapter provisioning begins only as the authenticated local daemon
 starts.
 
-When no verified Agent is ready, the channel remains online and Web offers the
-supported fixed user-level Agent installation and recovery recipes. A Web click
-is only a request:
-by default, the terminal running Mobius must approve that individual request
-before an installer starts. The initial recipes use the documented
+When no verified Agent is ready, the running paired daemon keeps the channel
+online and Web offers the supported fixed user-level Agent installation and
+recovery recipes. A Web click confirms that individual installation request.
+The local daemon authorizes the requested Agent ID and platform against its
+built-in catalog, resolves only the matching fixed recipe, and starts it without
+a second terminal confirmation. The initial recipes use the documented
 [Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli) and
 [Claude Code native stable channel](https://code.claude.com/docs/en/installation),
 plus the exact `@earendil-works/pi-coding-agent@0.85.0` and
@@ -259,19 +260,9 @@ contains stages and stable errors, never commands, URLs, paths, raw output,
 environment values, or credentials. Installing an Agent does not sign the user
 into its provider.
 
-A local user may explicitly grant one fixed recipe by creating a private
-mode-`0600` `~/.mobius/installation-grants.json` file:
-
-```json
-{
-  "agents": ["codex"]
-}
-```
-
-The grant is disabled by default, is scoped to the listed built-in Agent IDs,
-and is revoked by removing an ID or the file. It cannot change a release
-channel, command, URL, arguments, or installation target. Local provider
-credentials remain with the Agent process and never cross the Relay. Pi
+The Web request cannot change a release channel, command, URL, arguments, or
+installation target. Local provider credentials remain with the Agent process
+and never cross the Relay. Pi
 authentication is a local terminal action through `pi-acp --terminal-login`;
 OpenCode uses `opencode auth login`, Cursor uses `cursor-agent login`, Grok Build
 uses `grok login`, and WorkBuddy opens its local sign-in through `codebuddy`.

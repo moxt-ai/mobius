@@ -25,12 +25,10 @@ export class AgentOption {
 export class InstallableAgentOption {
   readonly id: string;
   readonly label: string;
-  readonly requiresLocalApproval: boolean;
 
-  constructor(id: string, label: string, requiresLocalApproval: boolean) {
+  constructor(id: string, label: string) {
     this.id = id;
     this.label = label;
-    this.requiresLocalApproval = requiresLocalApproval;
   }
 }
 
@@ -66,18 +64,8 @@ export abstract class RequestedAgentInstallationState extends AgentInstallationV
 
 export class RequestingAgentInstallationState extends RequestedAgentInstallationState {
   readonly canCancel = true;
-  readonly message = "Requesting local approval.";
+  readonly message = "Requesting installation.";
   readonly status = "requesting";
-
-  constructor(agentId: string, requestId: string) {
-    super(agentId, requestId);
-  }
-}
-
-export class AwaitingAgentInstallationApprovalState extends RequestedAgentInstallationState {
-  readonly canCancel = true;
-  readonly message = "Waiting for confirmation on this machine.";
-  readonly status = "awaiting_approval";
 
   constructor(agentId: string, requestId: string) {
     super(agentId, requestId);
@@ -86,7 +74,7 @@ export class AwaitingAgentInstallationApprovalState extends RequestedAgentInstal
 
 export class StartingAgentInstallationState extends RequestedAgentInstallationState {
   readonly canCancel = true;
-  readonly message = "Starting the approved installation recipe.";
+  readonly message = "Starting the fixed installation recipe.";
   readonly status = "starting";
 
   constructor(agentId: string, requestId: string) {
@@ -96,7 +84,7 @@ export class StartingAgentInstallationState extends RequestedAgentInstallationSt
 
 function installationStageMessage(stage: AgentInstallationStage): string {
   if (stage === "downloading") {
-    return "Downloading from the approved vendor.";
+    return "Downloading from the verified vendor.";
   }
   if (stage === "verifying") {
     return "Verifying the downloaded installer.";

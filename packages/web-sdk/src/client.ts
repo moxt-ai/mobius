@@ -1,7 +1,6 @@
 import {
   AGENT_ACTIVITY_KIND,
   AGENT_CONTENT_KIND,
-  AGENT_INSTALL_AWAITING_APPROVAL_KIND,
   AGENT_INSTALL_CANCEL_KIND,
   AGENT_INSTALL_CANCELLED_KIND,
   AGENT_INSTALL_COMPLETED_KIND,
@@ -12,7 +11,6 @@ import {
   AGENT_MESSAGE_DELTA_KIND,
   type AgentActivityEvent,
   type AgentContentEvent,
-  type AgentInstallAwaitingApprovalEvent,
   type AgentInstallCancelledEvent,
   type AgentInstallCompletedEvent,
   type AgentInstallFailedEvent,
@@ -20,7 +18,6 @@ import {
   type AgentInstallStartedEvent,
   decodeAgentActivityEvent,
   decodeAgentContentEvent,
-  decodeAgentInstallAwaitingApprovalEvent,
   decodeAgentInstallCancelCommand,
   decodeAgentInstallCancelledEvent,
   decodeAgentInstallCompletedEvent,
@@ -129,9 +126,6 @@ export interface ConnectMobiusClientOptions {
   readonly onCommands?: (event: SessionCommandsUpdatedEvent) => void;
   readonly onConfig?: (event: SessionConfigUpdatedEvent) => void;
   readonly onContent?: (event: AgentContentEvent) => void;
-  readonly onInstallAwaitingApproval?: (
-    event: AgentInstallAwaitingApprovalEvent,
-  ) => void;
   readonly onInstallCancelled?: (event: AgentInstallCancelledEvent) => void;
   readonly onInstallCompleted?: (event: AgentInstallCompletedEvent) => void;
   readonly onInstallFailed?: (event: AgentInstallFailedEvent) => void;
@@ -977,10 +971,6 @@ export class MobiusClient {
         decodeAgentInstallRequestCommand(encoded);
       } else if (kind === AGENT_INSTALL_CANCEL_KIND) {
         decodeAgentInstallCancelCommand(encoded);
-      } else if (kind === AGENT_INSTALL_AWAITING_APPROVAL_KIND) {
-        this.#options.onInstallAwaitingApproval?.(
-          decodeAgentInstallAwaitingApprovalEvent(encoded),
-        );
       } else if (kind === AGENT_INSTALL_STARTED_KIND) {
         this.#options.onInstallStarted?.(
           decodeAgentInstallStartedEvent(encoded),

@@ -45,7 +45,6 @@ export async function publishAgentCatalog(
         installableAgents: catalog.installableAgents.map((agent) => ({
           id: agent.id,
           label: agent.label,
-          requiresLocalApproval: agent.requiresLocalApproval,
         })),
       }),
       dispatcher: environmentProxyDispatcher,

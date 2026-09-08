@@ -1,6 +1,5 @@
 import type {
   AgentContentEvent,
-  AgentInstallAwaitingApprovalEvent,
   AgentInstallCancelledEvent,
   AgentInstallCompletedEvent,
   AgentInstallFailedEvent,
@@ -24,7 +23,6 @@ import { create } from "zustand";
 import {
   type AgentInstallationViewState,
   AgentOption,
-  AwaitingAgentInstallationApprovalState,
   CancelledAgentInstallationState,
   type ChannelConnection,
   type ChannelHistory,
@@ -86,9 +84,6 @@ export interface ChatStore {
   readonly appendAgentText: (turn: PendingTurn, delta: string) => void;
   readonly beginTurn: (prompt: string) => PendingTurn;
   readonly beginAgentInstallation: (agentId: string, requestId: string) => void;
-  readonly applyAgentInstallAwaitingApproval: (
-    event: AgentInstallAwaitingApprovalEvent,
-  ) => void;
   readonly applyAgentInstallCancelled: (
     event: AgentInstallCancelledEvent,
   ) => void;
@@ -558,20 +553,6 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
   agents: [defaultAgent],
   agentInstallations: [],
   announcement: "",
-  applyAgentInstallAwaitingApproval: (event) => {
-    set((state) => ({
-      agentInstallations: transitionInstallationState(
-        state.agentInstallations,
-        event.agentId,
-        event.requestId,
-        new AwaitingAgentInstallationApprovalState(
-          event.agentId,
-          event.requestId,
-        ),
-      ),
-      announcement: "Agent installation is waiting for local approval.",
-    }));
-  },
   applyAgentInstallCancelled: (event) => {
     set((state) => ({
       agentInstallations: transitionInstallationState(
@@ -814,7 +795,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         requestId,
         new RequestingAgentInstallationState(agentId, requestId),
       ),
-      announcement: "Requesting local Agent installation approval.",
+      announcement: "Requesting Agent installation.",
     }));
   },
   channelConfigured: false,

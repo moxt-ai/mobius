@@ -170,9 +170,6 @@ class ConnectedTransport extends TransportConnection {
       onContent: (event) => {
         useChatStore.getState().recordAgentContent(event);
       },
-      onInstallAwaitingApproval: (event) => {
-        useChatStore.getState().applyAgentInstallAwaitingApproval(event);
-      },
       onInstallCancelled: (event) => {
         useChatStore.getState().applyAgentInstallCancelled(event);
       },
