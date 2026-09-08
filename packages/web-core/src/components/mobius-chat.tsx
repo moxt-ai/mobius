@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 
+import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatMessageList } from "@/components/chat-message-list";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ function ConnectedMobiusChat({
   readonly history: ChannelHistory;
 }) {
   const [ready, setReady] = useState(false);
+  const agents = useChatStore((state) => state.agents);
   const conversations = useChatStore((state) => state.conversations);
   const activeConversationId = useChatStore(
     (state) => state.activeConversationId,
@@ -69,6 +71,24 @@ function ConnectedMobiusChat({
       void closeMobiusTransport();
     };
   }, [configureChannel, connection, history]);
+
+  if (ready && agents.length === 0) {
+    return (
+      <section className="rounded-xl border border-black/10 bg-background p-6">
+        <h1 className="text-xl font-semibold">Install a local Agent</h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {connection.machineName} is paired, but no verified Agent is ready
+          yet. Install an Agent on this machine to start chatting.
+        </p>
+        {!runtime.canSend && (
+          <p role="status" className="mt-3 text-sm text-muted-foreground">
+            Keep the Mobius daemon online to install an Agent.
+          </p>
+        )}
+        <AgentInstallationSidebarPanel />
+      </section>
+    );
+  }
 
   if (!ready || activeConversation === undefined) {
     return <p role="status">Preparing Mobius chat…</p>;
