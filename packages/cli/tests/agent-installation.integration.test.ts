@@ -2,7 +2,6 @@ import {
   chmod,
   mkdir,
   mkdtemp,
-  readFile,
   realpath,
   rm,
   writeFile,
@@ -10,42 +9,31 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
 import {
   AGENT_INSTALL_REQUEST_KIND,
   type AgentInstallRequestCommand,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+
+import { CodexAgentSpecification } from "../src/agent-catalog/discover-local-agents.ts";
 import {
-  CodexAgentSpecification,
-  PiAgentSpecification,
-} from "../src/agent-catalog/discover-local-agents.ts";
-import {
-  InstallableAgentDefinition,
+  AgentIntegrationDefinition,
   LocalAgentCatalog,
+  MissingAgentDefinition,
 } from "../src/agent-catalog/local-agent.ts";
 import {
   type AgentInstallation,
   AgentInstallationManager,
+  FailedInstallation,
   type InstallationAudit,
   type InstallationObserver,
   RunningInstallation,
   SucceededInstallation,
 } from "../src/agent-installation/agent-installation-manager.ts";
-import { AutomaticAdapterProvisioner } from "../src/agent-installation/automatic-adapter-provisioner.ts";
-import {
-  type AgentInstallRecipeOptions,
-  FixedAgentInstallRecipe,
-  fixedAgentInstallRecipes,
-} from "../src/agent-installation/fixed-agent-install-recipes.ts";
 import { FixedInstallationExecutor } from "../src/agent-installation/fixed-installation-executor.ts";
-import {
-  type AdapterInstallationPort,
-  ManagedAdapterInstaller,
-} from "../src/agent-installation/managed-adapter-installer.ts";
-import {
-  type ResolvedExecutable,
-  resolveExecutablePath,
-} from "../src/process/executable.ts";
+import type { AdapterInstallationPort } from "../src/agent-installation/managed-adapter-installer.ts";
+import { resolveExecutablePath } from "../src/process/executable.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fakeAgentPath = fileURLToPath(
@@ -73,45 +61,9 @@ class RecordingInstallationAudit implements InstallationAudit {
   };
 }
 
-// Real Agent and adapter installers depend on mutable package registries. These
-// stateful boundary implementations create disposable executables so production
-// discovery, identity validation, ACP verification, and filesystem publication
-// still run without reaching a third-party installer.
-class StatefulCodexInstallRecipe extends FixedAgentInstallRecipe {
-  readonly id = "codex";
-  readonly label = "Codex";
-  readonly releaseChannel = "test-standalone";
-
-  readonly install = async (
-    options: AgentInstallRecipeOptions,
-  ): Promise<ResolvedExecutable> => {
-    await options.report("downloading");
-    await options.report("verifying");
-    await options.report("installing_agent");
-    const directory = join(options.stateDirectory, "agents", "codex", "bin");
-    const path = join(directory, "codex");
-    await mkdir(directory, { mode: 0o700, recursive: true });
-    await writeFile(
-      path,
-      executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-      { mode: 0o700 },
-    );
-    await chmod(path, 0o700);
-    const executable = await resolveExecutablePath(path);
-    if (executable === null) {
-      throw new Error("Stateful Codex recipe did not create an executable");
-    }
-    return executable;
-  };
-}
-
+// The real adapter registry is mutable and requires network access. This
+// stateful boundary publishes a disposable adapter while production discovery,
+// executable validation, ACP probing, and catalog transitions remain real.
 class StatefulAdapterInstaller implements AdapterInstallationPort {
   readonly #stateDirectory: string;
   readonly installedAgentIds: string[] = [];
@@ -167,38 +119,6 @@ if (process.argv.includes("--version")) {
   };
 }
 
-class FailingAdapterInstaller implements AdapterInstallationPort {
-  readonly installedAgentIds: string[] = [];
-
-  readonly install: AdapterInstallationPort["install"] = (
-    specification,
-    signal,
-  ) => {
-    signal.throwIfAborted();
-    this.installedAgentIds.push(specification.id);
-    return Promise.reject(new Error("Deterministic adapter install failure"));
-  };
-}
-
-class CancellingAdapterInstaller implements AdapterInstallationPort {
-  readonly #controller: AbortController;
-  readonly #reason: Error;
-
-  constructor(controller: AbortController, reason: Error) {
-    this.#controller = controller;
-    this.#reason = reason;
-  }
-
-  readonly install: AdapterInstallationPort["install"] = (
-    _specification,
-    signal,
-  ) => {
-    signal.throwIfAborted();
-    this.#controller.abort(this.#reason);
-    return Promise.reject(signal.reason);
-  };
-}
-
 async function writeExternalCodexAgent(path: string): Promise<void> {
   await mkdir(join(path, ".."), { mode: 0o700, recursive: true });
   await writeFile(
@@ -216,356 +136,143 @@ if (process.argv.includes("--version")) {
   await chmod(path, 0o700);
 }
 
-function request(
-  requestId: string,
-  agentId = "codex",
-): AgentInstallRequestCommand {
+function request(requestId: string): AgentInstallRequestCommand {
   return {
-    agentId,
+    agentId: "codex",
     kind: AGENT_INSTALL_REQUEST_KIND,
     requestId,
   };
 }
 
-describe("local Agent installation", () => {
-  it("Given Pi installation is selected, When its fixed recipe and adapter installer run, Then exact verified packages are installed without lifecycle scripts in separate private caches", async () => {
-    const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-install-"));
-    const executableDirectory = join(stateDirectory, "bin");
-    const npmPath = join(executableDirectory, "npm");
-    const piExecutable = executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("0.85.0\\n");
-} else {
-  if (!process.argv.includes("--mode") || !process.argv.includes("rpc")) {
-    process.exit(90);
-  }
-  process.argv.push("--agent-name", "Pi");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`);
-    const adapterExecutable = executableSource(`
-import { spawn } from "node:child_process";
-const pi = process.env.PI_ACP_PI_COMMAND;
-if (pi === undefined) process.exit(91);
-const child = spawn(pi, ["--mode", "rpc"], {
-  env: process.env,
-  stdio: "inherit",
-});
-child.once("error", () => process.exit(92));
-child.once("exit", (code) => process.exit(code ?? 93));
-`);
-    try {
-      await mkdir(executableDirectory, { mode: 0o700, recursive: true });
-      await writeFile(
-        npmPath,
-        executableSource(`
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-const prefixIndex = process.argv.indexOf("--prefix");
-const prefix = process.argv[prefixIndex + 1];
-if (prefixIndex < 0 || prefix === undefined) process.exit(81);
-const requested = process.argv.at(-1);
-const installsAgent = requested === "@earendil-works/pi-coding-agent@0.85.0";
-const installsAdapter = requested === "pi-acp@0.0.33";
-if (!installsAgent && !installsAdapter) process.exit(82);
-const packageName = installsAgent ? "@earendil-works/pi-coding-agent" : "pi-acp";
-const version = installsAgent ? "0.85.0" : "0.0.33";
-const executableName = installsAgent ? "pi" : "pi-acp";
-const executablePath = installsAgent ? "dist/bundle/cli.js" : "dist/index.js";
-const integrity = installsAgent
-  ? "sha512-INxVkLAVfAMju5MojJpmyu/0bMP+r+ffZuS7UqVv32E2JwHBRbcHfELDfmFNvapEbgYfKN2r9OYO1p3TqDBR+g=="
-  : "sha512-vX9kY1tK14E72G4dBAx+RGCk/k7XPjTHls6dLUxA8WSkBav6B6JHuSBv3eusp50LCR/GTRsR2kIKsG0Z5jANzw==";
-const resolved = installsAgent
-  ? "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.0.tgz"
-  : "https://registry.npmjs.org/pi-acp/-/pi-acp-0.0.33.tgz";
-const packageRoot = join(prefix, "node_modules", ...packageName.split("/"));
-const executable = join(packageRoot, executablePath);
-mkdirSync(join(executable, ".."), { recursive: true });
-writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
-  name: packageName,
-  version,
-  bin: { [executableName]: executablePath },
-}));
-writeFileSync(
-  executable,
-  installsAgent
-    ? ${JSON.stringify(piExecutable)}
-    : ${JSON.stringify(adapterExecutable)},
-  { mode: 0o700 },
-);
-chmodSync(executable, 0o700);
-writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
-  lockfileVersion: 3,
-  packages: {
-    ["node_modules/" + packageName]: {
-      integrity,
-      resolved,
-      version,
-    },
-  },
-}));
-writeFileSync(join(prefix, "npm-invocation.json"), JSON.stringify({
-  arguments: process.argv.slice(2),
-  ignoreScripts: process.env.NPM_CONFIG_IGNORE_SCRIPTS,
-}));
-`),
-        { mode: 0o700 },
-      );
-      await chmod(npmPath, 0o700);
-      const recipes = fixedAgentInstallRecipes().filter(
-        (candidate) => candidate.id === "pi",
-      );
-      expect(recipes).toHaveLength(1);
-      const recipe = recipes[0];
-      if (recipe === undefined) {
-        throw new Error("Pi installation recipe is unavailable");
-      }
-      const specification = new PiAgentSpecification();
-      const observer = new RecordingInstallationObserver();
-      const audit = new RecordingInstallationAudit();
-      const catalog = new LocalAgentCatalog(
-        [],
-        [new InstallableAgentDefinition("pi", "Pi")],
-      );
-      const environment = {
-        MOBIUS_STATE_DIRECTORY: stateDirectory,
-        PATH: executableDirectory,
-      };
-      const manager = new AgentInstallationManager(
-        [specification],
-        new FixedInstallationExecutor(
-          {
-            defaultWorkspace: stateDirectory,
-            audit,
-            catalog,
-            environment,
-            publishCatalog: (signal) => {
-              signal.throwIfAborted();
-              return Promise.resolve();
-            },
-            stateDirectory,
-          },
-          [specification],
-          [recipe],
-          new ManagedAdapterInstaller({ environment, stateDirectory }),
-        ),
-        observer,
+function createManager(
+  stateDirectory: string,
+  executableDirectory: string,
+  catalog: LocalAgentCatalog,
+  adapterInstaller: AdapterInstallationPort,
+  observer: RecordingInstallationObserver,
+  audit: RecordingInstallationAudit,
+): AgentInstallationManager {
+  const specification = new CodexAgentSpecification();
+  return new AgentInstallationManager(
+    [specification],
+    new FixedInstallationExecutor(
+      {
+        defaultWorkspace: repositoryRoot,
         audit,
-      );
+        catalog,
+        environment: {
+          MOBIUS_STATE_DIRECTORY: stateDirectory,
+          PATH: executableDirectory,
+        },
+        publishCatalog: (signal) => {
+          signal.throwIfAborted();
+          return Promise.resolve();
+        },
+        stateDirectory,
+      },
+      [specification],
+      adapterInstaller,
+    ),
+    observer,
+    audit,
+  );
+}
 
-      await expect(
-        manager.request(
-          request("install-pi", "pi"),
-          new AbortController().signal,
-        ),
-      ).resolves.toBeInstanceOf(SucceededInstallation);
-
-      const packageRoot = join(stateDirectory, "agents", "pi", "0.85.0");
-      expect(catalog.read().agents[0]?.agentIdentity.realPath).toBe(
-        await realpath(
-          join(
-            packageRoot,
-            "node_modules",
-            "@earendil-works",
-            "pi-coding-agent",
-            "dist",
-            "bundle",
-            "cli.js",
-          ),
-        ),
-      );
-      const invocation = await readFile(
-        join(packageRoot, "npm-invocation.json"),
-        "utf8",
-      );
-      expect(invocation).toContain("@earendil-works/pi-coding-agent@0.85.0");
-      expect(invocation).toContain("--ignore-scripts");
-      expect(invocation).toContain('"ignoreScripts":"true"');
-      const adapterRoot = join(stateDirectory, "adapters", "pi", "0.0.33");
-      expect(catalog.read().agents[0]?.adapterIdentity.realPath).toBe(
-        await realpath(
-          join(adapterRoot, "node_modules", "pi-acp", "dist", "index.js"),
-        ),
-      );
-      await expect(
-        readFile(join(adapterRoot, "npm-invocation.json"), "utf8"),
-      ).resolves.toContain("pi-acp@0.0.33");
-      expect(catalog.read().installableAgents).toEqual([]);
-      expect(
-        observer.states
-          .filter((state) => state instanceof RunningInstallation)
-          .map((state) => state.stage),
-      ).toEqual([
-        "downloading",
-        "verifying",
-        "installing_agent",
-        "installing_adapter",
-        "checking_acp",
-      ]);
-      await writeFile(
-        join(packageRoot, "package-lock.json"),
-        JSON.stringify({
-          lockfileVersion: 3,
-          packages: {
-            "node_modules/@earendil-works/pi-coding-agent": {
-              integrity: "sha512-tampered",
-              resolved:
-                "https://registry.npmjs.org/@earendil-works/pi-coding-agent/-/pi-coding-agent-0.85.0.tgz",
-              version: "0.85.0",
-            },
-          },
-        }),
-        { mode: 0o600 },
-      );
-      await expect(
-        recipe.install({
-          audit: new RecordingInstallationAudit(),
-          environment,
-          report: () => Promise.resolve(),
-          requestId: "install-tampered-pi",
-          signal: new AbortController().signal,
-          stateDirectory,
-        }),
-      ).rejects.toMatchObject({ code: "agent_verification_failed" });
-      await writeFile(
-        join(adapterRoot, "package-lock.json"),
-        JSON.stringify({
-          lockfileVersion: 3,
-          packages: {
-            "node_modules/pi-acp": {
-              integrity: "sha512-tampered",
-              resolved: "https://registry.npmjs.org/pi-acp/-/pi-acp-0.0.33.tgz",
-              version: "0.0.33",
-            },
-          },
-        }),
-        { mode: 0o600 },
-      );
-      await expect(
-        new ManagedAdapterInstaller({
-          environment,
-          stateDirectory,
-        }).install(new PiAgentSpecification(), new AbortController().signal),
-      ).rejects.toMatchObject({ code: "adapter_verification_failed" });
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("Given the Web user confirms Codex installation, When the request reaches the local daemon, Then the fixed recipe starts without another approval and publishes the verified Agent", async () => {
+describe("local Agent integration installation", () => {
+  it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and retries its integration, Then Mobius installs only the adapter and publishes the detected Agent details", async () => {
     const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-fixed-installation-"),
+      join(tmpdir(), "mobius-integration-after-agent-install-"),
     );
-    const specification = new CodexAgentSpecification();
-    const recipe = new StatefulCodexInstallRecipe();
+    const executableDirectory = join(stateDirectory, "external");
+    const agentPath = join(executableDirectory, "codex");
+    const catalog = new LocalAgentCatalog(
+      [],
+      [new MissingAgentDefinition("codex", "Codex")],
+    );
     const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
     const observer = new RecordingInstallationObserver();
     const audit = new RecordingInstallationAudit();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("codex", "Codex")],
+    const manager = createManager(
+      stateDirectory,
+      executableDirectory,
+      catalog,
+      adapterInstaller,
+      observer,
+      audit,
     );
-    let publications = 0;
+
     try {
-      const executor = new FixedInstallationExecutor(
-        {
-          defaultWorkspace: stateDirectory,
-          audit,
-          catalog,
-          environment: { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: "" },
-          publishCatalog: (signal) => {
-            signal.throwIfAborted();
-            publications += 1;
-            return Promise.resolve();
-          },
-          stateDirectory,
-        },
-        [specification],
-        [recipe],
-        adapterInstaller,
+      const missing = await manager.request(
+        request("integration-before-agent"),
+        new AbortController().signal,
       );
-      const manager = new AgentInstallationManager(
-        [specification],
-        executor,
-        observer,
-        audit,
+      expect(missing).toBeInstanceOf(FailedInstallation);
+      expect(missing).toMatchObject({
+        code: "agent_not_installed",
+        message:
+          "Install Codex on this machine, then try installing the integration again.",
+      });
+      expect(adapterInstaller.installedAgentIds).toEqual([]);
+      expect(catalog.read().installableAgents[0]).toBeInstanceOf(
+        MissingAgentDefinition,
       );
 
-      await expect(
-        manager.request(
-          request("fixed-installation"),
-          new AbortController().signal,
-        ),
-      ).resolves.toBeInstanceOf(SucceededInstallation);
+      await writeExternalCodexAgent(agentPath);
+      const installed = await manager.request(
+        request("integration-after-agent"),
+        new AbortController().signal,
+      );
 
-      expect(publications).toBe(1);
-      expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["codex"]);
+      expect(installed).toBeInstanceOf(SucceededInstallation);
+      expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
       expect(catalog.read().installableAgents).toEqual([]);
-      const ready = catalog.read().agents[0];
-      expect(ready?.agentIdentity.realPath).toBe(
-        await realpath(join(stateDirectory, "agents", "codex", "bin", "codex")),
+      expect(catalog.read().agents).toHaveLength(1);
+      expect(catalog.read().agents[0]).toMatchObject({
+        agentVersion: "codex 0.153.0",
+        id: "codex",
+      });
+      expect(catalog.read().agents[0]?.agentIdentity.requestedPath).toBe(
+        agentPath,
       );
-      expect(ready?.adapterIdentity.realPath).toBe(
-        await realpath(
-          join(
-            stateDirectory,
-            "adapters",
-            "codex",
-            specification.adapterVersion,
-            "node_modules",
-            "@agentclientprotocol",
-            "codex-acp",
-            "dist",
-            "index.js",
-          ),
-        ),
-      );
-      expect(audit.events).toContain("agent_installation_acp_verified");
       expect(
         observer.states
-          .filter((state) => state instanceof RunningInstallation)
+          .filter(
+            (state): state is RunningInstallation =>
+              state instanceof RunningInstallation &&
+              state.requestId === "integration-after-agent",
+          )
           .map((state) => state.stage),
-      ).toEqual([
-        "downloading",
-        "verifying",
-        "installing_agent",
-        "installing_adapter",
-        "checking_acp",
-      ]);
+      ).toEqual(["installing_adapter", "checking_acp"]);
+      expect(audit.events).toContain("agent_installation_acp_verified");
     } finally {
       await rm(stateDirectory, { force: true, recursive: true });
     }
   });
 
-  it("Given an external adapter is present but ACP-incompatible, When the Web user confirms installation, Then Mobius keeps the verified Agent and falls back to its pinned private adapter", async () => {
+  it("Given Codex is installed with an incompatible automatically discovered adapter, When the user installs the integration, Then Mobius preserves Codex and replaces only the adapter", async () => {
     const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-adapter-fallback-"),
+      join(tmpdir(), "mobius-integration-adapter-repair-"),
     );
     const executableDirectory = join(stateDirectory, "external");
     const agentPath = join(executableDirectory, "codex");
     const adapterPath = join(executableDirectory, "codex-acp");
-    const specification = new CodexAgentSpecification();
-    const recipe = new StatefulCodexInstallRecipe();
-    const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-    const observer = new RecordingInstallationObserver();
     const catalog = new LocalAgentCatalog(
       [],
-      [new InstallableAgentDefinition("codex", "Codex")],
+      [
+        new AgentIntegrationDefinition(
+          "codex",
+          "Codex",
+          agentPath,
+          "codex 0.153.0",
+        ),
+      ],
     );
+    const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
+    const observer = new RecordingInstallationObserver();
+    const audit = new RecordingInstallationAudit();
+
     try {
-      await mkdir(executableDirectory, { mode: 0o700, recursive: true });
-      await writeFile(
-        agentPath,
-        executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-        { mode: 0o700 },
-      );
+      await writeExternalCodexAgent(agentPath);
       await writeFile(
         adapterPath,
         executableSource(`
@@ -577,274 +284,35 @@ if (process.argv.includes("--version")) {
 `),
         { mode: 0o700 },
       );
-      await Promise.all([chmod(agentPath, 0o700), chmod(adapterPath, 0o700)]);
-      const executor = new FixedInstallationExecutor(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit: new RecordingInstallationAudit(),
-          catalog,
-          environment: {
-            MOBIUS_CODEX_ACP_PATH: adapterPath,
-            MOBIUS_CODEX_PATH: agentPath,
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: "",
-          },
-          publishCatalog: (signal) => {
-            signal.throwIfAborted();
-            return Promise.resolve();
-          },
-          stateDirectory,
-        },
-        [specification],
-        [recipe],
+      await chmod(adapterPath, 0o700);
+      const manager = createManager(
+        stateDirectory,
+        executableDirectory,
+        catalog,
         adapterInstaller,
-      );
-      const manager = new AgentInstallationManager(
-        [specification],
-        executor,
         observer,
+        audit,
       );
 
       await expect(
         manager.request(
-          request("replace-incompatible-adapter"),
+          request("repair-integration"),
           new AbortController().signal,
         ),
       ).resolves.toBeInstanceOf(SucceededInstallation);
 
-      expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["codex"]);
-      const ready = catalog.read().agents[0];
-      expect(ready?.agentIdentity.realPath).toBe(await realpath(agentPath));
-      expect(ready?.adapterIdentity.realPath).toBe(
-        await realpath(
-          join(
-            stateDirectory,
-            "adapters",
-            "codex",
-            specification.adapterVersion,
-            "node_modules",
-            "@agentclientprotocol",
-            "codex-acp",
-            "dist",
-            "index.js",
-          ),
-        ),
+      expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
+      expect(catalog.read().agents[0]?.agentIdentity.requestedPath).toBe(
+        agentPath,
+      );
+      expect(catalog.read().agents[0]?.adapterIdentity.requestedPath).not.toBe(
+        await realpath(adapterPath),
       );
       expect(
         observer.states
           .filter((state) => state instanceof RunningInstallation)
           .map((state) => state.stage),
       ).toEqual(["checking_acp", "installing_adapter", "checking_acp"]);
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-});
-
-describe("automatic ACP adapter provisioning", () => {
-  it("Given a verified local Codex CLI without an adapter, When the daemon prepares its catalog, Then it installs only the pinned adapter and exposes Codex as ready", async () => {
-    const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-automatic-adapter-"),
-    );
-    const agentPath = join(stateDirectory, "external", "codex");
-    const specification = new CodexAgentSpecification();
-    const audit = new RecordingInstallationAudit();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("codex", "Codex")],
-    );
-    const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-    try {
-      await writeExternalCodexAgent(agentPath);
-      const inventory = await new AutomaticAdapterProvisioner(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit,
-          catalog,
-          environment: {
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: join(stateDirectory, "external"),
-          },
-        },
-        adapterInstaller,
-        [specification],
-      ).prepare(new AbortController().signal);
-
-      expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
-      expect(inventory.readyAgents().map((agent) => agent.id)).toEqual([
-        "codex",
-      ]);
-      expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["codex"]);
-      expect(catalog.read().installableAgents).toEqual([]);
-      expect(catalog.read().agents[0]?.agentIdentity.realPath).toBe(
-        await realpath(agentPath),
-      );
-      expect(audit.events).toEqual([
-        "agent_adapter_auto_install_started",
-        "agent_adapter_auto_install_completed",
-        "agent_adapter_auto_install_verified",
-      ]);
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("Given no usable local Agent CLI, When the daemon prepares its catalog, Then it does not install an ACP adapter", async () => {
-    const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-automatic-adapter-no-agent-"),
-    );
-    const specification = new CodexAgentSpecification();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("codex", "Codex")],
-    );
-    const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-    try {
-      const inventory = await new AutomaticAdapterProvisioner(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit: new RecordingInstallationAudit(),
-          catalog,
-          environment: {
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: "",
-          },
-        },
-        adapterInstaller,
-        [specification],
-      ).prepare(new AbortController().signal);
-
-      expect(adapterInstaller.installedAgentIds).toEqual([]);
-      expect(inventory.readyAgents()).toEqual([]);
-      expect(catalog.read().installableAgents.map((agent) => agent.id)).toEqual(
-        ["codex"],
-      );
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("Given the user explicitly configured an adapter path, When it is unavailable, Then automatic provisioning does not replace that override", async () => {
-    const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-automatic-adapter-override-"),
-    );
-    const agentPath = join(stateDirectory, "external", "codex");
-    const specification = new CodexAgentSpecification();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("codex", "Codex")],
-    );
-    const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
-    try {
-      await writeExternalCodexAgent(agentPath);
-      const inventory = await new AutomaticAdapterProvisioner(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit: new RecordingInstallationAudit(),
-          catalog,
-          environment: {
-            MOBIUS_CODEX_ACP_PATH: join(
-              stateDirectory,
-              "explicit-missing-adapter",
-            ),
-            MOBIUS_CODEX_PATH: agentPath,
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: "",
-          },
-        },
-        adapterInstaller,
-        [specification],
-      ).prepare(new AbortController().signal);
-
-      expect(adapterInstaller.installedAgentIds).toEqual([]);
-      expect(inventory.readyAgents()).toEqual([]);
-      expect(catalog.read().installableAgents.map((agent) => agent.id)).toEqual(
-        ["codex"],
-      );
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("Given a verified local Agent but adapter installation fails, When the daemon prepares its catalog, Then it stays usable and leaves the Agent installable", async () => {
-    const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-automatic-adapter-failure-"),
-    );
-    const agentPath = join(stateDirectory, "external", "codex");
-    const specification = new CodexAgentSpecification();
-    const audit = new RecordingInstallationAudit();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("codex", "Codex")],
-    );
-    const adapterInstaller = new FailingAdapterInstaller();
-    try {
-      await writeExternalCodexAgent(agentPath);
-      const inventory = await new AutomaticAdapterProvisioner(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit,
-          catalog,
-          environment: {
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: join(stateDirectory, "external"),
-          },
-        },
-        adapterInstaller,
-        [specification],
-      ).prepare(new AbortController().signal);
-
-      expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
-      expect(inventory.readyAgents()).toEqual([]);
-      expect(catalog.read().installableAgents.map((agent) => agent.id)).toEqual(
-        ["codex"],
-      );
-      expect(audit.events).toEqual([
-        "agent_adapter_auto_install_started",
-        "agent_adapter_auto_install_failed",
-      ]);
-    } finally {
-      await rm(stateDirectory, { force: true, recursive: true });
-    }
-  });
-
-  it("Given adapter provisioning is cancelled, When the installer returns, Then cancellation remains distinct and no catalog transition is committed", async () => {
-    const stateDirectory = await mkdtemp(
-      join(tmpdir(), "mobius-automatic-adapter-cancel-"),
-    );
-    const agentPath = join(stateDirectory, "external", "codex");
-    const specification = new CodexAgentSpecification();
-    const audit = new RecordingInstallationAudit();
-    const catalog = new LocalAgentCatalog(
-      [],
-      [new InstallableAgentDefinition("sentinel", "Sentinel")],
-    );
-    const controller = new AbortController();
-    const reason = new Error("Automatic adapter provisioning cancelled");
-    try {
-      await writeExternalCodexAgent(agentPath);
-      const provisioning = new AutomaticAdapterProvisioner(
-        {
-          defaultWorkspace: repositoryRoot,
-          audit,
-          catalog,
-          environment: {
-            MOBIUS_STATE_DIRECTORY: stateDirectory,
-            PATH: join(stateDirectory, "external"),
-          },
-        },
-        new CancellingAdapterInstaller(controller, reason),
-        [specification],
-      ).prepare(controller.signal);
-
-      await expect(provisioning).rejects.toBe(reason);
-      expect(catalog.read().installableAgents.map((agent) => agent.id)).toEqual(
-        ["sentinel"],
-      );
-      expect(audit.events).toEqual([
-        "agent_adapter_auto_install_started",
-        "agent_adapter_auto_install_cancelled",
-      ]);
     } finally {
       await rm(stateDirectory, { force: true, recursive: true });
     }

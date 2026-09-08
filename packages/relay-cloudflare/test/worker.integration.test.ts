@@ -46,11 +46,19 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayOrigin = "https://relay.test";
-const readyAgents = [{ id: "codex", label: "Codex" }];
+const readyAgents = [
+  {
+    agentPath: "/usr/local/bin/codex",
+    agentVersion: "codex 0.153.0",
+    id: "codex",
+    label: "Codex",
+  },
+];
 const installableAgents = [
   {
     id: "claude-code",
     label: "Claude Code",
+    status: "agent_not_installed",
   },
 ];
 const attemptIdsBySession = new Map<string, string>();

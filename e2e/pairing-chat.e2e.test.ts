@@ -23,8 +23,14 @@ import {
 import { runDaemon } from "../packages/cli/src/run-daemon.ts";
 import {
   AGENT_ACTIVITY_KIND,
+  AGENT_INSTALL_COMPLETED_KIND,
+  AGENT_INSTALL_FAILED_KIND,
+  AGENT_INSTALL_REQUEST_KIND,
+  AGENT_INSTALL_STARTED_KIND,
   AGENT_MESSAGE_DELTA_KIND,
   decodeAgentActivityEvent,
+  decodeAgentInstallCompletedEvent,
+  decodeAgentInstallFailedEvent,
   decodeAgentMessageDeltaEvent,
   decodeCommittedSessionEvent,
   decodeMessageKind,
@@ -40,6 +46,7 @@ import {
   decodeSessionStartedEvent,
   decodeSessionUsageUpdatedEvent,
   encodeAgentActivityEvent,
+  encodeAgentInstallRequestCommand,
   encodeAgentMessageDeltaEvent,
   encodeRuntimeHeartbeatEvent,
   encodeSessionCancelCommand,
@@ -494,11 +501,19 @@ function waitForProtocolKind(
   socket: WebSocket,
   expectedKind: string,
 ): Promise<string> {
+  return waitForProtocolKinds(socket, [expectedKind]);
+}
+
+function waitForProtocolKinds(
+  socket: WebSocket,
+  expectedKinds: readonly string[],
+  timeoutMilliseconds = 8_000,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       cleanup();
-      reject(new Error(`Did not receive ${expectedKind}`));
-    }, 8_000);
+      reject(new Error(`Did not receive ${expectedKinds.join(" or ")}`));
+    }, timeoutMilliseconds);
     const cleanup = (): void => {
       clearTimeout(timeout);
       socket.removeEventListener("message", handleMessage);
@@ -513,7 +528,7 @@ function waitForProtocolKind(
         return;
       }
       const message = unwrapCommittedEvent(event.data);
-      if (decodeMessageKind(message) !== expectedKind) {
+      if (!expectedKinds.includes(decodeMessageKind(message))) {
         return;
       }
       cleanup();
@@ -2128,7 +2143,7 @@ describe("pairing and channel chat", () => {
     }
   });
 
-  it("Given Codex, Claude Code, and Pi integrations on a paired machine, When the browser sends prompts and the daemon restarts, Then responses, usage, and Pi recovery persist", {
+  it("Given Codex and Pi are ready while Claude Code needs an integration, When the browser installs that integration and the daemon restarts, Then all Agent details, responses, usage, and Pi recovery persist", {
     timeout: 90_000,
   }, async () => {
     const temporaryDirectory = await mkdtemp(
@@ -2250,8 +2265,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
       "native",
     );
     process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
-    process.env["PATH"] =
-      `${executableDirectory}${delimiter}${previousPath ?? ""}`;
+    process.env["PATH"] = executableDirectory;
     process.env["NO_PROXY"] = "127.0.0.1,localhost";
     process.env["no_proxy"] = "127.0.0.1,localhost";
 
@@ -2269,7 +2283,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
       ],
       {
         cwd: repositoryRoot,
-        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        env: {
+          ...process.env,
+          PATH: previousPath ?? "",
+          WRANGLER_SEND_METRICS: "false",
+        },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -2376,36 +2394,58 @@ child.once("exit", (code) => process.exit(code ?? 93));
       const publicChannel: unknown = await authorizedChannelResponse.json();
       expect(publicChannel).toMatchObject({
         agents: [
-          { id: "codex", label: "Codex" },
-          { id: "pi", label: "Pi" },
+          {
+            agentPath: codexPath,
+            agentVersion: "codex 0.153.0",
+            id: "codex",
+            label: "Codex",
+          },
+          {
+            agentPath: piPath,
+            agentVersion: "0.85.0",
+            id: "pi",
+            label: "Pi",
+          },
         ],
         channelId: pairing.channelId,
         installableAgents: [
           {
+            agentPath: claudePath,
+            agentVersion: "2.1.138 (Claude Code)",
             id: "claude",
             label: "Claude Code",
+            status: "integration_not_installed",
           },
           {
             id: "deepseek-harness",
             label: "DeepSeek Harness",
+            status: "agent_not_installed",
           },
           {
             id: "opencode",
             label: "OpenCode",
+            status: "agent_not_installed",
+          },
+          {
+            id: "cursor",
+            label: "Cursor CLI",
+            status: "agent_not_installed",
           },
           {
             id: "grok-build",
             label: "Grok Build",
+            status: "agent_not_installed",
           },
           {
             id: "workbuddy",
             label: "WorkBuddy",
+            status: "agent_not_installed",
           },
         ],
         machineName: expect.any(String),
         workspaceName: expect.any(String),
       });
-      expect(JSON.stringify(publicChannel)).not.toContain(temporaryDirectory);
+      expect(JSON.stringify(publicChannel)).not.toContain(codexAdapterPath);
       const catalogEndpoint = new URL(paired.config.relayUrl);
       catalogEndpoint.protocol = "http:";
       catalogEndpoint.pathname = catalogEndpoint.pathname.replace(
@@ -2415,7 +2455,14 @@ child.once("exit", (code) => process.exit(code ?? 93));
       catalogEndpoint.searchParams.set("token", "invalid");
       const unauthorizedCatalogUpdate = await fetch(catalogEndpoint, {
         body: JSON.stringify({
-          agents: [{ id: "codex", label: "Codex" }],
+          agents: [
+            {
+              agentPath: codexPath,
+              agentVersion: "codex 0.153.0",
+              id: "codex",
+              label: "Codex",
+            },
+          ],
           installableAgents: [],
         }),
         headers: { "content-type": "application/json" },
@@ -2452,7 +2499,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
         const socket = new WebSocket(hostSocketUrl(pairing, origin));
         try {
           await waitForRuntimeOnline(socket);
-          const automaticallyProvisionedDescriptor = await fetch(
+          const awaitingIntegrationDescriptor = await fetch(
             new URL(
               `${MOBIUS_API_PREFIX}/channels/${encodeURIComponent(pairing.channelId)}`,
               origin,
@@ -2460,23 +2507,106 @@ child.once("exit", (code) => process.exit(code ?? 93));
             { headers: authenticatedHeaders(pairing) },
           );
           await expect(
-            automaticallyProvisionedDescriptor.json(),
+            awaitingIntegrationDescriptor.json(),
           ).resolves.toMatchObject({
             agents: [
               { id: "codex", label: "Codex" },
-              { id: "claude", label: "Claude Code" },
               { id: "pi", label: "Pi" },
             ],
             installableAgents: [
-              { id: "deepseek-harness", label: "DeepSeek Harness" },
-              { id: "opencode", label: "OpenCode" },
-              { id: "grok-build", label: "Grok Build" },
-              { id: "workbuddy", label: "WorkBuddy" },
+              {
+                agentPath: claudePath,
+                agentVersion: "2.1.138 (Claude Code)",
+                id: "claude",
+                label: "Claude Code",
+                status: "integration_not_installed",
+              },
+              {
+                id: "deepseek-harness",
+                label: "DeepSeek Harness",
+                status: "agent_not_installed",
+              },
+              {
+                id: "opencode",
+                label: "OpenCode",
+                status: "agent_not_installed",
+              },
+              {
+                id: "cursor",
+                label: "Cursor CLI",
+                status: "agent_not_installed",
+              },
+              {
+                id: "grok-build",
+                label: "Grok Build",
+                status: "agent_not_installed",
+              },
+              {
+                id: "workbuddy",
+                label: "WorkBuddy",
+                status: "agent_not_installed",
+              },
             ],
           });
           await expect(
             readFile(packageManagerRecordPath, "utf8"),
+          ).rejects.toMatchObject({ code: "ENOENT" });
+
+          const integrationRequestId = crypto.randomUUID();
+          const integrationCompleted = waitForProtocolKinds(
+            socket,
+            [AGENT_INSTALL_COMPLETED_KIND, AGENT_INSTALL_FAILED_KIND],
+            30_000,
+          );
+          const integrationStarted = waitForProtocolKinds(
+            socket,
+            [AGENT_INSTALL_STARTED_KIND],
+            30_000,
+          );
+          socket.send(
+            encodeAgentInstallRequestCommand({
+              agentId: "claude",
+              kind: AGENT_INSTALL_REQUEST_KIND,
+              requestId: integrationRequestId,
+            }),
+          );
+          await integrationStarted;
+          const integrationResult = await integrationCompleted;
+          if (
+            decodeMessageKind(integrationResult) === AGENT_INSTALL_FAILED_KIND
+          ) {
+            throw new Error(
+              `Integration installation failed: ${JSON.stringify(decodeAgentInstallFailedEvent(integrationResult))}`,
+            );
+          }
+          expect(
+            decodeAgentInstallCompletedEvent(integrationResult),
+          ).toMatchObject({
+            agentId: "claude",
+            requestId: integrationRequestId,
+          });
+          await expect(
+            readFile(packageManagerRecordPath, "utf8"),
           ).resolves.toBe("@agentclientprotocol/claude-agent-acp@0.73.0\n");
+          const integratedDescriptor = await fetch(
+            new URL(
+              `${MOBIUS_API_PREFIX}/channels/${encodeURIComponent(pairing.channelId)}`,
+              origin,
+            ),
+            { headers: authenticatedHeaders(pairing) },
+          );
+          await expect(integratedDescriptor.json()).resolves.toMatchObject({
+            agents: [
+              { id: "codex", label: "Codex" },
+              {
+                agentPath: claudePath,
+                agentVersion: "2.1.138 (Claude Code)",
+                id: "claude",
+                label: "Claude Code",
+              },
+              { id: "pi", label: "Pi" },
+            ],
+          });
           await expect(
             runBrowserPrompt(
               socket,
@@ -2719,15 +2849,51 @@ child.once("exit", (code) => process.exit(code ?? 93));
         );
         await expect(refreshedDescriptor.json()).resolves.toMatchObject({
           agents: [
-            { id: "codex", label: "Codex" },
-            { id: "claude", label: "Claude Code" },
-            { id: "pi", label: "Pi" },
+            {
+              agentPath: codexPath,
+              agentVersion: "codex 0.153.0",
+              id: "codex",
+              label: "Codex",
+            },
+            {
+              agentPath: claudePath,
+              agentVersion: "2.1.138 (Claude Code)",
+              id: "claude",
+              label: "Claude Code",
+            },
+            {
+              agentPath: piPath,
+              agentVersion: "0.85.0",
+              id: "pi",
+              label: "Pi",
+            },
           ],
           installableAgents: [
-            { id: "deepseek-harness", label: "DeepSeek Harness" },
-            { id: "opencode", label: "OpenCode" },
-            { id: "grok-build", label: "Grok Build" },
-            { id: "workbuddy", label: "WorkBuddy" },
+            {
+              id: "deepseek-harness",
+              label: "DeepSeek Harness",
+              status: "agent_not_installed",
+            },
+            {
+              id: "opencode",
+              label: "OpenCode",
+              status: "agent_not_installed",
+            },
+            {
+              id: "cursor",
+              label: "Cursor CLI",
+              status: "agent_not_installed",
+            },
+            {
+              id: "grok-build",
+              label: "Grok Build",
+              status: "agent_not_installed",
+            },
+            {
+              id: "workbuddy",
+              label: "WorkBuddy",
+              status: "agent_not_installed",
+            },
           ],
         });
         await expect(

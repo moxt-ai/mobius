@@ -12,6 +12,7 @@ import {
 } from "@moxt-ai/mobius-web-sdk";
 
 import {
+  AgentIntegrationOption,
   AgentOption,
   type BrowserPairingStatus,
   ChannelConnection,
@@ -22,11 +23,12 @@ import {
   CreatedPairing,
   ExpiredBrowserPairingStatus,
   FailedRecordedTurn,
-  InstallableAgentOption,
+  type InstallableAgentOption,
   isIdentifier,
   isPairingCode,
   isToken,
   LinkedChannelDevice,
+  MissingAgentOption,
   PairingApiError,
   PendingRecordedTurn,
   RecordedActivity,
@@ -489,7 +491,9 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
   for (const candidate of value) {
     if (
       !isRecord(candidate) ||
-      Object.keys(candidate).length !== 2 ||
+      Object.keys(candidate).length !== 4 ||
+      !Object.hasOwn(candidate, "agentPath") ||
+      !Object.hasOwn(candidate, "agentVersion") ||
       !Object.hasOwn(candidate, "id") ||
       !Object.hasOwn(candidate, "label")
     ) {
@@ -500,7 +504,15 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     }
     const id = candidate["id"];
     const label = candidate["label"];
+    const agentPath = candidate["agentPath"];
+    const agentVersion = candidate["agentVersion"];
     if (
+      typeof agentPath !== "string" ||
+      agentPath.trim().length === 0 ||
+      agentPath.length > 4_096 ||
+      typeof agentVersion !== "string" ||
+      agentVersion.trim().length === 0 ||
+      agentVersion.length > 128 ||
       typeof id !== "string" ||
       !isIdentifier(id) ||
       identifiers.has(id) ||
@@ -514,7 +526,9 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
       );
     }
     identifiers.add(id);
-    agents.push(new AgentOption(id, label.trim()));
+    agents.push(
+      new AgentOption(id, label.trim(), agentPath, agentVersion.trim()),
+    );
   }
   return agents;
 }
@@ -531,12 +545,7 @@ function decodeInstallableAgents(
   const agents: InstallableAgentOption[] = [];
   const identifiers = new Set<string>();
   for (const candidate of value) {
-    if (
-      !isRecord(candidate) ||
-      Object.keys(candidate).length !== 2 ||
-      !Object.hasOwn(candidate, "id") ||
-      !Object.hasOwn(candidate, "label")
-    ) {
+    if (!isRecord(candidate)) {
       throw new PairingApiError(
         "invalid_relay_response",
         "The relay returned an invalid installable Agent directory.",
@@ -558,7 +567,55 @@ function decodeInstallableAgents(
       );
     }
     identifiers.add(id);
-    agents.push(new InstallableAgentOption(id, label.trim()));
+    const status = candidate["status"];
+    if (
+      status === "agent_not_installed" &&
+      Object.keys(candidate).length === 3 &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label") &&
+      Object.hasOwn(candidate, "status")
+    ) {
+      agents.push(new MissingAgentOption(id, label.trim()));
+      continue;
+    }
+    if (
+      status === "integration_not_installed" &&
+      Object.keys(candidate).length === 5 &&
+      Object.hasOwn(candidate, "agentPath") &&
+      Object.hasOwn(candidate, "agentVersion") &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label") &&
+      Object.hasOwn(candidate, "status")
+    ) {
+      const agentPath = candidate["agentPath"];
+      const agentVersion = candidate["agentVersion"];
+      if (
+        typeof agentPath !== "string" ||
+        agentPath.trim().length === 0 ||
+        agentPath.length > 4_096 ||
+        typeof agentVersion !== "string" ||
+        agentVersion.trim().length === 0 ||
+        agentVersion.length > 128
+      ) {
+        throw new PairingApiError(
+          "invalid_relay_response",
+          "The relay returned an invalid installable Agent directory.",
+        );
+      }
+      agents.push(
+        new AgentIntegrationOption(
+          id,
+          label.trim(),
+          agentPath,
+          agentVersion.trim(),
+        ),
+      );
+      continue;
+    }
+    throw new PairingApiError(
+      "invalid_relay_response",
+      "The relay returned an invalid installable Agent directory.",
+    );
   }
   return agents;
 }

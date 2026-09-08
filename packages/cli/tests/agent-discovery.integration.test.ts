@@ -34,7 +34,7 @@ function executableSource(source: string): string {
 }
 
 describe("local Agent discovery", () => {
-  it("Given a verified Pi executable exists without pi-acp, When discovery runs, Then Pi is installable but not ready", async () => {
+  it("Given a verified Pi executable exists without pi-acp, When discovery runs, Then Pi is detected with its details but its integration is not ready", async () => {
     const temporaryDirectory = await mkdtemp(
       join(tmpdir(), "mobius-pi-missing-adapter-"),
     );
@@ -68,7 +68,13 @@ if (process.argv.includes("--version")) {
         status: "missing_adapter",
       });
       expect(inventory.installable).toEqual([
-        expect.objectContaining({ id: "pi", label: "Pi" }),
+        expect.objectContaining({
+          agentPath: piPath,
+          agentVersion: "0.85.0",
+          id: "pi",
+          label: "Pi",
+          status: "integration_not_installed",
+        }),
       ]);
     } finally {
       await rm(temporaryDirectory, { force: true, recursive: true });
@@ -122,7 +128,15 @@ child.once("exit", (code) => process.exit(code ?? 93));
       });
 
       expect(inventory.available).toEqual([]);
-      expect(inventory.installable).toEqual([]);
+      expect(inventory.installable).toEqual([
+        expect.objectContaining({
+          agentPath: piPath,
+          agentVersion: "0.85.0",
+          id: "pi",
+          label: "Pi",
+          status: "integration_not_installed",
+        }),
+      ]);
       expect(inventory.unavailable).toHaveLength(1);
       expect(inventory.unavailable[0]).toMatchObject({
         code: "authentication_required",

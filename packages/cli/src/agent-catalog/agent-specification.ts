@@ -63,13 +63,6 @@ export abstract class LocalAgentSpecification {
     _context: LocalAgentDiscoveryContext,
   ): Promise<readonly ResolvedExecutable[]> => Promise.resolve([]);
 
-  readonly supportsInstallation = (
-    platform: NodeJS.Platform,
-    architecture: NodeJS.Architecture,
-  ): boolean =>
-    (platform === "darwin" || platform === "linux") &&
-    (architecture === "arm64" || architecture === "x64");
-
   readonly verifyAcp = (
     _connection: ClientConnection,
     _initialized: InitializeResponse,

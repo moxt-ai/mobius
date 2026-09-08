@@ -145,7 +145,15 @@ if (process.argv.includes("--version")) {
       });
 
       expect(inventory.available).toEqual([]);
-      expect(inventory.installable).toEqual([]);
+      expect(inventory.installable).toEqual([
+        expect.objectContaining({
+          agentPath: executablePath,
+          agentVersion: "2.146.0",
+          id: "workbuddy",
+          label: "WorkBuddy",
+          status: "integration_not_installed",
+        }),
+      ]);
       expect(JSON.parse(formatAgentDiagnostics(inventory, true))).toEqual({
         available: [],
         unavailable: [

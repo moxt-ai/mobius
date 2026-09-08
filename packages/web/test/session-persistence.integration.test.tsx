@@ -102,8 +102,18 @@ describe.sequential("Session persistence boundaries", () => {
   it("Given a user selected a workspace, Agent, and run configuration, When they start a new chat, Then the new Session reuses all three selections", async () => {
     const paired = await pairDaemon({
       agents: [
-        { id: "codex", label: "Codex" },
-        { id: "claude", label: "Claude" },
+        {
+          agentPath: "/usr/local/bin/codex",
+          agentVersion: "codex 0.153.0",
+          id: "codex",
+          label: "Codex",
+        },
+        {
+          agentPath: "/usr/local/bin/claude",
+          agentVersion: "claude 2.1.210",
+          id: "claude",
+          label: "Claude",
+        },
       ],
     });
     window.history.replaceState(

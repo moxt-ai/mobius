@@ -1,7 +1,9 @@
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import {
-  InstallableAgentDefinition,
+  type AgentIntegrationDefinition,
+  type InstallableAgentDefinition,
   type LocalAgentDefinition,
+  MissingAgentDefinition,
 } from "./local-agent.ts";
 
 export abstract class AgentDiscovery {
@@ -31,13 +33,28 @@ export abstract class UnavailableAgent extends AgentDiscovery {
   abstract readonly message: string;
 }
 
-export class MissingAdapter extends UnavailableAgent {
+export abstract class UnavailableInstalledAgent extends UnavailableAgent {
+  readonly agent: AgentIntegrationDefinition;
+
+  protected constructor(
+    specification: LocalAgentSpecification,
+    agent: AgentIntegrationDefinition,
+  ) {
+    super(specification);
+    this.agent = agent;
+  }
+}
+
+export class MissingAdapter extends UnavailableInstalledAgent {
   readonly code = "adapter_not_found";
   readonly message = "ACP adapter not found";
   readonly status = "missing_adapter";
 
-  constructor(specification: LocalAgentSpecification) {
-    super(specification);
+  constructor(
+    specification: LocalAgentSpecification,
+    agent: AgentIntegrationDefinition,
+  ) {
+    super(specification, agent);
   }
 }
 
@@ -51,7 +68,7 @@ export class MissingAgent extends UnavailableAgent {
   }
 }
 
-export class ProbeFailed extends UnavailableAgent {
+export class AgentProbeFailed extends UnavailableAgent {
   readonly code: string;
   readonly message: string;
   readonly status = "probe_failed";
@@ -67,23 +84,46 @@ export class ProbeFailed extends UnavailableAgent {
   }
 }
 
-export class IncompatibleAdapter extends UnavailableAgent {
+export class IntegrationProbeFailed extends UnavailableInstalledAgent {
+  readonly code: string;
+  readonly message: string;
+  readonly status = "probe_failed";
+
+  constructor(
+    specification: LocalAgentSpecification,
+    agent: AgentIntegrationDefinition,
+    code: string,
+    message: string,
+  ) {
+    super(specification, agent);
+    this.code = code;
+    this.message = message;
+  }
+}
+
+export class IncompatibleAdapter extends UnavailableInstalledAgent {
   readonly code = "acp_incompatible";
   readonly message = "ACP adapter is incompatible";
   readonly status = "incompatible_adapter";
 
-  constructor(specification: LocalAgentSpecification) {
-    super(specification);
+  constructor(
+    specification: LocalAgentSpecification,
+    agent: AgentIntegrationDefinition,
+  ) {
+    super(specification, agent);
   }
 }
 
-export class AuthenticationRequiredAgent extends UnavailableAgent {
+export class AuthenticationRequiredAgent extends UnavailableInstalledAgent {
   readonly code = "authentication_required";
   readonly message = "Agent authentication is required";
   readonly status = "authentication_required";
 
-  constructor(specification: LocalAgentSpecification) {
-    super(specification);
+  constructor(
+    specification: LocalAgentSpecification,
+    agent: AgentIntegrationDefinition,
+  ) {
+    super(specification, agent);
   }
 }
 
@@ -93,11 +133,7 @@ export class LocalAgentInventory {
   readonly installable: readonly InstallableAgentDefinition[];
   readonly unavailable: readonly UnavailableAgent[];
 
-  constructor(
-    discoveries: readonly AgentDiscovery[],
-    platform: NodeJS.Platform = process.platform,
-    architecture: NodeJS.Architecture = process.arch,
-  ) {
+  constructor(discoveries: readonly AgentDiscovery[]) {
     const available: AvailableAgent[] = [];
     const unavailable: UnavailableAgent[] = [];
     for (const discovery of discoveries) {
@@ -112,22 +148,14 @@ export class LocalAgentInventory {
     this.available = Object.freeze(available);
     this.discoveries = Object.freeze([...discoveries]);
     this.installable = Object.freeze(
-      unavailable
-        .filter(
-          (discovery) =>
-            !(discovery instanceof AuthenticationRequiredAgent) &&
-            discovery.specification.supportsInstallation(
-              platform,
-              architecture,
-            ),
-        )
-        .map(
-          (discovery) =>
-            new InstallableAgentDefinition(
+      unavailable.map((discovery) =>
+        discovery instanceof UnavailableInstalledAgent
+          ? discovery.agent
+          : new MissingAgentDefinition(
               discovery.specification.id,
               discovery.specification.label,
             ),
-        ),
+      ),
     );
     this.unavailable = Object.freeze(unavailable);
   }

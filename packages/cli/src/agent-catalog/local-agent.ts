@@ -60,13 +60,39 @@ export class LocalAgentDefinition {
   }
 }
 
-export class InstallableAgentDefinition {
+export abstract class InstallableAgentDefinition {
   readonly id: string;
   readonly label: string;
+  abstract readonly status: string;
 
-  constructor(id: string, label: string) {
+  protected constructor(id: string, label: string) {
     this.id = id;
     this.label = label;
+  }
+}
+
+export class MissingAgentDefinition extends InstallableAgentDefinition {
+  readonly status = "agent_not_installed";
+
+  constructor(id: string, label: string) {
+    super(id, label);
+  }
+}
+
+export class AgentIntegrationDefinition extends InstallableAgentDefinition {
+  readonly agentPath: string;
+  readonly agentVersion: string;
+  readonly status = "integration_not_installed";
+
+  constructor(
+    id: string,
+    label: string,
+    agentPath: string,
+    agentVersion: string,
+  ) {
+    super(id, label);
+    this.agentPath = agentPath;
+    this.agentVersion = agentVersion;
   }
 }
 

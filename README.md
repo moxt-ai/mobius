@@ -149,10 +149,11 @@ working.
 
 The channel sidebar links directly to Agent settings and to
 `/channels/<channel-id>/access`. Agent settings shows verified local Agents
-separately from supported integrations that still need installation or recovery.
-Missing integrations use the same locally authorized install, retry, progress,
-and cancellation flow. The page intentionally does not expose local Agent paths,
-versions, provider credentials, or a remote uninstall action.
+separately from supported Agents that still need setup. A locally detected Agent
+shows its reported version and executable path; an Agent that was not detected is
+explicitly labeled `Not installed`. `Install integration` rechecks local
+discovery, then installs or repairs only the ACP integration. The page does not
+expose provider credentials or offer a remote Agent uninstall action.
 
 The pairing browser stores an owner host credential for the channel. The normal
 URL contains only the channel address, so opening it in another browser without
@@ -211,59 +212,39 @@ bundle. An explicit override is authoritative and fails closed; an automatically
 found executable must pass the full probe before Mobius may fall back to a
 previously verified private cache entry. The default working directory does not
 affect discovery.
-Executable paths, versions, identities, probe output, and adapter environment
-stay on the local machine. The Relay receives only stable Agent identifiers,
-labels, and sanitized ready/installable metadata.
+The daemon publishes each detected Agent's discovered executable path and reported
+version as authenticated channel catalog metadata so Agent settings can display
+them. This means the channel owner and linked devices can read those two local
+details through the Relay. File identities, adapter paths, probe output, launch
+environment, and provider credentials stay on the local machine.
 
-For integrations that need a separate ACP adapter, if the Agent CLI passes local
-executable and version checks but its adapter is missing, broken, or
-ACP-incompatible, the paired daemon automatically installs the exact pinned
-adapter into Mobius's private cache with optional platform Agent dependencies
-omitted. It then repeats the complete discovery and ACP initialize handshake
-before advertising the Agent. Mobius never installs or replaces an Agent CLI
-through this automatic adapter path. Direct ACP integrations never install an
-adapter. An explicit override remains authoritative and is never replaced
-automatically. Installation failure does not take the channel offline; the Agent
-remains in the installable catalog with a sanitized diagnostic.
+Pairing and saved-channel startup are read-only. A detected Agent whose ACP
+adapter is missing, broken, or incompatible is published with
+`integration_not_installed`; an absent or unverified Agent is published with
+`agent_not_installed`. No adapter or Agent package is installed automatically
+when the daemon starts.
 
-`mobius agents` and the one-time pairing claim remain read-only. The command
-prints the exact lightweight adapter recovery command when applicable, while
-automatic adapter provisioning begins only as the authenticated local daemon
-starts.
+`mobius agents` prints the exact lightweight adapter recovery command when
+applicable. The one-time pairing claim remains read-only.
 
-When no verified Agent is ready, the running paired daemon keeps the channel
-online and Web offers the supported fixed user-level Agent installation and
-recovery recipes. A Web click confirms that individual installation request.
-The local daemon authorizes the requested Agent ID and platform against its
-built-in catalog, resolves only the matching fixed recipe, and starts it without
-a second terminal confirmation. The initial recipes use the documented
-[Codex standalone installer](https://learn.chatgpt.com/docs/codex/cli) and
-[Claude Code native stable channel](https://code.claude.com/docs/en/installation),
-plus the exact `@earendil-works/pi-coding-agent@0.85.0` and
-`@deepseek-ai/dsh@0.1.2-rc.1` packages and checksum-pinned OpenCode platform
-archives. Grok Build uses the exact `@xai-official/grok@1.0.21` package and its
-matching integrity-pinned platform package. WorkBuddy uses the exact
-`@tencent-ai/codebuddy-code@2.146.0` package. Cursor CLI remains local-only
-because its official multi-file distribution is outside the single-artifact
-managed installer boundary. The npm recipes disable lifecycle scripts and verify
-the published package SRI. Grok's one required, pinned postinstall step runs with
-an allowlisted environment and writes only to an isolated managed `GROK_HOME`.
-DeepSeek also installs the lockfile's platform
-optional dependencies because its `sharp` and `koffi` runtimes require them,
-pins dependency resolution to the audited release window, and rejects any
-dependency without registry origin and SHA-512 integrity. Pi and separate
-adapters continue to omit optional dependencies. Pi and
-`pi-acp@0.0.33` use separate versioned private cache entries. Managed DeepSeek
-Harness receives a separate `DSH_HOME` and a fixed
-`DSH_PERMISSION_MODE=workspace-write`; a validated local `DSH_HOME` remains in
-use for a local installation. OpenCode archives are restricted to one expected
-executable, verified before extraction, and revalidated from a local manifest
-before every use. Mobius downloads or installs into a private staging directory,
-applies bounded verification and execution, repeats normal ACP discovery, and
-publishes the Agent only after the full path succeeds. Progress sent to Web
-contains stages and stable errors, never commands, URLs, paths, raw output,
-environment values, or credentials. Installing an Agent does not sign the user
-into its provider.
+When no verified integration is ready, the paired daemon keeps the channel
+online and Web still lists every supported Agent. The user installs the Agent CLI
+themselves. Selecting `Install integration` makes the local daemon rediscover the
+Agent at that moment, so a CLI installed after daemon startup is recognized
+without pairing again. If the Agent is still absent, the request fails with
+`agent_not_installed` and asks the user to install it locally. Mobius never
+downloads, installs, upgrades, removes, or signs in to the Agent CLI through this
+button.
+
+For a detected bridged Agent, the explicit request may install the exact pinned
+ACP adapter into Mobius's private cache, then repeats normal discovery and the
+ACP initialize handshake before advertising the integration as ready. Direct ACP
+Agents only repeat verification because they need no separate adapter. An
+explicit adapter override remains authoritative and is never replaced. Failure
+does not take the channel offline; the Agent remains in the setup catalog with a
+sanitized diagnostic. Progress events contain stable integration stages and
+errors, never commands, URLs, adapter paths, raw output, environment values, or
+credentials.
 
 The Web request cannot change a release channel, command, URL, arguments, or
 installation target. Local provider credentials remain with the Agent process
@@ -275,7 +256,7 @@ DeepSeek Harness reads credentials from its validated local home or launch
 environment; use the local `dsh web` Models page or `DEEPSEEK_API_KEY` to
 configure the default route. `mobius agents` reports ACP
 authentication failures as `authentication_required` without exposing a
-credential or local path. Pairing authorizes this channel to request work within
+credential. Pairing authorizes this channel to request work within
 the operating-system permissions of the user running Mobius. Agent-specific
 sandbox and approval behavior remains under the Agent's own configuration.
 

@@ -12,26 +12,24 @@ import {
 import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/supported-agent-specifications.ts";
 import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import {
+  findVerifiedAgentExecutable,
   resolveAdapterExecutable,
-  resolveAgentExecutable,
 } from "../agent-catalog/executable-discovery.ts";
-import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
-import { ProcessExecutionError } from "../process/executable.ts";
+import {
+  AgentIntegrationDefinition,
+  type LocalAgentCatalog,
+  MissingAgentDefinition,
+} from "../agent-catalog/local-agent.ts";
 import type {
   InstallationAudit,
   InstallationExecutor,
 } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
 import {
-  type FixedAgentInstallRecipe,
-  fixedAgentInstallRecipes,
-} from "./fixed-agent-install-recipes.ts";
-import {
   type AdapterInstallationPort,
   ManagedAdapterInstallError,
   ManagedAdapterInstaller,
 } from "./managed-adapter-installer.ts";
-import { InstallerDownloadError } from "./verified-download.ts";
 
 export interface FixedInstallationExecutorOptions {
   readonly defaultWorkspace: string;
@@ -57,21 +55,6 @@ function findSpecification(
   );
 }
 
-function findRecipe(
-  recipes: readonly FixedAgentInstallRecipe[],
-  agentId: string,
-): FixedAgentInstallRecipe {
-  for (const recipe of recipes) {
-    if (recipe.id === agentId) {
-      return recipe;
-    }
-  }
-  throw new InstallationManagerError(
-    "agent_not_installable",
-    "The requested Agent does not have an approved installation recipe",
-  );
-}
-
 function resolveDefaultWorkspace(path: string): string {
   try {
     const directory = realpathSync(resolve(path));
@@ -88,7 +71,7 @@ function resolveDefaultWorkspace(path: string): string {
   }
 }
 
-function resolveUserInstallationDirectory(path: string): string {
+function resolveIntegrationStateDirectory(path: string): string {
   try {
     const directory = realpathSync(resolve(path));
     const metadata = statSync(directory);
@@ -103,7 +86,7 @@ function resolveUserInstallationDirectory(path: string): string {
   } catch (error) {
     throw new InstallationManagerError(
       "unsafe_installation_root",
-      "The local Agent installation root is unavailable or unsafe",
+      "The local integration state directory is unavailable or unsafe",
       { cause: error },
     );
   }
@@ -113,27 +96,15 @@ function translateExecutionError(error: unknown): InstallationManagerError {
   if (error instanceof InstallationManagerError) {
     return error;
   }
-  if (
-    error instanceof ManagedAdapterInstallError ||
-    error instanceof InstallerDownloadError ||
-    error instanceof ProcessExecutionError
-  ) {
+  if (error instanceof ManagedAdapterInstallError) {
     return new InstallationManagerError(error.code, error.message, {
       cause: error,
     });
   }
   return new InstallationManagerError(
     "installation_failed",
-    "The fixed local Agent installation failed",
+    "The local Agent integration installation failed",
     { cause: error },
-  );
-}
-
-function requiresAgentReplacement(code: string): boolean {
-  return (
-    code === "agent_not_found" ||
-    code === "agent_probe_failed" ||
-    code === "agent_probe_timeout"
   );
 }
 
@@ -153,18 +124,15 @@ export class FixedInstallationExecutor implements InstallationExecutor {
   readonly #catalog: LocalAgentCatalog;
   readonly #environment: Readonly<NodeJS.ProcessEnv>;
   readonly #publishCatalog: (signal: AbortSignal) => Promise<void>;
-  readonly #recipes: readonly FixedAgentInstallRecipe[];
   readonly #specifications: readonly LocalAgentSpecification[];
-  readonly #stateDirectory: string;
 
   constructor(
     options: FixedInstallationExecutorOptions,
     specifications: readonly LocalAgentSpecification[] = supportedLocalAgentSpecifications(),
-    recipes: readonly FixedAgentInstallRecipe[] = fixedAgentInstallRecipes(),
     adapterInstaller?: AdapterInstallationPort,
   ) {
     const defaultWorkspace = resolveDefaultWorkspace(options.defaultWorkspace);
-    const stateDirectory = resolveUserInstallationDirectory(
+    const stateDirectory = resolveIntegrationStateDirectory(
       options.stateDirectory,
     );
     this.#defaultWorkspace = defaultWorkspace;
@@ -172,9 +140,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
     this.#catalog = options.catalog;
     this.#environment = Object.freeze({ ...options.environment });
     this.#publishCatalog = options.publishCatalog;
-    this.#recipes = Object.freeze([...recipes]);
     this.#specifications = Object.freeze([...specifications]);
-    this.#stateDirectory = stateDirectory;
     this.#adapterInstaller =
       adapterInstaller ??
       new ManagedAdapterInstaller({
@@ -191,34 +157,60 @@ export class FixedInstallationExecutor implements InstallationExecutor {
   ): Promise<void> => {
     try {
       const specification = findSpecification(this.#specifications, agentId);
-      const recipe = findRecipe(this.#recipes, agentId);
-      this.#audit.record(
-        "agent_installation_recipe_resolved",
-        requestId,
-        agentId,
-        {
-          adapterVersion: specification.adapterVersion,
-          releaseChannel: recipe.releaseChannel,
-        },
-      );
       const discoveryOptions = {
         defaultWorkspace: this.#defaultWorkspace,
         environment: this.#environment,
         signal,
       };
-      let agent = await resolveAgentExecutable(specification, discoveryOptions);
-      let installedAgent = false;
-      if (agent === null) {
-        agent = await recipe.install({
-          audit: this.#audit,
-          environment: this.#environment,
-          report,
-          requestId,
-          signal,
-          stateDirectory: this.#stateDirectory,
-        });
-        installedAgent = true;
+      const initialInventory = await discoverLocalAgentInventory({
+        ...discoveryOptions,
+        specifications: this.#specifications,
+      });
+      const previous = this.#catalog.read();
+      this.#catalog.transition(
+        initialInventory.readyAgents(),
+        initialInventory.installable,
+      );
+      try {
+        await this.#publishCatalog(signal);
+      } catch (error) {
+        this.#catalog.transition(previous.agents, previous.installableAgents);
+        throw error;
       }
+
+      const alreadyReady = initialInventory.available.find(
+        (candidate) => candidate.specification.id === agentId,
+      );
+      if (alreadyReady instanceof AvailableAgent) {
+        return;
+      }
+      const candidate = initialInventory.installable.find(
+        (agent) => agent.id === agentId,
+      );
+      if (candidate instanceof MissingAgentDefinition) {
+        throw new InstallationManagerError(
+          "agent_not_installed",
+          `Install ${specification.label} on this machine, then try installing the integration again.`,
+        );
+      }
+      if (!(candidate instanceof AgentIntegrationDefinition)) {
+        throw new InstallationManagerError(
+          "agent_verification_failed",
+          "The local Agent discovery result is unavailable",
+        );
+      }
+
+      const verifiedAgent = await findVerifiedAgentExecutable(
+        specification,
+        discoveryOptions,
+      );
+      if (verifiedAgent === null) {
+        throw new InstallationManagerError(
+          "agent_not_installed",
+          `Install ${specification.label} on this machine, then try installing the integration again.`,
+        );
+      }
+      const agent = verifiedAgent.executable;
       let adapter =
         specification instanceof DirectAcpAgentDefinition
           ? agent
@@ -229,6 +221,14 @@ export class FixedInstallationExecutor implements InstallationExecutor {
           throw new InstallationManagerError(
             "agent_verification_failed",
             "The direct Agent executable is unavailable",
+          );
+        }
+        if (
+          this.#environment[specification.adapterOverrideVariable] !== undefined
+        ) {
+          throw new InstallationManagerError(
+            "adapter_not_found",
+            "The configured ACP adapter is unavailable",
           );
         }
         await report("installing_adapter");
@@ -242,8 +242,10 @@ export class FixedInstallationExecutor implements InstallationExecutor {
       while (true) {
         await report("checking_acp");
         const environment: NodeJS.ProcessEnv = { ...this.#environment };
-        environment[specification.agentOverrideVariable] = agent.path;
-        environment[specification.adapterOverrideVariable] = adapter.path;
+        environment[specification.agentOverrideVariable] =
+          agent.identity.requestedPath;
+        environment[specification.adapterOverrideVariable] =
+          adapter.identity.requestedPath;
         const inventory = await discoverLocalAgentInventory({
           defaultWorkspace: this.#defaultWorkspace,
           environment,
@@ -264,7 +266,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             },
           );
 
-          const previous = this.#catalog.read();
+          const previousCatalog = this.#catalog.read();
           this.#catalog.transition(
             inventory.readyAgents(),
             inventory.installable,
@@ -273,8 +275,8 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             await this.#publishCatalog(signal);
           } catch (error) {
             this.#catalog.transition(
-              previous.agents,
-              previous.installableAgents,
+              previousCatalog.agents,
+              previousCatalog.installableAgents,
             );
             throw error;
           }
@@ -293,6 +295,8 @@ export class FixedInstallationExecutor implements InstallationExecutor {
         if (
           !installedAdapter &&
           specification instanceof BridgedAcpAgentDefinition &&
+          this.#environment[specification.adapterOverrideVariable] ===
+            undefined &&
           requiresAdapterReplacement(unavailable.code)
         ) {
           await report("installing_adapter");
@@ -301,25 +305,6 @@ export class FixedInstallationExecutor implements InstallationExecutor {
           this.#audit.record("agent_adapter_verified", requestId, agentId, {
             version: specification.adapterVersion,
           });
-          continue;
-        }
-        if (
-          !installedAgent &&
-          (requiresAgentReplacement(unavailable.code) ||
-            unavailable.code === "acp_incompatible")
-        ) {
-          agent = await recipe.install({
-            audit: this.#audit,
-            environment: this.#environment,
-            report,
-            requestId,
-            signal,
-            stateDirectory: this.#stateDirectory,
-          });
-          installedAgent = true;
-          if (specification instanceof DirectAcpAgentDefinition) {
-            adapter = agent;
-          }
           continue;
         }
         throw new InstallationManagerError(

@@ -202,7 +202,7 @@ describe("ACP session control protocol contract", () => {
     }
   });
 
-  it("Given a missing registered Agent, When Web requests installation, Then only its request and Agent identifiers cross the boundary", () => {
+  it("Given a supported Agent, When Web requests integration installation, Then only its request and Agent identifiers cross the boundary", () => {
     const command: AgentInstallRequestCommand = {
       agentId: "codex",
       kind: AGENT_INSTALL_REQUEST_KIND,
@@ -215,7 +215,19 @@ describe("ACP session control protocol contract", () => {
     ).toEqual(command);
   });
 
-  it("Given an installation request contains executable configuration, When the local boundary decodes it, Then the request is rejected before recipe resolution", () => {
+  it("Given a legacy Agent installation command, When the integration-only boundary decodes it, Then the command is rejected before reaching an older installation workflow", () => {
+    expect(() =>
+      decodeAgentInstallRequestCommand(
+        JSON.stringify({
+          agentId: "codex",
+          kind: "agent.install.request",
+          requestId: "install-1",
+        }),
+      ),
+    ).toThrowError(ProtocolMessageError);
+  });
+
+  it("Given an integration installation request contains executable configuration, When the local boundary decodes it, Then the request is rejected before adapter resolution", () => {
     expect(() =>
       decodeAgentInstallRequestCommand(
         JSON.stringify({

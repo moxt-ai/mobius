@@ -39,13 +39,12 @@ export async function publishAgentCatalog(
     response = await fetch(catalogEndpoint(config.relayUrl), {
       body: JSON.stringify({
         agents: catalog.agents.map((agent) => ({
+          agentPath: agent.agentIdentity.requestedPath,
+          agentVersion: agent.agentVersion,
           id: agent.id,
           label: agent.label,
         })),
-        installableAgents: catalog.installableAgents.map((agent) => ({
-          id: agent.id,
-          label: agent.label,
-        })),
+        installableAgents: catalog.installableAgents,
       }),
       dispatcher: environmentProxyDispatcher,
       headers: { "content-type": "application/json" },

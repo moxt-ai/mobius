@@ -37,7 +37,7 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Agent interaction boundaries", () => {
-  it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then navigation stays in the page and preserves the draft", async () => {
+  it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then its local details are visible and navigation preserves the draft", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(
       null,
@@ -68,6 +68,8 @@ describe.sequential("Agent interaction boundaries", () => {
       fireEvent.click(screen.getByRole("link", { name: "Agent settings" }));
       await screen.findByRole("heading", { level: 1, name: "Agent settings" });
       expect(window.location.pathname).toBe(`${sessionPath}/settings`);
+      expect(screen.getByText("codex 0.153.0")).toBeTruthy();
+      expect(screen.getByText("/usr/local/bin/codex")).toBeTruthy();
 
       fireEvent.click(screen.getByRole("link", { name: "Back to chat" }));
       const restoredPromptInput = await screen.findByRole("textbox", {

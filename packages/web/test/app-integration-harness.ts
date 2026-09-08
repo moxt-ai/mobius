@@ -18,7 +18,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, expect } from "vitest";
-
+import type { AgentOption, InstallableAgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import { startLocalRelay } from "./relay-harness.ts";
 
@@ -246,11 +246,8 @@ class StatefulDaemon {
 }
 
 export interface PairDaemonOptions {
-  readonly agents?: readonly Readonly<{ id: string; label: string }>[];
-  readonly installableAgents?: readonly Readonly<{
-    id: string;
-    label: string;
-  }>[];
+  readonly agents?: readonly AgentOption[];
+  readonly installableAgents?: readonly InstallableAgentOption[];
 }
 
 export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
@@ -268,7 +265,14 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     new URL(`${MOBIUS_API_PREFIX}/pairings/claim`, window.location.origin),
     {
       body: JSON.stringify({
-        agents: options.agents ?? [{ id: "codex", label: "Codex" }],
+        agents: options.agents ?? [
+          {
+            agentPath: "/usr/local/bin/codex",
+            agentVersion: "codex 0.153.0",
+            id: "codex",
+            label: "Codex",
+          },
+        ],
         installableAgents: options.installableAgents ?? [],
         machineName: "Integration machine",
         pairingCode: created.pairingCode,

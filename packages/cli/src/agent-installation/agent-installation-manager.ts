@@ -129,10 +129,7 @@ function authorizedSpecificationFor(
   agentId: string,
 ): LocalAgentSpecification | null {
   for (const specification of specifications) {
-    if (
-      specification.id === agentId &&
-      specification.supportsInstallation(process.platform, process.arch)
-    ) {
+    if (specification.id === agentId) {
       return specification;
     }
   }
@@ -145,7 +142,7 @@ function executionFailure(error: unknown): InstallationManagerError {
   }
   return new InstallationManagerError(
     "installation_failed",
-    "The local Agent installation failed",
+    "The local Agent integration installation failed",
     { cause: error },
   );
 }
@@ -229,7 +226,7 @@ export class AgentInstallationManager {
         command.requestId,
         command.agentId,
         "installation_in_progress",
-        "An installation for this Agent is already running",
+        "An integration installation for this Agent is already running",
       );
       const job = new InstallationJob(command.requestId, command.agentId);
       job.state = busy;
@@ -272,7 +269,7 @@ export class AgentInstallationManager {
       job.requestId,
       job.agentId,
     );
-    job.controller.abort(new Error("Agent installation cancelled"));
+    job.controller.abort(new Error("Agent integration installation cancelled"));
     return await job.completion.promise;
   };
 
@@ -283,7 +280,7 @@ export class AgentInstallationManager {
       if (job === undefined) {
         throw new InstallationManagerError(
           "installation_state_invalid",
-          "An active Agent installation is unavailable",
+          "An active Agent integration installation is unavailable",
         );
       }
       job.controller.abort(new Error("Mobius daemon stopped"));
@@ -314,7 +311,7 @@ export class AgentInstallationManager {
       job.controller.abort(
         new InstallationManagerError(
           "installation_timeout",
-          "The local Agent installation exceeded its deadline",
+          "The local Agent integration installation exceeded its deadline",
         ),
       );
     }, INSTALLATION_DEADLINE_MILLISECONDS);

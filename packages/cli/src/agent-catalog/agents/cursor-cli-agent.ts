@@ -25,11 +25,6 @@ export class CursorCliAgentSpecification extends DirectAcpAgentDefinition {
     );
   }
 
-  override readonly supportsInstallation = (
-    _platform: NodeJS.Platform,
-    _architecture: NodeJS.Architecture,
-  ): boolean => false;
-
   override readonly verifyAcp = async (
     connection: ClientConnection,
     initialized: InitializeResponse,

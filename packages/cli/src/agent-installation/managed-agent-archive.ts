@@ -83,7 +83,7 @@ export class TarGzipManagedAgentArchiveDefinition extends ManagedAgentArchiveDef
   ];
 }
 
-export class ManagedAgentArchiveError extends Error {
+class ManagedAgentArchiveError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string, options: ErrorOptions = {}) {
@@ -105,7 +105,7 @@ class ManagedAgentArchiveDownloader implements ManagedAgentArchiveDownloadPort {
   ): Promise<VerifiedDownload> => await downloadVerifiedFile(options);
 }
 
-export interface ManagedAgentArchiveInstallationPort {
+interface ManagedAgentArchiveInstallationPort {
   readonly install: (
     root: string,
     definition: ManagedAgentArchiveDefinition,

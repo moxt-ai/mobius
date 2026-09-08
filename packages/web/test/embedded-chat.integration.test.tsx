@@ -11,10 +11,12 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Embedded Mobius chat", () => {
-  it("Given a paired machine has no installed Agent, When a workspace opens Chat, Then it offers Agent installation instead of preparing forever", async () => {
+  it("Given a paired machine has no detected Agent, When a workspace opens Chat, Then it shows the missing Agent and integration action instead of preparing forever", async () => {
     const paired = await pairDaemon({
       agents: [],
-      installableAgents: [{ id: "codex", label: "Codex" }],
+      installableAgents: [
+        { id: "codex", label: "Codex", status: "agent_not_installed" },
+      ],
     });
     window.localStorage.clear();
     saveBrowserCredential(paired.channelId, paired.credential);
@@ -29,8 +31,7 @@ describe.sequential("Embedded Mobius chat", () => {
         observer = new MutationObserver(() => {
           if (
             screen.queryByText("Preparing Mobius chat…") !== null ||
-            screen.queryByRole("heading", { name: "Install a local Agent" }) !==
-              null
+            screen.queryByRole("heading", { name: "Local Agents" }) !== null
           )
             resolve();
         });
@@ -42,10 +43,13 @@ describe.sequential("Embedded Mobius chat", () => {
       await settled;
       await act(async () => {});
       expect(
-        screen.getByRole("heading", { name: "Install a local Agent" }),
+        screen.getByRole("heading", { name: "Local Agents" }),
       ).toBeTruthy();
       expect(screen.getByText("Codex")).toBeTruthy();
-      expect(screen.getByRole("button", { name: "Install" })).toBeTruthy();
+      expect(screen.getByText("Not installed")).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: "Install integration" }),
+      ).toBeTruthy();
       expect(screen.queryByText("Preparing Mobius chat…")).toBeNull();
     } finally {
       observer?.disconnect();

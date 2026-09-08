@@ -122,9 +122,10 @@ function AgentSettingsView({
               Local Agents
             </h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-              View and manage the Agent integrations available on {machineName}.
-              Agent binaries, provider credentials, and executable details stay
-              on that machine.
+              See which Agent CLIs Mobius detected on {machineName}, including
+              their reported version and executable path. Mobius installs only
+              the integration; Agent installation and sign-in remain local
+              actions.
             </p>
 
             <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -211,6 +212,24 @@ function AgentSettingsView({
                       The local Agent CLI and its ACP connection are verified
                       for this channel.
                     </p>
+                    <dl className="mt-3 grid gap-2 rounded-lg bg-black/[0.025] p-3 text-[11px] leading-4">
+                      <div className="min-w-0">
+                        <dt className="font-medium text-muted-foreground">
+                          Version
+                        </dt>
+                        <dd className="mt-0.5 break-words text-foreground">
+                          {agent.agentVersion}
+                        </dd>
+                      </div>
+                      <div className="min-w-0">
+                        <dt className="font-medium text-muted-foreground">
+                          Path
+                        </dt>
+                        <dd className="mt-0.5 break-all font-mono text-foreground">
+                          {agent.agentPath}
+                        </dd>
+                      </div>
+                    </dl>
                     <Link
                       className="mt-3 inline-flex min-h-11 items-center rounded-lg px-3 text-xs font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
                       relative="path"
@@ -235,11 +254,11 @@ function AgentSettingsView({
                   className="text-base font-semibold tracking-[-0.015em]"
                   id="available-agents-heading"
                 >
-                  Available to install
+                  Needs setup
                 </h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  Requests use fixed local recipes and never accept commands or
-                  paths from Web.
+                  Missing Agents must be installed locally first. Mobius can
+                  install or repair only their ACP integrations.
                 </p>
               </div>
               <span className="shrink-0 rounded-full bg-black/5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
@@ -263,10 +282,10 @@ function AgentSettingsView({
                 </span>
                 <span>
                   <strong className="block text-sm font-semibold">
-                    All supported integrations are ready
+                    All detected Agent integrations are ready
                   </strong>
                   <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">
-                    No Agent installation or recovery action is currently
+                    No integration installation or recovery action is currently
                     needed.
                   </span>
                 </span>
@@ -275,8 +294,9 @@ function AgentSettingsView({
           </section>
 
           <aside className="mt-10 rounded-xl bg-[#f1f3f5] px-5 py-4 text-xs leading-5 text-muted-foreground">
-            Mobius can install or repair only audited, supported integrations.
-            Removing or upgrading an Agent CLI remains a local machine action.
+            “Install integration” rechecks the Agent on this machine, then
+            installs only the audited ACP integration. It never installs,
+            removes, upgrades, or signs in to the Agent CLI itself.
           </aside>
         </div>
       </div>

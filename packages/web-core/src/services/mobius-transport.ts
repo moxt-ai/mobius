@@ -178,6 +178,7 @@ class ConnectedTransport extends TransportConnection {
       },
       onInstallFailed: (event) => {
         useChatStore.getState().applyAgentInstallFailed(event);
+        void this.#refreshAgentCatalog();
       },
       onInstallProgress: (event) => {
         useChatStore.getState().applyAgentInstallProgress(event);
@@ -736,7 +737,7 @@ export async function installLocalAgent(agentId: string): Promise<void> {
         ? error
         : new MobiusClientError(
             "unexpected_error",
-            "The Agent installation failed unexpectedly",
+            "The Agent integration installation failed unexpectedly",
           );
     if (failure.code === "installation_cancelled") {
       return;
@@ -744,7 +745,7 @@ export async function installLocalAgent(agentId: string): Promise<void> {
     useChatStore.getState().applyAgentInstallFailed({
       agentId,
       code: failure.code,
-      kind: "agent.install.failed",
+      kind: "agent.integration.install.failed",
       message: failure.message,
       requestId,
     });

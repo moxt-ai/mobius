@@ -8,7 +8,6 @@ export {
   AvailableAgent,
   LocalAgentInventory,
 } from "./agent-discovery.ts";
-export type { LocalAgentSpecification } from "./agent-specification.ts";
 export { CodexAgentSpecification } from "./agents/codex-agent.ts";
 export { CursorCliAgentSpecification } from "./agents/cursor-cli-agent.ts";
 export { DeepSeekHarnessAgentSpecification } from "./agents/deepseek-harness-agent.ts";
@@ -34,9 +33,5 @@ export async function discoverLocalAgentInventory(
       async (specification) => await discoverAgent(specification, options),
     ),
   );
-  return new LocalAgentInventory(
-    discoveries,
-    options.platform,
-    options.architecture,
-  );
+  return new LocalAgentInventory(discoveries);
 }

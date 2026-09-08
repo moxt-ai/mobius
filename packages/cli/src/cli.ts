@@ -26,7 +26,7 @@ Usage:
 Commands:
   pair   Pair this machine and start its local daemon
   start  Start the local daemon for a saved channel
-  agents Show locally available and installable Agents
+  agents Show detected, missing, and integration-ready Agents
 
 Pairing grants this browser access to the machine with your user account's permissions.
 New conversations default to ~/.mobius/workspace; choose other directories in the browser.

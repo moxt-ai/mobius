@@ -101,9 +101,7 @@ import {
   RunningInstallation,
   SucceededInstallation,
 } from "./agent-installation/agent-installation-manager.ts";
-import { AutomaticAdapterProvisioner } from "./agent-installation/automatic-adapter-provisioner.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
-import { ManagedAdapterInstaller } from "./agent-installation/managed-adapter-installer.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
@@ -364,7 +362,7 @@ class DaemonInstallationObserver implements InstallationObserver {
       );
       return Promise.resolve();
     }
-    throw new Error("Unsupported Agent installation state");
+    throw new Error("Unsupported Agent integration installation state");
   };
 }
 
@@ -1364,7 +1362,10 @@ async function runRelayConnection(
             void installations
               .request(command, signal)
               .catch((error: unknown) => {
-                console.error("Mobius Agent installation failed", error);
+                console.error(
+                  "Mobius Agent integration installation failed",
+                  error,
+                );
               });
             return;
           }
@@ -1483,20 +1484,6 @@ export async function runDaemon(
       await publishAgentCatalog(config, installationSignal),
     stateDirectory,
   });
-  await new AutomaticAdapterProvisioner(
-    {
-      defaultWorkspace: config.defaultWorkspace,
-      audit: installationAudit,
-      catalog: config.catalog,
-      environment: process.env,
-    },
-    new ManagedAdapterInstaller({
-      environment: process.env,
-      stateDirectory,
-    }),
-    specifications,
-  ).prepare(signal);
-
   const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
   const outbox = new SessionEventOutbox(config.auditDatabasePath);
   const publisher = new DaemonSessionEventPublisher(outbox);

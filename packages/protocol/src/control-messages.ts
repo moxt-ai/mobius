@@ -21,13 +21,15 @@ export const SESSION_ELICITATION_RESPOND_KIND = "session.elicitation.respond";
 export const SESSION_ELICITATION_RESOLVED_KIND = "session.elicitation.resolved";
 export const SESSION_OPERATION_FAILED_KIND = "session.operation.failed";
 export const AGENT_CONTENT_KIND = "agent.content";
-export const AGENT_INSTALL_REQUEST_KIND = "agent.install.request";
-export const AGENT_INSTALL_CANCEL_KIND = "agent.install.cancel";
-export const AGENT_INSTALL_STARTED_KIND = "agent.install.started";
-export const AGENT_INSTALL_PROGRESS_KIND = "agent.install.progress";
-export const AGENT_INSTALL_COMPLETED_KIND = "agent.install.completed";
-export const AGENT_INSTALL_FAILED_KIND = "agent.install.failed";
-export const AGENT_INSTALL_CANCELLED_KIND = "agent.install.cancelled";
+export const AGENT_INSTALL_REQUEST_KIND = "agent.integration.install.request";
+export const AGENT_INSTALL_CANCEL_KIND = "agent.integration.install.cancel";
+export const AGENT_INSTALL_STARTED_KIND = "agent.integration.install.started";
+export const AGENT_INSTALL_PROGRESS_KIND = "agent.integration.install.progress";
+export const AGENT_INSTALL_COMPLETED_KIND =
+  "agent.integration.install.completed";
+export const AGENT_INSTALL_FAILED_KIND = "agent.integration.install.failed";
+export const AGENT_INSTALL_CANCELLED_KIND =
+  "agent.integration.install.cancelled";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;

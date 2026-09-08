@@ -306,6 +306,8 @@ async function claimPairing(
   signal: AbortSignal,
 ): Promise<ClaimPairingResponse> {
   const agents = localAgents.map((agent) => ({
+    agentPath: agent.agentIdentity.requestedPath,
+    agentVersion: agent.agentVersion,
     id: agent.id,
     label: agent.label,
   }));
@@ -315,10 +317,7 @@ async function claimPairing(
     response = await fetch(endpoint, {
       body: JSON.stringify({
         agents,
-        installableAgents: installableAgents.map((agent) => ({
-          id: agent.id,
-          label: agent.label,
-        })),
+        installableAgents,
         machineName: hostname(),
         pairingCode: options.code,
         workspaceName: basename(defaultWorkspace) || "Local workspace",
@@ -461,7 +460,7 @@ function assertInventoryUsable(inventory: LocalAgentInventory): void {
   if (inventory.available.length + inventory.installable.length === 0) {
     throw new PairingClientError(
       "no_supported_agent",
-      "No supported Agent is ready or safely installable on this machine",
+      "No supported Agent is available for local discovery",
     );
   }
 }

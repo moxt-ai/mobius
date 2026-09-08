@@ -7,13 +7,46 @@ const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
 export interface AgentDescriptor {
+  readonly agentPath: string;
+  readonly agentVersion: string;
   readonly id: string;
   readonly label: string;
 }
 
-export interface InstallableAgentDescriptor {
+export abstract class InstallableAgentDescriptor {
   readonly id: string;
   readonly label: string;
+  abstract readonly status: string;
+
+  protected constructor(id: string, label: string) {
+    this.id = id;
+    this.label = label;
+  }
+}
+
+export class MissingAgentDescriptor extends InstallableAgentDescriptor {
+  readonly status = "agent_not_installed";
+
+  constructor(id: string, label: string) {
+    super(id, label);
+  }
+}
+
+export class AgentIntegrationDescriptor extends InstallableAgentDescriptor {
+  readonly agentPath: string;
+  readonly agentVersion: string;
+  readonly status = "integration_not_installed";
+
+  constructor(
+    id: string,
+    label: string,
+    agentPath: string,
+    agentVersion: string,
+  ) {
+    super(id, label);
+    this.agentPath = agentPath;
+    this.agentVersion = agentVersion;
+  }
 }
 
 export interface CreatedPairing {
@@ -316,7 +349,7 @@ export function parseAgents(encoded: string): readonly AgentDescriptor[] {
       { cause: error },
     );
   }
-  return validateAgents(value);
+  return validateAgents(normalizePersistedAgents(value));
 }
 
 export function parseInstallableAgents(
@@ -339,13 +372,45 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizePersistedAgents(value: unknown): unknown {
+  if (!Array.isArray(value)) {
+    return value;
+  }
+  return value.map((candidate) => {
+    if (
+      isRecord(candidate) &&
+      Object.keys(candidate).length === 2 &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label")
+    ) {
+      return {
+        agentPath: "Not reported",
+        agentVersion: "Not reported",
+        id: candidate["id"],
+        label: candidate["label"],
+      };
+    }
+    return candidate;
+  });
+}
+
 function normalizePersistedInstallableAgents(value: unknown): unknown {
   if (!Array.isArray(value)) {
     return value;
   }
-  // Existing D1 rows may still contain the retired local-approval flag. New
-  // catalog requests remain strict and cannot submit this legacy shape.
   return value.map((candidate) => {
+    if (
+      isRecord(candidate) &&
+      Object.keys(candidate).length === 2 &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label")
+    ) {
+      return {
+        id: candidate["id"],
+        label: candidate["label"],
+        status: "agent_not_installed",
+      };
+    }
     if (
       isRecord(candidate) &&
       Object.keys(candidate).length === 3 &&
@@ -354,7 +419,11 @@ function normalizePersistedInstallableAgents(value: unknown): unknown {
       Object.hasOwn(candidate, "requiresLocalApproval") &&
       typeof candidate["requiresLocalApproval"] === "boolean"
     ) {
-      return { id: candidate["id"], label: candidate["label"] };
+      return {
+        id: candidate["id"],
+        label: candidate["label"],
+        status: "agent_not_installed",
+      };
     }
     return candidate;
   });
@@ -373,7 +442,9 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
   for (const candidate of value) {
     if (
       !isRecord(candidate) ||
-      Object.keys(candidate).length !== 2 ||
+      Object.keys(candidate).length !== 4 ||
+      !Object.hasOwn(candidate, "agentPath") ||
+      !Object.hasOwn(candidate, "agentVersion") ||
       !Object.hasOwn(candidate, "id") ||
       !Object.hasOwn(candidate, "label")
     ) {
@@ -384,7 +455,15 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     }
     const id = candidate["id"];
     const label = candidate["label"];
+    const agentPath = candidate["agentPath"];
+    const agentVersion = candidate["agentVersion"];
     if (
+      typeof agentPath !== "string" ||
+      agentPath.trim().length === 0 ||
+      agentPath.length > 4_096 ||
+      typeof agentVersion !== "string" ||
+      agentVersion.trim().length === 0 ||
+      agentVersion.length > 128 ||
       typeof id !== "string" ||
       !IDENTIFIER_PATTERN.test(id) ||
       typeof label !== "string" ||
@@ -398,7 +477,12 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
       );
     }
     identifiers.add(id);
-    agents.push({ id, label: label.trim() });
+    agents.push({
+      agentPath,
+      agentVersion: agentVersion.trim(),
+      id,
+      label: label.trim(),
+    });
   }
   return agents;
 }
@@ -415,12 +499,7 @@ export function validateInstallableAgents(
   const agents: InstallableAgentDescriptor[] = [];
   const identifiers = new Set<string>();
   for (const candidate of value) {
-    if (
-      !isRecord(candidate) ||
-      Object.keys(candidate).length !== 2 ||
-      !Object.hasOwn(candidate, "id") ||
-      !Object.hasOwn(candidate, "label")
-    ) {
+    if (!isRecord(candidate)) {
       throw new PairingDirectoryError(
         "invalid_agents",
         "The installable Agent directory is invalid",
@@ -442,7 +521,55 @@ export function validateInstallableAgents(
       );
     }
     identifiers.add(id);
-    agents.push({ id, label: label.trim() });
+    const status = candidate["status"];
+    if (
+      status === "agent_not_installed" &&
+      Object.keys(candidate).length === 3 &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label") &&
+      Object.hasOwn(candidate, "status")
+    ) {
+      agents.push(new MissingAgentDescriptor(id, label.trim()));
+      continue;
+    }
+    if (
+      status === "integration_not_installed" &&
+      Object.keys(candidate).length === 5 &&
+      Object.hasOwn(candidate, "agentPath") &&
+      Object.hasOwn(candidate, "agentVersion") &&
+      Object.hasOwn(candidate, "id") &&
+      Object.hasOwn(candidate, "label") &&
+      Object.hasOwn(candidate, "status")
+    ) {
+      const agentPath = candidate["agentPath"];
+      const agentVersion = candidate["agentVersion"];
+      if (
+        typeof agentPath !== "string" ||
+        agentPath.trim().length === 0 ||
+        agentPath.length > 4_096 ||
+        typeof agentVersion !== "string" ||
+        agentVersion.trim().length === 0 ||
+        agentVersion.length > 128
+      ) {
+        throw new PairingDirectoryError(
+          "invalid_agents",
+          "The installable Agent directory is invalid",
+        );
+      }
+      agents.push(
+        new AgentIntegrationDescriptor(
+          id,
+          label.trim(),
+          agentPath,
+          agentVersion.trim(),
+        ),
+      );
+      continue;
+    }
+    throw new PairingDirectoryError(
+      "invalid_agents",
+      "The installable Agent directory is invalid",
+    );
   }
   return agents;
 }

@@ -91,12 +91,14 @@ deleted lifecycle.
 
 The daemon owns local path resolution, authorization, sandboxing, process
 lifecycle, long-lived ACP conversation sessions, approved agent selection,
-software installation, and audit records. Remote input is never an authorization
-decision at the local execution boundary. Agent identifiers map only to built-in
-local specifications; remote clients cannot provide commands, URLs, versions,
-arguments, environment values, or executable paths.
+ACP integration installation, and audit records. Remote input is never an
+authorization decision at the local execution boundary. Agent identifiers map
+only to built-in local specifications; remote clients cannot provide commands,
+URLs, versions, arguments, environment values, or executable paths. Paths and
+versions sent in the catalog are output-only metadata and never become execution
+authority when returned by a client.
 
-## Local Agent catalog and installation trust boundary
+## Local Agent catalog and integration trust boundary
 
 Discovery resolves an exact Agent/adapter pair from explicit local overrides,
 direct platform-aware `PATH` lookup, or Mobius's private managed cache. It
@@ -116,75 +118,75 @@ never silently falls back. Before each new adapter process, both identities are
 revalidated; a changed runtime is rejected without touching an existing
 conversation.
 
-Daemon startup includes one local-only adapter provisioning transition:
+Pairing and daemon startup perform only read-only discovery:
 
 ```text
-supported Agent ID + structurally valid local Agent CLI + bounded version probe
-  -> exact pinned ACP adapter staging in the private cache
-  -> normal Agent and ACP discovery
-  -> catalog transition only after a successful ACP initialize handshake
-  -> local audit event
+supported Agent ID + no verified Agent executable
+  -> agent_not_installed
+
+supported Agent ID + verified Agent executable + incomplete ACP path
+  -> integration_not_installed + Agent path + Agent version
+
+supported Agent ID + verified Agent executable + complete ACP probe
+  -> ready + Agent path + Agent version
 ```
 
-This path never installs an Agent platform binary and never runs when the user
-has set an explicit adapter override. Cancellation crosses the complete
-operation; an ordinary adapter installation or verification failure is recorded
-and leaves the daemon online with the Agent unavailable. Pairing claims and the
+No Agent or adapter package is installed automatically. Pairing claims and the
 standalone `agents` diagnostic remain read-only. After startup, the catalog
-changes only after a verified local installation or recovery request.
+changes only after an explicit, verified integration request. Ordinary
+discovery or verification failure leaves the daemon and channel online.
 
 The ready and installable catalogs are separate contracts. The daemon publishes
-only IDs and labels through a daemon-token-authenticated endpoint before opening
+IDs and labels for every supported Agent plus the discovered path and reported version for
+each detected Agent through a daemon-token-authenticated endpoint before opening
 its WebSocket. A runtime online event tells Web to refetch the descriptor. Zero
-ready Agents is valid when a supported fixed recipe is installable.
+ready Agents is valid because missing Agents remain visible as status entries.
+The owner and any linked channel device can read the published path and version;
+adapter paths, file identities, launch environments, raw probe output, and
+credentials are not published.
 
 Web presents the same contracts on the channel Agent settings route. Ready
-entries are view-only and link back to chat; installable entries can request,
-retry, or cancel the fixed local workflow. This is catalog management, not
-remote package management: Agent removal, upgrades, executable details, and
-provider credentials stay outside the Web surface.
+entries show Agent version and path and link back to chat. Setup entries show
+either `Not installed` or the detected Agent details, and can request, retry, or
+cancel integration installation. This is integration management, not remote
+Agent package management: Agent installation, removal, upgrades, sign-in, and
+provider credentials stay outside the Web action surface.
 
-Installation follows the local execution-boundary pipeline:
+Integration installation follows the local execution-boundary pipeline:
 
 ```text
 requestId + registered agentId from Web
-  -> strict protocol validation
-  -> local Agent ID and platform authorization against the built-in catalog
-  -> built-in fixed recipe and private target resolution
-  -> bounded official download or npm install, integrity verification, and subprocess execution
-  -> pinned private ACP adapter staging and atomic publication
+  -> strict integration-specific protocol validation
+  -> local Agent ID authorization against the built-in catalog
+  -> fresh local executable and version discovery
+  -> agent_not_installed when no verified Agent exists
+  -> pinned private ACP adapter staging for bridged Agents only
   -> normal Agent and ACP discovery
   -> authenticated catalog publication
   -> local audit event
 ```
 
-The Relay authenticates and routes installation messages but never executes
-them. A Web click confirms one request; the local daemon remains the final
-authority and rejects any Agent ID or platform outside its built-in installation
-catalog before resolving a fixed recipe. The host credential cannot provide or
-alter a command, version, URL, argument, environment value, or target. Installer
+The Relay authenticates and routes integration messages but never executes them.
+The integration-specific message kinds are distinct from the former Agent
+installation protocol, so mixed old and new clients cannot silently turn this
+button into an Agent installer. A Web click confirms one request; the local
+daemon remains the final authority and rejects any Agent ID outside its built-in
+catalog. The host credential cannot provide or alter an executable, command,
+version, URL, argument, environment value, or target. Adapter installer
 processes receive a minimal allowlisted environment with no channel token, Agent
-credential, or unrelated Mobius variable. Downloads enforce TLS, approved
-initial and redirect hosts, size and time limits, and a recorded SHA-256 digest.
-Vendor checksum or signature checks remain active when the fixed vendor
-installer provides them. Temporary directories, subprocess trees, output
-buffers, overall deadlines, and one-job per-Agent concurrency slots are owned
-and released by the local daemon.
+credential, or unrelated Mobius variable. Temporary directories, subprocess
+trees, output buffers, overall deadlines, and one-job per-Agent concurrency
+slots are owned and released by the local daemon.
 
 Managed adapters use exact package versions, omit optional platform Agent
 dependencies, disable lifecycle scripts, validate package name/version/bin
-containment in a staging directory, and publish with an atomic rename. Pi's
-managed Agent and adapter are independent versioned dependency units; both direct
-npm artifacts are matched against built-in SRI and registry tarball values before
-the complete bridge can become ready. Managed Grok Build additionally requires an
-exact platform package, then runs only its pinned postinstall script with an
-allowlisted environment into a private `GROK_HOME`. Managed WorkBuddy validates
-the pinned CodeBuddy Code package and its dependency closure. Cursor CLI has no
-managed recipe, so only a locally installed, fully probed executable can become
-ready. A failed staging install cannot replace an existing cache entry.
-Installation request IDs are idempotent for the daemon lifetime, and all
-cross-Relay progress and failure events use bounded stages and sanitized stable
-codes.
+containment in a staging directory, and publish with an atomic rename. A failed
+adapter staging install cannot replace an existing cache entry. Direct ACP
+Agents do not stage an adapter and only repeat the full local readiness probe.
+Previously cached Agent executables may still be discovered and revalidated,
+but this workflow never creates or replaces them. Integration request IDs are
+idempotent for the daemon lifetime, and all cross-Relay progress and failure
+events use bounded stages and sanitized stable codes.
 
 ## Workspace ownership
 

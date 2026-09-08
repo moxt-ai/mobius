@@ -8,7 +8,7 @@ import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 const MAX_REDIRECTS = 4;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
-export class InstallerDownloadError extends Error {
+class InstallerDownloadError extends Error {
   readonly code: string;
 
   constructor(code: string, message: string, options: ErrorOptions = {}) {

@@ -13,22 +13,57 @@ const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 
 export class AgentOption {
+  readonly agentPath: string;
+  readonly agentVersion: string;
   readonly id: string;
   readonly label: string;
 
-  constructor(id: string, label: string) {
+  constructor(
+    id: string,
+    label: string,
+    agentPath: string,
+    agentVersion: string,
+  ) {
+    this.agentPath = agentPath;
+    this.agentVersion = agentVersion;
     this.id = id;
     this.label = label;
   }
 }
 
-export class InstallableAgentOption {
+export abstract class InstallableAgentOption {
   readonly id: string;
   readonly label: string;
+  abstract readonly status: string;
 
-  constructor(id: string, label: string) {
+  protected constructor(id: string, label: string) {
     this.id = id;
     this.label = label;
+  }
+}
+
+export class MissingAgentOption extends InstallableAgentOption {
+  readonly status = "agent_not_installed";
+
+  constructor(id: string, label: string) {
+    super(id, label);
+  }
+}
+
+export class AgentIntegrationOption extends InstallableAgentOption {
+  readonly agentPath: string;
+  readonly agentVersion: string;
+  readonly status = "integration_not_installed";
+
+  constructor(
+    id: string,
+    label: string,
+    agentPath: string,
+    agentVersion: string,
+  ) {
+    super(id, label);
+    this.agentPath = agentPath;
+    this.agentVersion = agentVersion;
   }
 }
 
@@ -45,7 +80,7 @@ export abstract class AgentInstallationViewState {
 
 export class IdleAgentInstallationState extends AgentInstallationViewState {
   readonly canCancel = false;
-  readonly message = "Available for installation on this machine.";
+  readonly message = "Integration is not installed.";
   readonly status = "idle";
 
   constructor(agentId: string) {
@@ -64,7 +99,7 @@ export abstract class RequestedAgentInstallationState extends AgentInstallationV
 
 export class RequestingAgentInstallationState extends RequestedAgentInstallationState {
   readonly canCancel = true;
-  readonly message = "Requesting installation.";
+  readonly message = "Checking the local Agent.";
   readonly status = "requesting";
 
   constructor(agentId: string, requestId: string) {
@@ -74,7 +109,7 @@ export class RequestingAgentInstallationState extends RequestedAgentInstallation
 
 export class StartingAgentInstallationState extends RequestedAgentInstallationState {
   readonly canCancel = true;
-  readonly message = "Starting the fixed installation recipe.";
+  readonly message = "Starting integration installation.";
   readonly status = "starting";
 
   constructor(agentId: string, requestId: string) {
@@ -84,13 +119,13 @@ export class StartingAgentInstallationState extends RequestedAgentInstallationSt
 
 function installationStageMessage(stage: AgentInstallationStage): string {
   if (stage === "downloading") {
-    return "Downloading from the verified vendor.";
+    return "Downloading integration files.";
   }
   if (stage === "verifying") {
-    return "Verifying the downloaded installer.";
+    return "Verifying integration files.";
   }
   if (stage === "installing_agent") {
-    return "Installing the Agent for this user.";
+    return "Preparing the integration.";
   }
   if (stage === "installing_adapter") {
     return "Installing or locating the ACP adapter.";
@@ -98,7 +133,7 @@ function installationStageMessage(stage: AgentInstallationStage): string {
   if (stage === "checking_acp") {
     return "Checking the complete ACP connection.";
   }
-  throw new Error("Unsupported Agent installation stage");
+  throw new Error("Unsupported Agent integration installation stage");
 }
 
 export class RunningAgentInstallationState extends RequestedAgentInstallationState {
@@ -132,8 +167,8 @@ export class SucceededAgentInstallationState extends RequestedAgentInstallationS
     super(agentId, requestId);
     this.authenticationMayBeRequired = authenticationMayBeRequired;
     this.message = authenticationMayBeRequired
-      ? "Installed; sign-in may still be required."
-      : "Installed and ready.";
+      ? "Integration ready; Agent sign-in may still be required."
+      : "Integration ready.";
   }
 }
 
@@ -157,7 +192,7 @@ export class FailedAgentInstallationState extends RequestedAgentInstallationStat
 
 export class CancelledAgentInstallationState extends RequestedAgentInstallationState {
   readonly canCancel = false;
-  readonly message = "Installation was cancelled.";
+  readonly message = "Integration installation was cancelled.";
   readonly status = "cancelled";
 
   constructor(agentId: string, requestId: string) {

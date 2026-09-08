@@ -2,13 +2,15 @@ import { ProcessExecutionError } from "../process/executable.ts";
 import { probeAcpReadiness } from "./acp-readiness-probe.ts";
 import {
   type AgentDiscovery,
+  AgentProbeFailed,
   AuthenticationRequiredAgent,
   AvailableAgent,
   IncompatibleAdapter,
+  IntegrationProbeFailed,
   MissingAdapter,
   MissingAgent,
-  ProbeFailed,
   type UnavailableAgent,
+  type UnavailableInstalledAgent,
 } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
@@ -21,36 +23,71 @@ import {
   resolveAdapterExecutables,
   resolveAgentExecutables,
 } from "./executable-discovery.ts";
-import { LocalAgentDefinition } from "./local-agent.ts";
+import {
+  AgentIntegrationDefinition,
+  LocalAgentDefinition,
+} from "./local-agent.ts";
 
-function probeFailure(
+function agentProbeFailure(
   specification: LocalAgentSpecification,
-  executableKind: string,
   error: unknown,
 ): UnavailableAgent {
   if (error instanceof AgentProbeError) {
-    if (error.code === "authentication_required") {
-      return new AuthenticationRequiredAgent(specification);
-    }
-    return error.code === "acp_incompatible"
-      ? new IncompatibleAdapter(specification)
-      : new ProbeFailed(specification, error.code, error.message);
+    return new AgentProbeFailed(specification, error.code, error.message);
   }
   if (error instanceof ProcessExecutionError) {
     const code =
       error.code === "process_timeout"
-        ? `${executableKind}_probe_timeout`
-        : `${executableKind}_probe_failed`;
-    return new ProbeFailed(
+        ? "agent_probe_timeout"
+        : "agent_probe_failed";
+    return new AgentProbeFailed(
       specification,
       code,
-      `${executableKind === "agent" ? "Agent" : "Adapter"} version probe failed`,
+      "Agent version probe failed",
     );
   }
-  return new ProbeFailed(
+  return new AgentProbeFailed(
     specification,
-    `${executableKind}_probe_failed`,
-    `${executableKind === "agent" ? "Agent" : "Adapter"} probe failed`,
+    "agent_probe_failed",
+    "Agent probe failed",
+  );
+}
+
+function integrationProbeFailure(
+  specification: LocalAgentSpecification,
+  agent: AgentIntegrationDefinition,
+  error: unknown,
+): UnavailableInstalledAgent {
+  if (error instanceof AgentProbeError) {
+    if (error.code === "authentication_required") {
+      return new AuthenticationRequiredAgent(specification, agent);
+    }
+    return error.code === "acp_incompatible"
+      ? new IncompatibleAdapter(specification, agent)
+      : new IntegrationProbeFailed(
+          specification,
+          agent,
+          error.code,
+          error.message,
+        );
+  }
+  if (error instanceof ProcessExecutionError) {
+    const code =
+      error.code === "process_timeout"
+        ? "adapter_probe_timeout"
+        : "adapter_probe_failed";
+    return new IntegrationProbeFailed(
+      specification,
+      agent,
+      code,
+      "Adapter version probe failed",
+    );
+  }
+  return new IntegrationProbeFailed(
+    specification,
+    agent,
+    "adapter_probe_failed",
+    "Adapter probe failed",
   );
 }
 
@@ -63,15 +100,6 @@ export async function discoverAgent(
     resolveAdapterExecutables(specification, context),
     resolveAgentExecutables(specification, context),
   ]);
-  if (
-    specification instanceof DirectAcpAgentDefinition &&
-    agents.length === 0
-  ) {
-    return new MissingAgent(specification);
-  }
-  if (adapters.length === 0) {
-    return new MissingAdapter(specification);
-  }
   if (agents.length === 0) {
     return new MissingAgent(specification);
   }
@@ -92,8 +120,18 @@ export async function discoverAgent(
       if (context.signal.aborted) {
         context.signal.throwIfAborted();
       }
-      lastFailure = probeFailure(specification, "agent", error);
+      lastFailure = agentProbeFailure(specification, error);
       continue;
+    }
+
+    const installedAgent = new AgentIntegrationDefinition(
+      specification.id,
+      specification.label,
+      agent.identity.requestedPath,
+      agentVersion,
+    );
+    if (adapters.length === 0) {
+      return new MissingAdapter(specification, installedAgent);
     }
 
     for (const adapter of adapters) {
@@ -127,7 +165,11 @@ export async function discoverAgent(
         if (context.signal.aborted) {
           context.signal.throwIfAborted();
         }
-        lastFailure = probeFailure(specification, "adapter", error);
+        lastFailure = integrationProbeFailure(
+          specification,
+          installedAgent,
+          error,
+        );
         continue;
       }
 
@@ -178,7 +220,11 @@ export async function discoverAgent(
         if (context.signal.aborted) {
           context.signal.throwIfAborted();
         }
-        const failure = probeFailure(specification, "adapter", error);
+        const failure = integrationProbeFailure(
+          specification,
+          installedAgent,
+          error,
+        );
         if (failure instanceof AuthenticationRequiredAgent) {
           return failure;
         }
@@ -186,5 +232,5 @@ export async function discoverAgent(
       }
     }
   }
-  return lastFailure ?? new IncompatibleAdapter(specification);
+  return lastFailure ?? new MissingAgent(specification);
 }
