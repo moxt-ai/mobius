@@ -239,6 +239,9 @@ importers:
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
+      happy-dom:
+        specifier: 20.8.9
+        version: 20.8.9
 
 packages:
 
