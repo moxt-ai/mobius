@@ -1,4 +1,4 @@
-import type { PromptImage, PromptResource } from "@moxt-ai/mobius-web-sdk";
+import type { PromptImage, PromptResource } from "@moxt-ai/mobius-sdk";
 
 const IMAGE_BYTES_LIMIT = 2_500_000;
 const RESOURCE_BYTES_LIMIT = 1_000_000;

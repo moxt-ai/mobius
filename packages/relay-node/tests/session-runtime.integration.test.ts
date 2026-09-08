@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,7 +21,8 @@ import {
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
-    type ContentTarget,
+    ContentTarget,
+    CreateArtifactUploadRequest,
     CreateSessionBindingRequest,
     CreateSessionRequest,
     type ImmutableContent,
@@ -31,7 +33,7 @@ import {
     SessionRuntimeError,
     SqliteSessionRuntime,
 } from "@moxt-ai/mobius-relay-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FilesystemContentStore } from "../src/filesystem-content-store.ts";
 import { NodeSessionRuntime } from "../src/node-session-runtime.ts";
@@ -113,13 +115,94 @@ class FailAfterFirstWriteStore implements ImmutableContentStore {
     };
 }
 
+class ConcurrentWriteStore implements ImmutableContentStore {
+    readonly #delegate: ImmutableContentStore;
+    readonly #writesReady: Promise<void>;
+    readonly #releaseWrites: () => void;
+    #writeCount = 0;
+
+    constructor(delegate: ImmutableContentStore) {
+        this.#delegate = delegate;
+        let releaseWrites = (): void => undefined;
+        this.#writesReady = new Promise<void>((resolve) => {
+            releaseWrites = resolve;
+        });
+        this.#releaseWrites = releaseWrites;
+    }
+
+    readonly delete = (target: ContentTarget, signal: AbortSignal): Promise<void> =>
+        this.#delegate.delete(target, signal);
+
+    readonly inspect = (target: ContentTarget, signal: AbortSignal) => this.#delegate.inspect(target, signal);
+
+    readonly read = (target: ContentTarget, signal: AbortSignal) => this.#delegate.read(target, signal);
+
+    readonly write = async (target: ContentTarget, content: ImmutableContent, signal: AbortSignal): Promise<void> => {
+        await this.#delegate.write(target, content, signal);
+        this.#writeCount += 1;
+        if (this.#writeCount === 2) {
+            this.#releaseWrites();
+        }
+        await this.#writesReady;
+        signal.throwIfAborted();
+    };
+}
+
+class PausedWriteStore implements ImmutableContentStore {
+    readonly #delegate: ImmutableContentStore;
+    readonly #continueWrite: Promise<void>;
+    readonly #releaseWrite: () => void;
+    readonly #writeStarted: Promise<void>;
+    readonly #reportWriteStarted: () => void;
+
+    constructor(delegate: ImmutableContentStore) {
+        this.#delegate = delegate;
+        let releaseWrite = (): void => undefined;
+        this.#continueWrite = new Promise<void>((resolve) => {
+            releaseWrite = resolve;
+        });
+        this.#releaseWrite = releaseWrite;
+        let reportWriteStarted = (): void => undefined;
+        this.#writeStarted = new Promise<void>((resolve) => {
+            reportWriteStarted = resolve;
+        });
+        this.#reportWriteStarted = reportWriteStarted;
+    }
+
+    readonly continueWrite = (): void => {
+        this.#releaseWrite();
+    };
+
+    readonly delete = (target: ContentTarget, signal: AbortSignal): Promise<void> =>
+        this.#delegate.delete(target, signal);
+
+    readonly inspect = (target: ContentTarget, signal: AbortSignal) => this.#delegate.inspect(target, signal);
+
+    readonly read = (target: ContentTarget, signal: AbortSignal) => this.#delegate.read(target, signal);
+
+    readonly waitForWrite = (): Promise<void> => this.#writeStarted;
+
+    readonly write = async (target: ContentTarget, content: ImmutableContent, signal: AbortSignal): Promise<void> => {
+        this.#reportWriteStarted();
+        await this.#continueWrite;
+        signal.throwIfAborted();
+        await this.#delegate.write(target, content, signal);
+    };
+}
+
 async function temporaryDirectory(): Promise<string> {
     const directory = await mkdtemp(join(tmpdir(), "mobius-session-runtime-"));
     createdDirectories.push(directory);
     return directory;
 }
 
+beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(fixedTime);
+});
+
 afterEach(async () => {
+    vi.useRealTimers();
     await Promise.all(createdDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
 
@@ -1053,7 +1136,13 @@ describe("Node SQLite and filesystem session deployment", () => {
         const exported = await runtime.exportSession(scope, sessionId, signal);
         expect(exported.toolCallViews).toEqual([expect.objectContaining({ eventSequence: "2" })]);
         const destination = new ProjectScope("tenant-b", "project-b");
-        await runtime.importSession(destination, exported, fixedTime + 6, signal);
+        await runtime.importSession(
+            destination,
+            exported,
+            new CreateSessionBindingRequest("imported-workspace", "runtime-b", "codex", "root"),
+            fixedTime + 6,
+            signal,
+        );
         await expect(
             runtime.readToolCallDetail(destination, sessionId, "attempt-a", "activity-a", signal),
         ).resolves.toMatchObject({
@@ -1096,10 +1185,11 @@ describe("Node SQLite and filesystem session deployment", () => {
         });
 
         const exported = await runtime.exportSession(source, "portable-session", signal);
-        await runtime.importSession(destination, exported, fixedTime + 1, signal);
-        await expect(runtime.importSession(destination, exported, fixedTime + 2, signal)).rejects.toMatchObject({
-            code: "session_conflict",
-        });
+        const importedBinding = new CreateSessionBindingRequest("imported-workspace", "runtime-b", "codex", "root");
+        await runtime.importSession(destination, exported, importedBinding, fixedTime + 1, signal);
+        await expect(
+            runtime.importSession(destination, exported, importedBinding, fixedTime + 2, signal),
+        ).rejects.toMatchObject({ code: "session_conflict" });
         await expect(runtime.readSession(destination, "portable-session", signal)).resolves.toMatchObject({
             projectId: "project-b",
             sessionId: "portable-session",
@@ -1188,7 +1278,13 @@ describe("Node SQLite and filesystem session deployment", () => {
         expect(exported.minimumSequence).toBe("1");
         expect(exported.events[0]?.sequence).toBe(exported.minimumSequence);
 
-        await runtime.importSession(destination, exported, fixedTime + 100, signal);
+        await runtime.importSession(
+            destination,
+            exported,
+            new CreateSessionBindingRequest("imported-workspace", "runtime-b", "codex", "root"),
+            fixedTime + 100,
+            signal,
+        );
         const messages = await runtime.readMessages(destination, sessionId, null, 100, signal);
         expect(messages.messages).toHaveLength(15);
         expect(messages.messages).toEqual(
@@ -1204,6 +1300,122 @@ describe("Node SQLite and filesystem session deployment", () => {
         expect(events.events[0]?.sequence).toBe(exported.minimumSequence);
         expect(events.events.at(-1)?.sequence).toBe((BigInt(exported.nextSequence) - 1n).toString());
         runtime.close();
+    });
+
+    it("Given two valid leases upload the same Artifact concurrently, When both immutable writes finish before publication, Then both completions observe one available Artifact and its content remains readable", async () => {
+        const directory = await temporaryDirectory();
+        const database = new NodeSqlDatabase(join(directory, "relay.sqlite"));
+        const files = new FilesystemContentStore(join(directory, "content"));
+        const runtime = new SqliteSessionRuntime(database, new ConcurrentWriteStore(files));
+        const scope = new ProjectScope("tenant-a", "project-a");
+        const signal = new AbortController().signal;
+        const sessionId = "concurrent-artifact-session";
+        await runtime.createSession(
+            scope,
+            new CreateSessionRequest(
+                sessionId,
+                "runtime-a",
+                "codex",
+                "workspace",
+                "root",
+                new SessionRecordingPolicy("full", 86_400_000, 10, 100_000),
+            ),
+            fixedTime,
+            signal,
+        );
+        const bytes = new TextEncoder().encode("immutable attachment");
+        const digest = createHash("sha256").update(bytes).digest("hex");
+        const upload = await runtime.createArtifactUpload(
+            scope,
+            sessionId,
+            new CreateArtifactUploadRequest("attachment.txt", "text/plain", bytes.byteLength, digest),
+            fixedTime + 1,
+            signal,
+        );
+        const leases = await Promise.all([
+            runtime.authorizeArtifactUpload(
+                scope,
+                sessionId,
+                upload.artifactId,
+                upload.uploadToken,
+                fixedTime + 2,
+                signal,
+            ),
+            runtime.authorizeArtifactUpload(
+                scope,
+                sessionId,
+                upload.artifactId,
+                upload.uploadToken,
+                fixedTime + 2,
+                signal,
+            ),
+        ]);
+
+        const completed = await Promise.all(
+            leases.map((lease) => runtime.completeArtifactUpload(scope, lease, bytes, fixedTime + 3, signal)),
+        );
+
+        expect(completed).toHaveLength(2);
+        expect(completed[0]).toEqual(completed[1]);
+        await expect(runtime.readArtifactContent(scope, sessionId, upload.artifactId, signal)).resolves.toMatchObject({
+            bytes,
+        });
+        database.close();
+    });
+
+    it("Given an Artifact write is in flight, When its Session is deleted before publication, Then the completion is rejected and its orphaned immutable target is removed", async () => {
+        const directory = await temporaryDirectory();
+        const database = new NodeSqlDatabase(join(directory, "relay.sqlite"));
+        const files = new FilesystemContentStore(join(directory, "content"));
+        const pausedFiles = new PausedWriteStore(files);
+        const runtime = new SqliteSessionRuntime(database, pausedFiles);
+        const scope = new ProjectScope("tenant-a", "project-a");
+        const signal = new AbortController().signal;
+        const sessionId = "deleted-artifact-session";
+        await runtime.createSession(
+            scope,
+            new CreateSessionRequest(
+                sessionId,
+                "runtime-a",
+                "codex",
+                "workspace",
+                "root",
+                new SessionRecordingPolicy("full", 86_400_000, 10, 100_000),
+            ),
+            fixedTime,
+            signal,
+        );
+        const bytes = new TextEncoder().encode("discarded attachment");
+        const digest = createHash("sha256").update(bytes).digest("hex");
+        const upload = await runtime.createArtifactUpload(
+            scope,
+            sessionId,
+            new CreateArtifactUploadRequest("discarded.txt", "text/plain", bytes.byteLength, digest),
+            fixedTime + 1,
+            signal,
+        );
+        const lease = await runtime.authorizeArtifactUpload(
+            scope,
+            sessionId,
+            upload.artifactId,
+            upload.uploadToken,
+            fixedTime + 2,
+            signal,
+        );
+        const completion = runtime.completeArtifactUpload(scope, lease, bytes, fixedTime + 3, signal);
+        await pausedFiles.waitForWrite();
+
+        await runtime.deleteSession(scope, sessionId, fixedTime + 4, signal);
+        pausedFiles.continueWrite();
+
+        await expect(completion).rejects.toMatchObject({ code: "session_deleted" });
+        await expect(
+            files.inspect(
+                new ContentTarget(scope.tenantId, scope.projectId, sessionId, `upload-${upload.artifactId}`),
+                signal,
+            ),
+        ).resolves.toEqual({ kind: "missing" });
+        database.close();
     });
 
     it("Given configured tenant and project quotas, When active sessions reach capacity and one is deleted, Then admission is isolated and capacity is recovered", async () => {

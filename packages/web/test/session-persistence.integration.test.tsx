@@ -92,18 +92,103 @@ function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
 }
 
 describe.sequential("Session persistence boundaries", () => {
+    it("Given the built-in Web application has an attachment, When a user submits the core chat workflow, Then it uses the public artifact and Turn API instead of placing content in the channel control message", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, preparation);
+            useChatStore.getState().addDraftResource({
+                mimeType: "text/plain",
+                name: "public-api-context.txt",
+                text: "content transferred outside the control message",
+                type: "embedded",
+                uri: "attachment:///public-api-context.txt",
+            });
+            await screen.findByText("public-api-context.txt");
+            const promptInput = screen.getByRole("textbox", {
+                name: "Message the local agent",
+            });
+            fireEvent.change(promptInput, {
+                target: { value: "Use the public attachment" },
+            });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.resources).toHaveLength(1);
+            expect(prompt.resources[0]).toMatchObject({
+                mimeType: "text/plain",
+                name: "public-api-context.txt",
+                text: "",
+                type: "link",
+            });
+            expect(prompt.resources[0]?.uri).toMatch(/^mobius-artifact:/);
+            expect(JSON.stringify(prompt)).not.toContain("content transferred outside the control message");
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "public-sdk-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a user selected a workspace, Agent, and run configuration, When they start a new chat, Then the new Session reuses all three selections", async () => {
         const paired = await pairDaemon({
             agents: [
                 {
                     agentPath: "/usr/local/bin/codex",
                     agentVersion: "codex 0.153.0",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        resumeSession: true,
+                        unstableForkSession: false,
+                    },
                     id: "codex",
                     label: "Codex",
                 },
                 {
                     agentPath: "/usr/local/bin/claude",
                     agentVersion: "claude 2.1.210",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        resumeSession: true,
+                        unstableForkSession: false,
+                    },
                     id: "claude",
                     label: "Claude",
                 },

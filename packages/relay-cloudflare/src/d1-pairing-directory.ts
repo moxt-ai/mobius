@@ -4,6 +4,7 @@ import {
     ChannelDescriptor,
     ChannelHostCredential,
     type ClaimedPairing,
+    CreatedBrowserCredential,
     type CreatedChannelAccessGrant,
     type CreatedPairing,
     createRandomPairingCode,
@@ -12,6 +13,8 @@ import {
     hashSecret,
     type InstallableAgentDescriptor,
     LinkedChannelDevice,
+    MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
+    MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS,
     normalizePairingCode,
     PAIRING_LIFETIME_MILLISECONDS,
     PairedPairingStatus,
@@ -85,6 +88,14 @@ interface PublicChannelRow {
     readonly workspace_name: string;
 }
 
+interface BrowserCredentialRow {
+    readonly credential_id: string;
+    readonly expires_at: number;
+    readonly project_id: string;
+    readonly revoked_at: unknown;
+    readonly tenant_id: string;
+}
+
 export class D1PairingDirectory implements PairingDirectory {
     private readonly database: D1Database;
 
@@ -150,6 +161,78 @@ export class D1PairingDirectory implements PairingDirectory {
             );
         }
         return row;
+    };
+
+    private readonly readAuthorizedProjectOwner = async (
+        projectId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<AuthorizedChannelRow> => {
+        signal.throwIfAborted();
+        const tokenHash = await hashSecret(validateToken(token));
+        const row = await this.database
+            .prepare(
+                `SELECT channels.channel_id,
+                channels.runtime_id,
+                channels.tenant_id,
+                channels.project_id,
+                credentials.credential_id,
+                credentials.authority
+         FROM pairing_channels AS channels
+         INNER JOIN channel_host_credentials AS credentials
+           ON credentials.channel_id = channels.channel_id
+         WHERE channels.project_id = ?
+           AND credentials.token_hash = ?
+           AND credentials.revoked_at IS NULL
+           AND credentials.authority = 'owner'
+           AND channels.status = 'paired'`,
+            )
+            .bind(validateIdentifier(projectId, "project_id"), tokenHash)
+            .first<AuthorizedChannelRow>();
+        signal.throwIfAborted();
+        if (row === null) {
+            throw new PairingDirectoryError("owner_access_required", "An owner app credential is required");
+        }
+        return row;
+    };
+
+    private readonly authorizeBrowserProject = async (
+        projectId: string,
+        tokenHash: string,
+        signal: AbortSignal,
+    ): Promise<ProjectScopeAccess> => {
+        const row = await this.database
+            .prepare(
+                `SELECT credential_id, tenant_id, project_id, expires_at, revoked_at
+         FROM project_browser_credentials
+         WHERE project_id = ? AND token_hash = ?`,
+            )
+            .bind(validateIdentifier(projectId, "project_id"), tokenHash)
+            .first<BrowserCredentialRow>();
+        signal.throwIfAborted();
+        if (row === null) {
+            throw new PairingDirectoryError("unauthorized", "A valid project credential is required");
+        }
+        if (row.revoked_at !== null) {
+            throw new PairingDirectoryError("credential_revoked", "The browser credential was revoked");
+        }
+        const now = Date.now();
+        if (row.expires_at <= now) {
+            throw new PairingDirectoryError("credential_expired", "The browser credential expired");
+        }
+        const touched = await this.database
+            .prepare(
+                `UPDATE project_browser_credentials
+         SET last_used_at = ?
+         WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+            )
+            .bind(now, row.credential_id, now)
+            .run();
+        signal.throwIfAborted();
+        if (touched.meta.changes !== 1) {
+            throw new PairingDirectoryError("unauthorized", "A valid project credential is required");
+        }
+        return new ProjectScopeAccess(row.tenant_id, row.project_id);
     };
 
     readonly authorizeDaemon = async (
@@ -219,7 +302,7 @@ export class D1PairingDirectory implements PairingDirectory {
             .first<AuthorizedChannelRow>();
         signal.throwIfAborted();
         if (row === null) {
-            throw new PairingDirectoryError("unauthorized", "A valid project token is required");
+            return await this.authorizeBrowserProject(projectId, tokenHash, signal);
         }
         const touched = await this.database
             .prepare(
@@ -234,6 +317,71 @@ export class D1PairingDirectory implements PairingDirectory {
             throw new PairingDirectoryError("unauthorized", "A valid project token is required");
         }
         return new ProjectScopeAccess(row.tenant_id, row.project_id);
+    };
+
+    readonly authorizeProjectRuntime = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<VerifiedChannelAccess> => {
+        signal.throwIfAborted();
+        const tokenHash = await hashSecret(validateToken(token));
+        const row = await this.database
+            .prepare(
+                `SELECT channels.channel_id,
+                channels.runtime_id,
+                channels.tenant_id,
+                channels.project_id,
+                credentials.credential_id,
+                credentials.authority
+         FROM pairing_channels AS channels
+         INNER JOIN channel_host_credentials AS credentials
+           ON credentials.channel_id = channels.channel_id
+         WHERE channels.project_id = ?
+           AND channels.runtime_id = ?
+           AND credentials.token_hash = ?
+           AND credentials.revoked_at IS NULL
+           AND channels.status = 'paired'`,
+            )
+            .bind(validateIdentifier(projectId, "project_id"), validateIdentifier(runtimeId, "runtime_id"), tokenHash)
+            .first<AuthorizedChannelRow>();
+        signal.throwIfAborted();
+        if (row === null) {
+            const browser = await this.authorizeBrowserProject(projectId, tokenHash, signal);
+            const channel = await this.database
+                .prepare(
+                    `SELECT channel_id, runtime_id, tenant_id, project_id
+           FROM pairing_channels
+           WHERE tenant_id = ? AND project_id = ? AND runtime_id = ?
+             AND status = 'paired'`,
+                )
+                .bind(browser.tenantId, browser.projectId, validateIdentifier(runtimeId, "runtime_id"))
+                .first<ChannelScopeRow>();
+            signal.throwIfAborted();
+            if (channel === null) {
+                throw new PairingDirectoryError("unauthorized", "The project credential cannot access this Runtime");
+            }
+            return new VerifiedChannelAccess(
+                channel.channel_id,
+                channel.runtime_id,
+                channel.tenant_id,
+                channel.project_id,
+            );
+        }
+        const touched = await this.database
+            .prepare(
+                `UPDATE channel_host_credentials
+         SET last_used_at = ?
+         WHERE credential_id = ? AND revoked_at IS NULL`,
+            )
+            .bind(Date.now(), row.credential_id)
+            .run();
+        signal.throwIfAborted();
+        if (touched.meta.changes !== 1) {
+            throw new PairingDirectoryError("unauthorized", "A valid project Runtime credential is required");
+        }
+        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.tenant_id, row.project_id);
     };
 
     readonly claimPairing = async (
@@ -318,6 +466,55 @@ export class D1PairingDirectory implements PairingDirectory {
             grantId,
             grantSecret,
         };
+    };
+
+    readonly createBrowserCredential = async (
+        projectId: string,
+        token: string,
+        lifetimeMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<CreatedBrowserCredential> => {
+        if (
+            !Number.isSafeInteger(lifetimeMilliseconds) ||
+            lifetimeMilliseconds < MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS ||
+            lifetimeMilliseconds > MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS
+        ) {
+            throw new PairingDirectoryError("invalid_request", "The browser credential lifetime is invalid");
+        }
+        const owner = await this.readAuthorizedProjectOwner(projectId, token, signal);
+        const now = Date.now();
+        const expiresAt = now + lifetimeMilliseconds;
+        const credentialId = `bcr_${createRandomToken(18)}`;
+        const browserToken = createRandomToken(32);
+        const result = await this.database
+            .prepare(
+                `INSERT INTO project_browser_credentials (
+           credential_id, tenant_id, project_id, token_hash,
+           created_by_credential_id, created_at, expires_at, last_used_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            )
+            .bind(
+                credentialId,
+                owner.tenant_id,
+                owner.project_id,
+                await hashSecret(browserToken),
+                owner.credential_id,
+                now,
+                expiresAt,
+                now,
+            )
+            .run();
+        signal.throwIfAborted();
+        if (result.meta.changes !== 1) {
+            throw new Error("The browser credential was not stored");
+        }
+        return new CreatedBrowserCredential(
+            credentialId,
+            new Date(expiresAt).toISOString(),
+            owner.project_id,
+            owner.tenant_id,
+            browserToken,
+        );
     };
 
     readonly createPairing = async (signal: AbortSignal): Promise<CreatedPairing> => {
@@ -416,6 +613,39 @@ export class D1PairingDirectory implements PairingDirectory {
                     row.credential_id,
                     new Date(row.created_at).toISOString(),
                     new Date(row.last_used_at).toISOString(),
+                ),
+        );
+    };
+
+    readonly listProjectRuntimes = async (
+        projectId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<readonly ChannelDescriptor[]> => {
+        const access = await this.authorizeProject(projectId, token, signal);
+        const page = await this.database
+            .prepare(
+                `SELECT channel_id, runtime_id, machine_name, workspace_name,
+                agents_json, installable_agents_json, tenant_id, project_id
+         FROM pairing_channels
+         WHERE tenant_id = ? AND project_id = ? AND status = 'paired'
+         ORDER BY created_at, channel_id
+         LIMIT 100`,
+            )
+            .bind(access.tenantId, access.projectId)
+            .all<PublicChannelRow>();
+        signal.throwIfAborted();
+        return page.results.map(
+            (row) =>
+                new ChannelDescriptor(
+                    parseAgents(row.agents_json),
+                    row.channel_id,
+                    row.machine_name,
+                    row.workspace_name,
+                    row.tenant_id,
+                    row.project_id,
+                    row.runtime_id,
+                    parseInstallableAgents(row.installable_agents_json),
                 ),
         );
     };
@@ -645,6 +875,28 @@ export class D1PairingDirectory implements PairingDirectory {
             owner.project_id,
             normalizedCredentialId,
         );
+    };
+
+    readonly revokeBrowserCredential = async (
+        projectId: string,
+        credentialId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const owner = await this.readAuthorizedProjectOwner(projectId, token, signal);
+        const normalizedCredentialId = validateIdentifier(credentialId, "credential_id");
+        const result = await this.database
+            .prepare(
+                `UPDATE project_browser_credentials
+         SET revoked_at = COALESCE(revoked_at, ?)
+         WHERE credential_id = ? AND tenant_id = ? AND project_id = ?`,
+            )
+            .bind(Date.now(), normalizedCredentialId, owner.tenant_id, owner.project_id)
+            .run();
+        signal.throwIfAborted();
+        if (result.meta.changes !== 1) {
+            throw new PairingDirectoryError("browser_credential_not_found", "The browser credential was not found");
+        }
     };
 
     readonly updateAgentCatalog = async (

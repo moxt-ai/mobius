@@ -94,3 +94,63 @@ export async function readBoundedUtf8Body(request: Request, maximumBytes: number
     }
     return encoded;
 }
+
+export async function readBoundedBytesBody(request: Request, maximumBytes: number): Promise<Uint8Array> {
+    request.signal.throwIfAborted();
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1) {
+        throw new RequestBodyError("body_invalid_length", "The request body limit is invalid");
+    }
+    const declaredLength = declaredBodyLength(request, maximumBytes);
+    const reader = request.body?.getReader();
+    if (reader === undefined) {
+        throw new RequestBodyError("body_empty", "The request body is empty");
+    }
+    const chunks: Uint8Array[] = [];
+    let byteLength = 0;
+    try {
+        while (true) {
+            request.signal.throwIfAborted();
+            const chunk = await reader.read();
+            request.signal.throwIfAborted();
+            if (chunk.done) {
+                break;
+            }
+            byteLength += chunk.value.byteLength;
+            if (byteLength > maximumBytes) {
+                try {
+                    await reader.cancel("Request body limit exceeded");
+                } catch (cause) {
+                    request.signal.throwIfAborted();
+                    throw new RequestBodyError(
+                        "body_read_failed",
+                        "The oversized request body could not be cancelled",
+                        { cause },
+                    );
+                }
+                throw new RequestBodyError("body_too_large", "The request body is too large");
+            }
+            chunks.push(chunk.value);
+        }
+    } catch (cause) {
+        request.signal.throwIfAborted();
+        if (cause instanceof RequestBodyError) {
+            throw cause;
+        }
+        throw new RequestBodyError("body_read_failed", "The request body could not be read", { cause });
+    } finally {
+        reader.releaseLock();
+    }
+    if (byteLength === 0 || byteLength !== maximumBytes || (declaredLength !== null && declaredLength !== byteLength)) {
+        throw new RequestBodyError(
+            byteLength === 0 ? "body_empty" : "body_invalid_length",
+            "The request body length does not match its authorization",
+        );
+    }
+    const bytes = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+    }
+    return bytes;
+}

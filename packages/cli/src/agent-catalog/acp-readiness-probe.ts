@@ -13,8 +13,10 @@ import {
     type RequestPermissionResponse,
     type SessionNotification,
 } from "@agentclientprotocol/sdk";
+import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
+import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
 import { stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
@@ -22,6 +24,16 @@ import { normalizedVersion } from "./executable-discovery.ts";
 import type { LocalAgentDefinition } from "./local-agent.ts";
 
 const ACP_OUTPUT_LIMIT_BYTES = 1024 * 1024;
+
+export class VerifiedAcpReadiness {
+    readonly adapterVersion: string;
+    readonly capabilities: SessionCapabilities;
+
+    constructor(adapterVersion: string, capabilities: SessionCapabilities) {
+        this.adapterVersion = adapterVersion;
+        this.capabilities = capabilities;
+    }
+}
 
 class DiscoveryAcpHandler implements AcpClientHandler {
     readonly onElicitation = (
@@ -103,7 +115,7 @@ export async function probeAcpReadiness(
     environment: Readonly<NodeJS.ProcessEnv>,
     defaultWorkspace: string,
     signal: AbortSignal,
-): Promise<string> {
+): Promise<VerifiedAcpReadiness> {
     signal.throwIfAborted();
     const controller = new AbortController();
     let timedOut = false;
@@ -167,7 +179,10 @@ export async function probeAcpReadiness(
             throw new AgentProbeError("acp_incompatible", "ACP adapter selected an unsupported protocol version");
         }
         await specification.verifyAcp(connection, initialized, defaultWorkspace, controller.signal);
-        return normalizedVersion(initialized.agentInfo?.version ?? "");
+        return new VerifiedAcpReadiness(
+            normalizedVersion(initialized.agentInfo?.version ?? ""),
+            normalizeAcpCapabilities(initialized.agentCapabilities ?? {}),
+        );
     } catch (error) {
         if (signal.aborted) {
             signal.throwIfAborted();

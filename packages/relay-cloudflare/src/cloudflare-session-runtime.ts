@@ -25,10 +25,17 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import {
     type ActivityDetail,
+    ArtifactContent,
+    type ArtifactDescriptor,
+    ArtifactUploadAuthorization,
+    ArtifactUploadLease,
     type AttemptReconciliationOutcome,
+    AvailableArtifactDescriptor,
     type CommittedEventResult,
+    type CreateArtifactUploadRequest,
     type CreateSessionBindingRequest,
     type CreateSessionRequest,
+    ExpiredArtifactDescriptor,
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     type ProjectScope,
@@ -43,6 +50,8 @@ import {
     SessionRuntimeError,
     type SessionSummary,
     type TurnAcceptance,
+    type TurnCancellationAcceptance,
+    UploadingArtifactDescriptor,
     validateCreateSessionRequest,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -382,6 +391,83 @@ function decodeDetail(value: unknown): ActivityDetail {
     throw new SessionRuntimeError("session_storage_unavailable", "The activity detail is invalid");
 }
 
+function decodeUploadingArtifact(value: unknown): UploadingArtifactDescriptor {
+    if (!isRecord(value) || value["state"] !== "uploading") {
+        throw new SessionRuntimeError("session_storage_unavailable", "The artifact upload descriptor is invalid");
+    }
+    return new UploadingArtifactDescriptor(
+        readString(value, "sessionId"),
+        readString(value, "artifactId"),
+        readString(value, "name"),
+        readString(value, "mediaType"),
+        readNumber(value, "byteLength"),
+        readString(value, "sha256"),
+        readString(value, "createdAt"),
+        readString(value, "expiresAt"),
+    );
+}
+
+function decodeAvailableArtifact(value: unknown): AvailableArtifactDescriptor {
+    if (!isRecord(value) || value["state"] !== "available") {
+        throw new SessionRuntimeError("session_storage_unavailable", "The available artifact descriptor is invalid");
+    }
+    return new AvailableArtifactDescriptor(
+        readString(value, "sessionId"),
+        readString(value, "artifactId"),
+        readString(value, "name"),
+        readString(value, "mediaType"),
+        readNumber(value, "byteLength"),
+        readString(value, "sha256"),
+        readString(value, "createdAt"),
+        readString(value, "availableAt"),
+    );
+}
+
+function decodeArtifact(value: unknown): ArtifactDescriptor {
+    if (!isRecord(value)) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The artifact descriptor is invalid");
+    }
+    if (value["state"] === "uploading") {
+        return decodeUploadingArtifact(value);
+    }
+    if (value["state"] === "available") {
+        return decodeAvailableArtifact(value);
+    }
+    if (value["state"] === "expired") {
+        return new ExpiredArtifactDescriptor(
+            readString(value, "sessionId"),
+            readString(value, "artifactId"),
+            readString(value, "name"),
+            readString(value, "mediaType"),
+            readNumber(value, "byteLength"),
+            readString(value, "sha256"),
+            readString(value, "createdAt"),
+            readString(value, "expiredAt"),
+        );
+    }
+    throw new SessionRuntimeError("session_storage_unavailable", "The artifact state is invalid");
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (const byte of bytes) {
+        binary += String.fromCharCode(byte);
+    }
+    return btoa(binary);
+}
+
+function decodeBase64(value: string): Uint8Array {
+    let binary: string;
+    try {
+        binary = atob(value);
+    } catch (cause) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The artifact content encoding is invalid", {
+            cause,
+        });
+    }
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
 function decodeExport(value: unknown): SessionExport {
     if (
         !isRecord(value) ||
@@ -397,9 +483,11 @@ function decodeExport(value: unknown): SessionExport {
             "session",
             "toolCallViews",
             "turns",
+            "uploadedArtifacts",
         ]) ||
         !Array.isArray(value["toolCallViews"]) ||
         !Array.isArray(value["artifacts"]) ||
+        !Array.isArray(value["uploadedArtifacts"]) ||
         !Array.isArray(value["bindings"]) ||
         !Array.isArray(value["commandReceipts"]) ||
         !Array.isArray(value["interactions"]) ||
@@ -422,6 +510,23 @@ function decodeExport(value: unknown): SessionExport {
             mediaType: readString(artifact, "mediaType"),
             sha256: readString(artifact, "sha256"),
             toolCallId: readString(artifact, "toolCallId"),
+        };
+    });
+    const uploadedArtifacts = value["uploadedArtifacts"].map((artifact) => {
+        if (!isRecord(artifact) || artifact["contentEncoding"] !== "identity") {
+            throw new SessionRuntimeError("session_storage_unavailable", "The uploaded export artifact is invalid");
+        }
+        const contentEncoding: "identity" = "identity";
+        return {
+            artifactId: readString(artifact, "artifactId"),
+            availableAt: readString(artifact, "availableAt"),
+            byteLength: readNumber(artifact, "byteLength"),
+            contentBase64: readString(artifact, "contentBase64", true),
+            contentEncoding,
+            createdAt: readString(artifact, "createdAt"),
+            mediaType: readString(artifact, "mediaType"),
+            name: readString(artifact, "name"),
+            sha256: readString(artifact, "sha256"),
         };
     });
     return {
@@ -458,12 +563,18 @@ function decodeExport(value: unknown): SessionExport {
                 updatedAt: readString(command, "updatedAt"),
             };
         }),
+        uploadedArtifacts,
     };
 }
 
 function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
     switch (value) {
+        case "artifact_content_mismatch":
         case "artifact_not_found":
+        case "artifact_not_ready":
+        case "artifact_upload_closed":
+        case "artifact_upload_expired":
+        case "artifact_upload_unauthorized":
         case "content_too_large":
         case "cursor_expired":
         case "invalid_cursor":
@@ -472,6 +583,7 @@ function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
         case "idempotency_conflict":
         case "interaction_conflict":
         case "interaction_not_found":
+        case "invalid_request":
         case "event_source_conflict":
         case "pending_work_not_found":
         case "session_access_denied":
@@ -636,6 +748,131 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         };
     };
 
+    readonly acceptTurnCancellation = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        idempotencyKey: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<TurnCancellationAcceptance> => {
+        const value = await this.request(
+            scope,
+            sessionId,
+            "cancel-turn",
+            { idempotencyKey, now, runtimeId, sessionId, turnId },
+            signal,
+        );
+        if (!isRecord(value) || typeof value["duplicate"] !== "boolean") {
+            throw new SessionRuntimeError("session_storage_unavailable", "The Turn cancellation acceptance is invalid");
+        }
+        return {
+            duplicate: value["duplicate"],
+            pendingWork: decodePendingWork(value["pendingWork"]),
+            turn: decodeTurn(value["turn"]),
+        };
+    };
+
+    readonly createArtifactUpload = async (
+        scope: ProjectScope,
+        sessionId: string,
+        request: CreateArtifactUploadRequest,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactUploadAuthorization> => {
+        const value = await this.request(
+            scope,
+            sessionId,
+            "artifact-create-upload",
+            { now, request, sessionId },
+            signal,
+        );
+        if (!isRecord(value)) {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The artifact upload authorization is invalid",
+            );
+        }
+        return new ArtifactUploadAuthorization(decodeUploadingArtifact(value), readString(value, "uploadToken"));
+    };
+
+    readonly authorizeArtifactUpload = async (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        uploadToken: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactUploadLease> => {
+        const value = await this.request(
+            scope,
+            sessionId,
+            "artifact-authorize-upload",
+            { artifactId, now, sessionId, uploadToken },
+            signal,
+        );
+        if (!isRecord(value)) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The artifact upload lease is invalid");
+        }
+        return new ArtifactUploadLease(
+            decodeUploadingArtifact(value["artifact"]),
+            readString(value, "contentTargetId"),
+        );
+    };
+
+    readonly completeArtifactUpload = async (
+        scope: ProjectScope,
+        lease: ArtifactUploadLease,
+        bytes: Uint8Array,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<AvailableArtifactDescriptor> =>
+        decodeAvailableArtifact(
+            await this.request(
+                scope,
+                lease.artifact.sessionId,
+                "artifact-complete-upload",
+                { contentBase64: encodeBase64(bytes), lease, now },
+                signal,
+            ),
+        );
+
+    readonly readArtifact = async (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactDescriptor> =>
+        decodeArtifact(await this.request(scope, sessionId, "artifact-read", { artifactId, now, sessionId }, signal));
+
+    readonly readArtifactContent = async (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        signal: AbortSignal,
+    ): Promise<ArtifactContent> => {
+        const value = await this.request(scope, sessionId, "artifact-content", { artifactId, sessionId }, signal);
+        if (!isRecord(value)) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The artifact content response is invalid");
+        }
+        return new ArtifactContent(
+            decodeAvailableArtifact(value["artifact"]),
+            decodeBase64(readString(value, "contentBase64", true)),
+        );
+    };
+
+    readonly resolveArtifactResources = async (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactIds: readonly string[],
+        signal: AbortSignal,
+    ): Promise<SessionPromptCommand["resources"]> =>
+        decodePromptResourcesValue(
+            await this.request(scope, sessionId, "artifact-resources", { artifactIds, sessionId }, signal),
+        );
+
     readonly commitEvent = async (
         scope: ProjectScope,
         runtimeId: string,
@@ -719,6 +956,35 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         return summary;
     };
 
+    readonly openEventStream = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        signal.throwIfAborted();
+        const id = this.#namespace.idFromName(`${scope.tenantId}:${scope.projectId}:${sessionId}`);
+        try {
+            const response = await this.#namespace.get(id).fetch(
+                new Request("https://session.internal/internal/sessions/event-stream", {
+                    body: JSON.stringify({ cursor, scope, sessionId }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                    signal,
+                }),
+            );
+            signal.throwIfAborted();
+            return response;
+        } catch (cause) {
+            if (signal.aborted) {
+                throw cause;
+            }
+            throw new SessionRuntimeError("session_storage_unavailable", "The Session event stream is unavailable", {
+                cause,
+            });
+        }
+    };
+
     readonly readNativeHistory = async (
         scope: ProjectScope,
         sessionId: string,
@@ -763,6 +1029,32 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         signal: AbortSignal,
     ): Promise<Turn> => decodeTurn(await this.request(scope, sessionId, "turn", { sessionId, turnId }, signal));
 
+    readonly readTurnRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        const value = await this.request(scope, sessionId, "turn-runtime", { sessionId, turnId }, signal);
+        if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The Turn Runtime identity is invalid");
+        }
+        return value;
+    };
+
+    readonly readCommandRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        commandId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        const value = await this.request(scope, sessionId, "command-runtime", { commandId, sessionId }, signal);
+        if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The Turn Runtime identity is invalid");
+        }
+        return value;
+    };
+
     readonly readAttempt = async (
         scope: ProjectScope,
         sessionId: string,
@@ -778,6 +1070,19 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         signal: AbortSignal,
     ): Promise<Interaction> =>
         decodeInteraction(await this.request(scope, sessionId, "interaction", { interactionId, sessionId }, signal));
+
+    readonly readInteractionRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        interactionId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        const value = await this.request(scope, sessionId, "interaction-runtime", { interactionId, sessionId }, signal);
+        if (typeof value !== "string" || !IDENTIFIER_PATTERN.test(value)) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The Interaction Runtime identity is invalid");
+        }
+        return value;
+    };
 
     readonly readPendingInteractions = async (
         scope: ProjectScope,
@@ -978,6 +1283,7 @@ export class CloudflareSessionRuntime implements SessionRuntime {
     readonly importSession = async (
         scope: ProjectScope,
         exported: unknown,
+        targetBinding: CreateSessionBindingRequest,
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
@@ -991,7 +1297,9 @@ export class CloudflareSessionRuntime implements SessionRuntime {
         const reservation = await this.reserveSession(scope, sessionId, now, signal);
         let summary: SessionSummary;
         try {
-            summary = decodeSummary(await this.request(scope, sessionId, "import", { exported, now }, signal));
+            summary = decodeSummary(
+                await this.request(scope, sessionId, "import", { binding: targetBinding, exported, now }, signal),
+            );
         } catch (error) {
             if (
                 reservation.kind === "reserved" &&

@@ -1,9 +1,5 @@
-import {
-    MobiusClientError,
-    type NativeSessionEntry,
-    type NativeSessionHistory,
-    type SessionCapabilities,
-} from "@moxt-ai/mobius-web-sdk";
+import type { NativeSessionEntry, NativeSessionHistory, SessionCapabilities } from "@moxt-ai/mobius-sdk";
+import { MobiusChannelError } from "@moxt-ai/mobius-sdk/channel";
 import {
     ArrowLeft,
     ArrowRight,
@@ -81,7 +77,7 @@ type BrowserState =
       };
 
 function errorMessage(error: unknown): string {
-    if (error instanceof MobiusClientError) {
+    if (error instanceof MobiusChannelError) {
         switch (error.code) {
             case "acp_execution_failed":
                 return "The Agent couldn’t complete this request. Try again.";
@@ -93,7 +89,7 @@ function errorMessage(error: unknown): string {
                 return "This session list is out of date. Refresh it to continue.";
         }
     }
-    return error instanceof MobiusClientError ? error.message : "Could not load sessions. Try again.";
+    return error instanceof MobiusChannelError ? error.message : "Could not load sessions. Try again.";
 }
 
 function SessionActions({
@@ -312,7 +308,7 @@ function NativeSessionList({
                 entry,
                 action,
                 recovery:
-                    error instanceof MobiusClientError &&
+                    error instanceof MobiusChannelError &&
                     (error.code === "native_session_not_found" ||
                         error.code === "native_session_cursor_expired" ||
                         error.code === "native_session_target_changed")

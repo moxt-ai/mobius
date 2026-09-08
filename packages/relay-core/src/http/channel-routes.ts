@@ -14,6 +14,7 @@ import {
     parseJsonBody,
     preserveCancellation,
     readString,
+    sessionError,
 } from "./relay-http.ts";
 
 export function createChannelRoutes(useCases: ChannelUseCases): Hono {
@@ -130,6 +131,30 @@ export function createChannelRoutes(useCases: ChannelUseCases): Hono {
         } catch (error) {
             preserveCancellation(context.req.raw.signal, error);
             return directoryError(error);
+        }
+    });
+
+    app.get("/:channelId/sessions/:sessionId/commands/:commandId/artifacts/:artifactId/content", async (context) => {
+        try {
+            const content = await useCases.readArtifactContent(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? "",
+                validateIdentifier(context.req.param("sessionId"), "session_id"),
+                validateIdentifier(context.req.param("commandId"), "command_id"),
+                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
+                context.req.raw.signal,
+            );
+            return new Response(Uint8Array.from(content.bytes), {
+                headers: {
+                    "content-length": content.bytes.byteLength.toString(),
+                    "content-type": content.artifact.mediaType,
+                    "x-mobius-artifact-id": content.artifact.artifactId,
+                    "x-mobius-sha256": content.artifact.sha256,
+                },
+            });
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return sessionError(error);
         }
     });
 

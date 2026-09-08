@@ -1,4 +1,4 @@
-import type { AgentDisplayContent } from "@moxt-ai/mobius-web-sdk";
+import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk";
 import { ExternalLink, FileText, Image as ImageIcon, Terminal } from "lucide-react";
 
 import { AgentMarkdown } from "@/components/agent-markdown";

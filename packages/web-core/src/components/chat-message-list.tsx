@@ -2,7 +2,7 @@ import {
     type NativeSessionHistory,
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk";
 import { ArrowDown, MoreHorizontal } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
 import { AgentActivityList } from "@/components/agent-activity-list";

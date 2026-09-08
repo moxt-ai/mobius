@@ -173,6 +173,22 @@ export function initializeSessionSchema(database: SessionSqlDatabase): void {
         chunks_json TEXT,
         PRIMARY KEY (scope_key, session_id, artifact_id)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS uploaded_artifacts (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        artifact_id TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('uploading', 'available', 'expired')),
+        byte_length INTEGER NOT NULL CHECK (byte_length > 0),
+        sha256 TEXT NOT NULL CHECK (length(sha256) = 64),
+        content_target_id TEXT NOT NULL,
+        upload_token_hash TEXT NOT NULL,
+        upload_expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        available_at INTEGER,
+        PRIMARY KEY (scope_key, session_id, artifact_id)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS archive_segments (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

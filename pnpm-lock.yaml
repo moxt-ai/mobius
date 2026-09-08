@@ -89,6 +89,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260905.1
         version: 5.20260905.1
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../web-sdk
       wrangler:
         specifier: ^4.129.0
         version: 4.129.0(@cloudflare/workers-types@5.20260905.1)
@@ -114,18 +117,21 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../web-sdk
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
 
   packages/web:
     dependencies:
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../web-sdk
       '@moxt-ai/mobius-web-core':
         specifier: workspace:*
         version: link:../web-core
-      '@moxt-ai/mobius-web-sdk':
-        specifier: workspace:*
-        version: link:../web-sdk
       '@radix-ui/react-select':
         specifier: 2.3.7
         version: 2.3.7(@types/react-dom@19.2.7(@types/react@19.2.18))(@types/react@19.2.18)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -190,7 +196,7 @@ importers:
 
   packages/web-core:
     devDependencies:
-      '@moxt-ai/mobius-web-sdk':
+      '@moxt-ai/mobius-sdk':
         specifier: workspace:*
         version: link:../web-sdk
       '@radix-ui/react-select':

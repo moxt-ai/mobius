@@ -33,6 +33,7 @@ export type {
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 export {
+    decodeAgentContentEvent,
     decodeAgentDisplayContentValue,
     decodeInteraction,
     decodeNativeSessionHistory,
@@ -41,7 +42,10 @@ export {
     decodeRecordedAgentContentValue,
     decodeSessionCommandsUpdatedEvent,
     decodeSessionElicitationRequestedEvent,
+    decodeSessionElicitationResolvedEvent,
+    decodeSessionInfoUpdatedEvent,
     decodeSessionPermissionRequestedEvent,
+    decodeSessionPermissionResolvedEvent,
     decodeSessionReadyEvent,
     decodeSessionUsageUpdatedEvent,
     MOBIUS_API_PREFIX,
@@ -53,4 +57,6 @@ export {
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
-export * from "./client.ts";
+export * from "./errors.ts";
+export * from "./resources.ts";
+export * from "./service-client.ts";

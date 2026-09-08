@@ -1,25 +1,55 @@
 import {
-    type AgentInstallCancelRequest,
-    type AgentInstallRequest,
-    type CancelRequest,
-    connectMobiusClient,
-    type ElicitationResponseRequest,
-    type MobiusClient,
-    MobiusClientError,
+    decodeAgentContentEvent,
+    decodeSessionElicitationRequestedEvent,
+    decodeSessionElicitationResolvedEvent,
+    decodeSessionPermissionRequestedEvent,
+    decodeSessionPermissionResolvedEvent,
+    MobiusAgentActivityEvent,
+    MobiusAgentMessageEvent,
+    MobiusApiError,
+    MobiusArtifactUploadRequest,
+    MobiusAttemptEventSource,
+    type MobiusBrowserCredential,
+    MobiusBrowserCredentialRequest,
+    MobiusCancelledTurnState,
+    MobiusClient,
+    MobiusControlEvent,
+    MobiusElicitationResponseRequest,
+    MobiusError,
+    MobiusFailedTurnState,
+    MobiusIndeterminateTurnState,
+    MobiusPermissionResponseRequest,
+    MobiusRecordingPolicy,
+    type MobiusSession,
+    MobiusSucceededTurnState,
+    MobiusTurnCompletedEvent,
+    MobiusTurnFailedEvent,
+    MobiusTurnStartedEvent,
     mobiusApiUrl,
     type NativeSessionCommand,
     type NativeSessionResult,
+    type PromptResource,
+    type SessionConfigOption,
+    type SessionConfigUpdatedEvent,
+    type SessionReadyEvent,
+    StaticMobiusCredentialProvider,
+    type WorkspaceEntriesEvent,
+} from "@moxt-ai/mobius-sdk";
+import {
+    type AgentInstallCancelRequest,
+    type AgentInstallRequest,
+    type CancelRequest,
+    connectMobiusChannelClient,
+    type ElicitationResponseRequest,
+    type MobiusChannelClient,
+    MobiusChannelError,
     type PermissionResponseRequest,
     type PromptRequest,
     type PromptResult,
-    type SessionConfigOption,
-    type SessionConfigUpdatedEvent,
     type SessionConfigureRequest,
     type SessionPrepareRequest,
-    type SessionReadyEvent,
-    type WorkspaceEntriesEvent,
     type WorkspaceListRequest,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk/channel";
 import { type ChannelConnection, RecordedActivity, RequestedAgentInstallationState } from "@/domain/channel";
 import { DeletedSessionState, OfflineRuntimeState, OnlineRuntimeState, UnavailableRuntimeState } from "@/domain/chat";
 import { readChannelConnection } from "@/services/pairing-api";
@@ -57,12 +87,109 @@ interface BoundaryFailure {
 }
 
 function boundaryFailure(error: unknown): BoundaryFailure {
-    return error instanceof MobiusClientError
+    return error instanceof MobiusChannelError || error instanceof MobiusError
         ? { code: error.code, message: error.message }
         : {
               code: "unexpected_error",
               message: "The request failed unexpectedly",
           };
+}
+
+const BROWSER_CREDENTIAL_LIFETIME_SECONDS = 5 * 60;
+const BROWSER_CREDENTIAL_REFRESH_WINDOW_MILLISECONDS = 30_000;
+const PUBLIC_SESSION_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
+const PUBLIC_SESSION_CONTENT_LIMIT_BYTES = 6_000_000;
+
+class RefreshingBrowserCredentialProvider {
+    readonly #owner: MobiusClient;
+    #credential: MobiusBrowserCredential;
+
+    constructor(owner: MobiusClient, credential: MobiusBrowserCredential) {
+        this.#credential = credential;
+        this.#owner = owner;
+    }
+
+    readonly credential = async (signal: AbortSignal): Promise<string> => {
+        signal.throwIfAborted();
+        if (Date.parse(this.#credential.expiresAt) - Date.now() <= BROWSER_CREDENTIAL_REFRESH_WINDOW_MILLISECONDS) {
+            this.#credential = await this.#owner.credentials.issue(
+                new MobiusBrowserCredentialRequest(BROWSER_CREDENTIAL_LIFETIME_SECONDS),
+                signal,
+            );
+        }
+        signal.throwIfAborted();
+        return this.#credential.token;
+    };
+}
+
+class BrowserServiceClients {
+    readonly owner: MobiusClient;
+    readonly scoped: MobiusClient;
+
+    constructor(owner: MobiusClient, scoped: MobiusClient) {
+        this.owner = owner;
+        this.scoped = scoped;
+    }
+
+    readonly close = (): void => {
+        this.scoped.close();
+        this.owner.close();
+    };
+}
+
+class UploadedPromptAttachments {
+    readonly artifactIds: readonly string[];
+    readonly resources: PromptRequest["resources"];
+
+    constructor(artifactIds: readonly string[], resources: PromptRequest["resources"]) {
+        this.artifactIds = artifactIds;
+        this.resources = resources;
+    }
+}
+
+function decodeImageBytes(data: string): Uint8Array {
+    let binary: string;
+    try {
+        binary = atob(data);
+    } catch (cause) {
+        throw new MobiusChannelError("attachment_encoding_invalid", "The image attachment is not valid base64", {
+            cause,
+        });
+    }
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function sha256(bytes: Uint8Array, signal: AbortSignal): Promise<string> {
+    signal.throwIfAborted();
+    const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
+    signal.throwIfAborted();
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function connectBrowserServiceClients(connection: ChannelConnection): Promise<BrowserServiceClients> {
+    const owner = new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider(connection.hostToken),
+        endpoint: window.location.origin,
+        projectId: connection.projectId,
+    });
+    const signal = AbortSignal.timeout(20_000);
+    try {
+        const credential = await owner.credentials.issue(
+            new MobiusBrowserCredentialRequest(BROWSER_CREDENTIAL_LIFETIME_SECONDS),
+            signal,
+        );
+        return new BrowserServiceClients(
+            owner,
+            new MobiusClient({
+                credentialProvider: new RefreshingBrowserCredentialProvider(owner, credential),
+                endpoint: window.location.origin,
+                projectId: connection.projectId,
+            }),
+        );
+    } catch (error) {
+        owner.close();
+        throw error;
+    }
 }
 
 abstract class TransportConnection {
@@ -86,7 +213,7 @@ class DisconnectedTransport extends TransportConnection {
     readonly nativeSession = (): Promise<NativeSessionResult> => this.notInitialized();
     readonly cancelAgentInstallation = (): Promise<void> => this.notInitialized();
     readonly cancel = (): Promise<void> =>
-        Promise.reject(new MobiusClientError("transport_not_initialized", "The channel transport is not initialized"));
+        Promise.reject(new MobiusChannelError("transport_not_initialized", "The channel transport is not initialized"));
 
     readonly close = (): Promise<void> => Promise.resolve();
 
@@ -105,18 +232,25 @@ class DisconnectedTransport extends TransportConnection {
     readonly prompt = (): Promise<PromptResult> => this.notInitialized();
 
     private readonly notInitialized = <T>(): Promise<T> =>
-        Promise.reject(new MobiusClientError("transport_not_initialized", "The channel transport is not initialized"));
+        Promise.reject(new MobiusChannelError("transport_not_initialized", "The channel transport is not initialized"));
 }
 
 class ConnectedTransport extends TransportConnection {
     readonly #channelId: string;
-    readonly #client: Promise<MobiusClient>;
+    readonly #client: Promise<MobiusChannelClient>;
+    readonly #connection: ChannelConnection;
     readonly #preparingRequestIds = new Set<string>();
+    readonly #promptControllers = new Set<AbortController>();
+    readonly #publicCommandIds = new Set<string>();
+    readonly #serviceClients: Promise<BrowserServiceClients>;
+    readonly #turnIds = new Map<string, string>();
 
     constructor(connection: ChannelConnection, onActivity: () => void) {
         super();
         this.#channelId = connection.channelId;
-        this.#client = connectMobiusClient({
+        this.#connection = connection;
+        this.#serviceClients = connectBrowserServiceClients(connection);
+        this.#client = connectMobiusChannelClient({
             onActivity,
             onCommands: (event) => {
                 useChatStore.getState().applySessionCommands(event);
@@ -125,7 +259,9 @@ class ConnectedTransport extends TransportConnection {
                 useChatStore.getState().applySessionConfig(event);
             },
             onContent: (event) => {
-                useChatStore.getState().recordAgentContent(event);
+                if (!this.#publicCommandIds.has(event.commandId)) {
+                    useChatStore.getState().recordAgentContent(event);
+                }
             },
             onInstallCancelled: (event) => {
                 useChatStore.getState().applyAgentInstallCancelled(event);
@@ -145,7 +281,9 @@ class ConnectedTransport extends TransportConnection {
                 useChatStore.getState().applyAgentInstallStarted(event);
             },
             onElicitation: (event) => {
-                useChatStore.getState().applySessionElicitation(event);
+                if (!this.#publicCommandIds.has(event.commandId)) {
+                    useChatStore.getState().applySessionElicitation(event);
+                }
             },
             onElicitationResolved: (event) => {
                 useChatStore.getState().resolveSessionElicitation(event);
@@ -159,7 +297,9 @@ class ConnectedTransport extends TransportConnection {
                 }
             },
             onPermission: (event) => {
-                useChatStore.getState().applySessionPermission(event);
+                if (!this.#publicCommandIds.has(event.commandId)) {
+                    useChatStore.getState().applySessionPermission(event);
+                }
             },
             onPermissionResolved: (event) => {
                 useChatStore.getState().resolveSessionPermission(event.interactionId, event.sessionId);
@@ -189,15 +329,25 @@ class ConnectedTransport extends TransportConnection {
             store.setRuntime(new UnavailableRuntimeState());
             store.setErrorMessage(failureMessage(error));
         });
+        void this.#serviceClients.catch((error: unknown) => {
+            useChatStore.getState().setErrorMessage(failureMessage(error));
+        });
     }
 
     readonly close = async (): Promise<void> => {
-        try {
-            const client = await this.#client;
-            client.close();
-        } catch {
-            return;
+        for (const controller of this.#promptControllers) {
+            controller.abort(new Error("The Mobius transport closed"));
         }
+        this.#promptControllers.clear();
+        const channelClose = this.#client.then(
+            (client) => client.close(),
+            () => undefined,
+        );
+        const serviceClose = this.#serviceClients.then(
+            (clients) => clients.close(),
+            () => undefined,
+        );
+        await Promise.all([channelClose, serviceClose]);
     };
 
     readonly nativeSession = async (
@@ -211,8 +361,17 @@ class ConnectedTransport extends TransportConnection {
     };
 
     readonly cancel = async (request: CancelRequest): Promise<void> => {
-        const client = await this.#client;
-        client.cancel(request);
+        const clients = await this.#serviceClients;
+        const turnId = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
+        if (turnId === undefined) {
+            throw new MobiusChannelError("turn_not_found", "The active Turn is not available for cancellation");
+        }
+        await clients.scoped.turns.cancel(
+            request.sessionId,
+            turnId,
+            { idempotencyKey: `cancel-${crypto.randomUUID()}` },
+            AbortSignal.timeout(20_000),
+        );
     };
 
     readonly cancelAgentInstallation = async (request: AgentInstallCancelRequest): Promise<void> => {
@@ -228,8 +387,19 @@ class ConnectedTransport extends TransportConnection {
     };
 
     readonly elicit = async (request: ElicitationResponseRequest): Promise<void> => {
-        const client = await this.#client;
-        await client.respondElicitation(request);
+        const clients = await this.#serviceClients;
+        await clients.scoped.interactions.respond(
+            request.sessionId,
+            request.interactionId,
+            new MobiusElicitationResponseRequest("mobius-web", request.action, request.content),
+            AbortSignal.timeout(20_000),
+        );
+        useChatStore.getState().resolveSessionElicitation({
+            action: request.action,
+            interactionId: request.interactionId,
+            kind: "session.elicitation.resolved",
+            sessionId: request.sessionId,
+        });
     };
 
     readonly listWorkspace = async (request: WorkspaceListRequest): Promise<WorkspaceEntriesEvent> => {
@@ -243,8 +413,14 @@ class ConnectedTransport extends TransportConnection {
     };
 
     readonly permission = async (request: PermissionResponseRequest): Promise<void> => {
-        const client = await this.#client;
-        await client.respondPermission(request);
+        const clients = await this.#serviceClients;
+        await clients.scoped.interactions.respond(
+            request.sessionId,
+            request.interactionId,
+            new MobiusPermissionResponseRequest("mobius-web", request.outcome, request.optionId),
+            AbortSignal.timeout(20_000),
+        );
+        useChatStore.getState().resolveSessionPermission(request.interactionId, request.sessionId);
     };
 
     readonly prepare = async (request: SessionPrepareRequest): Promise<SessionReadyEvent> => {
@@ -298,9 +474,270 @@ class ConnectedTransport extends TransportConnection {
     };
 
     readonly prompt = async (request: PromptRequest): Promise<PromptResult> => {
-        const client = await this.#client;
-        return await client.prompt(request);
+        const controller = new AbortController();
+        this.#promptControllers.add(controller);
+        try {
+            return await this.runPrompt(request, controller.signal);
+        } finally {
+            this.#promptControllers.delete(controller);
+        }
     };
+
+    private readonly runPrompt = async (request: PromptRequest, signal: AbortSignal): Promise<PromptResult> => {
+        const clients = await this.#serviceClients;
+        const sessionId = request.sessionId ?? crypto.randomUUID();
+        const commandId = request.commandId ?? crypto.randomUUID();
+        await this.ensureSession(clients.scoped, request, sessionId, signal);
+        const attachments = await this.uploadAttachments(clients.scoped, sessionId, request, signal);
+        let attemptId = "";
+        let failureCode = "";
+        let failureMessage = "";
+        let stopReason = "";
+        const subscription = await clients.scoped.events.subscribe(
+            sessionId,
+            "",
+            {
+                receive: async (event) => {
+                    const payload = event.payload;
+                    if (!("commandId" in payload) || payload.commandId !== commandId) {
+                        return true;
+                    }
+                    if (payload instanceof MobiusTurnStartedEvent) {
+                        attemptId = payload.attemptId;
+                        request.observer?.onStarted?.(payload.attemptId);
+                        return true;
+                    }
+                    if (payload instanceof MobiusAgentMessageEvent) {
+                        request.observer?.onDelta?.(payload.text, event.sequence);
+                        return true;
+                    }
+                    if (payload instanceof MobiusAgentActivityEvent) {
+                        const sourceAttemptId =
+                            event.source instanceof MobiusAttemptEventSource ? event.source.attemptId : attemptId;
+                        request.observer?.onActivity?.({
+                            activityId: payload.activityId,
+                            activityType: payload.activityType,
+                            commandId: payload.commandId,
+                            content: payload.content,
+                            detail: payload.detail,
+                            input: payload.input,
+                            kind: payload.kind,
+                            locations: payload.locations,
+                            name: payload.name,
+                            output: payload.output,
+                            sequence: payload.sequence,
+                            sessionId: payload.sessionId,
+                            status: payload.status,
+                            title: payload.title,
+                            toolKind: payload.toolKind,
+                        });
+                        if (attemptId.length === 0) {
+                            attemptId = sourceAttemptId;
+                        }
+                        return true;
+                    }
+                    if (payload instanceof MobiusControlEvent) {
+                        this.applyPublicControlEvent(payload);
+                        return true;
+                    }
+                    if (payload instanceof MobiusTurnCompletedEvent) {
+                        stopReason = payload.stopReason;
+                        return false;
+                    }
+                    if (payload instanceof MobiusTurnFailedEvent) {
+                        failureCode = payload.code;
+                        failureMessage = payload.message;
+                        return false;
+                    }
+                    return true;
+                },
+            },
+            signal,
+        );
+        this.#publicCommandIds.add(commandId);
+        let acceptedTurnId = "";
+        try {
+            const accepted = await clients.scoped.turns.submit(
+                sessionId,
+                {
+                    additionalDirectoryIds: request.additionalDirectoryIds ?? [],
+                    artifactIds: attachments.artifactIds,
+                    content: request.prompt,
+                    idempotencyKey: commandId,
+                    images: [],
+                    resources: attachments.resources ?? [],
+                },
+                signal,
+            );
+            acceptedTurnId = accepted.turnId;
+            this.#turnIds.set(this.turnKey(sessionId, commandId), accepted.turnId);
+            try {
+                await subscription.completed;
+            } catch (streamError) {
+                const outcome = await clients.scoped.turns.read(sessionId, accepted.turnId, signal);
+                if (outcome.state instanceof MobiusSucceededTurnState) {
+                    stopReason = outcome.state.stopReason;
+                } else if (outcome.state instanceof MobiusCancelledTurnState) {
+                    stopReason = "cancelled";
+                } else if (outcome.state instanceof MobiusFailedTurnState) {
+                    failureCode = outcome.state.code;
+                    failureMessage = outcome.state.message;
+                } else if (outcome.state instanceof MobiusIndeterminateTurnState) {
+                    throw new MobiusChannelError("turn_indeterminate", outcome.state.reason, { cause: streamError });
+                } else {
+                    throw streamError;
+                }
+            }
+            if (failureCode.length > 0) {
+                throw new MobiusChannelError(failureCode, failureMessage);
+            }
+            if (stopReason.length === 0) {
+                throw new MobiusChannelError("turn_outcome_unavailable", "The Turn ended without a terminal outcome");
+            }
+            return { sessionId, stopReason };
+        } finally {
+            subscription.close();
+            if (acceptedTurnId.length > 0) {
+                this.#turnIds.delete(this.turnKey(sessionId, commandId));
+            }
+            this.#publicCommandIds.delete(commandId);
+        }
+    };
+
+    private readonly applyPublicControlEvent = (event: MobiusControlEvent): void => {
+        const store = useChatStore.getState();
+        if (event.kind === "agent.content") {
+            store.recordAgentContent(decodeAgentContentEvent(event.encodedPayload));
+            return;
+        }
+        if (event.kind === "session.permission.requested") {
+            store.applySessionPermission(decodeSessionPermissionRequestedEvent(event.encodedPayload));
+            return;
+        }
+        if (event.kind === "session.permission.resolved") {
+            const resolved = decodeSessionPermissionResolvedEvent(event.encodedPayload);
+            store.resolveSessionPermission(resolved.interactionId, resolved.sessionId);
+            return;
+        }
+        if (event.kind === "session.elicitation.requested") {
+            store.applySessionElicitation(decodeSessionElicitationRequestedEvent(event.encodedPayload));
+            return;
+        }
+        if (event.kind === "session.elicitation.resolved") {
+            store.resolveSessionElicitation(decodeSessionElicitationResolvedEvent(event.encodedPayload));
+        }
+    };
+
+    private readonly ensureSession = async (
+        client: MobiusClient,
+        request: PromptRequest,
+        sessionId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        let session: MobiusSession;
+        try {
+            session = await client.sessions.read(sessionId, signal);
+        } catch (error) {
+            if (!(error instanceof MobiusApiError) || error.code !== "session_not_found") {
+                throw error;
+            }
+            await client.sessions.create(
+                {
+                    agentId: request.agentId,
+                    bindingId: request.bindingId,
+                    directoryId: request.directoryId ?? "default",
+                    policy: new MobiusRecordingPolicy(
+                        "full",
+                        PUBLIC_SESSION_RETENTION_MILLISECONDS,
+                        1_000,
+                        PUBLIC_SESSION_CONTENT_LIMIT_BYTES,
+                    ),
+                    runtimeId: this.#connection.runtimeId,
+                    sessionId,
+                    title: "",
+                },
+                signal,
+            );
+            return;
+        }
+        const directoryId = request.directoryId ?? "default";
+        if (session.runtimeId !== this.#connection.runtimeId || session.agentId !== request.agentId) {
+            throw new MobiusChannelError(
+                "session_binding_conflict",
+                "The Session is bound to another Runtime or Agent",
+            );
+        }
+        if (
+            session.defaultBinding.bindingId !== request.bindingId ||
+            session.defaultBinding.agentRef !== request.agentId ||
+            session.defaultBinding.workspaceRef !== directoryId
+        ) {
+            await client.sessions.configure(
+                sessionId,
+                {
+                    agentRef: request.agentId,
+                    bindingId: request.bindingId,
+                    configRevision: session.defaultBinding.configRevision + 1,
+                    runtimeId: this.#connection.runtimeId,
+                    workspaceRef: directoryId,
+                },
+                signal,
+            );
+        }
+    };
+
+    private readonly uploadAttachments = async (
+        client: MobiusClient,
+        sessionId: string,
+        request: PromptRequest,
+        signal: AbortSignal,
+    ): Promise<UploadedPromptAttachments> => {
+        const artifactIds: string[] = [];
+        const resources: PromptResource[] = [];
+        for (const image of request.images ?? []) {
+            const bytes = decodeImageBytes(image.data);
+            artifactIds.push(await this.uploadAttachment(client, sessionId, image.name, image.mimeType, bytes, signal));
+        }
+        for (const resource of request.resources ?? []) {
+            if (resource.type !== "embedded") {
+                resources.push(resource);
+                continue;
+            }
+            artifactIds.push(
+                await this.uploadAttachment(
+                    client,
+                    sessionId,
+                    resource.name,
+                    resource.mimeType,
+                    new TextEncoder().encode(resource.text),
+                    signal,
+                ),
+            );
+        }
+        return new UploadedPromptAttachments(artifactIds, resources);
+    };
+
+    private readonly uploadAttachment = async (
+        client: MobiusClient,
+        sessionId: string,
+        name: string,
+        mediaType: string,
+        bytes: Uint8Array,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        if (bytes.byteLength === 0) {
+            throw new MobiusChannelError("attachment_empty", "An empty attachment cannot be uploaded");
+        }
+        const upload = await client.artifacts.createUpload(
+            sessionId,
+            new MobiusArtifactUploadRequest(name, mediaType, bytes.byteLength, await sha256(bytes, signal)),
+            signal,
+        );
+        await client.artifacts.uploadContent(sessionId, upload, bytes, signal);
+        return upload.artifactId;
+    };
+
+    private readonly turnKey = (sessionId: string, commandId: string): string => `${sessionId}\u0000${commandId}`;
 
     readonly #refreshAgentCatalog = async (): Promise<void> => {
         try {
@@ -611,9 +1048,9 @@ export async function installLocalAgent(agentId: string): Promise<void> {
         await transport.installAgent({ agentId, requestId });
     } catch (error) {
         const failure =
-            error instanceof MobiusClientError
+            error instanceof MobiusChannelError
                 ? error
-                : new MobiusClientError("unexpected_error", "The Agent integration installation failed unexpectedly");
+                : new MobiusChannelError("unexpected_error", "The Agent integration installation failed unexpectedly");
         if (failure.code === "installation_cancelled") {
             return;
         }

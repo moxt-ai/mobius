@@ -224,6 +224,19 @@ export class RuntimeRelay {
             this.disconnectHostCredential(access, credentialId);
             return new Response(null, { status: 204 });
         }
+        if (request.method === "POST" && pathname.endsWith("/pending-daemon-deliveries")) {
+            await this.actor(access.runtimeId, access.scope).dispatchPending(request.signal);
+            return new Response(null, { status: 204 });
+        }
+        if (request.method === "GET" && pathname.endsWith("/runtime-status")) {
+            const current = this.currentConnection();
+            return Response.json({
+                online:
+                    current?.state === "online" &&
+                    current.runtimeId === access.runtimeId &&
+                    this.#peers.daemons().length > 0,
+            });
+        }
         if (request.headers.get("Upgrade") !== "websocket") {
             return new Response("WebSocket upgrade required", { status: 426 });
         }

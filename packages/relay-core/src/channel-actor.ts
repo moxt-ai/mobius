@@ -175,7 +175,7 @@ export class ChannelActor {
             await this.#runtime.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         }
         this.broadcastRuntimeStatus(true);
-        await this.deliverPendingDaemonWork(signal);
+        await this.dispatchPending(signal);
     };
 
     readonly attachHost = (socket: ChannelSocket, _signal: AbortSignal): Promise<void> => {
@@ -684,7 +684,7 @@ export class ChannelActor {
         return true;
     };
 
-    private readonly deliverPendingDaemonWork = async (signal: AbortSignal): Promise<void> => {
+    readonly dispatchPending = async (signal: AbortSignal): Promise<void> => {
         let delivered = 0;
         while (delivered < 500) {
             const batch = await this.#runtime.listPendingDaemonDeliveries(

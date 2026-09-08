@@ -1,5 +1,7 @@
 import type { ImmutableContentStore } from "./content-storage.ts";
+import { SessionEventStreams } from "./session-event-stream.ts";
 import {
+    type CreateSessionBindingRequest,
     DEFAULT_SESSION_QUOTA_POLICY,
     type ProjectScope,
     type SessionExport,
@@ -9,6 +11,7 @@ import {
 } from "./session-runtime.ts";
 import type { SessionSqlDatabase } from "./session-sql-database.ts";
 import { SqliteSessionArchive } from "./sqlite-session-archive.ts";
+import { SqliteSessionArtifacts } from "./sqlite-session-artifacts.ts";
 import { SqliteSessionCommands } from "./sqlite-session-commands.ts";
 import { SqliteSessionEventProjector } from "./sqlite-session-event-projector.ts";
 import { SqliteSessionInteractions } from "./sqlite-session-interactions.ts";
@@ -27,9 +30,11 @@ export { validateCreateSessionRequest } from "./sqlite-session-records.ts";
 
 export class SqliteSessionRuntime implements SessionRuntime {
     readonly #archive: SqliteSessionArchive;
+    readonly #artifacts: SqliteSessionArtifacts;
     readonly #commands: SqliteSessionCommands;
     readonly #database: SessionSqlDatabase;
     readonly #eventProjector: SqliteSessionEventProjector;
+    readonly #eventStreams: SessionEventStreams;
     readonly #interactions: SqliteSessionInteractions;
     readonly #lifecycle: SqliteSessionLifecycle;
     readonly #queries: SqliteSessionQueries;
@@ -45,8 +50,10 @@ export class SqliteSessionRuntime implements SessionRuntime {
         this.#database = database;
         this.#eventProjector = new SqliteSessionEventProjector(database);
         this.#store = new SqliteSessionStore(database, quota);
+        this.#artifacts = new SqliteSessionArtifacts(database, content, this.#store);
         this.#lifecycle = new SqliteSessionLifecycle(database, this.#archive, this.#store);
         this.#queries = new SqliteSessionQueries(database, this.#archive, this.#store);
+        this.#eventStreams = new SessionEventStreams(this.#queries);
         this.#interactions = new SqliteSessionInteractions(database, this.#queries, this.#store);
         this.#commands = new SqliteSessionCommands(
             database,
@@ -55,7 +62,7 @@ export class SqliteSessionRuntime implements SessionRuntime {
             this.#lifecycle,
             this.#store,
         );
-        this.#transfer = new SqliteSessionTransfer(database, this.#archive, this.#store);
+        this.#transfer = new SqliteSessionTransfer(database, this.#archive, this.#artifacts, this.#store);
         initializeSessionSchema(this.#database);
     }
 
@@ -64,7 +71,16 @@ export class SqliteSessionRuntime implements SessionRuntime {
 
     readonly acceptTurn: SessionRuntime["acceptTurn"] = (...parameters) => this.#commands.acceptTurn(...parameters);
 
-    readonly commitEvent: SessionRuntime["commitEvent"] = (...parameters) => this.#commands.commitEvent(...parameters);
+    readonly acceptTurnCancellation: SessionRuntime["acceptTurnCancellation"] = (...parameters) =>
+        this.#commands.acceptTurnCancellation(...parameters);
+
+    readonly commitEvent: SessionRuntime["commitEvent"] = async (...parameters) => {
+        const result = await this.#commands.commitEvent(...parameters);
+        if (!result.duplicate) {
+            this.#eventStreams.publish(parameters[0], result.committed);
+        }
+        return result;
+    };
 
     readonly setDefaultBinding: SessionRuntime["setDefaultBinding"] = (...parameters) =>
         this.#commands.setDefaultBinding(...parameters);
@@ -97,10 +113,19 @@ export class SqliteSessionRuntime implements SessionRuntime {
 
     readonly readTurn: SessionRuntime["readTurn"] = (...parameters) => this.#queries.readTurn(...parameters);
 
+    readonly readTurnRuntime: SessionRuntime["readTurnRuntime"] = (...parameters) =>
+        this.#queries.readTurnRuntime(...parameters);
+
+    readonly readCommandRuntime: SessionRuntime["readCommandRuntime"] = (...parameters) =>
+        this.#queries.readCommandRuntime(...parameters);
+
     readonly readAttempt: SessionRuntime["readAttempt"] = (...parameters) => this.#queries.readAttempt(...parameters);
 
     readonly readInteraction: SessionRuntime["readInteraction"] = (...parameters) =>
         this.#queries.readInteraction(...parameters);
+
+    readonly readInteractionRuntime: SessionRuntime["readInteractionRuntime"] = (...parameters) =>
+        this.#queries.readInteractionRuntime(...parameters);
 
     readonly readPendingInteractions: SessionRuntime["readPendingInteractions"] = (...parameters) =>
         this.#queries.readPendingInteractions(...parameters);
@@ -115,6 +140,30 @@ export class SqliteSessionRuntime implements SessionRuntime {
 
     readonly readToolCallDetail: SessionRuntime["readToolCallDetail"] = (...parameters) =>
         this.#queries.readToolCallDetail(...parameters);
+
+    readonly createArtifactUpload: SessionRuntime["createArtifactUpload"] = (...parameters) =>
+        this.#artifacts.createUpload(...parameters);
+
+    readonly authorizeArtifactUpload: SessionRuntime["authorizeArtifactUpload"] = (...parameters) =>
+        this.#artifacts.authorizeUpload(...parameters);
+
+    readonly completeArtifactUpload: SessionRuntime["completeArtifactUpload"] = (...parameters) =>
+        this.#artifacts.completeUpload(...parameters);
+
+    readonly readArtifact: SessionRuntime["readArtifact"] = (...parameters) => this.#artifacts.read(...parameters);
+
+    readonly readArtifactContent: SessionRuntime["readArtifactContent"] = (...parameters) =>
+        this.#artifacts.readContent(...parameters);
+
+    readonly resolveArtifactResources: SessionRuntime["resolveArtifactResources"] = (...parameters) =>
+        this.#artifacts.resolveResources(...parameters);
+
+    readonly openEventStream: SessionRuntime["openEventStream"] = (...parameters) =>
+        this.#eventStreams.open(...parameters);
+
+    readonly closeEventStreams = (): void => {
+        this.#eventStreams.close();
+    };
 
     readonly runArchiveWork = async (scope: ProjectScope, sessionId: string, signal: AbortSignal): Promise<number> => {
         signal.throwIfAborted();
@@ -131,9 +180,11 @@ export class SqliteSessionRuntime implements SessionRuntime {
     readonly importSession = async (
         scope: ProjectScope,
         exported: unknown,
+        targetBinding: CreateSessionBindingRequest,
         now: number,
         signal: AbortSignal,
-    ): Promise<SessionSummary> => await this.#transfer.importSession(scope, exported, now, signal, this.createSession);
+    ): Promise<SessionSummary> =>
+        await this.#transfer.importSession(scope, exported, targetBinding, now, signal, this.createSession);
 
     readonly hasPendingArchiveWork = (scope: ProjectScope, sessionId: string): boolean =>
         this.#archive.hasPendingWork(scope, sessionId);

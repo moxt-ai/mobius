@@ -121,9 +121,12 @@ export function directoryError(error: unknown): Response {
             error.code === "pairing_not_found" ||
             error.code === "channel_not_found" ||
             error.code === "access_grant_invalid" ||
-            error.code === "linked_device_not_found"
+            error.code === "linked_device_not_found" ||
+            error.code === "browser_credential_not_found"
                 ? 404
-                : error.code === "unauthorized"
+                : error.code === "unauthorized" ||
+                    error.code === "credential_expired" ||
+                    error.code === "credential_revoked"
                   ? 401
                   : error.code === "owner_access_required"
                     ? 403
@@ -157,9 +160,11 @@ export function sessionError(error: unknown): Response {
             error.code === "interaction_not_found" ||
             error.code === "pending_work_not_found"
                 ? 404
-                : error.code === "session_access_denied"
+                : error.code === "session_access_denied" || error.code === "artifact_upload_unauthorized"
                   ? 403
-                  : error.code === "session_deleted" || error.code === "cursor_expired"
+                  : error.code === "session_deleted" ||
+                      error.code === "cursor_expired" ||
+                      error.code === "artifact_upload_expired"
                     ? 410
                     : error.code === "session_quota_exceeded"
                       ? 429
@@ -167,13 +172,17 @@ export function sessionError(error: unknown): Response {
                           error.code === "session_conflict" ||
                           error.code === "idempotency_conflict" ||
                           error.code === "interaction_conflict" ||
-                          error.code === "event_source_conflict"
+                          error.code === "event_source_conflict" ||
+                          error.code === "artifact_upload_closed" ||
+                          error.code === "artifact_not_ready"
                         ? 409
                         : error.code === "content_too_large"
                           ? 413
                           : error.code === "invalid_cursor" ||
                               error.code === "invalid_export" ||
-                              error.code === "invalid_page_size"
+                              error.code === "invalid_page_size" ||
+                              error.code === "invalid_request" ||
+                              error.code === "artifact_content_mismatch"
                             ? 400
                             : 503;
         return Response.json({ error: { code: error.code, message: error.message } }, { status });
@@ -196,7 +205,13 @@ export function createRequest(body: Readonly<Record<string, unknown>>): CreateSe
     if (!isRecord(policy)) {
         throw new PairingDirectoryError("invalid_request", "The session policy is invalid");
     }
-    assertExactKeys(policy, ["contentLimitBytes", "hotEventLimit", "level", "retentionMilliseconds"]);
+    assertExactKeys(policy, [
+        "contentLimitBytes",
+        "hotEventLimit",
+        "idempotencyRetentionMilliseconds",
+        "level",
+        "retentionMilliseconds",
+    ]);
     const level = policy["level"];
     if (level !== "full" && level !== "summary") {
         throw new PairingDirectoryError("invalid_request", "The session recording level is invalid");
@@ -212,6 +227,7 @@ export function createRequest(body: Readonly<Record<string, unknown>>): CreateSe
             readInteger(policy, "retentionMilliseconds"),
             readInteger(policy, "hotEventLimit"),
             readInteger(policy, "contentLimitBytes"),
+            readInteger(policy, "idempotencyRetentionMilliseconds"),
         ),
         readString(body, "title", 500, true),
     );

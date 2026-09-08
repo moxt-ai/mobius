@@ -4,8 +4,8 @@ Mobius is a remotely accessible ACP client runtime with a portable Relay core,
 a Cloudflare deployment profile, and a locally enforced security boundary.
 
 ```text
-Pairing page / channel Web app
-  -> Web SDK
+Pairing page / channel Web app / external integration
+  -> TypeScript SDK (HTTP resources + Session SSE)
   -> Relay API + ChannelActor
   -> verified Tenant / Project scope
   -> Runtime / Channel connection owner
@@ -28,13 +28,16 @@ projections, retention, deletion, and recoverable archive work.
 
 `packages/relay-cloudflare` is the active composition root. D1 implements the
 pairing directory and stores the daemon token hash, machine metadata, and locally
-advertised agent catalog. A Runtime Durable Object owns WebSocket connections;
-each independent session maps to a child Session Durable Object with its own
-SQLite state. D1 is a rebuildable session query directory and atomically reserves
-configured tenant/project session quota, while R2 stores immutable compressed
-archive segments. D1 schema changes are applied by Wrangler migrations before
-local development and after provisioning a deployment; request handlers do not
-create infrastructure tables.
+advertised agent catalog. Ready Agent entries include output-only executable
+path and version metadata together with capability booleans normalized from a
+bounded, successful ACP readiness probe. Persisted pre-capability catalogs are
+read conservatively with every capability disabled. A Runtime Durable Object owns WebSocket
+connections, and each independent session maps to a child Session Durable
+Object with its own SQLite state. D1 is a rebuildable session query directory
+and atomically reserves configured tenant/project session quota, while R2 stores
+immutable compressed archive segments. D1 schema changes are applied by
+Wrangler migrations before local development and after provisioning a
+deployment; request handlers do not create infrastructure tables.
 
 `packages/relay-node` supplies the same public Relay API composition with a
 single SQLite database and a containment-checked local filesystem content store.
@@ -48,6 +51,13 @@ Worker, while browser assets are served at the Worker origin. The browser derive
 the relay WebSocket URL from that origin. The single current Relay API is exposed
 under `/mobius/api`; it has no format or route-version branches. A bare origin
 renders the pairing page.
+The public TypeScript client uses HTTP for finite resource operations and one
+authenticated Server-Sent Event stream for ordered Session events. The
+capability document declares API version `1`, SSE event name
+`mobius.session-event.v1`, and event payload format version `1`. A subscriber is
+registered before cursor catch-up, so events committed during history reads are
+merged without a gap. Per-subscriber buffering and client reconnects are
+bounded, and heartbeat/liveness deadlines release abandoned streams.
 A successful one-time claim gives the browser an independent
 `/channels/<channel-id>` route. The Web application reads the paired machine and
 agent catalog from D1 through the Relay whenever that route opens, so it works in
@@ -72,6 +82,13 @@ outbox; Relay acknowledgements are emitted only after the authoritative event,
 projection, and archive job commit. Reconnection retransmits the same event IDs,
 so it repairs delivery without rerunning a command. Clients catch up with ordered
 cursors, then consume the same committed-event envelope live.
+
+Public Turn submission names a Session, content, and an idempotency key. Relay
+loads the server-owned Session binding, reauthorizes its exact Runtime, commits
+the Turn, and only then requests dispatch. This boundary is reusable by a
+future BotConversation: Bot behavior and binding revisions can be pinned while
+the existing Session remains the execution-history aggregate. Neither Channel
+nor Agent becomes the Bot's durable identity.
 
 Activity summaries are bounded separately from recorded details. Full permitted
 details are captured before summarization, split into bounded compressed segments,
@@ -205,7 +222,8 @@ events use bounded stages and sanitized stable codes.
   Tailwind CSS entrypoint.
 - `packages/web-core` owns the reusable React agent experience, including chat
   and integration components.
-- `packages/web-sdk` owns the browser-facing API.
+- `packages/web-sdk` owns the browser-and-Node TypeScript resource API and the
+  browser channel-control transport used by the built-in Web application.
 - `e2e/fixtures` contains deterministic external-boundary fixtures.
 - `deploy/docker` is an empty placeholder for a future packaged Node image.
 

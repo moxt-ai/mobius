@@ -1,4 +1,4 @@
-import type { WorkspaceEntriesEvent, WorkspaceEntry } from "@moxt-ai/mobius-web-sdk";
+import type { WorkspaceEntriesEvent, WorkspaceEntry } from "@moxt-ai/mobius-sdk";
 import {
     Check,
     ChevronLeft,

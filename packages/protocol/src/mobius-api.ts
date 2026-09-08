@@ -1,4 +1,10 @@
 export const MOBIUS_API_PREFIX = "/mobius/api";
+export const MOBIUS_API_VERSION = "1";
+export const MOBIUS_EVENT_FORMAT_VERSION = "1";
+export const MOBIUS_SESSION_EXPORT_FORMAT_VERSION = "1";
+export const MOBIUS_SESSION_EVENT_STREAM_EVENT = "mobius.session-event.v1";
+export const MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE = "text/event-stream";
+export const MOBIUS_SESSION_EVENT_STREAM_TRANSPORT = "sse";
 
 const API_PREFIX_PATTERN = /^\/[a-zA-Z0-9._~-]+(?:\/[a-zA-Z0-9._~-]+)*$/;
 

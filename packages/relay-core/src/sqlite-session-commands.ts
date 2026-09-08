@@ -4,7 +4,9 @@ import {
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeCommittedSessionEvent,
+    encodeSessionCancelCommand,
     encodeSessionEventEnvelope,
+    SESSION_CANCEL_KIND,
     SESSION_EVENT_COMMITTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
@@ -21,6 +23,7 @@ import {
     SessionRuntimeError,
     type SessionSummary,
     type TurnAcceptance,
+    type TurnCancellationAcceptance,
 } from "./session-runtime.ts";
 import type { SessionSqlDatabase } from "./session-sql-database.ts";
 import { rowNullableString, rowNumber, rowString } from "./sqlite-row.ts";
@@ -248,6 +251,118 @@ export class SqliteSessionCommands {
                 kind: "accepted",
                 pendingWork: pendingWorkFromRow(pending, scope),
                 turn: turnFromRow(accepted),
+            };
+        });
+    };
+
+    readonly acceptTurnCancellation = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        idempotencyKey: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<TurnCancellationAcceptance> => {
+        signal.throwIfAborted();
+        validateTimestamp(now);
+        validateDomainIdentifier(runtimeId, "runtime");
+        validateDomainIdentifier(sessionId, "session");
+        validateDomainIdentifier(turnId, "turn");
+        validateDomainIdentifier(idempotencyKey, "idempotency key");
+        this.#store.requireActiveSessionRow(scope, sessionId, now);
+        const key = scopeKey(scope);
+        const requestPayload = JSON.stringify({ sessionId, turnId });
+        const requestHash = await sha256(new TextEncoder().encode(requestPayload));
+        signal.throwIfAborted();
+        return this.#database.transaction(() => {
+            const turnRow = this.#database.query(
+                `SELECT t.*, b.runtime_id
+         FROM turns t
+         INNER JOIN session_bindings b
+           ON b.scope_key = t.scope_key AND b.session_id = t.session_id
+          AND b.binding_id = t.binding_id
+         WHERE t.scope_key = ? AND t.session_id = ? AND t.turn_id = ?`,
+                [key, sessionId, turnId],
+            )[0];
+            if (turnRow === undefined) {
+                throw new SessionRuntimeError("session_not_found", "The Turn does not exist");
+            }
+            if (rowString(turnRow, "runtime_id") !== runtimeId) {
+                throw new SessionRuntimeError(
+                    "session_access_denied",
+                    "The Runtime does not own the Turn's immutable binding",
+                );
+            }
+            const duplicate = this.#database.query(
+                `SELECT request_hash, result_id FROM command_receipts
+         WHERE scope_key = ? AND session_id = ?
+           AND command_kind = ? AND idempotency_key = ?`,
+                [key, sessionId, SESSION_CANCEL_KIND, idempotencyKey],
+            )[0];
+            if (duplicate !== undefined) {
+                if (rowString(duplicate, "request_hash") !== requestHash) {
+                    throw new SessionRuntimeError(
+                        "idempotency_conflict",
+                        "The idempotency key was reused for another Turn cancellation",
+                    );
+                }
+                const pending = this.#database.query(
+                    `SELECT * FROM pending_work
+           WHERE scope_key = ? AND session_id = ? AND work_id = ?`,
+                    [key, sessionId, rowString(duplicate, "result_id")],
+                )[0];
+                if (pending === undefined) {
+                    throw new SessionRuntimeError(
+                        "session_storage_unavailable",
+                        "The accepted Turn cancellation is incomplete",
+                    );
+                }
+                return {
+                    duplicate: true,
+                    pendingWork: pendingWorkFromRow(pending, scope),
+                    turn: turnFromRow(turnRow),
+                };
+            }
+            const state = rowString(turnRow, "state");
+            if (state !== "queued" && state !== "running" && state !== "indeterminate") {
+                throw new SessionRuntimeError("session_conflict", "The Turn no longer accepts cancellation");
+            }
+            const workId = `cancel_${crypto.randomUUID()}`;
+            const deliveryPayload = encodeSessionCancelCommand({
+                commandId: rowString(turnRow, "command_id"),
+                kind: SESSION_CANCEL_KIND,
+                sessionId,
+            });
+            this.#database.run(
+                `INSERT INTO command_receipts (
+           scope_key, session_id, command_kind, idempotency_key,
+           request_hash, result_id, accepted_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [key, sessionId, SESSION_CANCEL_KIND, idempotencyKey, requestHash, workId, now],
+            );
+            this.#database.run(
+                `INSERT INTO pending_work (
+           scope_key, session_id, work_id, work_kind, runtime_id,
+           delivery_payload, state, queued_at
+         ) VALUES (?, ?, ?, 'dispatch', ?, ?, 'pending', ?)`,
+                [key, sessionId, workId, runtimeId, deliveryPayload, now],
+            );
+            const pending = this.#database.query(
+                `SELECT * FROM pending_work
+         WHERE scope_key = ? AND session_id = ? AND work_id = ?`,
+                [key, sessionId, workId],
+            )[0];
+            if (pending === undefined) {
+                throw new SessionRuntimeError(
+                    "session_storage_unavailable",
+                    "The Turn cancellation was not committed atomically",
+                );
+            }
+            return {
+                duplicate: false,
+                pendingWork: pendingWorkFromRow(pending, scope),
+                turn: turnFromRow(turnRow),
             };
         });
     };

@@ -1,4 +1,4 @@
-import type { SessionConfigOption } from "@moxt-ai/mobius-web-sdk";
+import type { SessionConfigOption } from "@moxt-ai/mobius-sdk";
 import { Check, ChevronDown, LoaderCircle, RefreshCw, Settings2, X } from "lucide-react";
 import { type CSSProperties, Fragment, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 

@@ -71,6 +71,18 @@ const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const fakeAgentPath = fileURLToPath(new URL("./fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 const fakeAppServerUrl = new URL("./fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
+const verifiedAgentCapabilities = {
+    additionalDirectories: true,
+    audioPrompt: false,
+    closeSession: true,
+    deleteSession: true,
+    embeddedContextPrompt: true,
+    imagePrompt: true,
+    listSessions: true,
+    loadSession: true,
+    resumeSession: true,
+    unstableForkSession: false,
+};
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -1983,6 +1995,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
         const previousClaudeAdapterPath = process.env["MOBIUS_CLAUDE_ACP_PATH"];
         const previousPiPath = process.env["MOBIUS_PI_PATH"];
         const previousPiAdapterPath = process.env["MOBIUS_PI_ACP_PATH"];
+        const previousDeepSeekHarnessPath = process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"];
+        const previousOpenCodePath = process.env["MOBIUS_OPENCODE_PATH"];
+        const previousCursorPath = process.env["MOBIUS_CURSOR_PATH"];
+        const previousGrokBuildPath = process.env["MOBIUS_GROK_BUILD_PATH"];
+        const previousWorkBuddyPath = process.env["MOBIUS_WORKBUDDY_PATH"];
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousPath = process.env["PATH"];
@@ -1994,6 +2011,12 @@ child.once("exit", (code) => process.exit(code ?? 93));
         delete process.env["MOBIUS_CLAUDE_ACP_PATH"];
         process.env["MOBIUS_PI_PATH"] = piPath;
         process.env["MOBIUS_PI_ACP_PATH"] = piAdapterPath;
+        const unavailableAgentDirectory = join(temporaryDirectory, "unavailable-agents");
+        process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"] = join(unavailableAgentDirectory, "dsh");
+        process.env["MOBIUS_OPENCODE_PATH"] = join(unavailableAgentDirectory, "opencode");
+        process.env["MOBIUS_CURSOR_PATH"] = join(unavailableAgentDirectory, "cursor-agent");
+        process.env["MOBIUS_GROK_BUILD_PATH"] = join(unavailableAgentDirectory, "grok");
+        process.env["MOBIUS_WORKBUDDY_PATH"] = join(unavailableAgentDirectory, "codebuddy");
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(temporaryDirectory, "native");
         process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
         process.env["PATH"] = executableDirectory;
@@ -2098,12 +2121,20 @@ child.once("exit", (code) => process.exit(code ?? 93));
                     {
                         agentPath: codexPath,
                         agentVersion: "codex 0.153.0",
+                        capabilities: expect.objectContaining({
+                            imagePrompt: true,
+                            loadSession: true,
+                        }),
                         id: "codex",
                         label: "Codex",
                     },
                     {
                         agentPath: piPath,
                         agentVersion: "0.85.0",
+                        capabilities: expect.objectContaining({
+                            imagePrompt: true,
+                            loadSession: true,
+                        }),
                         id: "pi",
                         label: "Pi",
                     },
@@ -2157,6 +2188,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
                         {
                             agentPath: codexPath,
                             agentVersion: "codex 0.153.0",
+                            capabilities: verifiedAgentCapabilities,
                             id: "codex",
                             label: "Codex",
                         },
@@ -2170,7 +2202,14 @@ child.once("exit", (code) => process.exit(code ?? 93));
             catalogEndpoint.search = paired.config.relayUrl.search;
             const injectedCatalogUpdate = await fetch(catalogEndpoint, {
                 body: JSON.stringify({
-                    agents: [{ id: "codex", label: "Codex", path: codexPath }],
+                    agents: [
+                        {
+                            capabilities: verifiedAgentCapabilities,
+                            id: "codex",
+                            label: "Codex",
+                            path: codexPath,
+                        },
+                    ],
                     installableAgents: [],
                 }),
                 headers: { "content-type": "application/json" },
@@ -2199,8 +2238,26 @@ child.once("exit", (code) => process.exit(code ?? 93));
                     );
                     await expect(awaitingIntegrationDescriptor.json()).resolves.toMatchObject({
                         agents: [
-                            { id: "codex", label: "Codex" },
-                            { id: "pi", label: "Pi" },
+                            {
+                                agentPath: codexPath,
+                                agentVersion: "codex 0.153.0",
+                                capabilities: expect.objectContaining({
+                                    imagePrompt: true,
+                                    loadSession: true,
+                                }),
+                                id: "codex",
+                                label: "Codex",
+                            },
+                            {
+                                agentPath: piPath,
+                                agentVersion: "0.85.0",
+                                capabilities: expect.objectContaining({
+                                    imagePrompt: true,
+                                    loadSession: true,
+                                }),
+                                id: "pi",
+                                label: "Pi",
+                            },
                         ],
                         installableAgents: [
                             {
@@ -2486,18 +2543,30 @@ child.once("exit", (code) => process.exit(code ?? 93));
                         {
                             agentPath: codexPath,
                             agentVersion: "codex 0.153.0",
+                            capabilities: expect.objectContaining({
+                                imagePrompt: true,
+                                loadSession: true,
+                            }),
                             id: "codex",
                             label: "Codex",
                         },
                         {
                             agentPath: claudePath,
                             agentVersion: "2.1.138 (Claude Code)",
+                            capabilities: expect.objectContaining({
+                                imagePrompt: true,
+                                loadSession: true,
+                            }),
                             id: "claude",
                             label: "Claude Code",
                         },
                         {
                             agentPath: piPath,
                             agentVersion: "0.85.0",
+                            capabilities: expect.objectContaining({
+                                imagePrompt: true,
+                                loadSession: true,
+                            }),
                             id: "pi",
                             label: "Pi",
                         },
@@ -2548,6 +2617,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
             restoreEnvironmentVariable("MOBIUS_CLAUDE_ACP_PATH", previousClaudeAdapterPath);
             restoreEnvironmentVariable("MOBIUS_PI_PATH", previousPiPath);
             restoreEnvironmentVariable("MOBIUS_PI_ACP_PATH", previousPiAdapterPath);
+            restoreEnvironmentVariable("MOBIUS_DEEPSEEK_HARNESS_PATH", previousDeepSeekHarnessPath);
+            restoreEnvironmentVariable("MOBIUS_OPENCODE_PATH", previousOpenCodePath);
+            restoreEnvironmentVariable("MOBIUS_CURSOR_PATH", previousCursorPath);
+            restoreEnvironmentVariable("MOBIUS_GROK_BUILD_PATH", previousGrokBuildPath);
+            restoreEnvironmentVariable("MOBIUS_WORKBUDDY_PATH", previousWorkBuddyPath);
             restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
             restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
             restoreEnvironmentVariable("PATH", previousPath);

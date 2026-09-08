@@ -4,9 +4,10 @@ import type {
     NativeSessionHistory,
     PromptImage,
     PromptResource,
+    SessionCapabilities,
     SessionElicitationRequestedEvent,
     SessionPermissionRequestedEvent,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
@@ -15,12 +16,14 @@ const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 export class AgentOption {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
 
-    constructor(id: string, label: string, agentPath: string, agentVersion: string) {
+    constructor(id: string, label: string, agentPath: string, agentVersion: string, capabilities: SessionCapabilities) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
+        this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
     }

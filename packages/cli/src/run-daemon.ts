@@ -104,6 +104,7 @@ import { WorkspaceDirectoryService } from "./authorization/workspace-directory.t
 import type { DaemonConfig } from "./config.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
+import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
@@ -554,7 +555,8 @@ function operationErrorCode(error: unknown): string {
     if (
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
-        error instanceof LocalAgentCatalogError
+        error instanceof LocalAgentCatalogError ||
+        error instanceof PromptArtifactError
     ) {
         return error.code;
     }
@@ -565,7 +567,8 @@ function operationErrorMessage(error: unknown): string {
     if (
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
-        error instanceof LocalAgentCatalogError
+        error instanceof LocalAgentCatalogError ||
+        error instanceof PromptArtifactError
     ) {
         return error.message;
     }
@@ -797,12 +800,13 @@ async function executePrompt(
             }),
             attemptId,
         );
+        const attachments = await resolvePromptArtifacts(config, command, signal);
         const result = await sessions.runPrompt({
             additionalDirectories: resolved.additionalDirectories,
             agent,
             commandId: command.commandId,
             cwd: resolved.cwd,
-            images: command.images,
+            images: attachments.images,
             onActivity: (activity) => {
                 publisher.recordAttempt(
                     command.sessionId,
@@ -841,7 +845,7 @@ async function executePrompt(
                 return Promise.resolve();
             },
             prompt: command.prompt,
-            resources: command.resources,
+            resources: attachments.resources,
             sessionId: command.sessionId,
             signal,
         });

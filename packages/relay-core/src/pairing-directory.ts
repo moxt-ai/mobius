@@ -1,14 +1,31 @@
+import { type SessionCapabilities, sessionCapabilitiesSchema } from "@moxt-ai/mobius-protocol";
+
 export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
+export const MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
+export const MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 60 * 1_000;
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
+const SESSION_CAPABILITY_FIELDS: readonly string[] = [
+    "additionalDirectories",
+    "audioPrompt",
+    "closeSession",
+    "deleteSession",
+    "embeddedContextPrompt",
+    "imagePrompt",
+    "listSessions",
+    "loadSession",
+    "resumeSession",
+    "unstableForkSession",
+];
 
 export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
 }
@@ -141,6 +158,22 @@ export class ChannelDescriptor {
     }
 }
 
+export class CreatedBrowserCredential {
+    readonly credentialId: string;
+    readonly expiresAt: string;
+    readonly projectId: string;
+    readonly tenantId: string;
+    readonly token: string;
+
+    constructor(credentialId: string, expiresAt: string, projectId: string, tenantId: string, token: string) {
+        this.credentialId = credentialId;
+        this.expiresAt = expiresAt;
+        this.projectId = projectId;
+        this.tenantId = tenantId;
+        this.token = token;
+    }
+}
+
 export abstract class PairingStatus {
     abstract readonly status: string;
 }
@@ -206,6 +239,12 @@ export interface PairingDirectory {
     readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<VerifiedChannelAccess>;
     readonly authorizeHost: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelHostCredential>;
     readonly authorizeProject: (projectId: string, token: string, signal: AbortSignal) => Promise<ProjectScopeAccess>;
+    readonly authorizeProjectRuntime: (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<VerifiedChannelAccess>;
     readonly claimPairing: (
         pairingCode: string,
         machineName: string,
@@ -219,12 +258,23 @@ export interface PairingDirectory {
         token: string,
         signal: AbortSignal,
     ) => Promise<CreatedChannelAccessGrant>;
+    readonly createBrowserCredential: (
+        projectId: string,
+        token: string,
+        lifetimeMilliseconds: number,
+        signal: AbortSignal,
+    ) => Promise<CreatedBrowserCredential>;
     readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
     readonly listLinkedChannelDevices: (
         channelId: string,
         token: string,
         signal: AbortSignal,
     ) => Promise<readonly LinkedChannelDevice[]>;
+    readonly listProjectRuntimes: (
+        projectId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<readonly ChannelDescriptor[]>;
     readonly readChannel: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelDescriptor>;
     readonly readPairingStatus: (pairingId: string, pollToken: string, signal: AbortSignal) => Promise<PairingStatus>;
     readonly redeemChannelAccessGrant: (
@@ -239,6 +289,12 @@ export interface PairingDirectory {
         token: string,
         signal: AbortSignal,
     ) => Promise<ChannelHostCredential>;
+    readonly revokeBrowserCredential: (
+        projectId: string,
+        credentialId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<void>;
     readonly updateAgentCatalog: (
         channelId: string,
         token: string,
@@ -319,6 +375,21 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function unsupportedSessionCapabilities(): SessionCapabilities {
+    return Object.freeze({
+        additionalDirectories: false,
+        audioPrompt: false,
+        closeSession: false,
+        deleteSession: false,
+        embeddedContextPrompt: false,
+        imagePrompt: false,
+        listSessions: false,
+        loadSession: false,
+        resumeSession: false,
+        unstableForkSession: false,
+    });
+}
+
 function normalizePersistedAgents(value: unknown): unknown {
     if (!Array.isArray(value)) {
         return value;
@@ -333,12 +404,61 @@ function normalizePersistedAgents(value: unknown): unknown {
             return {
                 agentPath: "Not reported",
                 agentVersion: "Not reported",
+                capabilities: unsupportedSessionCapabilities(),
+                id: candidate["id"],
+                label: candidate["label"],
+            };
+        }
+        if (
+            isRecord(candidate) &&
+            Object.keys(candidate).length === 3 &&
+            Object.hasOwn(candidate, "capabilities") &&
+            Object.hasOwn(candidate, "id") &&
+            Object.hasOwn(candidate, "label")
+        ) {
+            return {
+                agentPath: "Not reported",
+                agentVersion: "Not reported",
+                capabilities: candidate["capabilities"],
+                id: candidate["id"],
+                label: candidate["label"],
+            };
+        }
+        if (
+            isRecord(candidate) &&
+            Object.keys(candidate).length === 4 &&
+            Object.hasOwn(candidate, "agentPath") &&
+            Object.hasOwn(candidate, "agentVersion") &&
+            Object.hasOwn(candidate, "id") &&
+            Object.hasOwn(candidate, "label")
+        ) {
+            return {
+                agentPath: candidate["agentPath"],
+                agentVersion: candidate["agentVersion"],
+                capabilities: unsupportedSessionCapabilities(),
                 id: candidate["id"],
                 label: candidate["label"],
             };
         }
         return candidate;
     });
+}
+
+function validateAgentCapabilities(value: unknown): SessionCapabilities {
+    if (
+        !isRecord(value) ||
+        Object.keys(value).length !== SESSION_CAPABILITY_FIELDS.length ||
+        SESSION_CAPABILITY_FIELDS.some((field) => !Object.hasOwn(value, field))
+    ) {
+        throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid");
+    }
+    const parsed = sessionCapabilitiesSchema.safeParse(value);
+    if (!parsed.success) {
+        throw new PairingDirectoryError("invalid_agents", "The local Agent capabilities are invalid", {
+            cause: parsed.error,
+        });
+    }
+    return parsed.data;
 }
 
 function normalizePersistedInstallableAgents(value: unknown): unknown {
@@ -386,14 +506,16 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length !== 4 ||
+            Object.keys(candidate).length !== 5 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
+            !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
             !Object.hasOwn(candidate, "label")
         ) {
             throw new PairingDirectoryError("invalid_agents", "The local agent directory is invalid");
         }
+        const capabilities = validateAgentCapabilities(candidate["capabilities"]);
         const id = candidate["id"];
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
@@ -418,6 +540,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         agents.push({
             agentPath,
             agentVersion: agentVersion.trim(),
+            capabilities,
             id,
             label: label.trim(),
         });

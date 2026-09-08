@@ -43,13 +43,27 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
+import { MobiusArtifactUploadRequest, MobiusClient, MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const relayOrigin = "https://relay.test";
+const verifiedAgentCapabilities = {
+    additionalDirectories: true,
+    audioPrompt: false,
+    closeSession: true,
+    deleteSession: true,
+    embeddedContextPrompt: true,
+    imagePrompt: true,
+    listSessions: true,
+    loadSession: true,
+    resumeSession: true,
+    unstableForkSession: false,
+};
 const readyAgents = [
     {
         agentPath: "/usr/local/bin/codex",
         agentVersion: "codex 0.153.0",
+        capabilities: verifiedAgentCapabilities,
         id: "codex",
         label: "Codex",
     },
@@ -130,6 +144,11 @@ function requiredString(value: Readonly<Record<string, unknown>>, key: string): 
         throw new Error(`Expected ${key}`);
     }
     return field;
+}
+
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+    const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
+    return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function decodeCreatedPairing(value: unknown): CreatedPairingResponse {
@@ -284,6 +303,7 @@ async function createSession(
             policy: {
                 contentLimitBytes: options.contentLimitBytes ?? 2_000_000,
                 hotEventLimit: options.hotEventLimit ?? 100,
+                idempotencyRetentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
                 level: "full",
                 retentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
             },
@@ -538,14 +558,142 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(ownerCredential?.token_hash).not.toBe(created.hostToken);
     });
 
-    it("Given a persisted catalog predates Web-confirmed installation, When its Channel is read, Then obsolete local-approval metadata is omitted", async () => {
+    it("Given an owner app credential, When a browser uses a short-lived project credential through the SDK, Then Runtime discovery and every Session request enforce expiry, refresh, and revocation", async () => {
+        const pairing = await pairChannel();
+        const issueCredential = async (): Promise<Readonly<Record<string, unknown>>> => {
+            const response = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/browser-credentials`,
+                {
+                    body: JSON.stringify({ expiresInSeconds: 120 }),
+                    headers: {
+                        ...authorization(pairing.created),
+                        "content-type": "application/json",
+                    },
+                    method: "POST",
+                },
+            );
+            expect(response.status).toBe(201);
+            const value: unknown = await response.json();
+            if (!isRecord(value)) {
+                throw new Error("Expected a browser credential");
+            }
+            return value;
+        };
+        const firstCredential = await issueCredential();
+        let browserToken = requiredString(firstCredential, "token");
+        expect(browserToken).not.toBe(pairing.created.hostToken);
+        expect(Date.parse(requiredString(firstCredential, "expiresAt")) - Date.now()).toBe(120_000);
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (signal) => {
+                    signal.throwIfAborted();
+                    return browserToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: pairing.created.projectId,
+            transport: {
+                fetch: async (request) => await exports.default.fetch(request),
+            },
+        });
+
+        const signal = new AbortController().signal;
+        const daemonSockets: OpenSocket[] = [];
+        try {
+            await expect(client.runtimes.list(signal)).resolves.toEqual([
+                expect.objectContaining({
+                    agents: readyAgents,
+                    online: false,
+                    runtimeId: pairing.created.runtimeId,
+                }),
+            ]);
+            const daemon = await openChannelSocket(
+                `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+            );
+            daemonSockets.push(daemon);
+            await expect(client.runtimes.list(signal)).resolves.toEqual([
+                expect.objectContaining({
+                    online: true,
+                    runtimeId: pairing.created.runtimeId,
+                }),
+            ]);
+            const session = await client.sessions.create(
+                {
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    directoryId: "root",
+                    policy: new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000),
+                    runtimeId: pairing.created.runtimeId,
+                    sessionId: "browser-credential-session",
+                    title: "Browser credential session",
+                },
+                signal,
+            );
+            const artifactBytes = new TextEncoder().encode("browser artifact");
+            const upload = await client.artifacts.createUpload(
+                session.sessionId,
+                new MobiusArtifactUploadRequest(
+                    "browser-artifact.txt",
+                    "text/plain",
+                    artifactBytes.byteLength,
+                    await sha256Hex(artifactBytes),
+                ),
+                signal,
+            );
+            await expect(
+                client.artifacts.uploadContent(session.sessionId, upload, artifactBytes, signal),
+            ).resolves.toMatchObject({
+                artifactId: upload.artifactId,
+                state: "available",
+            });
+            await expect(
+                client.artifacts.download(session.sessionId, upload.artifactId, signal),
+            ).resolves.toMatchObject({
+                artifact: expect.objectContaining({ artifactId: upload.artifactId }),
+                bytes: artifactBytes,
+            });
+
+            vi.setSystemTime(Date.now() + 120_001);
+            await expect(client.sessions.read(session.sessionId, signal)).rejects.toMatchObject({
+                code: "credential_expired",
+                status: 401,
+            });
+
+            const refreshedCredential = await issueCredential();
+            browserToken = requiredString(refreshedCredential, "token");
+            await expect(client.sessions.read(session.sessionId, signal)).resolves.toMatchObject({
+                sessionId: session.sessionId,
+            });
+
+            const revokeResponse = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/browser-credentials/${requiredString(refreshedCredential, "credentialId")}`,
+                {
+                    headers: authorization(pairing.created),
+                    method: "DELETE",
+                },
+            );
+            expect(revokeResponse.status).toBe(204);
+            await expect(client.sessions.read(session.sessionId, signal)).rejects.toMatchObject({
+                code: "credential_revoked",
+                status: 401,
+            });
+        } finally {
+            client.close();
+            for (const openSocket of daemonSockets) {
+                openSocket.socket.close(1000, "Test complete");
+            }
+        }
+    });
+
+    it("Given a persisted catalog predates verified capabilities and Web-confirmed installation, When its Channel is read, Then capabilities are conservative and obsolete approval metadata is omitted", async () => {
         const pairing = await pairChannel();
         await env.DIRECTORY_DATABASE.prepare(
             `UPDATE pairing_channels
-       SET installable_agents_json = ?
+       SET agents_json = ?, installable_agents_json = ?
        WHERE channel_id = ?`,
         )
             .bind(
+                JSON.stringify([{ id: "codex", label: "Codex" }]),
                 JSON.stringify([
                     {
                         id: "claude-code",
@@ -563,7 +711,29 @@ describe.sequential("Cloudflare session deployment", () => {
         );
         expect(response.status).toBe(200);
         const descriptor: unknown = await response.json();
-        expect(descriptor).toMatchObject({ installableAgents });
+        expect(descriptor).toMatchObject({
+            agents: [
+                {
+                    agentPath: "Not reported",
+                    agentVersion: "Not reported",
+                    capabilities: {
+                        additionalDirectories: false,
+                        audioPrompt: false,
+                        closeSession: false,
+                        deleteSession: false,
+                        embeddedContextPrompt: false,
+                        imagePrompt: false,
+                        listSessions: false,
+                        loadSession: false,
+                        resumeSession: false,
+                        unstableForkSession: false,
+                    },
+                    id: "codex",
+                    label: "Codex",
+                },
+            ],
+            installableAgents,
+        });
         expect(JSON.stringify(descriptor)).not.toContain("requiresLocalApproval");
     });
 
@@ -1180,8 +1350,11 @@ describe.sequential("Cloudflare session deployment", () => {
             );
             expect(exported.status).toBe(200);
             await expect(exported.json()).resolves.toMatchObject({
-                nativeHistory: result.history,
-                session: { hasNativeHistory: true },
+                formatVersion: "1",
+                session: {
+                    nativeHistory: result.history,
+                    session: { hasNativeHistory: true },
+                },
             });
             const provisional = await exports.default.fetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/provisional-native-session`,
@@ -1574,10 +1747,23 @@ describe.sequential("Cloudflare session deployment", () => {
         );
         expect(exportedResponse.status).toBe(200);
         const exported: unknown = await exportedResponse.json();
+        if (!isRecord(exported)) {
+            throw new Error("Expected a Session export envelope");
+        }
         const imported = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/session-imports`,
             {
-                body: JSON.stringify({ export: exported }),
+                body: JSON.stringify({
+                    formatVersion: exported["formatVersion"],
+                    session: exported["session"],
+                    targetBinding: {
+                        agentRef: "codex",
+                        bindingId: "imported-workspace",
+                        configRevision: 1,
+                        runtimeId: destination.created.runtimeId,
+                        workspaceRef: "root",
+                    },
+                }),
                 headers: {
                     ...authorization(destination.created),
                     "content-type": "application/json",
@@ -1929,7 +2115,15 @@ describe.sequential("Cloudflare session deployment", () => {
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/session-imports`,
             {
                 body: JSON.stringify({
-                    export: { session: { sessionId: "invalid-import" } },
+                    formatVersion: "1",
+                    session: { session: { sessionId: "invalid-import" } },
+                    targetBinding: {
+                        agentRef: "codex",
+                        bindingId: "imported-workspace",
+                        configRevision: 1,
+                        runtimeId: pairing.created.runtimeId,
+                        workspaceRef: "root",
+                    },
                 }),
                 headers: {
                     ...authorization(pairing.created),

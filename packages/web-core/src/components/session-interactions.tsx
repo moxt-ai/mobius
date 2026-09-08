@@ -1,9 +1,9 @@
 import type {
-    ElicitationResponseRequest,
     SessionElicitationField,
     SessionElicitationRequestedEvent,
     SessionPermissionRequestedEvent,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk";
+import type { ElicitationResponseRequest } from "@moxt-ai/mobius-sdk/channel";
 import { ExternalLink, HelpCircle, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 

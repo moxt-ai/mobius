@@ -20,7 +20,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { decodeBase64, sha256 } from "./session-archive-codec.ts";
 import { hasExactKeys, isRecord } from "./session-codec.ts";
-import { SessionRuntimeError } from "./session-runtime.ts";
+import { ArtifactContent, AvailableArtifactDescriptor, SessionRuntimeError } from "./session-runtime.ts";
 import {
     DECIMAL_SEQUENCE_PATTERN,
     DEFAULT_CONTENT_LIMIT_BYTES,
@@ -60,6 +60,7 @@ export interface DecodedSessionImport {
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly title: string;
+    readonly uploadedArtifacts: readonly ArtifactContent[];
 }
 
 function importString(
@@ -91,6 +92,7 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
             "session",
             "toolCallViews",
             "turns",
+            "uploadedArtifacts",
         ])
     ) {
         throw new SessionRuntimeError("invalid_export", "The session export is invalid");
@@ -128,6 +130,7 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     const commandValues = exported["turns"];
     const activityValues = exported["toolCallViews"];
     const artifactValues = exported["artifacts"];
+    const uploadedArtifactValues = exported["uploadedArtifacts"];
     const nativeHistoryValue = exported["nativeHistory"];
     if (
         !isRecord(sourceSession) ||
@@ -138,10 +141,12 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         !Array.isArray(commandValues) ||
         !Array.isArray(activityValues) ||
         !Array.isArray(artifactValues) ||
+        !Array.isArray(uploadedArtifactValues) ||
         eventValues.length > 100_000 ||
         commandValues.length > 10_000 ||
         activityValues.length > 100_000 ||
         artifactValues.length > 100_000 ||
+        uploadedArtifactValues.length > 1_000 ||
         bindingValues.length > 10_000 ||
         commandReceiptValues.length > 10_000 ||
         interactionValues.length > 100_000
@@ -651,6 +656,97 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         throw new SessionRuntimeError("invalid_export", "The session export contains an unreferenced artifact");
     }
 
+    const uploadedArtifacts: ArtifactContent[] = [];
+    const uploadedArtifactsById = new Map<string, ArtifactContent>();
+    for (const value of uploadedArtifactValues) {
+        if (
+            !isRecord(value) ||
+            !hasExactKeys(value, [
+                "artifactId",
+                "availableAt",
+                "byteLength",
+                "contentBase64",
+                "contentEncoding",
+                "createdAt",
+                "mediaType",
+                "name",
+                "sha256",
+            ])
+        ) {
+            throw new SessionRuntimeError("invalid_export", "An uploaded export artifact is invalid");
+        }
+        const artifactId = importIdentifier(value, "artifactId");
+        const availableAt = importTimestamp(value, "availableAt");
+        const createdAt = importTimestamp(value, "createdAt");
+        const byteLength = value["byteLength"];
+        const mediaType = importString(value, "mediaType", 255);
+        const name = importString(value, "name", 500);
+        const expectedHash = importString(value, "sha256", 64);
+        const contentBase64 = importString(value, "contentBase64", MAX_EXPORT_BYTE_LENGTH * 2, true);
+        let bytes: Uint8Array;
+        try {
+            bytes = decodeBase64(contentBase64);
+        } catch (cause) {
+            throw new SessionRuntimeError("invalid_export", "An uploaded export artifact is invalid", { cause });
+        }
+        artifactBytes += bytes.byteLength;
+        if (
+            value["contentEncoding"] !== "identity" ||
+            typeof byteLength !== "number" ||
+            !Number.isSafeInteger(byteLength) ||
+            byteLength < 1 ||
+            byteLength > contentLimitBytes ||
+            bytes.byteLength !== byteLength ||
+            artifactBytes > MAX_EXPORT_BYTE_LENGTH ||
+            availableAt < createdAt ||
+            !/^[a-f0-9]{64}$/.test(expectedHash) ||
+            (await sha256(bytes)) !== expectedHash ||
+            uploadedArtifactsById.has(artifactId)
+        ) {
+            throw new SessionRuntimeError("invalid_export", "An uploaded export artifact is invalid");
+        }
+        const content = new ArtifactContent(
+            new AvailableArtifactDescriptor(
+                sessionId,
+                artifactId,
+                name,
+                mediaType,
+                byteLength,
+                expectedHash,
+                new Date(createdAt).toISOString(),
+                new Date(availableAt).toISOString(),
+            ),
+            bytes,
+        );
+        uploadedArtifacts.push(content);
+        uploadedArtifactsById.set(artifactId, content);
+    }
+    for (const command of commands) {
+        for (const resource of command.command.resources) {
+            if (resource.type !== "link" || !resource.uri.startsWith("mobius-artifact:")) {
+                continue;
+            }
+            let uri: URL;
+            try {
+                uri = new URL(resource.uri);
+            } catch (cause) {
+                throw new SessionRuntimeError("invalid_export", "An uploaded artifact reference is invalid", { cause });
+            }
+            const content = uploadedArtifactsById.get(uri.pathname);
+            if (
+                content === undefined ||
+                resource.name !== content.artifact.name ||
+                resource.mimeType !== content.artifact.mediaType ||
+                resource.text.length !== 0 ||
+                uri.searchParams.size !== 2 ||
+                uri.searchParams.get("byteLength") !== content.artifact.byteLength.toString() ||
+                uri.searchParams.get("sha256") !== content.artifact.sha256
+            ) {
+                throw new SessionRuntimeError("invalid_export", "An uploaded artifact reference is invalid");
+            }
+        }
+    }
+
     signal.throwIfAborted();
     return {
         activities,
@@ -675,5 +771,6 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         runtimeId,
         sessionId,
         title,
+        uploadedArtifacts,
     };
 }

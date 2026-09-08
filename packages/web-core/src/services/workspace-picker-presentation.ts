@@ -1,4 +1,4 @@
-import type { WorkspaceEntry } from "@moxt-ai/mobius-web-sdk";
+import type { WorkspaceEntry } from "@moxt-ai/mobius-sdk";
 
 export function filterWorkspaceEntries(entries: readonly WorkspaceEntry[], query: string): readonly WorkspaceEntry[] {
     const normalizedQuery = query.trim().toLowerCase();

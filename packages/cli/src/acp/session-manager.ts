@@ -1,7 +1,6 @@
 import { spawn } from "node:child_process";
 
 import {
-    type AgentCapabilities,
     type ClientConnection,
     type CompleteElicitationNotification,
     type ContentBlock,
@@ -63,6 +62,7 @@ import {
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
+import { normalizeAcpCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
@@ -278,23 +278,6 @@ function readString(value: unknown, fallback = ""): string {
 
 function arraysEqual(left: readonly string[], right: readonly string[]): boolean {
     return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-function normalizeCapabilities(capabilities: AgentCapabilities): SessionCapabilities {
-    const session = capabilities.sessionCapabilities;
-    const prompt = capabilities.promptCapabilities;
-    return {
-        additionalDirectories: session?.additionalDirectories != null,
-        audioPrompt: prompt?.audio === true,
-        closeSession: session?.close != null,
-        deleteSession: session?.delete != null,
-        embeddedContextPrompt: prompt?.embeddedContext === true,
-        imagePrompt: prompt?.image === true,
-        listSessions: session?.list != null,
-        loadSession: capabilities.loadSession === true,
-        resumeSession: session?.resume != null,
-        unstableForkSession: session?.fork != null,
-    };
 }
 
 function elicitationFieldType(value: unknown): SessionElicitationField["type"] {
@@ -886,7 +869,7 @@ class AcpProcessSession implements AcpClientHandler {
             );
         }
         const capabilities = initialized.agentCapabilities ?? {};
-        this.#capabilities = normalizeCapabilities(capabilities);
+        this.#capabilities = normalizeAcpCapabilities(capabilities);
         this.#agentName = truncate(initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? this.#agentId, 255);
         this.#agentVersion = truncate(
             this.#verifiedAgentVersion.length > 0 ? this.#verifiedAgentVersion : (initialized.agentInfo?.version ?? ""),

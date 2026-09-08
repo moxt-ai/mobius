@@ -1,4 +1,4 @@
-import type { SessionElicitationField } from "@moxt-ai/mobius-web-sdk";
+import type { SessionElicitationField } from "@moxt-ai/mobius-sdk";
 
 export function encodeElicitationForm(form: FormData, fields: readonly SessionElicitationField[]): string {
     const values: Record<string, unknown> = {};

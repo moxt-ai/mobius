@@ -101,6 +101,54 @@ export class SqliteSessionQueries {
         return turnFromRow(row);
     };
 
+    readonly readTurnRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        signal.throwIfAborted();
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        validateDomainIdentifier(turnId, "turn");
+        const row = this.#database.query(
+            `SELECT b.runtime_id
+       FROM turns t
+       INNER JOIN session_bindings b
+         ON b.scope_key = t.scope_key AND b.session_id = t.session_id
+        AND b.binding_id = t.binding_id
+       WHERE t.scope_key = ? AND t.session_id = ? AND t.turn_id = ?`,
+            [scopeKey(scope), sessionId, turnId],
+        )[0];
+        if (row === undefined) {
+            throw new SessionRuntimeError("session_not_found", "The Turn does not exist");
+        }
+        return rowString(row, "runtime_id");
+    };
+
+    readonly readCommandRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        commandId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        signal.throwIfAborted();
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        validateDomainIdentifier(commandId, "command");
+        const row = this.#database.query(
+            `SELECT b.runtime_id
+       FROM turns t
+       INNER JOIN session_bindings b
+         ON b.scope_key = t.scope_key AND b.session_id = t.session_id
+        AND b.binding_id = t.binding_id
+       WHERE t.scope_key = ? AND t.session_id = ? AND t.command_id = ?`,
+            [scopeKey(scope), sessionId, commandId],
+        )[0];
+        if (row === undefined) {
+            throw new SessionRuntimeError("session_not_found", "The Turn does not exist");
+        }
+        return rowString(row, "runtime_id");
+    };
+
     readonly readAttempt = async (
         scope: ProjectScope,
         sessionId: string,
@@ -139,6 +187,33 @@ export class SqliteSessionQueries {
             throw new SessionRuntimeError("interaction_not_found", "The Interaction does not exist");
         }
         return interactionFromRow(row);
+    };
+
+    readonly readInteractionRuntime = async (
+        scope: ProjectScope,
+        sessionId: string,
+        interactionId: string,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        signal.throwIfAborted();
+        this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        validateDomainIdentifier(interactionId, "interaction");
+        const row = this.#database.query(
+            `SELECT b.runtime_id
+       FROM interactions i
+       INNER JOIN attempts a
+         ON a.scope_key = i.scope_key AND a.session_id = i.session_id
+        AND a.attempt_id = i.attempt_id
+       INNER JOIN session_bindings b
+         ON b.scope_key = a.scope_key AND b.session_id = a.session_id
+        AND b.binding_id = a.binding_id
+       WHERE i.scope_key = ? AND i.session_id = ? AND i.interaction_id = ?`,
+            [scopeKey(scope), sessionId, interactionId],
+        )[0];
+        if (row === undefined) {
+            throw new SessionRuntimeError("interaction_not_found", "The Interaction does not exist");
+        }
+        return rowString(row, "runtime_id");
     };
 
     readonly readPendingInteractions = async (

@@ -152,7 +152,9 @@ The channel sidebar links directly to Agent settings and to
 separately from supported Agents that still need setup. A locally detected Agent
 shows its reported version and executable path; an Agent that was not detected is
 explicitly labeled `Not installed`. `Install integration` rechecks local
-discovery, then installs or repairs only the ACP integration. The page does not
+discovery, then installs or repairs only the ACP integration. The public Runtime
+descriptor includes the reported path and version together with capability
+booleans observed during each ready Agent's bounded ACP probe. The page does not
 expose provider credentials or offer a remote Agent uninstall action.
 
 The pairing browser stores an owner host credential for the channel. The normal
@@ -459,7 +461,7 @@ packages/
   cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
-  web-sdk/           Browser-facing SDK
+  web-sdk/           Browser-and-Node TypeScript SDK
 deploy/
   docker/            Reserved for the future relay-node image
 e2e/

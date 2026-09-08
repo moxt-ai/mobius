@@ -25,7 +25,7 @@ function executableSource(source: string): string {
 }
 
 describe("direct ACP Agent discovery", () => {
-    it("Given a verified local DeepSeek Harness installation, When Mobius discovers Agents, Then it uses the canonical dsh path, validated local home, fixed safe launch, and CLI version", async () => {
+    it("Given a verified local DeepSeek Harness installation, When Mobius discovers Agents, Then it uses the canonical local launch and publishes only its verified ACP capabilities", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-discovery-"));
         const dshPath = join(temporaryDirectory, "dsh");
         const homeDirectory = join(temporaryDirectory, "dsh-home");
@@ -91,6 +91,18 @@ if (process.argv.includes("--version")) {
             });
             expect(discovered.agent.agentVersion).toBe("0.1.2-rc.1");
             expect(discovered.agent.adapterVersion).toBe("0.1.2-rc.1");
+            expect(discovered.agent.capabilities).toEqual({
+                additionalDirectories: false,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: false,
+                embeddedContextPrompt: false,
+                imagePrompt: false,
+                listSessions: true,
+                loadSession: false,
+                resumeSession: true,
+                unstableForkSession: false,
+            });
 
             const prepared = await manager.prepareSession({
                 additionalDirectories: [],

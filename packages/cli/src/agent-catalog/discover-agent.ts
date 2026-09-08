@@ -134,14 +134,14 @@ export async function discoverAgent(
                 specification.promptTimeoutMilliseconds,
             );
             try {
-                const acpVersion = await probeAcpReadiness(
+                const readiness = await probeAcpReadiness(
                     specification,
                     definition,
                     context.environment,
                     context.defaultWorkspace,
                     context.signal,
                 );
-                const verifiedAdapterVersion = adapterVersion.length > 0 ? adapterVersion : acpVersion;
+                const verifiedAdapterVersion = adapterVersion.length > 0 ? adapterVersion : readiness.adapterVersion;
                 if (verifiedAdapterVersion.length === 0) {
                     throw new AgentProbeError("acp_incompatible", "ACP adapter did not report a version");
                 }
@@ -158,6 +158,7 @@ export async function discoverAgent(
                         adapter.identity,
                         agent.identity,
                         specification.promptTimeoutMilliseconds,
+                        readiness.capabilities,
                     ),
                 );
             } catch (error) {

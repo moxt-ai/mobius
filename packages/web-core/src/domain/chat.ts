@@ -14,7 +14,7 @@ import type {
     SessionReadyEvent,
     SessionUsageUpdatedEvent,
     WorkspaceEntry,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk";
 import {
     type AgentOption,
     CompletedRecordedTurn,

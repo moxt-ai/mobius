@@ -427,6 +427,15 @@ export class SqliteSessionArchive {
         sessionId: string,
         signal: AbortSignal,
     ): Promise<void> => {
+        const uploadedArtifacts = this.#database.query(
+            `SELECT content_target_id FROM uploaded_artifacts
+       WHERE scope_key = ? AND session_id = ?`,
+            [scopeKey(scope), sessionId],
+        );
+        for (const artifact of uploadedArtifacts) {
+            signal.throwIfAborted();
+            await this.deleteContent(scope, sessionId, rowString(artifact, "content_target_id"), signal);
+        }
         const manifests = this.#database.query(
             `SELECT chunks_json FROM artifacts
        WHERE scope_key = ? AND session_id = ? AND chunks_json IS NOT NULL

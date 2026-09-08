@@ -244,6 +244,18 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
                 {
                     agentPath: "/usr/local/bin/codex",
                     agentVersion: "codex 0.153.0",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        resumeSession: true,
+                        unstableForkSession: false,
+                    },
                     id: "codex",
                     label: "Codex",
                 },

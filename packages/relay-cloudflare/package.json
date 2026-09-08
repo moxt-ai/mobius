@@ -24,6 +24,7 @@
     "devDependencies": {
         "@cloudflare/vitest-plugin": "^1.1.4",
         "@cloudflare/workers-types": "^5.20260905.1",
+        "@moxt-ai/mobius-sdk": "workspace:*",
         "wrangler": "^4.129.0"
     }
 }

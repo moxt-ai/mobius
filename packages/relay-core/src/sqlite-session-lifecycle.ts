@@ -181,6 +181,7 @@ export class SqliteSessionLifecycle {
         await this.#archive.deleteArchivedContent(scope, sessionId, signal);
         this.#database.transaction(() => {
             for (const table of [
+                "uploaded_artifacts",
                 "archive_work",
                 "archive_segments",
                 "artifacts",

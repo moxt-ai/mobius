@@ -17,6 +17,7 @@ export class NodeSessionRuntime extends SqliteSessionRuntime {
     }
 
     readonly close = (): void => {
+        this.closeEventStreams();
         this.#database.close();
     };
 }

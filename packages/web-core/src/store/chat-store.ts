@@ -17,7 +17,7 @@ import type {
     SessionReadyEvent,
     SessionUsageUpdatedEvent,
     WorkspaceEntry,
-} from "@moxt-ai/mobius-web-sdk";
+} from "@moxt-ai/mobius-sdk";
 import { create } from "zustand";
 
 import {
@@ -127,7 +127,18 @@ export interface ChatStore {
     readonly workspaceName: string;
 }
 
-const defaultAgent = new AgentOption("codex", "Codex", "Not reported", "Not reported");
+const defaultAgent = new AgentOption("codex", "Codex", "Not reported", "Not reported", {
+    additionalDirectories: false,
+    audioPrompt: false,
+    closeSession: false,
+    deleteSession: false,
+    embeddedContextPrompt: false,
+    imagePrompt: false,
+    listSessions: false,
+    loadSession: false,
+    resumeSession: false,
+    unstableForkSession: false,
+});
 const initialConversation = Conversation.create(defaultAgent);
 
 function initialInstallationStates(

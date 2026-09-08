@@ -5,7 +5,9 @@ import {
     decodeSessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import {
+    ArtifactUploadLease,
     type AttemptReconciliationOutcome,
+    CreateArtifactUploadRequest,
     CreateSessionBindingRequest,
     CreateSessionRequest,
     type ImmutableContentStore,
@@ -16,6 +18,7 @@ import {
     SessionRuntimeError,
     type SessionSqlRow,
     SqliteSessionRuntime,
+    UploadingArtifactDescriptor,
 } from "@moxt-ai/mobius-relay-core";
 import { DurableObjectContentStore } from "../durable-object-content-store.ts";
 import { DurableObjectSqlDatabase } from "../durable-object-sql-database.ts";
@@ -37,8 +40,8 @@ class InternalRequestError extends Error {
     readonly code: string;
     readonly status: number;
 
-    constructor(code: string, message: string, status = 400) {
-        super(message);
+    constructor(code: string, message: string, status = 400, options: ErrorOptions = {}) {
+        super(message, options);
         this.code = code;
         this.name = "InternalRequestError";
         this.status = status;
@@ -67,6 +70,62 @@ function readString(
         throw new InternalRequestError("invalid_session_operation", `The ${key} field is invalid`);
     }
     return field;
+}
+
+function readCreateArtifactUploadRequest(value: Readonly<Record<string, unknown>>): CreateArtifactUploadRequest {
+    const request = value["request"];
+    if (!isRecord(request)) {
+        throw new InternalRequestError("invalid_session_operation", "The artifact upload request is invalid");
+    }
+    assertExactKeys(request, ["byteLength", "mediaType", "name", "sha256"]);
+    return new CreateArtifactUploadRequest(
+        readString(request, "name", 500),
+        readString(request, "mediaType", 255),
+        readInteger(request, "byteLength"),
+        readString(request, "sha256", 64),
+    );
+}
+
+function readArtifactUploadLease(value: Readonly<Record<string, unknown>>): ArtifactUploadLease {
+    const lease = value["lease"];
+    if (!isRecord(lease) || !isRecord(lease["artifact"])) {
+        throw new InternalRequestError("invalid_session_operation", "The artifact upload lease is invalid");
+    }
+    const artifact = lease["artifact"];
+    if (artifact["state"] !== "uploading") {
+        throw new InternalRequestError("invalid_session_operation", "The artifact upload lease is invalid");
+    }
+    return new ArtifactUploadLease(
+        new UploadingArtifactDescriptor(
+            readString(artifact, "sessionId"),
+            readString(artifact, "artifactId"),
+            readString(artifact, "name", 500),
+            readString(artifact, "mediaType", 255),
+            readInteger(artifact, "byteLength"),
+            readString(artifact, "sha256", 64),
+            readString(artifact, "createdAt"),
+            readString(artifact, "expiresAt"),
+        ),
+        readString(lease, "contentTargetId"),
+    );
+}
+
+function decodeBase64(value: string): Uint8Array {
+    let binary: string;
+    try {
+        binary = atob(value);
+    } catch (cause) {
+        throw new InternalRequestError("invalid_session_operation", "The artifact content is invalid", 400, { cause });
+    }
+    return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+    let binary = "";
+    for (let offset = 0; offset < bytes.byteLength; offset += 32_768) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + 32_768));
+    }
+    return btoa(binary);
 }
 
 function readInteger(value: Readonly<Record<string, unknown>>, key: string): number {
@@ -243,19 +302,26 @@ function errorResponse(error: SessionRuntimeError | InternalRequestError): Respo
     const status =
         error.code === "session_not_found" || error.code === "artifact_not_found"
             ? 404
-            : error.code === "session_access_denied"
+            : error.code === "session_access_denied" || error.code === "artifact_upload_unauthorized"
               ? 403
-              : error.code === "session_deleted" || error.code === "cursor_expired"
+              : error.code === "session_deleted" ||
+                  error.code === "cursor_expired" ||
+                  error.code === "artifact_upload_expired"
                 ? 410
                 : error.code === "session_quota_exceeded"
                   ? 429
-                  : error.code === "session_busy" || error.code === "session_conflict"
+                  : error.code === "session_busy" ||
+                      error.code === "session_conflict" ||
+                      error.code === "artifact_upload_closed" ||
+                      error.code === "artifact_not_ready"
                     ? 409
                     : error.code === "content_too_large"
                       ? 413
                       : error.code === "invalid_cursor" ||
                           error.code === "invalid_export" ||
-                          error.code === "invalid_page_size"
+                          error.code === "invalid_page_size" ||
+                          error.code === "invalid_request" ||
+                          error.code === "artifact_content_mismatch"
                         ? 400
                         : 503;
     return Response.json({ error: { code: error.code, message: error.message } }, { status });
@@ -284,6 +350,15 @@ class SessionRelayController {
             const operation = operationFromPath(new URL(request.url).pathname);
             const body = await readBody(request);
             const scope = readScope(body);
+            if (operation === "event-stream") {
+                assertExactKeys(body, ["cursor", "scope", "sessionId"]);
+                return await this.#runtime.openEventStream(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "cursor", 512, true),
+                    request.signal,
+                );
+            }
             if (operation === "create") {
                 assertExactKeys(body, ["now", "request", "scope"]);
                 return Response.json(
@@ -303,6 +378,97 @@ class SessionRelayController {
                         readString(body, "runtimeId"),
                         decodeSessionPromptCommand(readString(body, "command", 8_000_000)),
                         readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "cancel-turn") {
+                assertExactKeys(body, ["idempotencyKey", "now", "runtimeId", "scope", "sessionId", "turnId"]);
+                return Response.json(
+                    await this.#runtime.acceptTurnCancellation(
+                        scope,
+                        readString(body, "runtimeId"),
+                        readString(body, "sessionId"),
+                        readString(body, "turnId"),
+                        readString(body, "idempotencyKey"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "artifact-create-upload") {
+                assertExactKeys(body, ["now", "request", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.createArtifactUpload(
+                        scope,
+                        readString(body, "sessionId"),
+                        readCreateArtifactUploadRequest(body),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "artifact-authorize-upload") {
+                assertExactKeys(body, ["artifactId", "now", "scope", "sessionId", "uploadToken"]);
+                return Response.json(
+                    await this.#runtime.authorizeArtifactUpload(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "artifactId"),
+                        readString(body, "uploadToken", 256),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "artifact-complete-upload") {
+                assertExactKeys(body, ["contentBase64", "lease", "now", "scope"]);
+                return Response.json(
+                    await this.#runtime.completeArtifactUpload(
+                        scope,
+                        readArtifactUploadLease(body),
+                        decodeBase64(readString(body, "contentBase64", 94 * 1024 * 1024)),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "artifact-read") {
+                assertExactKeys(body, ["artifactId", "now", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.readArtifact(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "artifactId"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "artifact-content") {
+                assertExactKeys(body, ["artifactId", "scope", "sessionId"]);
+                const content = await this.#runtime.readArtifactContent(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "artifactId"),
+                    request.signal,
+                );
+                return Response.json({
+                    artifact: content.artifact,
+                    contentBase64: encodeBase64(content.bytes),
+                });
+            }
+            if (operation === "artifact-resources") {
+                assertExactKeys(body, ["artifactIds", "scope", "sessionId"]);
+                const artifactIds = body["artifactIds"];
+                if (!Array.isArray(artifactIds) || artifactIds.some((artifactId) => typeof artifactId !== "string")) {
+                    throw new InternalRequestError("invalid_session_operation", "The artifact references are invalid");
+                }
+                return Response.json(
+                    await this.#runtime.resolveArtifactResources(
+                        scope,
+                        readString(body, "sessionId"),
+                        artifactIds.filter((artifactId) => typeof artifactId === "string"),
                         request.signal,
                     ),
                 );
@@ -370,6 +536,28 @@ class SessionRelayController {
                     ),
                 );
             }
+            if (operation === "turn-runtime") {
+                assertExactKeys(body, ["scope", "sessionId", "turnId"]);
+                return Response.json(
+                    await this.#runtime.readTurnRuntime(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "turnId"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "command-runtime") {
+                assertExactKeys(body, ["commandId", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.readCommandRuntime(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "commandId"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "attempt") {
                 assertExactKeys(body, ["attemptId", "scope", "sessionId"]);
                 return Response.json(
@@ -385,6 +573,17 @@ class SessionRelayController {
                 assertExactKeys(body, ["interactionId", "scope", "sessionId"]);
                 return Response.json(
                     await this.#runtime.readInteraction(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "interactionId"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "interaction-runtime") {
+                assertExactKeys(body, ["interactionId", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.readInteractionRuntime(
                         scope,
                         readString(body, "sessionId"),
                         readString(body, "interactionId"),
@@ -501,10 +700,11 @@ class SessionRelayController {
                 );
             }
             if (operation === "import") {
-                assertExactKeys(body, ["exported", "now", "scope"]);
+                assertExactKeys(body, ["binding", "exported", "now", "scope"]);
                 const summary = await this.#runtime.importSession(
                     scope,
                     body["exported"],
+                    readBinding(body),
                     readInteger(body, "now"),
                     request.signal,
                 );

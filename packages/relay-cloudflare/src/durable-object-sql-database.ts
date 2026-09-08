@@ -28,9 +28,14 @@ export class DurableObjectSqlDatabase implements SessionSqlDatabase {
             .toArray()
             .map(decodeRow);
 
-    readonly run = (sql: string, values: readonly SessionSqlValue[] = []): { readonly changes: number } => ({
-        changes: this.#storage.sql.exec(sql, ...values).rowsWritten,
-    });
+    readonly run = (sql: string, values: readonly SessionSqlValue[] = []): { readonly changes: number } => {
+        this.#storage.sql.exec(sql, ...values);
+        const result = this.#storage.sql.exec("SELECT changes() AS changes").one();
+        if (typeof result["changes"] !== "number") {
+            throw new Error("Durable Object SQLite returned an invalid change count");
+        }
+        return { changes: result["changes"] };
+    };
 
     readonly transaction = <T>(operation: () => T): T => this.#storage.transactionSync(operation);
 }

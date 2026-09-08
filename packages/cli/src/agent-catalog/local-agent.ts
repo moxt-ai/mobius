@@ -1,5 +1,7 @@
 import { realpathSync, statSync } from "node:fs";
+import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
+import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
 import { ExecutableIdentity } from "../process/executable.ts";
 
 function readTrustedIdentity(path: string): ExecutableIdentity {
@@ -23,6 +25,7 @@ export class LocalAgentDefinition {
     readonly agentVersion: string;
     readonly arguments: readonly string[];
     readonly command: string;
+    readonly capabilities: SessionCapabilities;
     readonly environment: Readonly<Record<string, string>>;
     readonly id: string;
     readonly label: string;
@@ -39,6 +42,7 @@ export class LocalAgentDefinition {
         adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
         agentIdentity: ExecutableIdentity = adapterIdentity,
         promptTimeoutMilliseconds = 30 * 60 * 1_000,
+        capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
     ) {
         if (!Number.isSafeInteger(promptTimeoutMilliseconds) || promptTimeoutMilliseconds < 1) {
             throw new Error("The local Agent prompt deadline is invalid");
@@ -48,6 +52,7 @@ export class LocalAgentDefinition {
         this.adapterVersion = adapterVersion;
         this.agentIdentity = agentIdentity;
         this.agentVersion = agentVersion;
+        this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
         this.promptTimeoutMilliseconds = promptTimeoutMilliseconds;

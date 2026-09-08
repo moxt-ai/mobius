@@ -6,7 +6,7 @@
         },
         "packages/web": {
             "ignoreDependencies": [
-                "@moxt-ai/mobius-web-sdk",
+                "@moxt-ai/mobius-sdk",
                 "@radix-ui/react-select",
                 "class-variance-authority",
                 "clsx",
@@ -19,6 +19,9 @@
         },
         "packages/relay-cloudflare": {
             "ignoreDependencies": ["cloudflare"]
+        },
+        "packages/web-sdk": {
+            "entry": ["examples/*.ts"]
         }
     }
 }

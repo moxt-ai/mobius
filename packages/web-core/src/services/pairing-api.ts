@@ -1,15 +1,20 @@
 import {
     decodeAgentDisplayContentValue,
-    decodeInteraction,
-    decodeNativeSessionHistory,
+    decodeMobiusAgentCapabilities,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
     type Interaction,
+    MobiusApiError,
+    MobiusClient,
+    MobiusError,
+    MobiusPageRequest,
+    type MobiusSession,
     mobiusApiUrl,
     type SessionElicitationRequestedEvent,
     type SessionPermissionRequestedEvent,
-} from "@moxt-ai/mobius-web-sdk";
+    StaticMobiusCredentialProvider,
+} from "@moxt-ai/mobius-sdk";
 
 import {
     AgentIntegrationOption,
@@ -42,7 +47,6 @@ import {
 const REQUEST_TIMEOUT_MILLISECONDS = 20_000;
 const CHANNEL_CREDENTIAL_PREFIX = "mobius:channel-credential:";
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
-const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);
 const TOOL_KINDS = new Set([
@@ -184,13 +188,6 @@ function readText(value: unknown, field: string, maximumLength: number): string 
 
 function readIdentifier(value: unknown, field: string): string {
     if (typeof value !== "string" || !isIdentifier(value)) {
-        throw new PairingApiError("invalid_relay_response", `The relay returned an invalid ${field}.`);
-    }
-    return value;
-}
-
-function readCommittedSequence(value: unknown, field: string): string {
-    if (typeof value !== "string" || value.length > 40 || !DECIMAL_SEQUENCE_PATTERN.test(value)) {
         throw new PairingApiError("invalid_relay_response", `The relay returned an invalid ${field}.`);
     }
     return value;
@@ -374,14 +371,16 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length !== 4 ||
+            Object.keys(candidate).length !== 5 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
+            !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
             !Object.hasOwn(candidate, "label")
         ) {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }
+        const capabilities = decodeMobiusAgentCapabilities(candidate["capabilities"]);
         const id = candidate["id"];
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
@@ -403,7 +402,7 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }
         identifiers.add(id);
-        agents.push(new AgentOption(id, label.trim(), agentPath, agentVersion.trim()));
+        agents.push(new AgentOption(id, label.trim(), agentPath, agentVersion.trim(), capabilities));
     }
     return agents;
 }
@@ -1025,33 +1024,17 @@ function isAcceptedUrlResponse(interaction: Interaction): boolean {
     }
 }
 
-function decodePendingSessionInteractions(
-    value: unknown,
+function pendingSessionInteractions(
+    interactions: readonly Interaction[],
     sessionId: string,
     turns: readonly RecordedTurn[],
 ): PendingSessionInteractions {
-    if (
-        !isRecord(value) ||
-        Object.keys(value).length !== 1 ||
-        !Array.isArray(value["interactions"]) ||
-        value["interactions"].length > 100
-    ) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid pending Interaction page.");
-    }
     const commandIdsByAttempt = new Map(
         turns.filter((turn) => turn instanceof RunningRecordedTurn).map((turn) => [turn.attemptId, turn.commandId]),
     );
     const elicitations: SessionElicitationRequestedEvent[] = [];
     const permissions: SessionPermissionRequestedEvent[] = [];
-    for (const candidate of value["interactions"]) {
-        let interaction: Interaction;
-        try {
-            interaction = decodeInteraction(candidate);
-        } catch (cause) {
-            throw new PairingApiError("invalid_relay_response", "The relay returned an invalid pending Interaction.", {
-                cause,
-            });
-        }
+    for (const interaction of interactions) {
         if (
             interaction.sessionId !== sessionId ||
             (interaction.state.kind !== "pending" && interaction.state.kind !== "responded")
@@ -1104,137 +1087,124 @@ interface RestoredChannelSession {
 }
 
 function isConcurrentSessionRemoval(error: unknown): boolean {
-    return error instanceof PairingApiError && (error.code === "session_not_found" || error.code === "session_deleted");
+    return (
+        (error instanceof PairingApiError || error instanceof MobiusApiError) &&
+        (error.code === "session_not_found" || error.code === "session_deleted")
+    );
+}
+
+function publicServiceClient(credential: BrowserChannelCredential): MobiusClient {
+    return new MobiusClient({
+        credentialProvider: new StaticMobiusCredentialProvider(credential.hostToken),
+        endpoint: window.location.origin,
+        projectId: credential.projectId,
+    });
+}
+
+function throwPublicApiFailure(error: unknown): never {
+    if (error instanceof MobiusError) {
+        throw new PairingApiError(error.code, error.message, { cause: error });
+    }
+    throw error;
 }
 
 async function readChannelHistoryWithSignal(channelId: string, signal: AbortSignal): Promise<ChannelHistory> {
     const credential = readChannelCredential(channelId);
-    const headers = { authorization: `Bearer ${credential.hostToken}` };
-    const directoryEndpoint = mobiusApiUrl(
-        window.location.origin,
-        `/projects/${encodeURIComponent(credential.projectId)}/sessions`,
-    );
-    directoryEndpoint.searchParams.set("limit", "100");
-    const directory = await requestJson(directoryEndpoint, { headers, method: "GET" }, signal);
-    if (!isRecord(directory) || !Array.isArray(directory["sessions"])) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid session directory.");
-    }
-    const summaries = directory["sessions"].map((session) => decodeRecordedSession(session, credential));
-    const restoredBySessionId = new Map<string, RestoredChannelSession>();
-    await Promise.all(
-        summaries.map(async ({ hasNativeHistory, session }) => {
-            try {
-                const messagesEndpoint = mobiusApiUrl(
-                    window.location.origin,
-                    `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/messages`,
-                );
-                messagesEndpoint.searchParams.set("limit", "100");
-                const historyEndpoint = mobiusApiUrl(
-                    window.location.origin,
-                    `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/native-history`,
-                );
-                const interactionsEndpoint = mobiusApiUrl(
-                    window.location.origin,
-                    `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(session.sessionId)}/interactions`,
-                );
-                const [page, nativeHistoryValue, interactionPage] = await Promise.all([
-                    requestJson(messagesEndpoint, { headers, method: "GET" }, signal),
-                    hasNativeHistory
-                        ? requestJson(historyEndpoint, { headers, method: "GET" }, signal)
-                        : Promise.resolve(null),
-                    requestJson(interactionsEndpoint, { headers, method: "GET" }, signal),
-                ]);
-                if (!isRecord(page) || !Array.isArray(page["messages"])) {
-                    throw new PairingApiError("invalid_relay_response", "The relay returned an invalid message page.");
+    const client = publicServiceClient(credential);
+    try {
+        const directory = await client.sessions.list(new MobiusPageRequest(100, ""), signal);
+        const summaries = directory.sessions.map((session) => decodeRecordedSession(session, credential));
+        const restoredBySessionId = new Map<string, RestoredChannelSession>();
+        await Promise.all(
+            summaries.map(async ({ hasNativeHistory, session }) => {
+                try {
+                    const [page, nativeHistory, interactions] = await Promise.all([
+                        client.sessions.readMessages(session.sessionId, new MobiusPageRequest(100, ""), signal),
+                        hasNativeHistory
+                            ? client.sessions.readNativeHistory(session.sessionId, signal)
+                            : Promise.resolve(null),
+                        client.interactions.listPending(session.sessionId, signal),
+                    ]);
+                    const additionalDirectoryIds = readSessionAdditionalDirectoryIds(page.messages);
+                    const turns = page.messages.map(decodeSessionMessage);
+                    const pending = pendingSessionInteractions(interactions, session.sessionId, turns);
+                    restoredBySessionId.set(session.sessionId, {
+                        turns,
+                        session: new RecordedSession(
+                            session.agentId,
+                            session.bindingId,
+                            session.configRevision,
+                            session.directoryId,
+                            session.runtimeId,
+                            session.sessionId,
+                            session.title,
+                            session.updatedAt,
+                            nativeHistory,
+                            pending.elicitations,
+                            pending.permissions,
+                            additionalDirectoryIds,
+                            page.lastCommittedSequence,
+                        ),
+                    });
+                } catch (error) {
+                    if (!isConcurrentSessionRemoval(error)) {
+                        throw error;
+                    }
                 }
-                const lastCommittedSeq = readCommittedSequence(page["lastCommittedSeq"], "message page sequence");
-                const additionalDirectoryIds = readSessionAdditionalDirectoryIds(page["messages"]);
-                const turns = page["messages"].map(decodeSessionMessage);
-                const interactions = decodePendingSessionInteractions(interactionPage, session.sessionId, turns);
-                restoredBySessionId.set(session.sessionId, {
-                    turns,
-                    session: new RecordedSession(
-                        session.agentId,
-                        session.bindingId,
-                        session.configRevision,
-                        session.directoryId,
-                        session.runtimeId,
-                        session.sessionId,
-                        session.title,
-                        session.updatedAt,
-                        nativeHistoryValue === null ? null : decodeNativeSessionHistory(nativeHistoryValue),
-                        interactions.elicitations,
-                        interactions.permissions,
-                        additionalDirectoryIds,
-                        lastCommittedSeq,
-                    ),
-                });
-            } catch (error) {
-                if (!isConcurrentSessionRemoval(error)) {
-                    throw error;
-                }
+            }),
+        );
+        const restored: RestoredChannelSession[] = [];
+        for (const { session } of summaries) {
+            const value = restoredBySessionId.get(session.sessionId);
+            if (value !== undefined) {
+                restored.push(value);
             }
-        }),
-    );
-    const restored: RestoredChannelSession[] = [];
-    for (const { session } of summaries) {
-        const value = restoredBySessionId.get(session.sessionId);
-        if (value !== undefined) {
-            restored.push(value);
         }
+        const sessions = restored.map(({ session }) => session);
+        const turns: RecordedTurn[] = [];
+        for (const { turns: sessionTurns } of restored) {
+            sessionTurns.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
+            turns.push(...sessionTurns);
+        }
+        return new ChannelHistory(turns, sessions);
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
     }
-    const sessions = restored.map(({ session }) => session);
-    const turns: RecordedTurn[] = [];
-    for (const { turns: sessionTurns } of restored) {
-        sessionTurns.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-        turns.push(...sessionTurns);
-    }
-    return new ChannelHistory(turns, sessions);
 }
 
 function decodeRecordedSession(
-    value: unknown,
+    value: MobiusSession,
     credential: BrowserChannelCredential,
 ): { readonly hasNativeHistory: boolean; readonly session: RecordedSession } {
-    if (!isRecord(value) || !isRecord(value["defaultBinding"]) || !isRecord(value["lifecycle"])) {
-        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid session summary.");
-    }
-    const sessionId = readIdentifier(value["sessionId"], "session identifier");
-    const agentId = readIdentifier(value["agentId"], "session Agent");
-    const runtimeId = readIdentifier(value["runtimeId"], "session Runtime");
-    const binding = value["defaultBinding"];
-    const configRevision = binding["configRevision"];
-    const hasNativeHistory = value["hasNativeHistory"];
+    const binding = value.defaultBinding;
     if (
-        value["tenantId"] !== credential.tenantId ||
-        value["projectId"] !== credential.projectId ||
-        value["lifecycle"]["kind"] !== "ready" ||
-        binding["sessionId"] !== sessionId ||
-        binding["agentRef"] !== agentId ||
-        binding["runtimeId"] !== runtimeId ||
-        typeof configRevision !== "number" ||
-        !Number.isSafeInteger(configRevision) ||
-        configRevision < 0 ||
-        typeof hasNativeHistory !== "boolean"
+        value.tenantId !== credential.tenantId ||
+        value.projectId !== credential.projectId ||
+        value.state.kind !== "ready" ||
+        binding.sessionId !== value.sessionId ||
+        binding.agentRef !== value.agentId ||
+        binding.runtimeId !== value.runtimeId
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an inconsistent session summary.");
     }
     return {
-        hasNativeHistory,
+        hasNativeHistory: value.hasNativeHistory,
         session: new RecordedSession(
-            agentId,
-            readIdentifier(binding["bindingId"], "Session binding"),
-            configRevision,
-            readIdentifier(binding["workspaceRef"], "Session workspace"),
-            runtimeId,
-            sessionId,
-            readText(value["title"], "session title", 500),
-            readDate(value["updatedAt"], "session update time").toISOString(),
+            value.agentId,
+            binding.bindingId,
+            binding.configRevision,
+            binding.workspaceRef,
+            value.runtimeId,
+            value.sessionId,
+            value.title,
+            value.updatedAt,
             null,
             [],
             [],
             [],
-            readCommittedSequence(value["lastCommittedSeq"], "session sequence"),
+            value.lastCommittedSequence,
         ),
     };
 }
@@ -1256,7 +1226,7 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         sessionId: value["sessionId"],
     };
     const attempt = value["attempt"];
-    if (attempt === null) {
+    if (attempt === null || (isRecord(attempt) && attempt["kind"] === "none")) {
         return decodeRecordedTurn({ ...base, status: "pending" });
     }
     if (!isRecord(attempt) || typeof attempt["kind"] !== "string") {
@@ -1361,20 +1331,14 @@ export async function readToolCallDetail(
     signal: AbortSignal,
 ): Promise<ActivityDetailResult> {
     const credential = readChannelCredential(channelId);
-    const endpoint = mobiusApiUrl(
-        window.location.origin,
-        `/projects/${encodeURIComponent(credential.projectId)}/sessions/${encodeURIComponent(sessionId)}/attempts/${encodeURIComponent(attemptId)}/tool-calls/${encodeURIComponent(toolCallId)}`,
-    );
-    return decodeActivityDetail(
-        await requestJson(
-            endpoint,
-            {
-                headers: { authorization: `Bearer ${credential.hostToken}` },
-                method: "GET",
-            },
-            signal,
-        ),
-    );
+    const client = publicServiceClient(credential);
+    try {
+        return decodeActivityDetail(await client.toolCalls.readDetail(sessionId, attemptId, toolCallId, signal));
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 export async function readChannelHistoryForSynchronization(

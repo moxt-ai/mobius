@@ -11,6 +11,7 @@ import {
 import { encodeBase64, sha256 } from "./session-archive-codec.ts";
 import { decodeSessionImport } from "./session-export-codec.ts";
 import {
+    type CreateSessionBindingRequest,
     CreateSessionRequest,
     type ProjectScope,
     type SessionExport,
@@ -21,6 +22,7 @@ import {
 import type { SessionSqlDatabase } from "./session-sql-database.ts";
 import { rowNullableString, rowNumber, rowString } from "./sqlite-row.ts";
 import type { SqliteSessionArchive } from "./sqlite-session-archive.ts";
+import type { SqliteSessionArtifacts } from "./sqlite-session-artifacts.ts";
 import {
     attemptSummaryFromRow,
     bindingFromRow,
@@ -36,14 +38,22 @@ import type { SqliteSessionStore } from "./sqlite-session-store.ts";
 
 export class SqliteSessionTransfer {
     readonly #archive: SqliteSessionArchive;
+    readonly #artifacts: SqliteSessionArtifacts;
     readonly #database: SessionSqlDatabase;
     readonly #store: SqliteSessionStore;
 
-    constructor(database: SessionSqlDatabase, archive: SqliteSessionArchive, store: SqliteSessionStore) {
+    constructor(
+        database: SessionSqlDatabase,
+        archive: SqliteSessionArchive,
+        artifacts: SqliteSessionArtifacts,
+        store: SqliteSessionStore,
+    ) {
         this.#archive = archive;
+        this.#artifacts = artifacts;
         this.#database = database;
         this.#store = store;
     }
+
     readonly exportSession = async (
         scope: ProjectScope,
         sessionId: string,
@@ -158,6 +168,13 @@ export class SqliteSessionTransfer {
                 toolCallId: rowString(row, "activity_id"),
             });
         }
+        const uploadedArtifacts = await this.#artifacts.exportAvailable(scope, sessionId, signal);
+        for (const artifact of uploadedArtifacts) {
+            exportBytes += artifact.byteLength;
+            if (exportBytes > MAX_EXPORT_BYTE_LENGTH) {
+                throw new SessionRuntimeError("content_too_large", "The session export exceeds the configured limit");
+            }
+        }
         const bindings = this.#database
             .query(
                 `SELECT * FROM session_bindings
@@ -216,12 +233,14 @@ export class SqliteSessionTransfer {
             session,
             toolCallViews,
             turns,
+            uploadedArtifacts,
         };
     };
 
     readonly importSession = async (
         scope: ProjectScope,
         exported: unknown,
+        targetBinding: CreateSessionBindingRequest,
         now: number,
         signal: AbortSignal,
         createSession: SessionRuntime["createSession"],
@@ -230,14 +249,10 @@ export class SqliteSessionTransfer {
         validateTimestamp(now);
         const {
             activities,
-            agentId,
             artifacts,
-            bindingId,
             bindings,
             commands,
             contentLimitBytes,
-            createdBy,
-            directoryId,
             eventPayloadHashes,
             events,
             hotEventLimit,
@@ -251,7 +266,14 @@ export class SqliteSessionTransfer {
             runtimeId,
             sessionId,
             title,
+            uploadedArtifacts,
         } = await decodeSessionImport(exported, signal);
+        if (bindings.some((binding) => binding.bindingId === targetBinding.bindingId)) {
+            throw new SessionRuntimeError(
+                "session_conflict",
+                "The destination Session binding identifier is already in the export",
+            );
+        }
         if (this.#store.sessionRow(scope, sessionId) !== null) {
             throw new SessionRuntimeError("session_conflict", "The imported session identifier is already in use");
         }
@@ -262,10 +284,10 @@ export class SqliteSessionTransfer {
                 scope,
                 new CreateSessionRequest(
                     sessionId,
-                    runtimeId,
-                    agentId,
-                    bindingId,
-                    directoryId,
+                    targetBinding.runtimeId,
+                    targetBinding.agentRef,
+                    targetBinding.bindingId,
+                    targetBinding.workspaceRef,
                     {
                         contentLimitBytes,
                         hotEventLimit,
@@ -274,13 +296,16 @@ export class SqliteSessionTransfer {
                         retentionMilliseconds,
                     },
                     title,
-                    createdBy,
+                    "session-import",
                 ),
                 now,
                 signal,
             );
             created = true;
             signal.throwIfAborted();
+            for (const artifact of uploadedArtifacts) {
+                await this.#artifacts.restoreAvailable(scope, sessionId, artifact, now, signal);
+            }
             this.#database.transaction(() => {
                 if (nativeHistory !== null) {
                     this.#database.run(
@@ -290,9 +315,6 @@ export class SqliteSessionTransfer {
                     );
                 }
                 for (const binding of bindings) {
-                    if (binding.bindingId === bindingId) {
-                        continue;
-                    }
                     this.#database.run(
                         `INSERT INTO session_bindings (
                scope_key, session_id, binding_id, runtime_id, agent_ref,
@@ -506,16 +528,26 @@ export class SqliteSessionTransfer {
                 }
                 this.#database.run(
                     `UPDATE sessions
-           SET minimum_sequence = ?, next_sequence = ?, updated_at = ?
+           SET config_revision = ?, minimum_sequence = ?, next_sequence = ?,
+               updated_at = ?
            WHERE scope_key = ? AND session_id = ?`,
-                    [minimumSequenceNumber, nextSequenceNumber, now, key, sessionId],
+                    [targetBinding.configRevision, minimumSequenceNumber, nextSequenceNumber, now, key, sessionId],
+                );
+                this.#database.run(
+                    `UPDATE session_bindings SET config_revision = ?
+           WHERE scope_key = ? AND session_id = ? AND binding_id = ?`,
+                    [targetBinding.configRevision, key, sessionId, targetBinding.bindingId],
                 );
             });
             signal.throwIfAborted();
         } catch (error) {
             if (created) {
+                await this.#archive
+                    .deleteArchivedContent(scope, sessionId, AbortSignal.timeout(20_000))
+                    .catch(() => undefined);
                 this.#database.transaction(() => {
                     for (const table of [
+                        "uploaded_artifacts",
                         "archive_work",
                         "archive_segments",
                         "artifacts",

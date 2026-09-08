@@ -46,6 +46,146 @@ export class ProjectScope {
     }
 }
 
+export const ARTIFACT_UPLOAD_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
+
+export class CreateArtifactUploadRequest {
+    readonly byteLength: number;
+    readonly mediaType: string;
+    readonly name: string;
+    readonly sha256: string;
+
+    constructor(name: string, mediaType: string, byteLength: number, sha256: string) {
+        this.byteLength = byteLength;
+        this.mediaType = mediaType;
+        this.name = name;
+        this.sha256 = sha256;
+    }
+}
+
+export abstract class ArtifactDescriptor {
+    readonly artifactId: string;
+    readonly byteLength: number;
+    readonly createdAt: string;
+    readonly mediaType: string;
+    readonly name: string;
+    readonly sessionId: string;
+    readonly sha256: string;
+    abstract readonly state: string;
+
+    constructor(
+        sessionId: string,
+        artifactId: string,
+        name: string,
+        mediaType: string,
+        byteLength: number,
+        sha256: string,
+        createdAt: string,
+    ) {
+        this.artifactId = artifactId;
+        this.byteLength = byteLength;
+        this.createdAt = createdAt;
+        this.mediaType = mediaType;
+        this.name = name;
+        this.sessionId = sessionId;
+        this.sha256 = sha256;
+    }
+}
+
+export class UploadingArtifactDescriptor extends ArtifactDescriptor {
+    readonly expiresAt: string;
+    readonly state = "uploading";
+
+    constructor(
+        sessionId: string,
+        artifactId: string,
+        name: string,
+        mediaType: string,
+        byteLength: number,
+        sha256: string,
+        createdAt: string,
+        expiresAt: string,
+    ) {
+        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
+        this.expiresAt = expiresAt;
+    }
+}
+
+export class ArtifactUploadAuthorization extends UploadingArtifactDescriptor {
+    readonly uploadToken: string;
+
+    constructor(descriptor: UploadingArtifactDescriptor, uploadToken: string) {
+        super(
+            descriptor.sessionId,
+            descriptor.artifactId,
+            descriptor.name,
+            descriptor.mediaType,
+            descriptor.byteLength,
+            descriptor.sha256,
+            descriptor.createdAt,
+            descriptor.expiresAt,
+        );
+        this.uploadToken = uploadToken;
+    }
+}
+
+export class AvailableArtifactDescriptor extends ArtifactDescriptor {
+    readonly availableAt: string;
+    readonly state = "available";
+
+    constructor(
+        sessionId: string,
+        artifactId: string,
+        name: string,
+        mediaType: string,
+        byteLength: number,
+        sha256: string,
+        createdAt: string,
+        availableAt: string,
+    ) {
+        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
+        this.availableAt = availableAt;
+    }
+}
+
+export class ExpiredArtifactDescriptor extends ArtifactDescriptor {
+    readonly expiredAt: string;
+    readonly state = "expired";
+
+    constructor(
+        sessionId: string,
+        artifactId: string,
+        name: string,
+        mediaType: string,
+        byteLength: number,
+        sha256: string,
+        createdAt: string,
+        expiredAt: string,
+    ) {
+        super(sessionId, artifactId, name, mediaType, byteLength, sha256, createdAt);
+        this.expiredAt = expiredAt;
+    }
+}
+
+export class ArtifactUploadLease {
+    readonly artifact: UploadingArtifactDescriptor;
+    readonly contentTargetId: string;
+
+    constructor(artifact: UploadingArtifactDescriptor, contentTargetId: string) {
+        this.artifact = artifact;
+        this.contentTargetId = contentTargetId;
+    }
+}
+
+export class ArtifactContent {
+    readonly artifact: AvailableArtifactDescriptor;
+    readonly bytes: Uint8Array;
+
+    constructor(artifact: AvailableArtifactDescriptor, bytes: Uint8Array) {
+        this.artifact = artifact;
+        this.bytes = bytes;
+    }
+}
+
 export class SessionRecordingPolicy {
     readonly contentLimitBytes: number;
     readonly hotEventLimit: number;
@@ -283,6 +423,24 @@ export interface InteractionResponseAcceptance {
     readonly pendingWork: PendingWork;
 }
 
+export interface TurnCancellationAcceptance {
+    readonly duplicate: boolean;
+    readonly pendingWork: PendingWork;
+    readonly turn: Turn;
+}
+
+export interface SessionUploadedArtifactExport {
+    readonly artifactId: string;
+    readonly availableAt: string;
+    readonly byteLength: number;
+    readonly contentBase64: string;
+    readonly contentEncoding: "identity";
+    readonly createdAt: string;
+    readonly mediaType: string;
+    readonly name: string;
+    readonly sha256: string;
+}
+
 export interface PendingDaemonDelivery {
     readonly interactionId: string | null;
     readonly payload: string;
@@ -297,6 +455,7 @@ export interface SessionExport {
         readonly event: AgentActivityEvent;
         readonly eventSequence: string;
     }[];
+    readonly uploadedArtifacts: readonly SessionUploadedArtifactExport[];
     readonly artifacts: readonly {
         readonly attemptId: string;
         readonly artifactId: string;
@@ -324,28 +483,9 @@ export interface SessionExport {
 }
 
 export class SessionRuntimeError extends Error {
-    readonly code:
-        | "artifact_not_found"
-        | "content_too_large"
-        | "cursor_expired"
-        | "event_source_conflict"
-        | "invalid_cursor"
-        | "invalid_export"
-        | "invalid_page_size"
-        | "idempotency_conflict"
-        | "interaction_conflict"
-        | "interaction_not_found"
-        | "pending_work_not_found"
-        | "session_access_denied"
-        | "session_busy"
-        | "session_conflict"
-        | "session_deleted"
-        | "session_not_found"
-        | "session_quota_exceeded"
-        | "session_storage_timeout"
-        | "session_storage_unavailable";
+    readonly code: string;
 
-    constructor(code: SessionRuntimeError["code"], message: string, options: ErrorOptions = {}) {
+    constructor(code: string, message: string, options: ErrorOptions = {}) {
         super(message, options);
         this.code = code;
         this.name = "SessionRuntimeError";
@@ -370,6 +510,15 @@ export interface SessionCommandPort {
         now: number,
         signal: AbortSignal,
     ) => Promise<TurnAcceptance>;
+    readonly acceptTurnCancellation: (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        idempotencyKey: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<TurnCancellationAcceptance>;
     readonly setDefaultBinding: (
         scope: ProjectScope,
         sessionId: string,
@@ -454,6 +603,12 @@ export interface SessionQueryPort {
         interactionId: string,
         signal: AbortSignal,
     ) => Promise<Interaction>;
+    readonly readInteractionRuntime: (
+        scope: ProjectScope,
+        sessionId: string,
+        interactionId: string,
+        signal: AbortSignal,
+    ) => Promise<string>;
     readonly readPendingInteractions: (
         scope: ProjectScope,
         sessionId: string,
@@ -461,6 +616,18 @@ export interface SessionQueryPort {
     ) => Promise<readonly Interaction[]>;
     readonly readSession: (scope: ProjectScope, sessionId: string, signal: AbortSignal) => Promise<SessionSummary>;
     readonly readTurn: (scope: ProjectScope, sessionId: string, turnId: string, signal: AbortSignal) => Promise<Turn>;
+    readonly readTurnRuntime: (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ) => Promise<string>;
+    readonly readCommandRuntime: (
+        scope: ProjectScope,
+        sessionId: string,
+        commandId: string,
+        signal: AbortSignal,
+    ) => Promise<string>;
     readonly readToolCallDetail: (
         scope: ProjectScope,
         sessionId: string,
@@ -489,14 +656,73 @@ export interface SessionQueryPort {
     ) => Promise<NativeSessionHistory | null>;
 }
 
+export interface SessionArtifactPort {
+    readonly authorizeArtifactUpload: (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        uploadToken: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<ArtifactUploadLease>;
+    readonly completeArtifactUpload: (
+        scope: ProjectScope,
+        lease: ArtifactUploadLease,
+        bytes: Uint8Array,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<AvailableArtifactDescriptor>;
+    readonly createArtifactUpload: (
+        scope: ProjectScope,
+        sessionId: string,
+        request: CreateArtifactUploadRequest,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<ArtifactUploadAuthorization>;
+    readonly readArtifact: (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<ArtifactDescriptor>;
+    readonly readArtifactContent: (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactId: string,
+        signal: AbortSignal,
+    ) => Promise<ArtifactContent>;
+    readonly resolveArtifactResources: (
+        scope: ProjectScope,
+        sessionId: string,
+        artifactIds: readonly string[],
+        signal: AbortSignal,
+    ) => Promise<SessionPromptCommand["resources"]>;
+}
+
+export interface SessionEventStreamPort {
+    readonly openEventStream: (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        signal: AbortSignal,
+    ) => Promise<Response>;
+}
+
 export interface SessionTransferPort {
     readonly exportSession: (scope: ProjectScope, sessionId: string, signal: AbortSignal) => Promise<SessionExport>;
     readonly importSession: (
         scope: ProjectScope,
         exported: unknown,
+        targetBinding: CreateSessionBindingRequest,
         now: number,
         signal: AbortSignal,
     ) => Promise<SessionSummary>;
 }
 
-export interface SessionRuntime extends SessionCommandPort, SessionQueryPort, SessionTransferPort {}
+export interface SessionRuntime
+    extends SessionCommandPort,
+        SessionArtifactPort,
+        SessionEventStreamPort,
+        SessionQueryPort,
+        SessionTransferPort {}
