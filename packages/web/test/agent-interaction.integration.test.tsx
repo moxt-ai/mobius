@@ -533,11 +533,13 @@ describe.sequential("Agent interaction boundaries", () => {
       expect(
         within(agentMessage).queryByTestId("agent-process-disclosure"),
       ).toBeNull();
-      expect(
-        within(agentMessage)
-          .getByRole("button", { name: "Copy code" })
-          .hasAttribute("disabled"),
-      ).toBe(false);
+      await waitFor(() => {
+        expect(
+          within(agentMessage)
+            .getByRole("button", { name: "Copy code" })
+            .hasAttribute("disabled"),
+        ).toBe(false);
+      });
       expect(
         within(agentMessage).queryByRole("button", { name: "Download file" }),
       ).toBeNull();

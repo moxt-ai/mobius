@@ -137,7 +137,8 @@ function SelectConfigControl({
   const descriptionId = useId();
   const errorId = useId();
   const [failure, setFailure] = useState("");
-  const disabled = conversation.isRunning || pending;
+  const disabled =
+    conversation.isRunning || pending || option.values.length < 2;
   const valueGroups = groupConfigValues(option.values);
   const describedBy = [
     option.description.length > 0 ? descriptionId : "",

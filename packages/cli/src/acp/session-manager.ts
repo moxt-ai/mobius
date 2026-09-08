@@ -37,7 +37,6 @@ import {
   type SessionCommandsUpdatedEvent,
   type SessionConfigOption,
   type SessionConfigUpdatedEvent,
-  type SessionConfigValue,
   type SessionElicitationField,
   type SessionElicitationOption,
   type SessionElicitationRequestedEvent,
@@ -69,6 +68,11 @@ import {
   nativeSessionIdSchema,
   nativeSessionPageSchema,
 } from "./native-session.ts";
+import {
+  type SessionConfigProtocol,
+  SessionConfigProtocolError,
+} from "./session-config/session-config-protocol.ts";
+import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import {
   type AcpSessionStore,
@@ -298,10 +302,6 @@ function readString(value: unknown, fallback = ""): string {
   return typeof value === "string" ? value : fallback;
 }
 
-function readBoolean(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function arraysEqual(
   left: readonly string[],
   right: readonly string[],
@@ -310,155 +310,6 @@ function arraysEqual(
     left.length === right.length &&
     left.every((value, index) => value === right[index])
   );
-}
-
-function normalizeConfigValue(
-  option: Readonly<Record<string, unknown>>,
-  groupId = "",
-  groupName = "",
-): SessionConfigValue {
-  return {
-    description: truncate(readString(option["description"]), 500),
-    groupId: truncate(groupId, 128),
-    groupName: truncate(groupName, 255),
-    name: truncate(
-      readString(option["name"], readString(option["value"])),
-      255,
-    ),
-    value: truncate(readString(option["value"]), 500),
-  };
-}
-
-function normalizeConfigValues(value: unknown): readonly SessionConfigValue[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  const normalized: SessionConfigValue[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const groupedOptions = entry["options"];
-    if (Array.isArray(groupedOptions)) {
-      const groupId = readString(entry["group"]);
-      const groupName = readString(entry["name"]);
-      for (const groupedOption of groupedOptions) {
-        if (isRecord(groupedOption)) {
-          normalized.push(
-            normalizeConfigValue(groupedOption, groupId, groupName),
-          );
-        }
-      }
-      continue;
-    }
-    normalized.push(normalizeConfigValue(entry));
-  }
-  return normalized.filter((entry) => entry.value.length > 0).slice(0, 500);
-}
-
-function normalizeConfigOptions(
-  value: unknown,
-  modes: unknown,
-): readonly SessionConfigOption[] {
-  const normalized: SessionConfigOption[] = [];
-  if (Array.isArray(value)) {
-    for (const option of value) {
-      if (!isRecord(option)) {
-        continue;
-      }
-      const id = truncate(readString(option["id"]), 128);
-      const name = truncate(readString(option["name"], id), 255);
-      if (id.length === 0 || name.length === 0) {
-        continue;
-      }
-      if (option["type"] === "boolean") {
-        normalized.push({
-          booleanValue: readBoolean(option["currentValue"]),
-          category: truncate(readString(option["category"]), 128),
-          currentValue: "",
-          description: truncate(readString(option["description"]), 500),
-          id,
-          name,
-          type: "boolean",
-          values: [],
-        });
-        continue;
-      }
-      if (option["type"] === "select") {
-        const values = normalizeConfigValues(option["options"]);
-        const currentValue = truncate(readString(option["currentValue"]), 500);
-        if (
-          currentValue.length > 0 &&
-          values.some((entry) => entry.value === currentValue)
-        ) {
-          normalized.push({
-            booleanValue: false,
-            category: truncate(readString(option["category"]), 128),
-            currentValue,
-            description: truncate(readString(option["description"]), 500),
-            id,
-            name,
-            type: "select",
-            values,
-          });
-        }
-      }
-    }
-  }
-  if (isRecord(modes)) {
-    const values: SessionConfigValue[] = [];
-    const availableModes = modes["availableModes"];
-    if (Array.isArray(availableModes)) {
-      for (const mode of availableModes) {
-        if (!isRecord(mode)) {
-          continue;
-        }
-        const id = truncate(readString(mode["id"]), 500);
-        if (id.length === 0) {
-          continue;
-        }
-        values.push({
-          description: truncate(readString(mode["description"]), 500),
-          groupId: "",
-          groupName: "",
-          name: truncate(readString(mode["name"], id), 255),
-          value: id,
-        });
-      }
-    }
-    const currentValue = truncate(readString(modes["currentModeId"]), 500);
-    if (
-      currentValue.length > 0 &&
-      values.some((entry) => entry.value === currentValue) &&
-      !normalized.some((entry) => entry.category === "mode")
-    ) {
-      normalized.unshift({
-        booleanValue: false,
-        category: "mode",
-        currentValue,
-        description: "Agent session mode",
-        id: "mode",
-        name: "Mode",
-        type: "select",
-        values,
-      });
-    }
-  }
-  return normalized.slice(0, 100);
-}
-
-function replaceConfigOptionsKeepingMode(
-  current: readonly SessionConfigOption[],
-  value: unknown,
-): readonly SessionConfigOption[] {
-  const next = normalizeConfigOptions(value, undefined);
-  if (next.some((option) => option.category === "mode")) {
-    return next;
-  }
-  return [
-    ...current.filter((option) => option.category === "mode"),
-    ...next,
-  ].slice(0, 100);
 }
 
 function normalizeCapabilities(
@@ -897,6 +748,7 @@ class AcpProcessSession implements AcpClientHandler {
   readonly #pendingPermissions = new Map<string, PendingPermission>();
   readonly #preSessionUpdates: SessionNotification[] = [];
   readonly #processExit: Promise<void>;
+  readonly #sessionConfigProtocol: SessionConfigProtocol;
   readonly #store: AcpSessionStore;
   readonly #verifiedAgentVersion: string;
   #preSessionUpdateBytes = 0;
@@ -915,6 +767,7 @@ class AcpProcessSession implements AcpClientHandler {
     unstableForkSession: false,
   };
   #commands: readonly SessionCommand[] = [];
+  #configRevision = 0;
   #configOptions: readonly SessionConfigOption[] = [];
   #nativeSessionId = "";
   #prompted = false;
@@ -942,6 +795,7 @@ class AcpProcessSession implements AcpClientHandler {
     this.#cwd = cwd;
     this.#getObserver = getObserver;
     this.#mobiusSessionId = mobiusSessionId;
+    this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
     this.#store = store;
     this.#verifiedAgentVersion = agent.agentVersion;
     this.#child = spawn(agent.adapterPath, [...agent.arguments], {
@@ -1289,13 +1143,8 @@ class AcpProcessSession implements AcpClientHandler {
       this.selectNativeSession(created.sessionId);
       lifecycleResponse = created;
     }
-    const lifecycleRecord = isRecord(lifecycleResponse)
-      ? lifecycleResponse
-      : {};
-    this.#configOptions = normalizeConfigOptions(
-      lifecycleRecord["configOptions"],
-      lifecycleRecord["modes"],
-    );
+    this.#configOptions =
+      this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
     await this.#updateTail;
     signal.throwIfAborted();
     if (this.#prompted) {
@@ -1378,6 +1227,13 @@ class AcpProcessSession implements AcpClientHandler {
       );
     }
     if (existing.type === "select") {
+      if (existing.values.length < 2) {
+        throw new AcpExecutionError(
+          "The requested ACP configuration option is unavailable",
+          {},
+          "invalid_session_configuration",
+        );
+      }
       if (!existing.values.some((entry) => entry.value === options.value)) {
         throw new AcpExecutionError(
           "The requested ACP configuration value is unavailable",
@@ -1385,59 +1241,37 @@ class AcpProcessSession implements AcpClientHandler {
           "invalid_session_configuration",
         );
       }
-      if (existing.category === "mode") {
-        await this.race(
-          this.#connection.agent.request(
-            methods.agent.session.setMode,
-            { modeId: options.value, sessionId: this.#nativeSessionId },
-            { cancellationSignal: options.signal },
-          ),
-          "ACP agent exited while setting the session mode",
-          options.signal,
-        );
-        this.#configOptions = this.#configOptions.map((option) =>
-          option.id === existing.id
-            ? { ...option, currentValue: options.value }
-            : option,
-        );
-      } else {
-        const response = await this.race(
-          this.#connection.agent.request(
-            methods.agent.session.setConfigOption,
-            {
-              configId: existing.id,
-              sessionId: this.#nativeSessionId,
-              value: options.value,
-            },
-            { cancellationSignal: options.signal },
-          ),
-          "ACP agent exited while changing session configuration",
-          options.signal,
-        );
-        this.#configOptions = replaceConfigOptionsKeepingMode(
-          this.#configOptions,
-          response.configOptions,
+    }
+    const configRevision = this.#configRevision;
+    try {
+      const configured = await this.#sessionConfigProtocol.configure(
+        this.#configOptions,
+        options,
+        this.#nativeSessionId,
+        {
+          request: async (method, params, failureMessage, signal) =>
+            await this.race(
+              this.#connection.agent.request(method, params, {
+                cancellationSignal: signal,
+              }),
+              failureMessage,
+              signal,
+            ),
+        },
+      );
+      await this.#updateTail;
+      if (this.#configRevision === configRevision) {
+        this.#configOptions = configured;
+      }
+    } catch (error) {
+      if (error instanceof SessionConfigProtocolError) {
+        throw new AcpExecutionError(
+          error.message,
+          { cause: error },
+          error.code,
         );
       }
-    } else {
-      const response = await this.race(
-        this.#connection.agent.request(
-          methods.agent.session.setConfigOption,
-          {
-            configId: existing.id,
-            sessionId: this.#nativeSessionId,
-            type: "boolean",
-            value: options.booleanValue,
-          },
-          { cancellationSignal: options.signal },
-        ),
-        "ACP agent exited while changing session configuration",
-        options.signal,
-      );
-      this.#configOptions = replaceConfigOptionsKeepingMode(
-        this.#configOptions,
-        response.configOptions,
-      );
+      throw error;
     }
     return this.#configOptions;
   };
@@ -1944,10 +1778,11 @@ class AcpProcessSession implements AcpClientHandler {
       return;
     }
     if (update.sessionUpdate === "config_option_update") {
-      this.#configOptions = replaceConfigOptionsKeepingMode(
+      this.#configOptions = this.#sessionConfigProtocol.normalizeUpdate(
         this.#configOptions,
         update.configOptions,
       );
+      this.#configRevision += 1;
       await this.emitConfigUpdate();
       return;
     }
@@ -1957,6 +1792,7 @@ class AcpProcessSession implements AcpClientHandler {
           ? { ...option, currentValue: update.currentModeId }
           : option,
       );
+      this.#configRevision += 1;
       await this.emitConfigUpdate();
       return;
     }

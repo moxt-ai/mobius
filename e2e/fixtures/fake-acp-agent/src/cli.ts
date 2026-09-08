@@ -389,7 +389,7 @@ function persistState(sessionId: string, state: FakeSessionState): void {
 }
 
 function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
-  return [
+  const options: acp.SessionConfigOption[] = [
     {
       category: "model",
       currentValue: state.model,
@@ -424,6 +424,9 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
       type: "boolean",
     },
   ];
+  return process.argv.includes("--without-reasoning-effort")
+    ? options.filter((option) => option.category !== "thought_level")
+    : options;
 }
 
 function sessionModes(state: FakeSessionState): acp.SessionModeState {
@@ -441,6 +444,64 @@ function sessionModes(state: FakeSessionState): acp.SessionModeState {
       },
     ],
     currentModeId: state.mode,
+  };
+}
+
+function usesGrokLegacyConfig(): boolean {
+  return process.argv.includes("--grok-legacy-config");
+}
+
+function sessionConfiguration(
+  state: FakeSessionState,
+): Readonly<Record<string, unknown>> {
+  if (!usesGrokLegacyConfig()) {
+    return {
+      configOptions: configOptions(state),
+      modes: sessionModes(state),
+    };
+  }
+  return {
+    _meta: {
+      "x.ai/sessionConfig": {
+        options: [
+          {
+            category: "model",
+            id: "test-small",
+            label: "Test Small",
+            selected: state.model === "test-small",
+          },
+          {
+            category: "model",
+            id: "test-large",
+            label: "Test Large",
+            selected: state.model === "test-large",
+          },
+          ...["low", "medium", "high"].map((effort) => ({
+            category: "mode",
+            id: effort,
+            label: effort[0]?.toUpperCase() + effort.slice(1),
+            selected:
+              !process.argv.includes("--grok-legacy-no-selected-effort") &&
+              state.reasoningEffort === effort,
+          })),
+        ],
+      },
+    },
+    models: {
+      availableModels: [
+        {
+          _meta: { supportsReasoningEffort: true },
+          modelId: "test-small",
+          name: "Test Small",
+        },
+        {
+          _meta: { supportsReasoningEffort: true },
+          modelId: "test-large",
+          name: "Test Large",
+        },
+      ],
+      currentModelId: state.model,
+    },
   };
 }
 
@@ -557,8 +618,7 @@ acp
       setImmediate(() => process.exit(0));
     }
     return {
-      configOptions: configOptions(state),
-      modes: sessionModes(state),
+      ...sessionConfiguration(state),
       sessionId,
     };
   })
@@ -566,7 +626,7 @@ acp
     acquireWriter(context.params.sessionId);
     const state = readPersistedState(context.params.sessionId);
     sessions.set(context.params.sessionId, state);
-    return { configOptions: configOptions(state), modes: sessionModes(state) };
+    return sessionConfiguration(state);
   })
   .onRequest(acp.methods.agent.session.list, async (context) => {
     if (
@@ -653,9 +713,8 @@ acp
     sessions.set(sessionId, state);
     persistState(sessionId, state);
     return {
+      ...sessionConfiguration(state),
       sessionId,
-      configOptions: configOptions(state),
-      modes: sessionModes(state),
     };
   })
   .onRequest(acp.methods.agent.session.delete, (context) => {
@@ -718,8 +777,54 @@ acp
         });
       }
     }
-    return { configOptions: configOptions(state), modes: sessionModes(state) };
+    return sessionConfiguration(state);
   })
+  .onRequest(
+    "session/set_model",
+    (params: unknown) => params,
+    (context) => {
+      if (!usesGrokLegacyConfig()) {
+        throw new Error("Legacy Grok session configuration is unavailable");
+      }
+      const params = context.params;
+      if (!isRecord(params)) {
+        throw new Error("Invalid Grok model request");
+      }
+      const sessionId = params["sessionId"];
+      const modelId = params["modelId"];
+      if (typeof sessionId !== "string" || typeof modelId !== "string") {
+        throw new Error("Invalid Grok model request");
+      }
+      const state = sessions.get(sessionId);
+      if (state === undefined) {
+        throw new Error("Unknown ACP session");
+      }
+      if (modelId !== "test-small" && modelId !== "test-large") {
+        throw new Error("Unknown Grok model");
+      }
+      let updated = state.withConfig("model", modelId);
+      const metadata = params["_meta"];
+      if (isRecord(metadata) && Object.hasOwn(metadata, "reasoningEffort")) {
+        const effort = metadata["reasoningEffort"];
+        if (effort === null) {
+          updated = updated.withConfig("reasoning_effort", "default");
+        } else if (
+          effort === "low" ||
+          effort === "medium" ||
+          effort === "high"
+        ) {
+          updated = updated.withConfig("reasoning_effort", effort);
+        } else {
+          throw new Error("Unknown Grok reasoning effort");
+        }
+      }
+      sessions.set(sessionId, updated);
+      persistState(sessionId, updated);
+      return process.argv.includes("--invalid-grok-config-response")
+        ? {}
+        : { _meta: { model: { Ok: modelId } } };
+    },
+  )
   .onRequest(acp.methods.agent.session.setConfigOption, (context) => {
     const state = sessions.get(context.params.sessionId);
     if (state === undefined) {
