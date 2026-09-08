@@ -164,6 +164,7 @@ if (process.argv.includes("--version")) {
         MOBIUS_CODEX_ACP_PATH: adapterPath,
         MOBIUS_CODEX_PATH: codexPath,
         MOBIUS_STATE_DIRECTORY: stateDirectory,
+        MOBIUS_WORKBUDDY_PATH: join(temporaryDirectory, "missing-workbuddy"),
         NO_PROXY: "127.0.0.1,localhost",
         PATH: temporaryDirectory,
         no_proxy: "127.0.0.1,localhost",
@@ -259,6 +260,10 @@ if (process.argv.includes("--version")) {
             MOBIUS_CODEX_ACP_PATH: adapterPath,
             MOBIUS_CODEX_PATH: codexPath,
             MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "state"),
+            MOBIUS_WORKBUDDY_PATH: join(
+              temporaryDirectory,
+              "missing-workbuddy",
+            ),
             PATH: temporaryDirectory,
           },
         },

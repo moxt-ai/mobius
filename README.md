@@ -182,7 +182,10 @@ version because the current ACP profile reports its internal bridge version.
 OpenCode runs directly as `opencode acp` with its own auto-update disabled while
 Mobius owns the process. Cursor CLI, Grok Build, and WorkBuddy run through their
 native ACP entrypoints with automatic updates disabled; readiness also requires
-successful session creation. Cursor's optional question and plan extensions are
+successful session creation. On macOS, WorkBuddy discovery checks the embedded
+`codebuddy` executable in both the system and current user's standard
+`WorkBuddy.app` locations, so the desktop application does not need to add its
+private CLI to `PATH`. Cursor's optional question and plan extensions are
 safely declined during discovery and normal turns. Only complete integrations are
 advertised. Inspect the local result without pairing:
 
@@ -202,10 +205,12 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 - `MOBIUS_GROK_BUILD_PATH`
 - `MOBIUS_WORKBUDDY_PATH`
 
-Automatic lookup uses the `PATH` inherited by the Mobius process. An explicit
-override is authoritative and fails closed; an automatically found executable
-must pass the full probe before Mobius may fall back to a previously verified
-private cache entry. The default working directory does not affect discovery.
+Automatic lookup uses the `PATH` inherited by the Mobius process, plus documented
+Agent-specific installation locations such as the macOS WorkBuddy application
+bundle. An explicit override is authoritative and fails closed; an automatically
+found executable must pass the full probe before Mobius may fall back to a
+previously verified private cache entry. The default working directory does not
+affect discovery.
 Executable paths, versions, identities, probe output, and adapter environment
 stay on the local machine. The Relay receives only stable Agent identifiers,
 labels, and sanitized ready/installable metadata.

@@ -56,6 +56,7 @@ async function resolveManagedAdapterExecutable(
 async function resolveSpecificationExecutables(
   executableName: string,
   overrideVariable: string,
+  resolveInstalled: () => Promise<readonly ResolvedExecutable[]>,
   resolveManaged: () => Promise<ResolvedExecutable | null>,
   context: LocalAgentDiscoveryContext,
 ): Promise<readonly ResolvedExecutable[]> {
@@ -72,14 +73,24 @@ async function resolveSpecificationExecutables(
     context.environment,
     context.platform,
   );
+  const installed = await resolveInstalled();
   const managed = await resolveManaged();
-  if (external === null) {
-    return managed === null ? [] : [managed];
+  const executables: ResolvedExecutable[] = [];
+  const paths = new Set<string>();
+  if (external !== null) {
+    executables.push(external);
+    paths.add(external.path);
   }
-  if (managed === null || managed.path === external.path) {
-    return [external];
+  for (const executable of installed) {
+    if (!paths.has(executable.path)) {
+      executables.push(executable);
+      paths.add(executable.path);
+    }
   }
-  return [external, managed];
+  if (managed !== null && !paths.has(managed.path)) {
+    executables.push(managed);
+  }
+  return executables;
 }
 
 export async function resolveAgentExecutables(
@@ -89,6 +100,7 @@ export async function resolveAgentExecutables(
   return await resolveSpecificationExecutables(
     specification.agentExecutable,
     specification.agentOverrideVariable,
+    async () => await specification.resolveInstalledAgentExecutables(context),
     async () => await resolveManagedExecutable(specification, context),
     context,
   );
@@ -107,6 +119,7 @@ export async function resolveAdapterExecutables(
   return await resolveSpecificationExecutables(
     specification.adapterExecutable,
     specification.adapterOverrideVariable,
+    () => Promise.resolve([]),
     async () => await resolveManagedAdapterExecutable(specification, context),
     context,
   );

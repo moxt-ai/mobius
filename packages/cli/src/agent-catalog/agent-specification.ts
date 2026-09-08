@@ -59,6 +59,10 @@ export abstract class LocalAgentSpecification {
 
   readonly recoveryCommand = (): string => "";
 
+  readonly resolveInstalledAgentExecutables = (
+    _context: LocalAgentDiscoveryContext,
+  ): Promise<readonly ResolvedExecutable[]> => Promise.resolve([]);
+
   readonly supportsInstallation = (
     platform: NodeJS.Platform,
     architecture: NodeJS.Architecture,

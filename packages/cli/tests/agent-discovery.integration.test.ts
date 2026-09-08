@@ -280,6 +280,7 @@ if (process.argv.includes("--version")) {
         defaultWorkspace: repositoryRoot,
         environment: {
           MOBIUS_STATE_DIRECTORY: temporaryDirectory,
+          MOBIUS_WORKBUDDY_PATH: join(temporaryDirectory, "missing-workbuddy"),
           PATH: temporaryDirectory,
         },
         signal: new AbortController().signal,
@@ -479,6 +480,10 @@ if (process.argv.includes("--version")) {
           environment: {
             MOBIUS_CODEX_ACP_PATH: adapterPath,
             MOBIUS_CODEX_PATH: codexLink,
+            MOBIUS_WORKBUDDY_PATH: join(
+              temporaryDirectory,
+              "missing-workbuddy",
+            ),
             PATH: temporaryDirectory,
           },
           signal: new AbortController().signal,

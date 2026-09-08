@@ -107,10 +107,14 @@ uses `PI_ACP_PI_COMMAND` to bind the verified executable and must also finish a
 bounded `/session` prompt through `pi-acp -> pi --mode rpc`. The resulting
 candidate pair is accepted only after the complete probe. Cursor CLI, Grok Build,
 and WorkBuddy use native ACP entrypoints and must create a session during
-readiness probing. An invalid automatic external candidate can fall back to the
-private cache, while an explicit override never silently falls back. Before each
-new adapter process, both identities are revalidated; a changed runtime is
-rejected without touching an existing conversation.
+readiness probing. Besides `PATH`, an Agent specification can contribute fixed
+local installation candidates. WorkBuddy uses this boundary to discover the
+embedded `codebuddy` executable from standard macOS `WorkBuddy.app` locations
+without accepting an application path from a remote client. An invalid automatic
+external candidate can fall back to the private cache, while an explicit override
+never silently falls back. Before each new adapter process, both identities are
+revalidated; a changed runtime is rejected without touching an existing
+conversation.
 
 Daemon startup includes one local-only adapter provisioning transition:
 
