@@ -11,6 +11,6 @@
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "hono": "^4.13.5",
-        "typed-inject": "^5.0.0"
+        "valibot": "1.4.2"
     }
 }

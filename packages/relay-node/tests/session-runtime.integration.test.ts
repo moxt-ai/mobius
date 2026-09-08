@@ -209,7 +209,9 @@ afterEach(async () => {
 describe("Node SQLite and filesystem session deployment", () => {
     it("Given two Attempts reuse the same tool call identifier, When each detail is read by its composite identity, Then the bounded views never cross Attempt boundaries", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "tool-identity-session";
@@ -296,7 +298,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given a running Attempt, When the Runtime requests permission, Then a pending Interaction is durably linked to the pinned Turn and the Attempt waits for input", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "interaction-session";
@@ -462,7 +466,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given a URL elicitation response was accepted, When the Agent later reports out-of-band completion, Then the same Interaction resolves once without disconnecting execution", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "url-elicitation-session";
@@ -572,7 +578,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given an active Attempt with a missing daemon event, When a later source sequence arrives first, Then the gap is rejected without applying the terminal transition", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "source-gap-session";
@@ -648,7 +656,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given acknowledged Attempt events and a cursor before hot-log compaction, When the events are archived and retransmitted, Then decimal ordering and source deduplication survive without invalidating the cursor", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "source-dedup-session";
@@ -736,7 +746,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given an accepted Turn with a pinned binding, When the same request is retried, the default binding changes, and the Runtime disconnects, Then the Turn and Attempt identities remain stable until explicit reconciliation", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "stable-session";
@@ -918,7 +930,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given a used Session binding, When the Agent applies a configuration update, Then future Turns use a new revision while the accepted Turn stays pinned", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "configured-session";
@@ -1011,7 +1025,10 @@ describe("Node SQLite and filesystem session deployment", () => {
         const directory = await temporaryDirectory();
         const database = new NodeSqlDatabase(join(directory, "relay.sqlite"));
         const files = new FilesystemContentStore(join(directory, "content"));
-        const runtime = new SqliteSessionRuntime(database, new FailAfterFirstWriteStore(files));
+        const runtime = new SqliteSessionRuntime({
+            gateways: { database, content: new FailAfterFirstWriteStore(files) },
+            config: {},
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const sessionId = "session-a";
         const command = prompt(sessionId, "command-a", "inspect the repository");
@@ -1163,7 +1180,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given isolated tenants and retained records, When sessions are exported, imported, expired, and deleted, Then ownership and lifecycle outcomes stay explicit", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const source = new ProjectScope("tenant-a", "project-a");
         const destination = new ProjectScope("tenant-b", "project-b");
         const signal = new AbortController().signal;
@@ -1210,7 +1229,9 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given a session whose earliest payloads moved to immutable archives, When it is exported and imported, Then every durable cursor and final message remains complete", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
+        const runtime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
         const source = new ProjectScope("tenant-a", "project-a");
         const destination = new ProjectScope("tenant-b", "project-b");
         const signal = new AbortController().signal;
@@ -1306,7 +1327,10 @@ describe("Node SQLite and filesystem session deployment", () => {
         const directory = await temporaryDirectory();
         const database = new NodeSqlDatabase(join(directory, "relay.sqlite"));
         const files = new FilesystemContentStore(join(directory, "content"));
-        const runtime = new SqliteSessionRuntime(database, new ConcurrentWriteStore(files));
+        const runtime = new SqliteSessionRuntime({
+            gateways: { database, content: new ConcurrentWriteStore(files) },
+            config: {},
+        });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "concurrent-artifact-session";
@@ -1368,7 +1392,7 @@ describe("Node SQLite and filesystem session deployment", () => {
         const database = new NodeSqlDatabase(join(directory, "relay.sqlite"));
         const files = new FilesystemContentStore(join(directory, "content"));
         const pausedFiles = new PausedWriteStore(files);
-        const runtime = new SqliteSessionRuntime(database, pausedFiles);
+        const runtime = new SqliteSessionRuntime({ gateways: { database, content: pausedFiles }, config: {} });
         const scope = new ProjectScope("tenant-a", "project-a");
         const signal = new AbortController().signal;
         const sessionId = "deleted-artifact-session";
@@ -1420,11 +1444,13 @@ describe("Node SQLite and filesystem session deployment", () => {
 
     it("Given configured tenant and project quotas, When active sessions reach capacity and one is deleted, Then admission is isolated and capacity is recovered", async () => {
         const directory = await temporaryDirectory();
-        const runtime = new NodeSessionRuntime(
-            join(directory, "relay.sqlite"),
-            join(directory, "content"),
-            new SessionQuotaPolicy(2, 1),
-        );
+        const runtime = new NodeSessionRuntime({
+            config: {
+                databasePath: join(directory, "relay.sqlite"),
+                contentRoot: join(directory, "content"),
+                quota: new SessionQuotaPolicy(2, 1),
+            },
+        });
         const signal = new AbortController().signal;
         const tenantProjectA = new ProjectScope("tenant-a", "project-a");
         const tenantProjectB = new ProjectScope("tenant-a", "project-b");

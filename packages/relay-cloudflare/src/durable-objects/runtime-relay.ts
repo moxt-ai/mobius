@@ -184,11 +184,10 @@ export class RuntimeRelay {
     `);
         this.#peers = new CloudflareChannelPeers(state);
         this.#database = environment.DIRECTORY_DATABASE;
-        this.#sessions = new CloudflareSessionRuntime(
-            environment.SESSION_RELAY,
-            environment.DIRECTORY_DATABASE,
-            sessionQuotaFromEnvironment(environment),
-        );
+        this.#sessions = new CloudflareSessionRuntime({
+            gateways: { sessionRelay: environment.SESSION_RELAY, directoryDatabase: environment.DIRECTORY_DATABASE },
+            config: { quota: sessionQuotaFromEnvironment(environment) },
+        });
         this.#state = state;
     }
 
@@ -563,7 +562,10 @@ export class RuntimeRelay {
     };
 
     private readonly actor = (runtimeId: string, scope: ProjectScope): ChannelActor =>
-        new ChannelActor(runtimeId, scope, this.#sessions, this.#peers);
+        new ChannelActor({
+            config: { runtimeId, scope },
+            gateways: { commands: this.#sessions, queries: this.#sessions, peers: this.#peers },
+        });
 
     private readonly withSocketSignal = async (
         socket: WebSocket,

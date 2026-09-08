@@ -17,17 +17,32 @@ Pairing page / channel Web app / external integration
   -> discovered built-in Agent CLI + optional ACP adapter
 ```
 
-`packages/relay-core` owns the Hono HTTP routes, input validation, pairing and
-channel contracts, the platform-independent `ChannelActor`, and ports for the
-pairing directory, session runtime, content storage, peers, and deployment
-runtime. It imports no Cloudflare API. The actor validates protocol messages,
-selects the one active daemon, routes commands, and commits reliable session
-events before acknowledging them. `SqliteSessionRuntime` owns atomic command
-deduplication, attempt transitions, monotonic event sequencing, paginated query
-projections, retention, deletion, and recoverable archive work.
+`packages/relay-core` owns inferred Hono feature route factories, orchestration services,
+gateway contracts, input validation, pairing and channel contracts, the
+platform-independent `ChannelActor`, and ports for content storage and peers.
+Pairing, channel, and session logic is grouped by feature under `service/`;
+Valibot schemas and inferred persisted-record types live under `entity/session/`.
+Storage methods expose semantic persistence operations, validate database results
+with these schemas, and execute one SQL statement each. Services own validation,
+lifecycle decisions, transaction boundaries, and multi-step composition.
+Portable SQLite persistence lives under `storage/`, while shared HTTP boundary
+code lives under `infra/`.
+`createMobiusApplication()` builds the reusable, chained route graph with a validated
+API prefix. `createMobiusDependencies()` accepts caller-created gateways and builds
+a plain readonly context. Constructors declare only their required `services`,
+`storages`, `gateways`, or `config` subset; HTTP routes read the request's context.
+`createSessionDependencies()` constructs schema-backed storages and session services
+in dependency order. Pairing routes use the pairing gateway directly. There is no
+container, registration metadata, or application subclass. Core imports no
+Cloudflare API. The actor validates protocol
+messages, selects the one active daemon, routes commands, and commits reliable
+session events before acknowledging them.
+`SqliteSessionRuntime` owns atomic command deduplication, attempt transitions,
+monotonic event sequencing, paginated query projections, retention, deletion,
+and recoverable archive work.
 
 `packages/relay-cloudflare` is the active composition root. D1 implements the
-pairing directory and stores the daemon token hash, machine metadata, and locally
+pairing gateway and stores the daemon token hash, machine metadata, and locally
 advertised agent catalog. Ready Agent entries include output-only executable
 path and version metadata together with capability booleans normalized from a
 bounded, successful ACP readiness probe. Persisted pre-capability catalogs are
@@ -38,12 +53,19 @@ and atomically reserves configured tenant/project session quota, while R2 stores
 immutable compressed archive segments. D1 schema changes are applied by
 Wrangler migrations before local development and after provisioning a
 deployment; request handlers do not create infrastructure tables.
+The Worker creates its application once at module scope and constructs dependencies
+from the current bindings for each request. Durable Objects retain their owned
+session resources for their instance lifetime.
 
 `packages/relay-node` supplies the same public Relay API composition with a
 single SQLite database and a containment-checked local filesystem content store.
-The embedding process supplies its pairing directory, channel transport, and
-HTTP listener. The Node and Cloudflare profiles share the session domain contract
-and are exercised by matching public API scenarios.
+The embedding process supplies its pairing and channel gateways and HTTP
+listener. The Node and Cloudflare profiles share the session gateway contracts
+and are exercised by matching public API scenarios. `NodeSessionRuntime` and
+`CloudflareSessionRuntime` implement those contracts directly without adapter
+wrappers.
+Node creates a stable application context for its runtime lifetime and closes
+event streams and its database through the returned `close()` operation.
 
 For Cloudflare deployment, the Web build is uploaded as Worker Static Assets in
 the same deployment as the Relay. API and WebSocket requests continue into the
@@ -207,8 +229,8 @@ events use bounded stages and sanitized stable codes.
 
 ## Workspace ownership
 
-- `packages/relay-core` owns the portable Relay API, channel behavior, domain
-  contracts, and runtime/storage ports.
+- `packages/relay-core` owns the portable Relay routes, services,
+  gateways, channel behavior, domain contracts, and runtime/storage ports.
 - `packages/relay-cloudflare` owns the Worker entry point, D1 implementation,
   Runtime and Session Durable Objects, R2 adapter, Cloudflare migrations, and
   Worker Assets composition.

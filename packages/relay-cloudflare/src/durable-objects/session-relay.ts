@@ -338,7 +338,10 @@ class SessionRelayController {
         content: ImmutableContentStore,
     ) {
         this.#database = new DurableObjectSqlDatabase(state.storage);
-        this.#runtime = new SqliteSessionRuntime(this.#database, content, sessionQuotaFromEnvironment(environment));
+        this.#runtime = new SqliteSessionRuntime({
+            gateways: { database: this.#database, content },
+            config: { quota: sessionQuotaFromEnvironment(environment) },
+        });
         this.#state = state;
     }
 

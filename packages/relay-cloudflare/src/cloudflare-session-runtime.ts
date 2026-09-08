@@ -23,6 +23,7 @@ import {
     type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
+import type { SessionArtifactGateway, SessionEventStreamGateway } from "@moxt-ai/mobius-relay-core";
 import {
     type ActivityDetail,
     ArtifactContent,
@@ -39,16 +40,18 @@ import {
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     type ProjectScope,
+    type SessionCommandGateway,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionExport,
     type SessionLifecycle,
     type SessionMessage,
     type SessionMessagePage,
+    type SessionQueryGateway,
     type SessionQuotaPolicy,
-    type SessionRuntime,
     SessionRuntimeError,
     type SessionSummary,
+    type SessionTransferGateway,
     type TurnAcceptance,
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
@@ -678,15 +681,25 @@ function decodeDirectoryCursor(
     }
 }
 
-export class CloudflareSessionRuntime implements SessionRuntime {
+export class CloudflareSessionRuntime
+    implements
+        SessionCommandGateway,
+        SessionQueryGateway,
+        SessionTransferGateway,
+        SessionArtifactGateway,
+        SessionEventStreamGateway
+{
     readonly #database: D1Database;
     readonly #namespace: DurableObjectNamespace;
     readonly #quota: SessionQuotaPolicy;
 
-    constructor(namespace: DurableObjectNamespace, database: D1Database, quota: SessionQuotaPolicy) {
-        this.#database = database;
-        this.#namespace = namespace;
-        this.#quota = quota;
+    constructor(cx: {
+        readonly gateways: { readonly sessionRelay: DurableObjectNamespace; readonly directoryDatabase: D1Database };
+        readonly config: { readonly quota: SessionQuotaPolicy };
+    }) {
+        this.#database = cx.gateways.directoryDatabase;
+        this.#namespace = cx.gateways.sessionRelay;
+        this.#quota = cx.config.quota;
     }
 
     readonly createSession = async (

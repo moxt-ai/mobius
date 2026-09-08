@@ -9,10 +9,17 @@ import { NodeSqlDatabase } from "./node-sql-database.ts";
 export class NodeSessionRuntime extends SqliteSessionRuntime {
     readonly #database: NodeSqlDatabase;
 
-    constructor(databasePath: string, contentRoot: string, quota?: SessionQuotaPolicy) {
+    constructor(cx: {
+        readonly config: {
+            readonly databasePath: string;
+            readonly contentRoot: string;
+            readonly quota?: SessionQuotaPolicy;
+        };
+    }) {
+        const { databasePath, contentRoot } = cx.config;
         mkdirSync(dirname(databasePath), { recursive: true });
         const database = new NodeSqlDatabase(databasePath);
-        super(database, new FilesystemContentStore(contentRoot), quota);
+        super({ gateways: { database, content: new FilesystemContentStore(contentRoot) }, config: cx.config });
         this.#database = database;
     }
 
