@@ -5,5 +5,6 @@ export * from "./content-storage.ts";
 export * from "./create-application.ts";
 export * from "./pairing-directory.ts";
 export * from "./relay-api.ts";
+export * from "./relay-use-cases.ts";
 export * from "./session-runtime.ts";
 export * from "./sqlite-session-runtime.ts";

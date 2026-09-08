@@ -372,7 +372,7 @@ export class SessionRuntimeError extends Error {
   }
 }
 
-export interface SessionRuntime {
+export interface SessionCommandPort {
   readonly acceptInteractionResponse: (
     scope: ProjectScope,
     sessionId: string,
@@ -416,23 +416,6 @@ export interface SessionRuntime {
     now: number,
     signal: AbortSignal,
   ) => Promise<SessionLifecycle>;
-  readonly exportSession: (
-    scope: ProjectScope,
-    sessionId: string,
-    signal: AbortSignal,
-  ) => Promise<SessionExport>;
-  readonly importSession: (
-    scope: ProjectScope,
-    exported: unknown,
-    now: number,
-    signal: AbortSignal,
-  ) => Promise<SessionSummary>;
-  readonly listSessions: (
-    scope: ProjectScope,
-    cursor: string | null,
-    limit: number,
-    signal: AbortSignal,
-  ) => Promise<SessionDirectoryPage>;
   readonly listPendingDaemonDeliveries: (
     scope: ProjectScope,
     runtimeId: string,
@@ -446,6 +429,39 @@ export interface SessionRuntime {
     now: number,
     signal: AbortSignal,
   ) => Promise<PendingWork>;
+  readonly markRuntimeDisconnected: (
+    scope: ProjectScope,
+    runtimeId: string,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<readonly CommittedSessionEvent[]>;
+  readonly recordNativeHistory: (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    title: string,
+    history: NativeSessionHistory,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<SessionSummary>;
+  readonly reconcileAttempt: (
+    scope: ProjectScope,
+    runtimeId: string,
+    sessionId: string,
+    attemptId: string,
+    outcome: AttemptReconciliationOutcome,
+    now: number,
+    signal: AbortSignal,
+  ) => Promise<Attempt>;
+}
+
+export interface SessionQueryPort {
+  readonly listSessions: (
+    scope: ProjectScope,
+    cursor: string | null,
+    limit: number,
+    signal: AbortSignal,
+  ) => Promise<SessionDirectoryPage>;
   readonly readAttempt: (
     scope: ProjectScope,
     sessionId: string,
@@ -474,12 +490,6 @@ export interface SessionRuntime {
     turnId: string,
     signal: AbortSignal,
   ) => Promise<Turn>;
-  readonly markRuntimeDisconnected: (
-    scope: ProjectScope,
-    runtimeId: string,
-    now: number,
-    signal: AbortSignal,
-  ) => Promise<readonly CommittedSessionEvent[]>;
   readonly readToolCallDetail: (
     scope: ProjectScope,
     sessionId: string,
@@ -506,22 +516,23 @@ export interface SessionRuntime {
     sessionId: string,
     signal: AbortSignal,
   ) => Promise<NativeSessionHistory | null>;
-  readonly recordNativeHistory: (
+}
+
+export interface SessionTransferPort {
+  readonly exportSession: (
     scope: ProjectScope,
-    runtimeId: string,
     sessionId: string,
-    title: string,
-    history: NativeSessionHistory,
+    signal: AbortSignal,
+  ) => Promise<SessionExport>;
+  readonly importSession: (
+    scope: ProjectScope,
+    exported: unknown,
     now: number,
     signal: AbortSignal,
   ) => Promise<SessionSummary>;
-  readonly reconcileAttempt: (
-    scope: ProjectScope,
-    runtimeId: string,
-    sessionId: string,
-    attemptId: string,
-    outcome: AttemptReconciliationOutcome,
-    now: number,
-    signal: AbortSignal,
-  ) => Promise<Attempt>;
 }
+
+export interface SessionRuntime
+  extends SessionCommandPort,
+    SessionQueryPort,
+    SessionTransferPort {}

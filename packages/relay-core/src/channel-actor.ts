@@ -59,9 +59,10 @@ import {
   CreateSessionBindingRequest,
   CreateSessionRequest,
   type ProjectScope,
+  type SessionCommandPort,
   type SessionMessage,
+  type SessionQueryPort,
   SessionRecordingPolicy,
-  type SessionRuntime,
   SessionRuntimeError,
 } from "./session-runtime.ts";
 
@@ -160,17 +161,19 @@ export interface ChannelPeers {
   readonly hosts: () => readonly ChannelSocket[];
 }
 
+type ChannelSessionRuntime = SessionCommandPort & SessionQueryPort;
+
 export class ChannelActor {
   readonly #clock: RelayClock;
   readonly #peers: ChannelPeers;
-  readonly #runtime: SessionRuntime;
+  readonly #runtime: ChannelSessionRuntime;
   readonly #runtimeId: string;
   readonly #scope: ProjectScope;
 
   constructor(
     runtimeId: string,
     scope: ProjectScope,
-    runtime: SessionRuntime,
+    runtime: ChannelSessionRuntime,
     peers: ChannelPeers,
     clock: RelayClock = new SystemRelayClock(),
   ) {
@@ -385,7 +388,7 @@ export class ChannelActor {
           );
           return;
         }
-        let acceptance: Awaited<ReturnType<SessionRuntime["acceptTurn"]>>;
+        let acceptance: Awaited<ReturnType<SessionCommandPort["acceptTurn"]>>;
         try {
           acceptance = await this.#runtime.acceptTurn(
             this.#scope,
