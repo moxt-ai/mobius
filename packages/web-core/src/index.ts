@@ -14,3 +14,5 @@ export { ChatMessageList } from "./components/chat-message-list";
 export { MobiusChat } from "./components/mobius-chat";
 export { Pair } from "./components/pairing-page";
 export type { ChannelConnection } from "./domain/channel";
+
+export { readChannelConnection } from "./services/pairing-api";

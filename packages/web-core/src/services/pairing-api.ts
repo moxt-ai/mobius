@@ -110,6 +110,7 @@ async function requestJson(
   try {
     value = await response.json();
   } catch (error) {
+    if (signal.aborted) throw error;
     throw new PairingApiError(
       "invalid_relay_response",
       "The pairing relay returned an invalid response.",
@@ -1166,6 +1167,7 @@ export async function revokeLinkedChannelDevice(
 
 export async function readChannelConnection(
   channelId: string,
+  cancellationSignal: AbortSignal = new AbortController().signal,
 ): Promise<ChannelConnection> {
   const credential = readChannelCredential(channelId);
   const endpoint = mobiusApiUrl(
@@ -1173,10 +1175,14 @@ export async function readChannelConnection(
     `/channels/${encodeURIComponent(channelId)}`,
   );
   return decodeChannelConnection(
-    await requestJson(endpoint, {
-      headers: { authorization: `Bearer ${credential.hostToken}` },
-      method: "GET",
-    }),
+    await requestJson(
+      endpoint,
+      {
+        headers: { authorization: `Bearer ${credential.hostToken}` },
+        method: "GET",
+      },
+      requestSignal(cancellationSignal),
+    ),
     channelId,
     credential,
   );
