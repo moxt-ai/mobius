@@ -23,7 +23,6 @@ import {
     type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
-import type { SessionArtifactGateway, SessionEventStreamGateway } from "@moxt-ai/mobius-relay-core";
 import {
     type ActivityDetail,
     ArtifactContent,
@@ -40,18 +39,16 @@ import {
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     type ProjectScope,
-    type SessionCommandGateway,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionExport,
     type SessionLifecycle,
     type SessionMessage,
     type SessionMessagePage,
-    type SessionQueryGateway,
     type SessionQuotaPolicy,
+    type SessionRuntime,
     SessionRuntimeError,
     type SessionSummary,
-    type SessionTransferGateway,
     type TurnAcceptance,
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
@@ -681,14 +678,7 @@ function decodeDirectoryCursor(
     }
 }
 
-export class CloudflareSessionRuntime
-    implements
-        SessionCommandGateway,
-        SessionQueryGateway,
-        SessionTransferGateway,
-        SessionArtifactGateway,
-        SessionEventStreamGateway
-{
+export class CloudflareSessionRuntime implements SessionRuntime {
     readonly #database: D1Database;
     readonly #namespace: DurableObjectNamespace;
     readonly #quota: SessionQuotaPolicy;

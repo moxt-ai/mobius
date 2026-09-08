@@ -23,13 +23,14 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import {
     ChannelDescriptor,
-    type ChannelGateway,
+    type ChannelRuntime,
     createMobiusApplication,
+    type PairingDirectory,
     PairingDirectoryError,
-    type PairingGateway,
     ProjectScope,
     ProjectScopeAccess,
     RuntimeStatus,
+    type SessionRuntime,
     VerifiedChannelAccess,
 } from "@moxt-ai/mobius-relay-core";
 import {
@@ -74,7 +75,7 @@ const createdDirectories: string[] = [];
 const attemptIdsBySession = new Map<string, string>();
 const sourceSequences = new Map<string, number>();
 
-class ScopedPairingGateway implements PairingGateway {
+class ScopedPairingDirectory implements PairingDirectory {
     readonly authorizeDaemon = async (): Promise<never> => {
         throw new PairingDirectoryError("unauthorized", "Not available in this scenario");
     };
@@ -180,7 +181,7 @@ class ScopedPairingGateway implements PairingGateway {
     };
 }
 
-class InertChannelGateway implements ChannelGateway {
+class InertChannelRuntime implements ChannelRuntime {
     readonly acceptDaemon = async (): Promise<Response> => new Response(null, { status: 501 });
 
     readonly acceptHost = async (): Promise<Response> => new Response(null, { status: 501 });
@@ -192,10 +193,10 @@ class InertChannelGateway implements ChannelGateway {
     readonly readRuntimeStatus = async (): Promise<RuntimeStatus> => new RuntimeStatus(false);
 }
 
-class ExecutingChannelRuntime implements ChannelGateway {
-    readonly #runtime: NodeSessionRuntime;
+class ExecutingChannelRuntime implements ChannelRuntime {
+    readonly #runtime: SessionRuntime;
 
-    constructor(runtime: NodeSessionRuntime) {
+    constructor(runtime: SessionRuntime) {
         this.#runtime = runtime;
     }
 
@@ -331,11 +332,11 @@ class ExecutingChannelRuntime implements ChannelGateway {
     };
 }
 
-class CapturingChannelRuntime implements ChannelGateway {
-    readonly #runtime: NodeSessionRuntime;
+class CapturingChannelRuntime implements ChannelRuntime {
+    readonly #runtime: SessionRuntime;
     readonly deliveredPayloads: string[] = [];
 
-    constructor(runtime: NodeSessionRuntime) {
+    constructor(runtime: SessionRuntime) {
         this.#runtime = runtime;
     }
 
@@ -535,16 +536,10 @@ describe("Node public Relay API", () => {
         createdDirectories.push(directory);
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const application = createMobiusApplication({
-            channelGateway: new InertChannelGateway(),
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime: new InertChannelRuntime(),
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
 
         try {
             const response = await application.fetch(authorized(`${MOBIUS_API_PREFIX}/capabilities`));
@@ -596,16 +591,10 @@ describe("Node public Relay API", () => {
         createdDirectories.push(directory);
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const application = createMobiusApplication({
-            channelGateway: new ExecutingChannelRuntime(sessionRuntime),
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime: new ExecutingChannelRuntime(sessionRuntime),
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
         const client = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
             endpoint: "https://node.relay.test",
@@ -746,16 +735,10 @@ describe("Node public Relay API", () => {
         createdDirectories.push(directory);
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const application = createMobiusApplication({
-            channelGateway: new ExecutingChannelRuntime(sessionRuntime),
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime: new ExecutingChannelRuntime(sessionRuntime),
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
         const transport = new InterruptedApplicationHttpTransport(async (request) => await application.fetch(request));
         const client = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
@@ -850,16 +833,10 @@ describe("Node public Relay API", () => {
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const channelRuntime = new CapturingChannelRuntime(sessionRuntime);
         const application = createMobiusApplication({
-            channelGateway: channelRuntime,
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime,
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
         const client = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
             endpoint: "https://node.relay.test",
@@ -941,16 +918,10 @@ describe("Node public Relay API", () => {
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const channelRuntime = new CapturingChannelRuntime(sessionRuntime);
         const application = createMobiusApplication({
-            channelGateway: channelRuntime,
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime,
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
         const client = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
             endpoint: "https://node.relay.test",
@@ -1066,16 +1037,10 @@ describe("Node public Relay API", () => {
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const channelRuntime = new CapturingChannelRuntime(sessionRuntime);
         const application = createMobiusApplication({
-            channelGateway: channelRuntime,
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sessionRuntime,
-            sessionQueries: sessionRuntime,
-            sessionTransfers: sessionRuntime,
-            sessionArtifacts: sessionRuntime,
-            sessionEventStreams: sessionRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime,
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime,
+        }).resolve("application");
         const client = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
             endpoint: "https://node.relay.test",
@@ -1183,17 +1148,13 @@ describe("Node public Relay API", () => {
         const sessionRuntime = new NodeSessionRuntime(join(directory, "relay.sqlite"), join(directory, "content"));
         const injector = createMobiusApplication(
             {
-                channelGateway: new InertChannelGateway(),
-                pairingGateway: new ScopedPairingGateway(),
-                sessionCommands: sessionRuntime,
-                sessionQueries: sessionRuntime,
-                sessionTransfers: sessionRuntime,
-                sessionArtifacts: sessionRuntime,
-                sessionEventStreams: sessionRuntime,
+                channelRuntime: new InertChannelRuntime(),
+                pairingDirectory: new ScopedPairingDirectory(),
+                sessionRuntime,
             },
             "/configured/api",
         );
-        const application = injector.create().resolve("application");
+        const application = injector.resolve("application");
 
         const response = await application.fetch(new Request("https://node.relay.test/configured/api/health"));
 
@@ -1221,27 +1182,15 @@ describe("Node public Relay API", () => {
             join(targetDirectory, "content"),
         );
         const sourceApplication = createMobiusApplication({
-            channelGateway: new ExecutingChannelRuntime(sourceRuntime),
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: sourceRuntime,
-            sessionQueries: sourceRuntime,
-            sessionTransfers: sourceRuntime,
-            sessionArtifacts: sourceRuntime,
-            sessionEventStreams: sourceRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime: new ExecutingChannelRuntime(sourceRuntime),
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime: sourceRuntime,
+        }).resolve("application");
         const targetApplication = createMobiusApplication({
-            channelGateway: new InertChannelGateway(),
-            pairingGateway: new ScopedPairingGateway(),
-            sessionCommands: targetRuntime,
-            sessionQueries: targetRuntime,
-            sessionTransfers: targetRuntime,
-            sessionArtifacts: targetRuntime,
-            sessionEventStreams: targetRuntime,
-        })
-            .create()
-            .resolve("application");
+            channelRuntime: new InertChannelRuntime(),
+            pairingDirectory: new ScopedPairingDirectory(),
+            sessionRuntime: targetRuntime,
+        }).resolve("application");
         const sourceClient = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(token),
             endpoint: "https://source.node.test",
@@ -1355,13 +1304,9 @@ describe("Node public Relay API", () => {
         expect(() =>
             createMobiusApplication(
                 {
-                    channelGateway: new InertChannelGateway(),
-                    pairingGateway: new ScopedPairingGateway(),
-                    sessionCommands: sessionRuntime,
-                    sessionQueries: sessionRuntime,
-                    sessionTransfers: sessionRuntime,
-                    sessionArtifacts: sessionRuntime,
-                    sessionEventStreams: sessionRuntime,
+                    channelRuntime: new InertChannelRuntime(),
+                    pairingDirectory: new ScopedPairingDirectory(),
+                    sessionRuntime,
                 },
                 "configured/api",
             ),
@@ -1373,10 +1318,10 @@ describe("Node public Relay API", () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-node-relay-"));
         createdDirectories.push(directory);
         const relay = createNodeRelay({
-            channelGateway: new InertChannelGateway(),
+            channelRuntime: new InertChannelRuntime(),
             contentRoot: join(directory, "content"),
             databasePath: join(directory, "relay.sqlite"),
-            pairingGateway: new ScopedPairingGateway(),
+            pairingDirectory: new ScopedPairingDirectory(),
         });
         const signal = new AbortController().signal;
         const sessionId = "node-session-a";

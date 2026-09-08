@@ -1,17 +1,17 @@
 import {
-    type ChannelGateway,
+    type ChannelRuntime,
     createMobiusApplication,
-    type PairingGateway,
+    type PairingDirectory,
     type SessionQuotaPolicy,
 } from "@moxt-ai/mobius-relay-core";
 
 import { NodeSessionRuntime } from "./node-session-runtime.ts";
 
 export interface NodeRelayOptions {
-    readonly channelGateway: ChannelGateway;
+    readonly channelRuntime: ChannelRuntime;
     readonly contentRoot: string;
     readonly databasePath: string;
-    readonly pairingGateway: PairingGateway;
+    readonly pairingDirectory: PairingDirectory;
     readonly quota?: SessionQuotaPolicy;
 }
 
@@ -22,21 +22,15 @@ export interface NodeRelay {
 }
 
 export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
-    const sessions = new NodeSessionRuntime(options.databasePath, options.contentRoot, options.quota);
+    const sessionRuntime = new NodeSessionRuntime(options.databasePath, options.contentRoot, options.quota);
     const app = createMobiusApplication({
-        channelGateway: options.channelGateway,
-        pairingGateway: options.pairingGateway,
-        sessionCommands: sessions,
-        sessionQueries: sessions,
-        sessionTransfers: sessions,
-        sessionArtifacts: sessions,
-        sessionEventStreams: sessions,
-    })
-        .create()
-        .resolve("application");
+        channelRuntime: options.channelRuntime,
+        pairingDirectory: options.pairingDirectory,
+        sessionRuntime,
+    }).resolve("application");
     return {
-        close: sessions.close,
+        close: sessionRuntime.close,
         fetch: async (request) => await app.fetch(request),
-        sessionRuntime: sessions,
+        sessionRuntime,
     };
 }
