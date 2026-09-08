@@ -882,7 +882,11 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       });
       return;
     }
-    const conversation = Conversation.create(readDefaultAgent(state.agents));
+    const previous = readActiveConversation(state);
+    const conversation = Conversation.createUsingSelections(
+      readAgent(state.agents, previous.agentId),
+      previous,
+    );
     set({
       activeConversationId: conversation.id,
       conversations: [conversation, ...state.conversations],

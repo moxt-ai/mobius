@@ -32,11 +32,10 @@ import {
   UnavailableRuntimeState,
 } from "@/domain/chat";
 import { readChannelConnection } from "@/services/pairing-api";
-import { isModelConfigurationOption } from "@/services/session-config-presentation";
 import {
-  readSessionModelPreferences,
-  saveSessionModelPreferences,
-} from "@/services/session-model-preferences";
+  readSessionConfigPreferences,
+  saveSessionConfigPreferences,
+} from "@/services/session-config-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
@@ -54,7 +53,7 @@ function failureMessage(error: unknown): string {
   return `${failure.code}: ${failure.message}`;
 }
 
-function modelConfigurationPriority(category: string): number {
+function sessionConfigurationPriority(category: string): number {
   if (category === "model") {
     return 0;
   }
@@ -278,7 +277,7 @@ class ConnectedTransport extends TransportConnection {
   ): Promise<SessionConfigUpdatedEvent> => {
     const client = await this.#client;
     const configured = await client.configureSession(request);
-    saveSessionModelPreferences(
+    saveSessionConfigPreferences(
       this.#channelId,
       request.agentId,
       configured.configOptions,
@@ -328,10 +327,10 @@ class ConnectedTransport extends TransportConnection {
       const preferenceOrder = new Map(
         ready.configOptions.map((option) => [
           option.id,
-          modelConfigurationPriority(option.category),
+          sessionConfigurationPriority(option.category),
         ]),
       );
-      const preferences = readSessionModelPreferences(
+      const preferences = readSessionConfigPreferences(
         this.#channelId,
         request.agentId,
       ).toSorted(
@@ -345,11 +344,7 @@ class ConnectedTransport extends TransportConnection {
         const option = configOptions.find(
           (candidate) => candidate.id === preference.configId,
         );
-        if (
-          option === undefined ||
-          option.type !== preference.valueType ||
-          !isModelConfigurationOption(option)
-        ) {
+        if (option === undefined || option.type !== preference.valueType) {
           continue;
         }
         if (option.type === "select") {
@@ -374,7 +369,7 @@ class ConnectedTransport extends TransportConnection {
         });
         bindingId = configured.requestId;
         configOptions = configured.configOptions;
-        saveSessionModelPreferences(
+        saveSessionConfigPreferences(
           this.#channelId,
           request.agentId,
           configOptions,

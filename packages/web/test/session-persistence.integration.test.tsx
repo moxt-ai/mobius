@@ -68,7 +68,220 @@ function modelConfigOptions(model: string): readonly SessionConfigOption[] {
   ];
 }
 
+function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
+  return [
+    {
+      booleanValue: false,
+      category: "mode",
+      currentValue: mode,
+      description: "Agent session mode",
+      id: "mode",
+      name: "Mode",
+      type: "select",
+      values: [
+        {
+          description: "Answer and act directly",
+          groupId: "modes",
+          groupName: "Modes",
+          name: "Ask",
+          value: "ask",
+        },
+        {
+          description: "Plan before acting",
+          groupId: "modes",
+          groupName: "Modes",
+          name: "Plan",
+          value: "plan",
+        },
+      ],
+    },
+  ];
+}
+
 describe.sequential("Session persistence boundaries", () => {
+  it("Given a user selected a workspace, Agent, and run configuration, When they start a new chat, Then the new Session reuses all three selections", async () => {
+    const paired = await pairDaemon({
+      agents: [
+        { id: "codex", label: "Codex" },
+        { id: "claude", label: "Claude" },
+      ],
+    });
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const initialPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, initialPreparation);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Workspace directory:/ }),
+      );
+      const homeRequest = decodeWorkspaceListCommand(
+        await paired.daemon.receive(WORKSPACE_LIST_KIND),
+      );
+      paired.daemon.send(
+        encodeWorkspaceEntriesEvent({
+          bindingId: homeRequest.bindingId,
+          directoryId: homeRequest.directoryId,
+          directoryLabel: "/projects",
+          entries: [
+            { directoryId: "selected-project", name: "Selected project" },
+          ],
+          kind: "workspace.entries",
+          parentDirectoryId: "",
+          requestId: homeRequest.requestId,
+        }),
+      );
+      const workspacePicker = await screen.findByRole("dialog", {
+        name: "Choose workspace",
+      });
+      fireEvent.click(
+        await within(workspacePicker).findByRole("button", {
+          name: "Selected project",
+        }),
+      );
+      const selectedDirectoryRequest = decodeWorkspaceListCommand(
+        await paired.daemon.receive(WORKSPACE_LIST_KIND),
+      );
+      expect(selectedDirectoryRequest.directoryId).toBe("selected-project");
+      paired.daemon.send(
+        encodeWorkspaceEntriesEvent({
+          bindingId: selectedDirectoryRequest.bindingId,
+          directoryId: selectedDirectoryRequest.directoryId,
+          directoryLabel: "/projects/selected",
+          entries: [],
+          kind: "workspace.entries",
+          parentDirectoryId: homeRequest.directoryId,
+          requestId: selectedDirectoryRequest.requestId,
+        }),
+      );
+      fireEvent.click(
+        await within(workspacePicker).findByRole("button", {
+          name: "Use this folder",
+        }),
+      );
+      const directoryPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(directoryPreparation).toMatchObject({
+        agentId: "codex",
+        directoryId: "selected-project",
+      });
+      await sendReadySession(paired.daemon, directoryPreparation);
+
+      const agentPicker = screen.getByRole("combobox", {
+        name: "Agent for this conversation",
+      });
+      fireEvent.pointerDown(agentPicker, {
+        button: 0,
+        pointerType: "mouse",
+      });
+      fireEvent.click(await screen.findByRole("option", { name: "Claude" }));
+      const selectedAgentPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(selectedAgentPreparation).toMatchObject({
+        agentId: "claude",
+        directoryId: "selected-project",
+      });
+      await sendReadySession(
+        paired.daemon,
+        selectedAgentPreparation,
+        modeConfigOptions("ask"),
+      );
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: /Run settings: Ask/ }),
+      );
+      const modePicker = screen.getByRole("combobox", { name: "Mode" });
+      fireEvent.pointerDown(modePicker, {
+        button: 0,
+        pointerType: "mouse",
+      });
+      fireEvent.click(await screen.findByRole("option", { name: "Plan" }));
+      const selectedConfiguration = decodeSessionConfigureCommand(
+        await paired.daemon.receive(SESSION_CONFIGURE_KIND),
+      );
+      expect(selectedConfiguration).toMatchObject({
+        agentId: "claude",
+        configId: "mode",
+        sessionId: selectedAgentPreparation.sessionId,
+        value: "plan",
+      });
+      await paired.daemon.sendSessionEvent(
+        selectedAgentPreparation.sessionId,
+        encodeSessionConfigUpdatedEvent({
+          configOptions: modeConfigOptions("plan"),
+          kind: "session.config.updated",
+          requestId: selectedConfiguration.requestId,
+          sessionId: selectedAgentPreparation.sessionId,
+        }),
+      );
+      await completeRenderedPrompt(
+        paired.daemon,
+        "Remember my chat setup",
+        "SETUP-REMEMBERED",
+      );
+
+      fireEvent.click(
+        within(
+          screen.getByRole("complementary", {
+            name: "Conversation sidebar",
+          }),
+        ).getByRole("button", { name: /New chat.*⌘ N/ }),
+      );
+
+      const nextPreparation = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      expect(nextPreparation).toMatchObject({
+        agentId: "claude",
+        directoryId: "selected-project",
+      });
+      await sendReadySession(
+        paired.daemon,
+        nextPreparation,
+        modeConfigOptions("ask"),
+      );
+      const restoredConfiguration = decodeSessionConfigureCommand(
+        await paired.daemon.receive(SESSION_CONFIGURE_KIND),
+      );
+      expect(restoredConfiguration).toMatchObject({
+        agentId: "claude",
+        configId: "mode",
+        sessionId: nextPreparation.sessionId,
+        value: "plan",
+      });
+      await paired.daemon.sendSessionEvent(
+        nextPreparation.sessionId,
+        encodeSessionConfigUpdatedEvent({
+          configOptions: modeConfigOptions("plan"),
+          kind: "session.config.updated",
+          requestId: restoredConfiguration.requestId,
+          sessionId: nextPreparation.sessionId,
+        }),
+      );
+      expect(
+        screen.getByRole("combobox", {
+          name: "Agent for this conversation",
+        }).textContent,
+      ).toContain("Claude");
+      await screen.findByRole("button", { name: /Run settings: Plan/ });
+    } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
   it("Given an Agent previously used a selected model configuration, When a user starts another conversation with that Agent, Then the new Session restores that configuration by default", async () => {
     const paired = await pairDaemon();
     window.history.replaceState(

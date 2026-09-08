@@ -1055,6 +1055,26 @@ export class Conversation {
     );
   }
 
+  static createUsingSelections(
+    agent: AgentOption,
+    source: Conversation,
+  ): Conversation {
+    return new Conversation(
+      agent.id,
+      agent.label,
+      crypto.randomUUID(),
+      crypto.randomUUID(),
+      "New chat",
+      "No messages yet",
+      "",
+      [],
+      new UnpreparedSessionState(),
+      source.directoryId,
+      source.directoryLabel,
+      source.additionalDirectories,
+    );
+  }
+
   get contextLocked(): boolean {
     return this.messages.length > 0 || this.session.restored;
   }

@@ -28,9 +28,7 @@ function firstCategory(
   return options.find((option) => option.category === category);
 }
 
-export function isModelConfigurationOption(
-  option: SessionConfigOption,
-): boolean {
+function isModelConfigurationOption(option: SessionConfigOption): boolean {
   return (
     option.category === "model" ||
     option.category === "thought_level" ||
