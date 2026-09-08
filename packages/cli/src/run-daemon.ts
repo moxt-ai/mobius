@@ -79,13 +79,12 @@ import {
   WORKSPACE_LIST_KIND,
   type WorkspaceListCommand,
 } from "@moxt-ai/mobius-protocol";
-import { type MessageEvent, WebSocket } from "undici";
+import { fetch, type MessageEvent, WebSocket } from "undici";
 
 import {
   AcpExecutionError,
   AcpSessionManager,
   type AcpSessionObserver,
-  NullAcpSessionObserver,
 } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
@@ -110,6 +109,7 @@ import { LocalAuthorizationError } from "./authorization/local-authorization-err
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import type { DaemonConfig } from "./config.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
+import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
@@ -122,6 +122,7 @@ import { readStateDirectory } from "./storage/state-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const RELAY_CONNECTION_REFRESH_MILLISECONDS = 20 * 60 * 1_000;
+const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 
 abstract class RelayConnectionRefreshState {}
 
@@ -390,21 +391,23 @@ class ResolvedSessionDirectories {
 }
 
 class ActiveDaemonTurn {
+  readonly attemptId: string;
   readonly command: SessionPromptCommand;
-  readonly #connectionController: AbortController;
+  readonly #controller: AbortController;
+  readonly #finished = Promise.withResolvers<void>();
   #cancellationRequested = false;
 
-  constructor(
-    command: SessionPromptCommand,
-    connectionController: AbortController,
-  ) {
+  constructor(command: SessionPromptCommand, attemptId: string) {
+    this.attemptId = attemptId;
     this.command = command;
-    this.#connectionController = connectionController;
+    this.#controller = new AbortController();
   }
 
-  readonly abortConnection = (): void => {
-    this.#connectionController.abort();
+  readonly abortDaemon = (): void => {
+    this.#controller.abort();
   };
+
+  readonly finish = (): void => this.#finished.resolve();
 
   readonly matches = (cancellation: SessionCancelCommand): boolean =>
     cancellation.commandId === this.command.commandId &&
@@ -419,8 +422,83 @@ class ActiveDaemonTurn {
   };
 
   get signal(): AbortSignal {
-    return this.#connectionController.signal;
+    return this.#controller.signal;
   }
+
+  get completion(): Promise<void> {
+    return this.#finished.promise;
+  }
+}
+
+class ActiveTurnReconciliationError extends Error {
+  readonly code = "active_turn_reconciliation_failed";
+
+  constructor(message: string, options: ErrorOptions = {}) {
+    super(message, options);
+    this.name = "ActiveTurnReconciliationError";
+  }
+}
+
+function activeTurnReconciliationEndpoint(
+  config: DaemonConfig,
+  turn: ActiveDaemonTurn,
+): URL {
+  const endpoint = new URL(config.relayUrl);
+  endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+  if (!endpoint.pathname.endsWith("/daemon")) {
+    throw new ActiveTurnReconciliationError("The Relay URL is invalid");
+  }
+  endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/sessions/${encodeURIComponent(turn.command.sessionId)}/attempts/${encodeURIComponent(turn.attemptId)}/reconciliation`;
+  endpoint.searchParams.delete("liveness");
+  return endpoint;
+}
+
+async function reconcileActiveTurn(
+  config: DaemonConfig,
+  turn: ActiveDaemonTurn,
+  signal: AbortSignal,
+): Promise<void> {
+  signal.throwIfAborted();
+  const timeoutSignal = AbortSignal.timeout(
+    ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS,
+  );
+  const requestSignal = AbortSignal.any([signal, timeoutSignal]);
+  let response: Awaited<ReturnType<typeof fetch>>;
+  try {
+    response = await fetch(activeTurnReconciliationEndpoint(config, turn), {
+      body: JSON.stringify({ outcome: { kind: "running" } }),
+      dispatcher: environmentProxyDispatcher,
+      headers: { "content-type": "application/json" },
+      method: "POST",
+      signal: requestSignal,
+    });
+  } catch (error) {
+    if (signal.aborted) {
+      signal.throwIfAborted();
+    }
+    throw new ActiveTurnReconciliationError(
+      timeoutSignal.aborted
+        ? "The active Agent turn reconciliation timed out"
+        : "The active Agent turn could not be reconciled",
+      { cause: error },
+    );
+  }
+  await response.body?.cancel();
+  if (!response.ok) {
+    throw new ActiveTurnReconciliationError(
+      "The Relay rejected the active Agent turn reconciliation",
+    );
+  }
+}
+
+async function reconcileActiveTurns(
+  config: DaemonConfig,
+  turns: readonly ActiveDaemonTurn[],
+  signal: AbortSignal,
+): Promise<void> {
+  await Promise.all(
+    turns.map(async (turn) => await reconcileActiveTurn(config, turn, signal)),
+  );
 }
 
 function send(socket: WebSocket, message: string): void {
@@ -430,30 +508,84 @@ function send(socket: WebSocket, message: string): void {
   socket.send(message);
 }
 
-function recordSessionEvent(
-  outbox: SessionEventOutbox,
-  socket: WebSocket,
-  sessionId: string,
-  payload: string,
-  attemptId: string | null = null,
-): void {
-  const envelope = outbox.enqueue(sessionId, payload, attemptId);
-  if (socket.readyState === WebSocket.OPEN) {
-    socket.send(envelope);
+abstract class DaemonSessionEventConnectionState {
+  abstract readonly disconnect: (
+    socket: WebSocket,
+  ) => DaemonSessionEventConnectionState;
+  abstract readonly send: (message: string) => void;
+}
+
+class DisconnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
+  readonly disconnect = (): DaemonSessionEventConnectionState => this;
+  readonly send = (): void => undefined;
+}
+
+class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
+  readonly #socket: WebSocket;
+
+  constructor(socket: WebSocket) {
+    super();
+    this.#socket = socket;
   }
+
+  readonly disconnect = (
+    socket: WebSocket,
+  ): DaemonSessionEventConnectionState =>
+    socket === this.#socket ? new DisconnectedDaemonSessionEventState() : this;
+
+  readonly send = (message: string): void => {
+    if (this.#socket.readyState === WebSocket.OPEN) {
+      try {
+        this.#socket.send(message);
+      } catch {
+        // The durable outbox retains the event for the replacement connection.
+      }
+    }
+  };
+}
+
+class DaemonSessionEventPublisher {
+  readonly #outbox: SessionEventOutbox;
+  #connection: DaemonSessionEventConnectionState =
+    new DisconnectedDaemonSessionEventState();
+
+  constructor(outbox: SessionEventOutbox) {
+    this.#outbox = outbox;
+  }
+
+  readonly connect = (socket: WebSocket): void => {
+    const connection = new ConnectedDaemonSessionEventState(socket);
+    this.#connection = connection;
+    for (const pending of this.#outbox.pending()) {
+      connection.send(pending);
+    }
+  };
+
+  readonly disconnect = (socket: WebSocket): void => {
+    this.#connection = this.#connection.disconnect(socket);
+  };
+
+  readonly recordAttempt = (
+    sessionId: string,
+    payload: string,
+    attemptId: string,
+  ): void => {
+    this.#connection.send(this.#outbox.enqueue(sessionId, payload, attemptId));
+  };
+
+  readonly recordRuntime = (sessionId: string, payload: string): void => {
+    this.#connection.send(this.#outbox.enqueue(sessionId, payload));
+  };
 }
 
 function reportFailure(
-  outbox: SessionEventOutbox,
-  socket: WebSocket,
+  publisher: DaemonSessionEventPublisher,
   command: SessionPromptCommand,
   code: string,
   message: string,
-  attemptId: string | null = null,
+  attemptId: string,
 ): void {
-  recordSessionEvent(
-    outbox,
-    socket,
+  publisher.recordAttempt(
     command.sessionId,
     encodeSessionFailedEvent({
       code,
@@ -584,7 +716,7 @@ async function executeWorkspaceList(
 }
 
 async function executeSessionPrepare(
-  outbox: SessionEventOutbox,
+  publisher: DaemonSessionEventPublisher,
   socket: WebSocket,
   command: SessionPrepareCommand,
   config: DaemonConfig,
@@ -619,9 +751,7 @@ async function executeSessionPrepare(
       event: "session_prepared",
       sessionId: command.sessionId,
     });
-    recordSessionEvent(
-      outbox,
-      socket,
+    publisher.recordRuntime(
       command.sessionId,
       encodeSessionReadyEvent({
         additionalDirectories: resolved.additionalDirectoryEntries,
@@ -654,7 +784,7 @@ async function executeSessionPrepare(
 }
 
 async function executeSessionConfigure(
-  outbox: SessionEventOutbox,
+  publisher: DaemonSessionEventPublisher,
   socket: WebSocket,
   command: SessionConfigureCommand,
   config: DaemonConfig,
@@ -688,9 +818,7 @@ async function executeSessionConfigure(
       event: "session_configured",
       sessionId: command.sessionId,
     });
-    recordSessionEvent(
-      outbox,
-      socket,
+    publisher.recordRuntime(
       command.sessionId,
       encodeSessionConfigUpdatedEvent({
         configOptions,
@@ -706,7 +834,7 @@ async function executeSessionConfigure(
 
 async function executePrompt(
   outbox: SessionEventOutbox,
-  socket: WebSocket,
+  publisher: DaemonSessionEventPublisher,
   command: SessionPromptCommand,
   config: DaemonConfig,
   directories: WorkspaceDirectoryService,
@@ -730,9 +858,7 @@ async function executePrompt(
       sessionId: command.sessionId,
     });
     outbox.transitionExecution(command.commandId, "running");
-    recordSessionEvent(
-      outbox,
-      socket,
+    publisher.recordAttempt(
       command.sessionId,
       encodeSessionStartedEvent({
         commandId: command.commandId,
@@ -749,9 +875,7 @@ async function executePrompt(
       cwd: resolved.cwd,
       images: command.images,
       onActivity: (activity) => {
-        recordSessionEvent(
-          outbox,
-          socket,
+        publisher.recordAttempt(
           command.sessionId,
           encodeAgentActivityEvent({
             activityId: activity.activityId,
@@ -775,9 +899,7 @@ async function executePrompt(
         return Promise.resolve();
       },
       onText: (text) => {
-        recordSessionEvent(
-          outbox,
-          socket,
+        publisher.recordAttempt(
           command.sessionId,
           encodeAgentMessageDeltaEvent({
             commandId: command.commandId,
@@ -795,9 +917,7 @@ async function executePrompt(
       signal,
     });
 
-    recordSessionEvent(
-      outbox,
-      socket,
+    publisher.recordAttempt(
       command.sessionId,
       encodeSessionCompletedEvent({
         commandId: command.commandId,
@@ -827,8 +947,7 @@ async function executePrompt(
     });
     const code = operationErrorCode(error);
     reportFailure(
-      outbox,
-      socket,
+      publisher,
       command,
       code === "session_operation_failed" ? "agent_execution_failed" : code,
       code === "session_operation_failed"
@@ -899,6 +1018,9 @@ async function runRelayConnection(
   installationObserver: DaemonInstallationObserver,
   nativeSessions: NativeSessionService,
   outbox: SessionEventOutbox,
+  publisher: DaemonSessionEventPublisher,
+  activeTurns: Map<string, ActiveDaemonTurn>,
+  activeAttemptIds: Map<string, string>,
   onConnected: () => void,
   signal: AbortSignal,
   timer: DaemonTimer,
@@ -906,9 +1028,8 @@ async function runRelayConnection(
   const relayUrl = new URL(config.relayUrl);
   relayUrl.searchParams.set("liveness", "1");
   const socket = await connectRelay(relayUrl, signal);
+  const reconnectingTurns = [...activeTurns.values()];
   onConnected();
-  const activeTurns = new Map<string, ActiveDaemonTurn>();
-  const activeAttemptIds = new Map<string, string>();
   const connectionController = new AbortController();
   const nativeRequests = new Map<
     string,
@@ -919,20 +1040,7 @@ async function runRelayConnection(
       readonly completion: Promise<void>;
     }
   >();
-  const record = (sessionId: string, payload: string): void => {
-    recordSessionEvent(
-      outbox,
-      socket,
-      sessionId,
-      payload,
-      activeAttemptIds.get(sessionId) ?? null,
-    );
-  };
-  sessions.setObserver(new DaemonAcpObserver(record));
   installationObserver.connect(socket);
-  for (const pending of outbox.pending()) {
-    send(socket, pending);
-  }
 
   try {
     await new Promise<void>((resolve, reject) => {
@@ -946,11 +1054,8 @@ async function runRelayConnection(
         socket.removeEventListener("error", handleError);
         socket.removeEventListener("message", handleMessage);
         installationObserver.disconnect(socket);
+        publisher.disconnect(socket);
         connectionController.abort();
-        for (const turn of activeTurns.values()) {
-          turn.abortConnection();
-        }
-        activeTurns.clear();
       };
 
       const resolveConnection = (): void => {
@@ -1187,7 +1292,7 @@ async function runRelayConnection(
           if (kind === SESSION_PREPARE_KIND) {
             const command = decodeSessionPrepareCommand(encoded);
             void executeSessionPrepare(
-              outbox,
+              publisher,
               socket,
               command,
               config,
@@ -1201,7 +1306,7 @@ async function runRelayConnection(
           if (kind === SESSION_CONFIGURE_KIND) {
             const command = decodeSessionConfigureCommand(encoded);
             void executeSessionConfigure(
-              outbox,
+              publisher,
               socket,
               command,
               config,
@@ -1289,12 +1394,12 @@ async function runRelayConnection(
             return;
           }
 
-          const turn = new ActiveDaemonTurn(command, new AbortController());
+          const turn = new ActiveDaemonTurn(command, receipt.attemptId);
           activeTurns.set(command.commandId, turn);
           activeAttemptIds.set(command.sessionId, receipt.attemptId);
           void executePrompt(
             outbox,
-            socket,
+            publisher,
             command,
             config,
             directories,
@@ -1313,6 +1418,7 @@ async function runRelayConnection(
               ) {
                 activeAttemptIds.delete(command.sessionId);
               }
+              turn.finish();
               connectionRefresh.afterTurnFinished();
             });
         } catch (error) {
@@ -1324,6 +1430,28 @@ async function runRelayConnection(
       socket.addEventListener("close", handleClose);
       socket.addEventListener("error", handleError);
       socket.addEventListener("message", handleMessage);
+      void reconcileActiveTurns(
+        config,
+        reconnectingTurns,
+        connectionController.signal,
+      ).then(
+        () => {
+          if (finished) {
+            return;
+          }
+          publisher.connect(socket);
+          void Promise.all(
+            reconnectingTurns.map((turn) => turn.completion),
+          ).then(connectionRefresh.afterTurnFinished);
+        },
+        () => {
+          if (finished) {
+            return;
+          }
+          socket.close(1011, "Active Agent turn reconciliation failed");
+          rejectConnection();
+        },
+      );
 
       if (signal.aborted) {
         stop();
@@ -1371,8 +1499,19 @@ export async function runDaemon(
 
   const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
   const outbox = new SessionEventOutbox(config.auditDatabasePath);
+  const publisher = new DaemonSessionEventPublisher(outbox);
+  const activeTurns = new Map<string, ActiveDaemonTurn>();
+  const activeAttemptIds = new Map<string, string>();
+  const recordSessionEvent = (sessionId: string, payload: string): void => {
+    const attemptId = activeAttemptIds.get(sessionId);
+    if (attemptId === undefined) {
+      publisher.recordRuntime(sessionId, payload);
+      return;
+    }
+    publisher.recordAttempt(sessionId, payload, attemptId);
+  };
   const sessions = new AcpSessionManager(
-    new NullAcpSessionObserver(),
+    new DaemonAcpObserver(recordSessionEvent),
     sessionStore,
   );
   const directories = new WorkspaceDirectoryService(
@@ -1426,6 +1565,9 @@ export async function runDaemon(
           installationObserver,
           nativeSessions,
           outbox,
+          publisher,
+          activeTurns,
+          activeAttemptIds,
           announceConnection,
           signal,
           timer,
@@ -1444,6 +1586,11 @@ export async function runDaemon(
       await waitForRelayRetry(signal, timer);
     }
   } finally {
+    const turns = [...activeTurns.values()];
+    for (const turn of turns) {
+      turn.abortDaemon();
+    }
+    await Promise.all(turns.map((turn) => turn.completion));
     try {
       await catalogPublication;
     } finally {

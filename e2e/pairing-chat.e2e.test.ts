@@ -33,7 +33,9 @@ import {
   decodeRuntimeStatusEvent,
   decodeSessionCancelCommand,
   decodeSessionCompletedEvent,
+  decodeSessionElicitationRequestedEvent,
   decodeSessionFailedEvent,
+  decodeSessionPermissionRequestedEvent,
   decodeSessionPromptCommand,
   decodeSessionStartedEvent,
   decodeSessionUsageUpdatedEvent,
@@ -42,8 +44,10 @@ import {
   encodeRuntimeHeartbeatEvent,
   encodeSessionCancelCommand,
   encodeSessionCompletedEvent,
+  encodeSessionElicitationRespondCommand,
   encodeSessionEventEnvelope,
   encodeSessionFailedEvent,
+  encodeSessionPermissionRespondCommand,
   encodeSessionPrepareCommand,
   encodeSessionPromptCommand,
   encodeSessionStartedEvent,
@@ -54,9 +58,11 @@ import {
   RUNTIME_STATUS_KIND,
   SESSION_CANCEL_KIND,
   SESSION_COMPLETED_KIND,
+  SESSION_ELICITATION_REQUESTED_KIND,
   SESSION_EVENT_COMMITTED_KIND,
   SESSION_EVENT_KIND,
   SESSION_FAILED_KIND,
+  SESSION_PERMISSION_REQUESTED_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
   SESSION_READY_KIND,
@@ -365,6 +371,44 @@ function waitForRuntimeOnline(socket: WebSocket): Promise<void> {
         return;
       }
       if (decodeRuntimeStatusEvent(event.data).online) {
+        cleanup();
+        resolve();
+      }
+    };
+    socket.addEventListener("error", handleError);
+    socket.addEventListener("message", handleMessage);
+  });
+}
+
+function waitForRuntimeReconnect(socket: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let observedOffline = false;
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("The daemon did not reconnect"));
+    }, 8_000);
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      socket.removeEventListener("error", handleError);
+      socket.removeEventListener("message", handleMessage);
+    };
+    const handleError = (): void => {
+      cleanup();
+      reject(new Error("The host WebSocket failed"));
+    };
+    const handleMessage = (event: MessageEvent<unknown>): void => {
+      if (typeof event.data !== "string") {
+        return;
+      }
+      if (decodeMessageKind(event.data) !== RUNTIME_STATUS_KIND) {
+        return;
+      }
+      const status = decodeRuntimeStatusEvent(event.data);
+      if (!status.online) {
+        observedOffline = true;
+        return;
+      }
+      if (observedOffline) {
         cleanup();
         resolve();
       }
@@ -1875,6 +1919,209 @@ describe("pairing and channel chat", () => {
       } else {
         process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
       }
+      restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+      restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+      await rm(temporaryDirectory, { recursive: true });
+    }
+  });
+
+  it("Given a local Agent turn is waiting for approval, When the relay connection is replaced and the daemon reconnects, Then the same turn completes without an Agent failure", {
+    timeout: 30_000,
+  }, async () => {
+    const temporaryDirectory = await mkdtemp(
+      join(tmpdir(), "mobius-live-turn-reconnect-e2e-"),
+    );
+    const port = await reservePort();
+    const origin = `http://127.0.0.1:${port.toString()}`;
+    const executableDirectory = join(temporaryDirectory, "bin");
+    const workbuddyPath = join(executableDirectory, "codebuddy");
+    const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+    const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+    const previousCursorPath = process.env["MOBIUS_CURSOR_PATH"];
+    const previousDeepSeekPath = process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"];
+    const previousFakeAcpStateDirectory =
+      process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    const previousGrokPath = process.env["MOBIUS_GROK_BUILD_PATH"];
+    const previousOpenCodePath = process.env["MOBIUS_OPENCODE_PATH"];
+    const previousPath = process.env["PATH"];
+    const previousPiPath = process.env["MOBIUS_PI_PATH"];
+    const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+    const previousWorkBuddyPath = process.env["MOBIUS_WORKBUDDY_PATH"];
+    const previousNoProxy = process.env["NO_PROXY"];
+    const previousLowerNoProxy = process.env["no_proxy"];
+    await mkdir(executableDirectory, { mode: 0o700, recursive: true });
+    await writeFile(
+      workbuddyPath,
+      agentExecutableSource("WorkBuddy", "1.0.0"),
+      { mode: 0o700 },
+    );
+    await chmod(workbuddyPath, 0o700);
+    const missingAgentPath = join(temporaryDirectory, "missing-agent");
+    process.env["MOBIUS_CODEX_PATH"] = missingAgentPath;
+    process.env["MOBIUS_CLAUDE_PATH"] = missingAgentPath;
+    process.env["MOBIUS_CURSOR_PATH"] = missingAgentPath;
+    process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"] = missingAgentPath;
+    process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(
+      temporaryDirectory,
+      "native",
+    );
+    process.env["MOBIUS_GROK_BUILD_PATH"] = missingAgentPath;
+    process.env["MOBIUS_OPENCODE_PATH"] = missingAgentPath;
+    process.env["MOBIUS_PI_PATH"] = missingAgentPath;
+    process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
+    process.env["MOBIUS_WORKBUDDY_PATH"] = workbuddyPath;
+    process.env["PATH"] =
+      `${executableDirectory}${delimiter}${previousPath ?? ""}`;
+    process.env["NO_PROXY"] = "127.0.0.1,localhost";
+    process.env["no_proxy"] = "127.0.0.1,localhost";
+    const wrangler = spawn(
+      pnpmCommand,
+      [
+        "wrangler",
+        "dev",
+        "--ip",
+        "127.0.0.1",
+        "--port",
+        port.toString(),
+        "--persist-to",
+        join(temporaryDirectory, "wrangler-state"),
+      ],
+      {
+        cwd: repositoryRoot,
+        env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    try {
+      await waitForRelay(wrangler);
+      const pairingResponse = await fetch(
+        new URL(`${MOBIUS_API_PREFIX}/pairings`, origin),
+        { method: "POST" },
+      );
+      const pairing = decodeBrowserPairing(await pairingResponse.json());
+      const paired = await pairLocalMachine([
+        "--url",
+        origin,
+        "--code",
+        pairing.pairingCode,
+        "--workspace",
+        repositoryRoot,
+      ]);
+      const audit = new AuditStore(paired.config.auditDatabasePath);
+      const daemonController = new AbortController();
+      const daemonRun = runDaemon(
+        paired.config,
+        audit,
+        daemonController.signal,
+      );
+      try {
+        const host = new WebSocket(hostSocketUrl(pairing, origin));
+        const sockets = [host];
+        try {
+          await waitForRuntimeOnline(host);
+          const sessionId = crypto.randomUUID();
+          const permissionArrived = waitForProtocolKind(
+            host,
+            SESSION_PERMISSION_REQUESTED_KIND,
+          );
+          const prompt = startBrowserPrompt(
+            host,
+            "workbuddy",
+            sessionId,
+            "exercise ACP controls",
+          );
+          const permission = decodeSessionPermissionRequestedEvent(
+            await permissionArrived,
+          );
+
+          const replacementDaemon = new WebSocket(paired.config.relayUrl);
+          sockets.push(replacementDaemon);
+          await waitForSocketOpen(replacementDaemon);
+          const reconnected = waitForRuntimeReconnect(host);
+          replacementDaemon.close(1000, "Simulate a transient relay loss");
+          await reconnected;
+
+          const elicitationArrived = waitForProtocolKind(
+            host,
+            SESSION_ELICITATION_REQUESTED_KIND,
+          );
+          host.send(
+            encodeSessionPermissionRespondCommand({
+              interactionId: permission.interactionId,
+              kind: "session.permission.respond",
+              optionId: "allow-once",
+              outcome: "selected",
+              sessionId,
+            }),
+          );
+          const elicitation = decodeSessionElicitationRequestedEvent(
+            await elicitationArrived,
+          );
+          host.send(
+            encodeSessionElicitationRespondCommand({
+              action: "accept",
+              content: JSON.stringify({ branch: "reconnect-safe" }),
+              interactionId: elicitation.interactionId,
+              kind: "session.elicitation.respond",
+              sessionId,
+            }),
+          );
+
+          await expect(prompt.result).resolves.toMatchObject({
+            stopReason: "end_turn",
+            text: expect.stringContaining("reconnect-safe"),
+          });
+          const historyResponse = await fetch(
+            projectSessionUrl(pairing, origin, sessionId, "/messages"),
+            { headers: authenticatedHeaders(pairing) },
+          );
+          await expect(historyResponse.json()).resolves.toEqual(
+            expect.objectContaining({
+              messages: expect.arrayContaining([
+                expect.objectContaining({
+                  attempt: expect.objectContaining({ kind: "succeeded" }),
+                  commandId: prompt.commandId,
+                  response: expect.stringContaining("reconnect-safe"),
+                }),
+              ]),
+            }),
+          );
+        } finally {
+          for (const socket of sockets) {
+            socket.close(1000, "Live turn reconnect E2E complete");
+          }
+        }
+      } finally {
+        daemonController.abort();
+        await daemonRun;
+        audit.close();
+      }
+    } finally {
+      await stopProcess(wrangler);
+      restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+      restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+      restoreEnvironmentVariable("MOBIUS_CURSOR_PATH", previousCursorPath);
+      restoreEnvironmentVariable(
+        "MOBIUS_DEEPSEEK_HARNESS_PATH",
+        previousDeepSeekPath,
+      );
+      restoreEnvironmentVariable(
+        "MOBIUS_FAKE_ACP_STATE_DIRECTORY",
+        previousFakeAcpStateDirectory,
+      );
+      restoreEnvironmentVariable("MOBIUS_GROK_BUILD_PATH", previousGrokPath);
+      restoreEnvironmentVariable("MOBIUS_OPENCODE_PATH", previousOpenCodePath);
+      restoreEnvironmentVariable("MOBIUS_PI_PATH", previousPiPath);
+      restoreEnvironmentVariable(
+        "MOBIUS_STATE_DIRECTORY",
+        previousStateDirectory,
+      );
+      restoreEnvironmentVariable(
+        "MOBIUS_WORKBUDDY_PATH",
+        previousWorkBuddyPath,
+      );
+      restoreEnvironmentVariable("PATH", previousPath);
       restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
       restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
       await rm(temporaryDirectory, { recursive: true });
