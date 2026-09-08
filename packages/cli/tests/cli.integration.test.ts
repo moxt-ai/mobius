@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import packageMetadata from "../package.json" with { type: "json" };
 
 const executeFile = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../src/cli.ts", import.meta.url));
@@ -41,6 +42,13 @@ function readPort(server: Server): number {
 }
 
 describe("Mobius CLI", () => {
+    it("Given a CLI installation, When pair is invoked without required arguments, Then its version is printed before pairing fails", async () => {
+        await expect(executeFile(process.execPath, [cliPath, "pair"], { timeout: 10_000 })).rejects.toMatchObject({
+            stdout: `mobius version: ${packageMetadata.version}\n`,
+            code: 1,
+        });
+    });
+
     it("Given no running daemon, When help is requested, Then the CLI lists its daemon capabilities and exits", async () => {
         const result = await executeFile(process.execPath, [cliPath, "--help"]);
 

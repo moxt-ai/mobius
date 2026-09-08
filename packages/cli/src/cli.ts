@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { mkdir } from "node:fs/promises";
+import packageMetadata from "../package.json" with { type: "json" };
 
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
 
     let config: DaemonConfig;
     if (command === "pair") {
+        process.stdout.write(`mobius version: ${packageMetadata.version}\n`);
         const paired = await pairLocalMachine(process.argv.slice(3), shutdown.signal);
         config = paired.config;
         process.stdout.write("\nLocal machine paired.\n");
