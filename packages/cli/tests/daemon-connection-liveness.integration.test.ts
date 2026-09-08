@@ -4,25 +4,32 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
+    decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
+    encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    SESSION_PROMPT_KIND,
+    SESSION_STARTED_KIND,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../protocol/src/index.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
-import { createDaemonConfig } from "../src/config.ts";
+import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
+import type { DaemonScheduledTask, DaemonTimer } from "../src/relay-connection/timer.ts";
 import { runDaemon } from "../src/run-daemon.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function restoreEnvironmentVariable(name: string, previous: string | undefined): void {
     if (previous === undefined) {
@@ -59,6 +66,58 @@ class ClientWebSocketFrame {
         this.opcode = opcode;
         this.text = text;
     }
+}
+
+class ControllableDaemonTask implements DaemonScheduledTask {
+    readonly #callback: () => void;
+    #cancelled = false;
+
+    constructor(callback: () => void) {
+        this.#callback = callback;
+    }
+
+    readonly cancel = (): void => {
+        this.#cancelled = true;
+    };
+
+    readonly run = (): void => {
+        if (this.#cancelled) {
+            return;
+        }
+        this.#cancelled = true;
+        this.#callback();
+    };
+}
+
+class ControllableDaemonTimer implements DaemonTimer {
+    readonly #scheduled = new Map<number, ControllableDaemonTask[]>();
+    readonly #waiters = new Map<number, Array<(task: ControllableDaemonTask) => void>>();
+
+    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+        const task = new ControllableDaemonTask(callback);
+        const waiter = this.#waiters.get(milliseconds)?.shift();
+        if (waiter !== undefined) {
+            waiter(task);
+            return task;
+        }
+        const scheduled = this.#scheduled.get(milliseconds) ?? [];
+        scheduled.push(task);
+        this.#scheduled.set(milliseconds, scheduled);
+        return task;
+    };
+
+    readonly waitForTask = (milliseconds: number): Promise<ControllableDaemonTask> => {
+        const scheduled = this.#scheduled.get(milliseconds);
+        const task = scheduled?.shift();
+        if (task !== undefined) {
+            return Promise.resolve(task);
+        }
+        return new Promise((resolve) => {
+            const waiters = this.#waiters.get(milliseconds) ?? [];
+            waiters.push(resolve);
+            this.#waiters.set(milliseconds, waiters);
+        });
+    };
 }
 
 function readClientFrame(socket: Duplex): Promise<ClientWebSocketFrame> {
@@ -434,6 +493,170 @@ describe("daemon relay connection liveness", () => {
             restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
             restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
             restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an active Agent turn cannot be reconciled, When its relay connection recovers, Then the daemon replaces the connection without exiting", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-reconciliation-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        let reconciliationRequestCount = 0;
+        let observeReconciliationFailure = (): void => undefined;
+        const reconciliationFailure = new Promise<void>((resolve) => {
+            observeReconciliationFailure = resolve;
+        });
+        const relay = createServer((request, response) => {
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            if (
+                request.method === "PUT" &&
+                url.pathname === `${MOBIUS_API_PREFIX}/channels/reconciliation-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            if (request.method === "POST" && url.pathname.endsWith("/reconciliation")) {
+                reconciliationRequestCount += 1;
+                request.resume();
+                response.writeHead(503, { "content-type": "application/json" });
+                response.end(
+                    JSON.stringify({
+                        error: {
+                            code: "session_storage_unavailable",
+                            message: "The test Relay temporarily rejected reconciliation",
+                        },
+                    }),
+                );
+                observeReconciliationFailure();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const upgradeWaiters: Array<() => void> = [];
+        const daemonSockets: Duplex[] = [];
+        const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            respondToClientClose(socket);
+            if (daemonSockets.length === 1) {
+                clientFrames.push(readClientFrame(socket));
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        commandId: "reconciliation-command",
+                        directoryId: "default",
+                        images: [],
+                        kind: SESSION_PROMPT_KIND,
+                        prompt: "exercise ACP controls",
+                        resources: [],
+                        sessionId: "reconciliation-session",
+                    }),
+                );
+            }
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        const config = createDaemonConfig(
+            {
+                defaultWorkspace,
+                auditDatabasePath,
+                channelId: "reconciliation-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/reconciliation-channel/daemon`,
+                ),
+            },
+            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
+        );
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await firstConnection;
+            const firstFrame = clientFrames[0];
+            if (firstFrame === undefined) {
+                throw new Error("Test relay did not observe the active Agent turn");
+            }
+            const started = decodeSessionEventEnvelope((await firstFrame).text);
+            expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
+            const firstSocket = daemonSockets[0];
+            if (firstSocket === undefined) {
+                throw new Error("Test relay did not retain the first connection");
+            }
+
+            const secondConnection = waitForUpgrade();
+            const firstRetry = timer.waitForTask(500);
+            firstSocket.destroy();
+            (await firstRetry).run();
+            await secondConnection;
+            const secondRetry = timer.waitForTask(500);
+            await reconciliationFailure;
+            expect(reconciliationRequestCount).toBe(1);
+
+            const thirdConnection = waitForUpgrade();
+            (await secondRetry).run();
+            await thirdConnection;
+            expect(daemonSockets).toHaveLength(3);
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
             await rm(stateDirectory, { force: true, recursive: true });
         }
     });

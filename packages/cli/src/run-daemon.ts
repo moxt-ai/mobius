@@ -114,6 +114,7 @@ import { readStateDirectory } from "./storage/state-directory.ts";
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const RELAY_CONNECTION_REFRESH_MILLISECONDS = 20 * 60 * 1_000;
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
+const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
 abstract class RelayConnectionRefreshState {}
 
@@ -451,7 +452,9 @@ async function reconcileActiveTurn(config: DaemonConfig, turn: ActiveDaemonTurn,
     }
     await response.body?.cancel();
     if (!response.ok) {
-        throw new ActiveTurnReconciliationError("The Relay rejected the active Agent turn reconciliation");
+        throw new ActiveTurnReconciliationError(
+            `The Relay rejected the active Agent turn reconciliation with status ${response.status.toString()}`,
+        );
     }
 }
 
@@ -468,6 +471,19 @@ function send(socket: WebSocket, message: string): void {
         throw new Error("Relay connection is not open");
     }
     socket.send(message);
+}
+
+function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
+    try {
+        socket.close(code, reason);
+    } catch (error) {
+        console.error("Mobius daemon could not close the Relay WebSocket", error);
+        try {
+            socket.close();
+        } catch (fallbackError) {
+            console.error("Mobius daemon could not release the Relay WebSocket", fallbackError);
+        }
+    }
 }
 
 abstract class DaemonSessionEventConnectionState {
@@ -1001,19 +1017,19 @@ async function runRelayConnection(
             };
 
             const stop = (): void => {
-                socket.close(1000, "Daemon stopped");
+                closeRelaySocket(socket, 1000, "Daemon stopped");
                 resolveConnection();
             };
 
             const refreshConnection = (): void => {
-                socket.close(1000, "Refreshing idle relay connection");
+                closeRelaySocket(socket, 1000, "Refreshing idle relay connection");
                 resolveConnection();
             };
 
             const connectionLiveness = new RelayConnectionLiveness(timer, {
                 send: (message) => send(socket, message),
                 unresponsive: () => {
-                    socket.close(4001, "Relay liveness check timed out");
+                    closeRelaySocket(socket, 4001, "Relay liveness check timed out");
                     resolveConnection();
                 },
             });
@@ -1038,7 +1054,7 @@ async function runRelayConnection(
             const handleMessage = (event: MessageEvent<unknown>): void => {
                 const encoded: unknown = event.data;
                 if (typeof encoded !== "string") {
-                    socket.close(4003, "Text message required");
+                    closeRelaySocket(socket, 4003, "Text message required");
                     rejectConnection();
                     return;
                 }
@@ -1301,7 +1317,7 @@ async function runRelayConnection(
                         });
                 } catch (error) {
                     console.error("Mobius daemon rejected a message", error);
-                    socket.close(4008, "Invalid protocol message");
+                    closeRelaySocket(socket, 4008, "Invalid protocol message");
                     rejectConnection();
                 }
             };
@@ -1318,11 +1334,16 @@ async function runRelayConnection(
                         connectionRefresh.afterTurnFinished,
                     );
                 },
-                () => {
+                (error: unknown) => {
                     if (finished) {
                         return;
                     }
-                    socket.close(1011, "Active Agent turn reconciliation failed");
+                    console.error("Mobius daemon could not reconcile active Agent turns", error);
+                    closeRelaySocket(
+                        socket,
+                        ACTIVE_TURN_RECONCILIATION_CLOSE_CODE,
+                        "Active Agent turn reconciliation failed",
+                    );
                     rejectConnection();
                 },
             );

@@ -1478,6 +1478,53 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given an owning Runtime has an already-running Attempt, When reconnection confirms the same running outcome, Then reconciliation succeeds without changing the Attempt", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "already-running-reconciliation-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const active = prompt(sessionId, "already-running-reconciliation-command", "continue the active execution");
+            await submitPrompt(host, daemon, active);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "already-running-reconciliation-started", {
+                    commandId: active.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    attemptId: "already-running-reconciliation-attempt",
+                    sessionId,
+                }),
+            );
+
+            const reconciliation = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/already-running-reconciliation-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
+                {
+                    body: JSON.stringify({ outcome: { kind: "running" } }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                },
+            );
+
+            expect(reconciliation.status).toBe(200);
+            await expect(reconciliation.json()).resolves.toMatchObject({
+                attemptId: "already-running-reconciliation-attempt",
+                state: { kind: "running" },
+            });
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            host.socket.close(1000, "Worker integration complete");
+            daemon.socket.close(1000, "Worker integration complete");
+        }
+    });
+
     it("Given a large tool record in the free deployment profile, When archive recovery and restart run, Then full details remain readable without external object storage", async () => {
         const pairing = await pairChannel();
         const sessionId = "large-session";

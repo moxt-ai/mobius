@@ -229,10 +229,17 @@ export class SessionInteractionService {
         const key = scopeKey(scope);
         this.#database.transaction(() => {
             const attempt = this.#storage.findRuntimeAttempt(key, sessionId, attemptId, runtimeId);
-            if (attempt === undefined || rowString(attempt, "state") !== "indeterminate") {
+            if (attempt === undefined) {
+                throw new SessionRuntimeError("session_conflict", "Only the owning Runtime can reconcile an Attempt");
+            }
+            const attemptState = rowString(attempt, "state");
+            if (outcome.kind === "running" && (attemptState === "running" || attemptState === "waiting_input")) {
+                return;
+            }
+            if (attemptState !== "indeterminate") {
                 throw new SessionRuntimeError(
                     "session_conflict",
-                    "Only the owning Runtime can reconcile an indeterminate Attempt",
+                    "The Attempt cannot be reconciled from its current state",
                 );
             }
             const turnId = rowString(attempt, "turn_id");
