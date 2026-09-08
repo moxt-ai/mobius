@@ -563,7 +563,7 @@ export class RuntimeRelay {
     };
 
     private readonly actor = (runtimeId: string, scope: ProjectScope): ChannelActor =>
-        new ChannelActor(runtimeId, scope, this.#sessions, this.#peers);
+        new ChannelActor(runtimeId, scope, this.#sessions, this.#sessions, this.#peers);
 
     private readonly withSocketSignal = async (
         socket: WebSocket,

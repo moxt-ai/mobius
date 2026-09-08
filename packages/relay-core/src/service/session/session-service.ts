@@ -1,0 +1,587 @@
+import {
+    encodeSessionElicitationRespondCommand,
+    encodeSessionPermissionRespondCommand,
+    type InteractionResponse,
+    type NativeSessionHistory,
+    type PromptImage,
+    type PromptResource,
+    SESSION_PROMPT_KIND,
+    type SessionElicitationRespondCommand,
+    type SessionPermissionRespondCommand,
+} from "@moxt-ai/mobius-protocol";
+import type {
+    ChannelGateway,
+    PairingGateway,
+    SessionArtifactGateway,
+    SessionCommandGateway,
+    SessionEventStreamGateway,
+    SessionQueryGateway,
+    SessionTransferGateway,
+} from "../../gateway/index.ts";
+import { RuntimeDescriptor } from "../channel/channel.ts";
+import { VerifiedChannelAccess } from "../pairing/pairing.ts";
+import {
+    type ArtifactUploadLease,
+    type AttemptReconciliationOutcome,
+    type CreateArtifactUploadRequest,
+    type CreateSessionBindingRequest,
+    type CreateSessionRequest,
+    ProjectScope,
+} from "../session/session.ts";
+export class SessionService {
+    static readonly inject = [
+        "pairingGateway",
+        "sessionCommands",
+        "sessionQueries",
+        "sessionTransfers",
+        "sessionArtifacts",
+        "sessionEventStreams",
+        "channelGateway",
+    ] satisfies readonly [
+        "pairingGateway",
+        "sessionCommands",
+        "sessionQueries",
+        "sessionTransfers",
+        "sessionArtifacts",
+        "sessionEventStreams",
+        "channelGateway",
+    ];
+    readonly #pairingGateway: PairingGateway;
+    readonly #sessionCommands: SessionCommandGateway;
+    readonly #sessionQueries: SessionQueryGateway;
+    readonly #sessionTransfers: SessionTransferGateway;
+    readonly #sessionArtifacts: SessionArtifactGateway;
+    readonly #sessionEventStreams: SessionEventStreamGateway;
+    readonly #channelGateway: ChannelGateway;
+    constructor(
+        pairingGateway: PairingGateway,
+        sessionCommands: SessionCommandGateway,
+        sessionQueries: SessionQueryGateway,
+        sessionTransfers: SessionTransferGateway,
+        sessionArtifacts: SessionArtifactGateway,
+        sessionEventStreams: SessionEventStreamGateway,
+        channelGateway: ChannelGateway,
+    ) {
+        this.#pairingGateway = pairingGateway;
+        this.#sessionCommands = sessionCommands;
+        this.#sessionQueries = sessionQueries;
+        this.#sessionTransfers = sessionTransfers;
+        this.#sessionArtifacts = sessionArtifacts;
+        this.#sessionEventStreams = sessionEventStreams;
+        this.#channelGateway = channelGateway;
+    }
+    readonly createSession = async (
+        projectId: string,
+        token: string,
+        request: CreateSessionRequest,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairingGateway.authorizeProjectRuntime(projectId, request.runtimeId, token, signal);
+        return await this.#sessionCommands.createSession(
+            new ProjectScope(access.tenantId, access.projectId),
+            request,
+            now,
+            signal,
+        );
+    };
+
+    readonly createBrowserCredential = (
+        projectId: string,
+        token: string,
+        lifetimeMilliseconds: number,
+        signal: AbortSignal,
+    ) => this.#pairingGateway.createBrowserCredential(projectId, token, lifetimeMilliseconds, signal);
+
+    readonly revokeBrowserCredential = (projectId: string, credentialId: string, token: string, signal: AbortSignal) =>
+        this.#pairingGateway.revokeBrowserCredential(projectId, credentialId, token, signal);
+
+    readonly listRuntimes = async (
+        projectId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<readonly RuntimeDescriptor[]> => {
+        const channels = await this.#pairingGateway.listProjectRuntimes(projectId, token, signal);
+        return await Promise.all(
+            channels.map(
+                async (channel) =>
+                    new RuntimeDescriptor(
+                        channel,
+                        await this.#channelGateway.readRuntimeStatus(
+                            new VerifiedChannelAccess(
+                                channel.channelId,
+                                channel.runtimeId,
+                                channel.tenantId,
+                                channel.projectId,
+                            ),
+                            signal,
+                        ),
+                    ),
+            ),
+        );
+    };
+
+    readonly listSessions = async (
+        projectId: string,
+        token: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ) => this.#sessionQueries.listSessions(await this.projectScope(projectId, token, signal), cursor, limit, signal);
+
+    readonly importSession = async (
+        projectId: string,
+        token: string,
+        exported: unknown,
+        targetBinding: CreateSessionBindingRequest,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairingGateway.authorizeProjectRuntime(
+            projectId,
+            targetBinding.runtimeId,
+            token,
+            signal,
+        );
+        return await this.#sessionTransfers.importSession(
+            new ProjectScope(access.tenantId, access.projectId),
+            exported,
+            targetBinding,
+            now,
+            signal,
+        );
+    };
+
+    readonly readSession = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
+        this.#sessionQueries.readSession(await this.projectScope(projectId, token, signal), sessionId, signal);
+
+    readonly setDefaultBinding = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        binding: CreateSessionBindingRequest,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairingGateway.authorizeProjectRuntime(projectId, binding.runtimeId, token, signal);
+        return await this.#sessionCommands.setDefaultBinding(
+            new ProjectScope(access.tenantId, access.projectId),
+            sessionId,
+            binding,
+            now,
+            signal,
+        );
+    };
+
+    readonly submitTurn = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        idempotencyKey: string,
+        content: string,
+        additionalDirectoryIds: readonly string[],
+        images: readonly PromptImage[],
+        resources: readonly PromptResource[],
+        artifactIds: readonly string[],
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const scope = await this.projectScope(projectId, token, signal);
+        const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
+        const access = await this.#pairingGateway.authorizeProjectRuntime(
+            projectId,
+            session.defaultBinding.runtimeId,
+            token,
+            signal,
+        );
+        const artifactResources = await this.#sessionArtifacts.resolveArtifactResources(
+            scope,
+            sessionId,
+            artifactIds,
+            signal,
+        );
+        const acceptance = await this.#sessionCommands.acceptTurn(
+            scope,
+            access.runtimeId,
+            {
+                additionalDirectoryIds,
+                agentId: session.defaultBinding.agentRef,
+                bindingId: session.defaultBinding.bindingId,
+                commandId: idempotencyKey,
+                directoryId: session.defaultBinding.workspaceRef,
+                images,
+                kind: SESSION_PROMPT_KIND,
+                prompt: content,
+                resources: [...resources, ...artifactResources],
+                sessionId,
+            },
+            now,
+            signal,
+        );
+        await this.#channelGateway.dispatchPending(access, signal);
+        return acceptance.turn;
+    };
+
+    readonly createArtifactUpload = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        request: CreateArtifactUploadRequest,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        await this.#sessionArtifacts.createArtifactUpload(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            request,
+            now,
+            signal,
+        );
+
+    readonly authorizeArtifactUpload = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        artifactId: string,
+        uploadToken: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactUploadLease> =>
+        await this.#sessionArtifacts.authorizeArtifactUpload(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            artifactId,
+            uploadToken,
+            now,
+            signal,
+        );
+
+    readonly completeArtifactUpload = async (
+        projectId: string,
+        token: string,
+        lease: ArtifactUploadLease,
+        bytes: Uint8Array,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        await this.#sessionArtifacts.completeArtifactUpload(
+            await this.projectScope(projectId, token, signal),
+            lease,
+            bytes,
+            now,
+            signal,
+        );
+
+    readonly readArtifact = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        artifactId: string,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        await this.#sessionArtifacts.readArtifact(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            artifactId,
+            now,
+            signal,
+        );
+
+    readonly readArtifactContent = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        artifactId: string,
+        signal: AbortSignal,
+    ) =>
+        await this.#sessionArtifacts.readArtifactContent(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            artifactId,
+            signal,
+        );
+
+    readonly openEventStream = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        cursor: string,
+        signal: AbortSignal,
+    ): Promise<Response> =>
+        await this.#sessionEventStreams.openEventStream(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            cursor,
+            signal,
+        );
+
+    readonly readTurn = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ) => this.#sessionQueries.readTurn(await this.projectScope(projectId, token, signal), sessionId, turnId, signal);
+
+    readonly cancelTurn = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        turnId: string,
+        idempotencyKey: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const scope = await this.projectScope(projectId, token, signal);
+        const runtimeId = await this.#sessionQueries.readTurnRuntime(scope, sessionId, turnId, signal);
+        const access = await this.#pairingGateway.authorizeProjectRuntime(projectId, runtimeId, token, signal);
+        const acceptance = await this.#sessionCommands.acceptTurnCancellation(
+            scope,
+            access.runtimeId,
+            sessionId,
+            turnId,
+            idempotencyKey,
+            now,
+            signal,
+        );
+        if (acceptance.pendingWork.state.kind !== "completed") {
+            await this.#channelGateway.dispatchPending(access, signal);
+        }
+        return acceptance.turn;
+    };
+
+    readonly readAttempt = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        attemptId: string,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readAttempt(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            attemptId,
+            signal,
+        );
+
+    readonly reconcileAttempt = async (
+        channelId: string,
+        token: string,
+        sessionId: string,
+        attemptId: string,
+        outcome: AttemptReconciliationOutcome,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairingGateway.authorizeDaemon(channelId, token, signal);
+        return await this.#sessionCommands.reconcileAttempt(
+            new ProjectScope(access.tenantId, access.projectId),
+            access.runtimeId,
+            sessionId,
+            attemptId,
+            outcome,
+            now,
+            signal,
+        );
+    };
+
+    readonly readPendingInteractions = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readPendingInteractions(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            signal,
+        );
+
+    readonly readInteraction = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        interactionId: string,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readInteraction(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            interactionId,
+            signal,
+        );
+
+    readonly respondToPermission = async (
+        projectId: string,
+        token: string,
+        responderId: string,
+        command: SessionPermissionRespondCommand,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        await this.respondToInteraction(
+            projectId,
+            token,
+            responderId,
+            command.sessionId,
+            command.interactionId,
+            {
+                content: JSON.stringify({
+                    optionId: command.optionId,
+                    outcome: command.outcome,
+                }),
+                kind: "permission",
+            },
+            encodeSessionPermissionRespondCommand(command),
+            now,
+            signal,
+        );
+
+    readonly respondToElicitation = async (
+        projectId: string,
+        token: string,
+        responderId: string,
+        command: SessionElicitationRespondCommand,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        await this.respondToInteraction(
+            projectId,
+            token,
+            responderId,
+            command.sessionId,
+            command.interactionId,
+            {
+                content: JSON.stringify({
+                    action: command.action,
+                    content: command.content,
+                }),
+                kind: "elicitation",
+            },
+            encodeSessionElicitationRespondCommand(command),
+            now,
+            signal,
+        );
+
+    readonly readMessages = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readMessages(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            cursor,
+            limit,
+            signal,
+        );
+
+    readonly readEvents = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readEvents(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            cursor,
+            limit,
+            signal,
+        );
+
+    readonly readToolCallDetail = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        attemptId: string,
+        toolCallId: string,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readToolCallDetail(
+            await this.projectScope(projectId, token, signal),
+            sessionId,
+            attemptId,
+            toolCallId,
+            signal,
+        );
+
+    readonly readNativeHistory = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
+        this.#sessionQueries.readNativeHistory(await this.projectScope(projectId, token, signal), sessionId, signal);
+
+    readonly recordNativeHistory = async (
+        projectId: string,
+        token: string,
+        runtimeId: string,
+        sessionId: string,
+        title: string,
+        history: NativeSessionHistory,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionCommands.recordNativeHistory(
+            await this.projectScope(projectId, token, signal),
+            runtimeId,
+            sessionId,
+            title,
+            history,
+            now,
+            signal,
+        );
+
+    readonly exportSession = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
+        this.#sessionTransfers.exportSession(await this.projectScope(projectId, token, signal), sessionId, signal);
+
+    readonly deleteSession = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => this.#sessionCommands.deleteSession(await this.projectScope(projectId, token, signal), sessionId, now, signal);
+
+    private readonly respondToInteraction = async (
+        projectId: string,
+        token: string,
+        responderId: string,
+        sessionId: string,
+        interactionId: string,
+        response: InteractionResponse,
+        deliveryPayload: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const scope = await this.projectScope(projectId, token, signal);
+        const runtimeId = await this.#sessionQueries.readInteractionRuntime(scope, sessionId, interactionId, signal);
+        const access = await this.#pairingGateway.authorizeProjectRuntime(projectId, runtimeId, token, signal);
+        const acceptance = await this.#sessionCommands.acceptInteractionResponse(
+            scope,
+            sessionId,
+            interactionId,
+            responderId,
+            response,
+            deliveryPayload,
+            now,
+            signal,
+        );
+        if (acceptance.pendingWork.state.kind !== "completed") {
+            await this.#channelGateway.dispatchPending(access, signal);
+        }
+        return acceptance.interaction;
+    };
+
+    private readonly projectScope = async (
+        projectId: string,
+        token: string,
+        signal: AbortSignal,
+    ): Promise<ProjectScope> => {
+        const access = await this.#pairingGateway.authorizeProject(projectId, token, signal);
+        return new ProjectScope(access.tenantId, access.projectId);
+    };
+}

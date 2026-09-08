@@ -1,6 +1,6 @@
 import {
+    type ChannelGateway,
     type ChannelHostCredential,
-    type ChannelRuntime,
     RuntimeStatus,
     type VerifiedChannelAccess,
 } from "@moxt-ai/mobius-relay-core";
@@ -11,7 +11,7 @@ export const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
 export const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
 export const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
 
-export class CloudflareChannelRuntime implements ChannelRuntime {
+export class CloudflareChannelRuntime implements ChannelGateway {
     readonly #namespace: DurableObjectNamespace;
 
     constructor(namespace: DurableObjectNamespace) {
