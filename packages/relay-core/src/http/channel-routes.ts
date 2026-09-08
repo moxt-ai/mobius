@@ -1,153 +1,151 @@
 import { Hono } from "hono";
 
 import {
-  validateAgentCatalog,
-  validateAgents,
-  validateIdentifier,
-  validateInstallableAgents,
+    validateAgentCatalog,
+    validateAgents,
+    validateIdentifier,
+    validateInstallableAgents,
 } from "../pairing-directory.ts";
 import type { ChannelUseCases } from "../relay-use-cases.ts";
 import {
-  assertExactKeys,
-  bearerToken,
-  directoryError,
-  parseJsonBody,
-  preserveCancellation,
-  readString,
+    assertExactKeys,
+    bearerToken,
+    directoryError,
+    parseJsonBody,
+    preserveCancellation,
+    readString,
 } from "./relay-http.ts";
 
 export function createChannelRoutes(useCases: ChannelUseCases): Hono {
-  const app = new Hono();
+    const app = new Hono();
 
-  app.put("/:channelId/catalog", async (context) => {
-    try {
-      const body = await parseJsonBody(context.req.raw);
-      assertExactKeys(body, ["agents", "installableAgents"]);
-      const agents = validateAgents(body["agents"]);
-      const installableAgents = validateInstallableAgents(
-        body["installableAgents"],
-      );
-      validateAgentCatalog(agents, installableAgents);
-      await useCases.updateAgentCatalog(
-        validateIdentifier(context.req.param("channelId"), "channel_id"),
-        context.req.query("token") ?? "",
-        agents,
-        installableAgents,
-        context.req.raw.signal,
-      );
-      return new Response(null, { status: 204 });
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.put("/:channelId/catalog", async (context) => {
+        try {
+            const body = await parseJsonBody(context.req.raw);
+            assertExactKeys(body, ["agents", "installableAgents"]);
+            const agents = validateAgents(body["agents"]);
+            const installableAgents = validateInstallableAgents(body["installableAgents"]);
+            validateAgentCatalog(agents, installableAgents);
+            await useCases.updateAgentCatalog(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? "",
+                agents,
+                installableAgents,
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.post("/:channelId/access-grants", async (context) => {
-    try {
-      return context.json(
-        await useCases.createAccessGrant(
-          validateIdentifier(context.req.param("channelId"), "channel_id"),
-          bearerToken(context.req.raw),
-          context.req.raw.signal,
-        ),
-        201,
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.post("/:channelId/access-grants", async (context) => {
+        try {
+            return context.json(
+                await useCases.createAccessGrant(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+                201,
+            );
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.post("/:channelId/access-grants/:grantId/redeem", async (context) => {
-    try {
-      const body = await parseJsonBody(context.req.raw);
-      assertExactKeys(body, ["grantSecret"]);
-      return context.json(
-        await useCases.redeemAccessGrant(
-          validateIdentifier(context.req.param("channelId"), "channel_id"),
-          validateIdentifier(context.req.param("grantId"), "grant_id"),
-          readString(body, "grantSecret", 256),
-          context.req.raw.signal,
-        ),
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.post("/:channelId/access-grants/:grantId/redeem", async (context) => {
+        try {
+            const body = await parseJsonBody(context.req.raw);
+            assertExactKeys(body, ["grantSecret"]);
+            return context.json(
+                await useCases.redeemAccessGrant(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    validateIdentifier(context.req.param("grantId"), "grant_id"),
+                    readString(body, "grantSecret", 256),
+                    context.req.raw.signal,
+                ),
+            );
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.get("/:channelId/linked-devices", async (context) => {
-    try {
-      return context.json({
-        devices: await useCases.listLinkedDevices(
-          validateIdentifier(context.req.param("channelId"), "channel_id"),
-          bearerToken(context.req.raw),
-          context.req.raw.signal,
-        ),
-      });
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.get("/:channelId/linked-devices", async (context) => {
+        try {
+            return context.json({
+                devices: await useCases.listLinkedDevices(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+            });
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.delete("/:channelId/linked-devices/:credentialId", async (context) => {
-    try {
-      await useCases.revokeLinkedDevice(
-        validateIdentifier(context.req.param("channelId"), "channel_id"),
-        validateIdentifier(context.req.param("credentialId"), "credential_id"),
-        bearerToken(context.req.raw),
-        context.req.raw.signal,
-      );
-      return new Response(null, { status: 204 });
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.delete("/:channelId/linked-devices/:credentialId", async (context) => {
+        try {
+            await useCases.revokeLinkedDevice(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                validateIdentifier(context.req.param("credentialId"), "credential_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.get("/:channelId", async (context) => {
-    try {
-      return context.json(
-        await useCases.readChannel(
-          validateIdentifier(context.req.param("channelId"), "channel_id"),
-          context.req.query("token") ?? bearerToken(context.req.raw),
-          context.req.raw.signal,
-        ),
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.get("/:channelId", async (context) => {
+        try {
+            return context.json(
+                await useCases.readChannel(
+                    validateIdentifier(context.req.param("channelId"), "channel_id"),
+                    context.req.query("token") ?? bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+            );
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.get("/:channelId/host", async (context) => {
-    try {
-      return await useCases.acceptHost(
-        validateIdentifier(context.req.param("channelId"), "channel_id"),
-        context.req.query("token") ?? "",
-        context.req.raw,
-        context.req.raw.signal,
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.get("/:channelId/host", async (context) => {
+        try {
+            return await useCases.acceptHost(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? "",
+                context.req.raw,
+                context.req.raw.signal,
+            );
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  app.get("/:channelId/daemon", async (context) => {
-    try {
-      return await useCases.acceptDaemon(
-        validateIdentifier(context.req.param("channelId"), "channel_id"),
-        context.req.query("token") ?? "",
-        context.req.raw,
-        context.req.raw.signal,
-      );
-    } catch (error) {
-      preserveCancellation(context.req.raw.signal, error);
-      return directoryError(error);
-    }
-  });
+    app.get("/:channelId/daemon", async (context) => {
+        try {
+            return await useCases.acceptDaemon(
+                validateIdentifier(context.req.param("channelId"), "channel_id"),
+                context.req.query("token") ?? "",
+                context.req.raw,
+                context.req.raw.signal,
+            );
+        } catch (error) {
+            preserveCancellation(context.req.raw.signal, error);
+            return directoryError(error);
+        }
+    });
 
-  return app;
+    return app;
 }

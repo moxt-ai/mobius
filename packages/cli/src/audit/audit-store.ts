@@ -3,19 +3,19 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export interface AuditRecord {
-  readonly commandId: string;
-  readonly details?: Readonly<Record<string, string>>;
-  readonly event: string;
-  readonly sessionId: string;
+    readonly commandId: string;
+    readonly details?: Readonly<Record<string, string>>;
+    readonly event: string;
+    readonly sessionId: string;
 }
 
 export class AuditStore {
-  private readonly database: DatabaseSync;
+    private readonly database: DatabaseSync;
 
-  constructor(path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.database = new DatabaseSync(path);
-    this.database.exec(`
+    constructor(path: string) {
+        mkdirSync(dirname(path), { recursive: true });
+        this.database = new DatabaseSync(path);
+        this.database.exec(`
       CREATE TABLE IF NOT EXISTS audit_events (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         recorded_at TEXT NOT NULL,
@@ -25,22 +25,16 @@ export class AuditStore {
         details_json TEXT NOT NULL DEFAULT '{}'
       ) STRICT
     `);
-    const columns = this.database
-      .prepare("PRAGMA table_info(audit_events)")
-      .all();
-    if (
-      !columns.some((column) => Reflect.get(column, "name") === "details_json")
-    ) {
-      this.database.exec(
-        "ALTER TABLE audit_events ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'",
-      );
+        const columns = this.database.prepare("PRAGMA table_info(audit_events)").all();
+        if (!columns.some((column) => Reflect.get(column, "name") === "details_json")) {
+            this.database.exec("ALTER TABLE audit_events ADD COLUMN details_json TEXT NOT NULL DEFAULT '{}'");
+        }
     }
-  }
 
-  record(record: AuditRecord): void {
-    this.database
-      .prepare(
-        `
+    record(record: AuditRecord): void {
+        this.database
+            .prepare(
+                `
           INSERT INTO audit_events (
             recorded_at,
             event,
@@ -49,17 +43,17 @@ export class AuditStore {
             details_json
           ) VALUES (?, ?, ?, ?, ?)
         `,
-      )
-      .run(
-        new Date().toISOString(),
-        record.event,
-        record.commandId,
-        record.sessionId,
-        JSON.stringify(record.details ?? {}),
-      );
-  }
+            )
+            .run(
+                new Date().toISOString(),
+                record.event,
+                record.commandId,
+                record.sessionId,
+                JSON.stringify(record.details ?? {}),
+            );
+    }
 
-  close(): void {
-    this.database.close();
-  }
+    close(): void {
+        this.database.close();
+    }
 }

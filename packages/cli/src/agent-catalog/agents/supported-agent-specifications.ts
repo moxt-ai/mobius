@@ -9,14 +9,14 @@ import { PiAgentSpecification } from "./pi-agent.ts";
 import { WorkBuddyAgentSpecification } from "./workbuddy-agent.ts";
 
 export function supportedLocalAgentSpecifications(): readonly LocalAgentSpecification[] {
-  return Object.freeze([
-    new CodexAgentSpecification(),
-    new ClaudeCodeAgentSpecification(),
-    new PiAgentSpecification(),
-    new DeepSeekHarnessAgentSpecification(),
-    new OpenCodeAgentSpecification(),
-    new CursorCliAgentSpecification(),
-    new GrokBuildAgentSpecification(),
-    new WorkBuddyAgentSpecification(),
-  ]);
+    return Object.freeze([
+        new CodexAgentSpecification(),
+        new ClaudeCodeAgentSpecification(),
+        new PiAgentSpecification(),
+        new DeepSeekHarnessAgentSpecification(),
+        new OpenCodeAgentSpecification(),
+        new CursorCliAgentSpecification(),
+        new GrokBuildAgentSpecification(),
+        new WorkBuddyAgentSpecification(),
+    ]);
 }

@@ -1,13 +1,13 @@
 export interface ComposerSelectedContextCounts {
-  readonly additionalDirectoryCount: number;
-  readonly imageCount: number;
-  readonly resourceCount: number;
+    readonly additionalDirectoryCount: number;
+    readonly imageCount: number;
+    readonly resourceCount: number;
 }
 
 export function hasSelectedComposerContext({
-  additionalDirectoryCount,
-  imageCount,
-  resourceCount,
+    additionalDirectoryCount,
+    imageCount,
+    resourceCount,
 }: ComposerSelectedContextCounts): boolean {
-  return additionalDirectoryCount + imageCount + resourceCount > 0;
+    return additionalDirectoryCount + imageCount + resourceCount > 0;
 }

@@ -3,35 +3,31 @@ import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
 import { defineConfig } from "vitest/config";
 
 const packageDirectory = fileURLToPath(new URL(".", import.meta.url));
-const wranglerConfigPath = fileURLToPath(
-  new URL("./wrangler.jsonc", import.meta.url),
-);
-const migrationsPath = fileURLToPath(
-  new URL("./migrations/d1", import.meta.url),
-);
+const wranglerConfigPath = fileURLToPath(new URL("./wrangler.jsonc", import.meta.url));
+const migrationsPath = fileURLToPath(new URL("./migrations/d1", import.meta.url));
 
 export default defineConfig(async () => {
-  const migrations = await readD1Migrations(migrationsPath);
+    const migrations = await readD1Migrations(migrationsPath);
 
-  return {
-    root: packageDirectory,
-    plugins: [
-      cloudflareTest({
-        wrangler: { configPath: wranglerConfigPath },
-        miniflare: {
-          bindings: {
-            SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
-            SESSION_ACTIVE_SESSIONS_PER_TENANT: "8",
-            SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
-            TEST_MIGRATIONS: migrations,
-          },
+    return {
+        root: packageDirectory,
+        plugins: [
+            cloudflareTest({
+                wrangler: { configPath: wranglerConfigPath },
+                miniflare: {
+                    bindings: {
+                        SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
+                        SESSION_ACTIVE_SESSIONS_PER_TENANT: "8",
+                        SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
+                        TEST_MIGRATIONS: migrations,
+                    },
+                },
+            }),
+        ],
+        test: {
+            include: ["test/**/*.integration.test.ts"],
+            setupFiles: ["./test/apply-migrations.ts"],
+            testTimeout: 15_000,
         },
-      }),
-    ],
-    test: {
-      include: ["test/**/*.integration.test.ts"],
-      setupFiles: ["./test/apply-migrations.ts"],
-      testTimeout: 15_000,
-    },
-  };
+    };
 });

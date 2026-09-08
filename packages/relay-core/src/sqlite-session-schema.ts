@@ -1,7 +1,7 @@
 import type { SessionSqlDatabase } from "./session-sql-database.ts";
 
 export function initializeSessionSchema(database: SessionSqlDatabase): void {
-  database.exec(`
+    database.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         scope_key TEXT NOT NULL,
         tenant_id TEXT NOT NULL,

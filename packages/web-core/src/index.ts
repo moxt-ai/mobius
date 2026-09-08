@@ -1,11 +1,11 @@
 export { App, Chat, type ChatProps } from "./app";
 export {
-  AgentInstallationCardsView,
-  AgentInstallationPage,
+    AgentInstallationCardsView,
+    AgentInstallationPage,
 } from "./components/agent-installation-panel";
 export {
-  AgentSettingsPage,
-  AgentSettingsPage as Integration,
+    AgentSettingsPage,
+    AgentSettingsPage as Integration,
 } from "./components/agent-settings-page";
 export { ChannelAccessPage } from "./components/channel-access-panel";
 export { ChatComposer } from "./components/chat-composer";

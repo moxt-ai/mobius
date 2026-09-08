@@ -3,163 +3,144 @@ import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 export class AcpStoredSession {
-  readonly additionalDirectories: readonly string[];
-  readonly agentId: string;
-  readonly cwd: string;
-  readonly nativeSessionId: string;
-  readonly prompted: boolean;
-  readonly sessionId: string;
+    readonly additionalDirectories: readonly string[];
+    readonly agentId: string;
+    readonly cwd: string;
+    readonly nativeSessionId: string;
+    readonly prompted: boolean;
+    readonly sessionId: string;
 
-  constructor(
-    sessionId: string,
-    agentId: string,
-    nativeSessionId: string,
-    cwd: string,
-    additionalDirectories: readonly string[],
-    prompted: boolean,
-  ) {
-    this.additionalDirectories = [...additionalDirectories];
-    this.agentId = agentId;
-    this.cwd = cwd;
-    this.nativeSessionId = nativeSessionId;
-    this.prompted = prompted;
-    this.sessionId = sessionId;
-  }
+    constructor(
+        sessionId: string,
+        agentId: string,
+        nativeSessionId: string,
+        cwd: string,
+        additionalDirectories: readonly string[],
+        prompted: boolean,
+    ) {
+        this.additionalDirectories = [...additionalDirectories];
+        this.agentId = agentId;
+        this.cwd = cwd;
+        this.nativeSessionId = nativeSessionId;
+        this.prompted = prompted;
+        this.sessionId = sessionId;
+    }
 }
 
 export abstract class AcpStoredSessionLookup {
-  abstract readonly found: boolean;
+    abstract readonly found: boolean;
 }
 
 class MissingAcpStoredSession extends AcpStoredSessionLookup {
-  readonly found = false;
+    readonly found = false;
 }
 
 export class FoundAcpStoredSession extends AcpStoredSessionLookup {
-  readonly found = true;
-  readonly session: AcpStoredSession;
+    readonly found = true;
+    readonly session: AcpStoredSession;
 
-  constructor(session: AcpStoredSession) {
-    super();
-    this.session = session;
-  }
+    constructor(session: AcpStoredSession) {
+        super();
+        this.session = session;
+    }
 }
 
 export class DeletedAcpStoredSession extends AcpStoredSessionLookup {
-  readonly found = false;
+    readonly found = false;
 }
 
 export interface AcpSessionStore {
-  readonly findNative: (
-    agentId: string,
-    nativeSessionId: string,
-  ) => readonly AcpStoredSession[];
-  readonly markDeleted: (
-    agentId: string,
-    nativeSessionId: string,
-  ) => readonly string[];
-  readonly read: (sessionId: string) => AcpStoredSessionLookup;
-  readonly remove: (sessionId: string) => void;
-  readonly write: (session: AcpStoredSession) => void;
+    readonly findNative: (agentId: string, nativeSessionId: string) => readonly AcpStoredSession[];
+    readonly markDeleted: (agentId: string, nativeSessionId: string) => readonly string[];
+    readonly read: (sessionId: string) => AcpStoredSessionLookup;
+    readonly remove: (sessionId: string) => void;
+    readonly write: (session: AcpStoredSession) => void;
 }
 
 function readString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error(`Stored ACP session has an invalid ${field}`);
-  }
-  return value;
+    if (typeof value !== "string" || value.length === 0) {
+        throw new Error(`Stored ACP session has an invalid ${field}`);
+    }
+    return value;
 }
 
 function readAdditionalDirectories(value: unknown): readonly string[] {
-  if (typeof value !== "string") {
-    throw new Error("Stored ACP session has invalid additional directories");
-  }
-  const decoded: unknown = JSON.parse(value);
-  if (
-    !Array.isArray(decoded) ||
-    decoded.some((directory) => typeof directory !== "string")
-  ) {
-    throw new Error("Stored ACP session has invalid additional directories");
-  }
-  return decoded;
+    if (typeof value !== "string") {
+        throw new Error("Stored ACP session has invalid additional directories");
+    }
+    const decoded: unknown = JSON.parse(value);
+    if (!Array.isArray(decoded) || decoded.some((directory) => typeof directory !== "string")) {
+        throw new Error("Stored ACP session has invalid additional directories");
+    }
+    return decoded;
 }
 
 function readPrompted(value: unknown): boolean {
-  if (value === 0) {
-    return false;
-  }
-  if (value === 1) {
-    return true;
-  }
-  throw new Error("Stored ACP session has an invalid prompted state");
+    if (value === 0) {
+        return false;
+    }
+    if (value === 1) {
+        return true;
+    }
+    throw new Error("Stored ACP session has an invalid prompted state");
 }
 
 function decodeSessionRow(row: unknown): AcpStoredSession {
-  if (typeof row !== "object" || row === null || Array.isArray(row)) {
-    throw new Error("Stored ACP session is not an object");
-  }
-  return new AcpStoredSession(
-    readString(Reflect.get(row, "session_id"), "session ID"),
-    readString(Reflect.get(row, "agent_id"), "agent ID"),
-    readString(Reflect.get(row, "native_session_id"), "native session ID"),
-    readString(Reflect.get(row, "cwd"), "working directory"),
-    readAdditionalDirectories(Reflect.get(row, "additional_directories_json")),
-    readPrompted(Reflect.get(row, "prompted")),
-  );
+    if (typeof row !== "object" || row === null || Array.isArray(row)) {
+        throw new Error("Stored ACP session is not an object");
+    }
+    return new AcpStoredSession(
+        readString(Reflect.get(row, "session_id"), "session ID"),
+        readString(Reflect.get(row, "agent_id"), "agent ID"),
+        readString(Reflect.get(row, "native_session_id"), "native session ID"),
+        readString(Reflect.get(row, "cwd"), "working directory"),
+        readAdditionalDirectories(Reflect.get(row, "additional_directories_json")),
+        readPrompted(Reflect.get(row, "prompted")),
+    );
 }
 
 export class MemoryAcpSessionStore implements AcpSessionStore {
-  readonly #sessions = new Map<string, AcpStoredSession>();
-  readonly #deleted = new Set<string>();
+    readonly #sessions = new Map<string, AcpStoredSession>();
+    readonly #deleted = new Set<string>();
 
-  readonly findNative = (
-    agentId: string,
-    nativeSessionId: string,
-  ): readonly AcpStoredSession[] =>
-    [...this.#sessions.values()].filter(
-      (session) =>
-        session.agentId === agentId &&
-        session.nativeSessionId === nativeSessionId,
-    );
+    readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
+        [...this.#sessions.values()].filter(
+            (session) => session.agentId === agentId && session.nativeSessionId === nativeSessionId,
+        );
 
-  readonly markDeleted = (
-    agentId: string,
-    nativeSessionId: string,
-  ): readonly string[] => {
-    const ids = this.findNative(agentId, nativeSessionId).map(
-      (session) => session.sessionId,
-    );
-    for (const id of ids) {
-      this.#sessions.delete(id);
-      this.#deleted.add(id);
-    }
-    return ids;
-  };
+    readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
+        const ids = this.findNative(agentId, nativeSessionId).map((session) => session.sessionId);
+        for (const id of ids) {
+            this.#sessions.delete(id);
+            this.#deleted.add(id);
+        }
+        return ids;
+    };
 
-  readonly read = (sessionId: string): AcpStoredSessionLookup => {
-    if (this.#deleted.has(sessionId)) return new DeletedAcpStoredSession();
-    const session = this.#sessions.get(sessionId);
-    return session === undefined
-      ? new MissingAcpStoredSession()
-      : new FoundAcpStoredSession(session);
-  };
+    readonly read = (sessionId: string): AcpStoredSessionLookup => {
+        if (this.#deleted.has(sessionId)) {
+            return new DeletedAcpStoredSession();
+        }
+        const session = this.#sessions.get(sessionId);
+        return session === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(session);
+    };
 
-  readonly remove = (sessionId: string): void => {
-    this.#sessions.delete(sessionId);
-  };
+    readonly remove = (sessionId: string): void => {
+        this.#sessions.delete(sessionId);
+    };
 
-  readonly write = (session: AcpStoredSession): void => {
-    this.#sessions.set(session.sessionId, session);
-  };
+    readonly write = (session: AcpStoredSession): void => {
+        this.#sessions.set(session.sessionId, session);
+    };
 }
 
 export class SqliteAcpSessionStore implements AcpSessionStore {
-  readonly #database: DatabaseSync;
+    readonly #database: DatabaseSync;
 
-  constructor(path: string) {
-    mkdirSync(dirname(path), { recursive: true });
-    this.#database = new DatabaseSync(path);
-    this.#database.exec(`
+    constructor(path: string) {
+        mkdirSync(dirname(path), { recursive: true });
+        this.#database = new DatabaseSync(path);
+        this.#database.exec(`
       CREATE TABLE IF NOT EXISTS acp_deleted_sessions (session_id TEXT PRIMARY KEY) STRICT;
       CREATE TABLE IF NOT EXISTS acp_sessions (
         session_id TEXT PRIMARY KEY,
@@ -171,35 +152,29 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
         updated_at TEXT NOT NULL
       ) STRICT
     `);
-    const columns = this.#database
-      .prepare("PRAGMA table_info(acp_sessions)")
-      .all();
-    const hasPromptedColumn = columns.some(
-      (column) =>
-        typeof column === "object" &&
-        column !== null &&
-        Reflect.get(column, "name") === "prompted",
-    );
-    if (!hasPromptedColumn) {
-      this.#database.exec(`
+        const columns = this.#database.prepare("PRAGMA table_info(acp_sessions)").all();
+        const hasPromptedColumn = columns.some(
+            (column) => typeof column === "object" && column !== null && Reflect.get(column, "name") === "prompted",
+        );
+        if (!hasPromptedColumn) {
+            this.#database.exec(`
         ALTER TABLE acp_sessions
         ADD COLUMN prompted INTEGER NOT NULL DEFAULT 1 CHECK (prompted IN (0, 1))
       `);
+        }
     }
-  }
 
-  readonly read = (sessionId: string): AcpStoredSessionLookup => {
-    if (
-      this.#database
-        .prepare(
-          "SELECT session_id FROM acp_deleted_sessions WHERE session_id = ?",
-        )
-        .get(sessionId) !== undefined
-    )
-      return new DeletedAcpStoredSession();
-    const row = this.#database
-      .prepare(
-        `
+    readonly read = (sessionId: string): AcpStoredSessionLookup => {
+        if (
+            this.#database
+                .prepare("SELECT session_id FROM acp_deleted_sessions WHERE session_id = ?")
+                .get(sessionId) !== undefined
+        ) {
+            return new DeletedAcpStoredSession();
+        }
+        const row = this.#database
+            .prepare(
+                `
           SELECT
             session_id,
             agent_id,
@@ -210,59 +185,41 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
           FROM acp_sessions
           WHERE session_id = ?
         `,
-      )
-      .get(sessionId);
-    return row === undefined
-      ? new MissingAcpStoredSession()
-      : new FoundAcpStoredSession(decodeSessionRow(row));
-  };
+            )
+            .get(sessionId);
+        return row === undefined ? new MissingAcpStoredSession() : new FoundAcpStoredSession(decodeSessionRow(row));
+    };
 
-  readonly remove = (sessionId: string): void => {
-    this.#database
-      .prepare("DELETE FROM acp_sessions WHERE session_id = ?")
-      .run(sessionId);
-  };
+    readonly remove = (sessionId: string): void => {
+        this.#database.prepare("DELETE FROM acp_sessions WHERE session_id = ?").run(sessionId);
+    };
 
-  readonly findNative = (
-    agentId: string,
-    nativeSessionId: string,
-  ): readonly AcpStoredSession[] =>
-    this.#database
-      .prepare(
-        "SELECT * FROM acp_sessions WHERE agent_id = ? AND native_session_id = ?",
-      )
-      .all(agentId, nativeSessionId)
-      .map(decodeSessionRow);
-
-  readonly markDeleted = (
-    agentId: string,
-    nativeSessionId: string,
-  ): readonly string[] => {
-    const ids = this.findNative(agentId, nativeSessionId).map(
-      (session) => session.sessionId,
-    );
-    this.#database.exec("BEGIN");
-    try {
-      for (const id of ids) {
+    readonly findNative = (agentId: string, nativeSessionId: string): readonly AcpStoredSession[] =>
         this.#database
-          .prepare(
-            "INSERT OR IGNORE INTO acp_deleted_sessions (session_id) VALUES (?)",
-          )
-          .run(id);
-        this.remove(id);
-      }
-      this.#database.exec("COMMIT");
-      return ids;
-    } catch (error) {
-      this.#database.exec("ROLLBACK");
-      throw error;
-    }
-  };
+            .prepare("SELECT * FROM acp_sessions WHERE agent_id = ? AND native_session_id = ?")
+            .all(agentId, nativeSessionId)
+            .map(decodeSessionRow);
 
-  readonly write = (session: AcpStoredSession): void => {
-    this.#database
-      .prepare(
-        `
+    readonly markDeleted = (agentId: string, nativeSessionId: string): readonly string[] => {
+        const ids = this.findNative(agentId, nativeSessionId).map((session) => session.sessionId);
+        this.#database.exec("BEGIN");
+        try {
+            for (const id of ids) {
+                this.#database.prepare("INSERT OR IGNORE INTO acp_deleted_sessions (session_id) VALUES (?)").run(id);
+                this.remove(id);
+            }
+            this.#database.exec("COMMIT");
+            return ids;
+        } catch (error) {
+            this.#database.exec("ROLLBACK");
+            throw error;
+        }
+    };
+
+    readonly write = (session: AcpStoredSession): void => {
+        this.#database
+            .prepare(
+                `
           INSERT INTO acp_sessions (
             session_id,
             agent_id,
@@ -280,19 +237,19 @@ export class SqliteAcpSessionStore implements AcpSessionStore {
             prompted = excluded.prompted,
             updated_at = excluded.updated_at
         `,
-      )
-      .run(
-        session.sessionId,
-        session.agentId,
-        session.nativeSessionId,
-        session.cwd,
-        JSON.stringify(session.additionalDirectories),
-        session.prompted ? 1 : 0,
-        new Date().toISOString(),
-      );
-  };
+            )
+            .run(
+                session.sessionId,
+                session.agentId,
+                session.nativeSessionId,
+                session.cwd,
+                JSON.stringify(session.additionalDirectories),
+                session.prompted ? 1 : 0,
+                new Date().toISOString(),
+            );
+    };
 
-  readonly close = (): void => {
-    this.#database.close();
-  };
+    readonly close = (): void => {
+        this.#database.close();
+    };
 }

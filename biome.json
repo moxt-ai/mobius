@@ -1,38 +1,42 @@
 {
-  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-  "vcs": {
-    "enabled": true,
-    "clientKind": "git",
-    "defaultBranch": "main",
-    "useIgnoreFile": true
-  },
-  "files": {
-    "includes": ["**", "!!**/dist", "!!**/coverage"]
-  },
-  "linter": {
-    "enabled": true,
-    "domains": {
-      "project": "recommended",
-      "types": "recommended",
-      "test": "recommended"
+    "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+    "vcs": {
+        "enabled": true,
+        "clientKind": "git",
+        "defaultBranch": "main",
+        "useIgnoreFile": true
     },
-    "rules": {
-      "preset": "recommended",
-      "nursery": {
-        "noFloatingPromises": "error",
-        "noMisusedPromises": "error",
-        "useExhaustiveSwitchCases": "error"
-      }
+    "files": {
+        "includes": ["**", "!!**/dist", "!!**/coverage", "!!**/worker-configuration.d.ts"]
+    },
+    "linter": {
+        "enabled": true,
+        "domains": {
+            "project": "recommended",
+            "types": "recommended",
+            "test": "recommended"
+        },
+        "rules": {
+            "preset": "recommended",
+            "style": {
+                "useBlockStatements": "error"
+            },
+            "nursery": {
+                "noFloatingPromises": "error",
+                "noMisusedPromises": "error",
+                "useExhaustiveSwitchCases": "error"
+            }
+        }
+    },
+    "formatter": {
+        "enabled": true,
+        "indentStyle": "space",
+        "indentWidth": 4,
+        "lineWidth": 120
+    },
+    "css": {
+        "parser": {
+            "tailwindDirectives": true
+        }
     }
-  },
-  "formatter": {
-    "enabled": true,
-    "indentStyle": "space",
-    "indentWidth": 2
-  },
-  "css": {
-    "parser": {
-      "tailwindDirectives": true
-    }
-  }
 }

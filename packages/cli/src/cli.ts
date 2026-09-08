@@ -6,10 +6,7 @@ import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
 import { type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
-import {
-  pairLocalMachine,
-  resumeLocalMachine,
-} from "./pairing/pair-local-machine.ts";
+import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { runDaemon } from "./run-daemon.ts";
 
 const shutdown = new AbortController();
@@ -33,81 +30,62 @@ New conversations default to ~/.mobius/workspace; choose other directories in th
 `;
 
 async function main(): Promise<void> {
-  const command = process.argv[2];
-  if (command === undefined || command === "--help" || command === "-h") {
-    process.stdout.write(USAGE);
-    return;
-  }
-
-  if (command === "agents") {
-    const arguments_ = process.argv.slice(3);
-    if (
-      arguments_.length > 1 ||
-      (arguments_.length === 1 && arguments_[0] !== "--json")
-    ) {
-      throw new Error("Usage: mobius agents [--json]");
+    const command = process.argv[2];
+    if (command === undefined || command === "--help" || command === "-h") {
+        process.stdout.write(USAGE);
+        return;
     }
-    await mkdir(loadDefaultWorkspace(), { recursive: true, mode: 0o700 });
-    const inventory = await discoverLocalAgentInventory({
-      defaultWorkspace: loadDefaultWorkspace(),
-      environment: process.env,
-      signal: shutdown.signal,
-    });
-    process.stdout.write(
-      formatAgentDiagnostics(inventory, arguments_[0] === "--json"),
-    );
-    return;
-  }
 
-  let config: DaemonConfig;
-  if (command === "pair") {
-    const paired = await pairLocalMachine(
-      process.argv.slice(3),
-      shutdown.signal,
-    );
-    config = paired.config;
-    process.stdout.write("\nLocal machine paired.\n");
-    process.stdout.write(`Channel: ${paired.channelUrl}\n`);
-    process.stdout.write(
-      "Open this channel in any browser while the daemon is running.\n",
-    );
-    process.stdout.write(`Connection saved to ${paired.connectionPath}\n`);
-  } else if (command === "start") {
-    const paired = await resumeLocalMachine(
-      process.argv.slice(3),
-      shutdown.signal,
-    );
-    config = paired.config;
-    process.stdout.write("\nSaved local machine channel loaded.\n");
-    process.stdout.write(`Channel: ${paired.channelUrl}\n`);
-    process.stdout.write(
-      "Open this channel in any browser while the daemon is running.\n",
-    );
-  } else {
-    throw new Error(USAGE.trimEnd());
-  }
+    if (command === "agents") {
+        const arguments_ = process.argv.slice(3);
+        if (arguments_.length > 1 || (arguments_.length === 1 && arguments_[0] !== "--json")) {
+            throw new Error("Usage: mobius agents [--json]");
+        }
+        await mkdir(loadDefaultWorkspace(), { recursive: true, mode: 0o700 });
+        const inventory = await discoverLocalAgentInventory({
+            defaultWorkspace: loadDefaultWorkspace(),
+            environment: process.env,
+            signal: shutdown.signal,
+        });
+        process.stdout.write(formatAgentDiagnostics(inventory, arguments_[0] === "--json"));
+        return;
+    }
 
-  process.stdout.write(
-    "Starting the local daemon. Keep this terminal open.\n\n",
-  );
-  process.stdout.write(
-    "This paired browser can use the machine with your user account's permissions.\n",
-  );
-  process.stdout.write(`Default workspace: ${config.defaultWorkspace}\n\n`);
-  const audit = new AuditStore(config.auditDatabasePath);
-  try {
-    await runDaemon(config, audit, shutdown.signal);
-  } finally {
-    audit.close();
-  }
+    let config: DaemonConfig;
+    if (command === "pair") {
+        const paired = await pairLocalMachine(process.argv.slice(3), shutdown.signal);
+        config = paired.config;
+        process.stdout.write("\nLocal machine paired.\n");
+        process.stdout.write(`Channel: ${paired.channelUrl}\n`);
+        process.stdout.write("Open this channel in any browser while the daemon is running.\n");
+        process.stdout.write(`Connection saved to ${paired.connectionPath}\n`);
+    } else if (command === "start") {
+        const paired = await resumeLocalMachine(process.argv.slice(3), shutdown.signal);
+        config = paired.config;
+        process.stdout.write("\nSaved local machine channel loaded.\n");
+        process.stdout.write(`Channel: ${paired.channelUrl}\n`);
+        process.stdout.write("Open this channel in any browser while the daemon is running.\n");
+    } else {
+        throw new Error(USAGE.trimEnd());
+    }
+
+    process.stdout.write("Starting the local daemon. Keep this terminal open.\n\n");
+    process.stdout.write("This paired browser can use the machine with your user account's permissions.\n");
+    process.stdout.write(`Default workspace: ${config.defaultWorkspace}\n\n`);
+    const audit = new AuditStore(config.auditDatabasePath);
+    try {
+        await runDaemon(config, audit, shutdown.signal);
+    } finally {
+        audit.close();
+    }
 }
 
 try {
-  await main();
+    await main();
 } catch (error) {
-  if (!shutdown.signal.aborted) {
-    const message = error instanceof Error ? error.message : "Unknown failure";
-    process.stderr.write(`Mobius daemon failed: ${message}\n`);
-    process.exitCode = 1;
-  }
+    if (!shutdown.signal.aborted) {
+        const message = error instanceof Error ? error.message : "Unknown failure";
+        process.stderr.write(`Mobius daemon failed: ${message}\n`);
+        process.exitCode = 1;
+    }
 }

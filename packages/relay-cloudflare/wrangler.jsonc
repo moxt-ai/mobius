@@ -1,47 +1,47 @@
 {
-  "$schema": "../../node_modules/wrangler/config-schema.json",
-  "name": "mobius-relay",
-  "main": "src/worker.ts",
-  "compatibility_date": "2026-09-03",
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "RUNTIME_RELAY",
-        "class_name": "RuntimeRelay"
-      },
-      {
-        "name": "SESSION_RELAY",
-        "class_name": "LiteSessionRelay"
-      }
-    ]
-  },
-  "migrations": [
-    {
-      "tag": "initial",
-      "new_sqlite_classes": ["RuntimeRelay", "SessionRelay"]
+    "$schema": "../../node_modules/wrangler/config-schema.json",
+    "name": "mobius-relay",
+    "main": "src/worker.ts",
+    "compatibility_date": "2026-09-03",
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "RUNTIME_RELAY",
+                "class_name": "RuntimeRelay"
+            },
+            {
+                "name": "SESSION_RELAY",
+                "class_name": "LiteSessionRelay"
+            }
+        ]
     },
-    {
-      "tag": "lite-session-storage",
-      "new_sqlite_classes": ["LiteSessionRelay"]
+    "migrations": [
+        {
+            "tag": "initial",
+            "new_sqlite_classes": ["RuntimeRelay", "SessionRelay"]
+        },
+        {
+            "tag": "lite-session-storage",
+            "new_sqlite_classes": ["LiteSessionRelay"]
+        }
+    ],
+    "d1_databases": [
+        {
+            "binding": "DIRECTORY_DATABASE",
+            "migrations_dir": "migrations/d1"
+        }
+    ],
+    "vars": {
+        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
+        "SESSION_ACTIVE_SESSIONS_PER_TENANT": "10000",
+        "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+    },
+    "assets": {
+        "directory": "../web/dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/mobius/api/*"]
+    },
+    "observability": {
+        "enabled": true
     }
-  ],
-  "d1_databases": [
-    {
-      "binding": "DIRECTORY_DATABASE",
-      "migrations_dir": "migrations/d1"
-    }
-  ],
-  "vars": {
-    "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
-    "SESSION_ACTIVE_SESSIONS_PER_TENANT": "10000",
-    "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
-  },
-  "assets": {
-    "directory": "../web/dist",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": ["/mobius/api/*"]
-  },
-  "observability": {
-    "enabled": true
-  }
 }

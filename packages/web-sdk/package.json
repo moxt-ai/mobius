@@ -1,19 +1,19 @@
 {
-  "name": "@moxt-ai/mobius-web-sdk",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "exports": "./src/index.ts",
-  "scripts": {
-    "build": "tsc --project tsconfig.build.json",
-    "typecheck": "tsc --project tsconfig.json"
-  },
-  "dependencies": {
-    "@moxt-ai/mobius-protocol": "workspace:*",
-    "partysocket": "1.3.0"
-  },
-  "devDependencies": {
-    "@types/node": "^24.13.3",
-    "happy-dom": "20.14.0"
-  }
+    "name": "@moxt-ai/mobius-web-sdk",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "exports": "./src/index.ts",
+    "scripts": {
+        "build": "tsc --project tsconfig.build.json",
+        "typecheck": "tsc --project tsconfig.json"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "partysocket": "1.3.0"
+    },
+    "devDependencies": {
+        "@types/node": "^24.13.3",
+        "happy-dom": "20.14.0"
+    }
 }

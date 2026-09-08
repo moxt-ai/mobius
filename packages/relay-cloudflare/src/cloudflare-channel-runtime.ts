@@ -1,8 +1,4 @@
-import type {
-  ChannelHostCredential,
-  ChannelRuntime,
-  VerifiedChannelAccess,
-} from "@moxt-ai/mobius-relay-core";
+import type { ChannelHostCredential, ChannelRuntime, VerifiedChannelAccess } from "@moxt-ai/mobius-relay-core";
 
 export const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 export const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
@@ -11,72 +7,65 @@ export const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
 export const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
 
 export class CloudflareChannelRuntime implements ChannelRuntime {
-  readonly #namespace: DurableObjectNamespace;
+    readonly #namespace: DurableObjectNamespace;
 
-  constructor(namespace: DurableObjectNamespace) {
-    this.#namespace = namespace;
-  }
-
-  readonly acceptDaemon = async (
-    access: VerifiedChannelAccess,
-    request: Request,
-    signal: AbortSignal,
-  ): Promise<Response> => await this.forward(access, request, signal);
-
-  readonly acceptHost = async (
-    access: ChannelHostCredential,
-    request: Request,
-    signal: AbortSignal,
-  ): Promise<Response> => {
-    const headers = new Headers(request.headers);
-    headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
-    return await this.forward(
-      access,
-      new Request(request, { headers, signal }),
-      signal,
-    );
-  };
-
-  readonly disconnectHost = async (
-    access: ChannelHostCredential,
-    signal: AbortSignal,
-  ): Promise<void> => {
-    signal.throwIfAborted();
-    const headers = new Headers();
-    headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-    headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
-    headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
-    headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-    headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
-    const objectId = this.#namespace.idFromName(access.channelId);
-    const response = await this.#namespace.get(objectId).fetch(
-      new Request("https://runtime.internal/host-credentials/revoke", {
-        headers,
-        method: "DELETE",
-        signal,
-      }),
-    );
-    signal.throwIfAborted();
-    if (response.status !== 204) {
-      throw new Error("The linked host connection could not be revoked");
+    constructor(namespace: DurableObjectNamespace) {
+        this.#namespace = namespace;
     }
-  };
 
-  private readonly forward = async (
-    access: VerifiedChannelAccess,
-    request: Request,
-    signal: AbortSignal,
-  ): Promise<Response> => {
-    signal.throwIfAborted();
-    const headers = new Headers(request.headers);
-    headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-    headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
-    headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
-    headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-    const forwarded = new Request(request, { headers, signal });
-    const objectId = this.#namespace.idFromName(access.channelId);
-    const response = await this.#namespace.get(objectId).fetch(forwarded);
-    signal.throwIfAborted();
-    return response;
-  };
+    readonly acceptDaemon = async (
+        access: VerifiedChannelAccess,
+        request: Request,
+        signal: AbortSignal,
+    ): Promise<Response> => await this.forward(access, request, signal);
+
+    readonly acceptHost = async (
+        access: ChannelHostCredential,
+        request: Request,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        const headers = new Headers(request.headers);
+        headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
+        return await this.forward(access, new Request(request, { headers, signal }), signal);
+    };
+
+    readonly disconnectHost = async (access: ChannelHostCredential, signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted();
+        const headers = new Headers();
+        headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
+        headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
+        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
+        headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
+        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
+        const objectId = this.#namespace.idFromName(access.channelId);
+        const response = await this.#namespace.get(objectId).fetch(
+            new Request("https://runtime.internal/host-credentials/revoke", {
+                headers,
+                method: "DELETE",
+                signal,
+            }),
+        );
+        signal.throwIfAborted();
+        if (response.status !== 204) {
+            throw new Error("The linked host connection could not be revoked");
+        }
+    };
+
+    private readonly forward = async (
+        access: VerifiedChannelAccess,
+        request: Request,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        signal.throwIfAborted();
+        const headers = new Headers(request.headers);
+        headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
+        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
+        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
+        headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
+        const forwarded = new Request(request, { headers, signal });
+        const objectId = this.#namespace.idFromName(access.channelId);
+        const response = await this.#namespace.get(objectId).fetch(forwarded);
+        signal.throwIfAborted();
+        return response;
+    };
 }

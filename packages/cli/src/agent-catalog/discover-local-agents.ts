@@ -5,8 +5,8 @@ import { supportedLocalAgentSpecifications } from "./agents/supported-agent-spec
 import { discoverAgent } from "./discover-agent.ts";
 
 export {
-  AvailableAgent,
-  LocalAgentInventory,
+    AvailableAgent,
+    LocalAgentInventory,
 } from "./agent-discovery.ts";
 export { CodexAgentSpecification } from "./agents/codex-agent.ts";
 export { CursorCliAgentSpecification } from "./agents/cursor-cli-agent.ts";
@@ -18,20 +18,16 @@ export { supportedLocalAgentSpecifications } from "./agents/supported-agent-spec
 export { WorkBuddyAgentSpecification } from "./agents/workbuddy-agent.ts";
 export { resolveAgentExecutable } from "./executable-discovery.ts";
 
-export interface DiscoverLocalAgentInventoryOptions
-  extends LocalAgentDiscoveryContext {
-  readonly specifications?: readonly LocalAgentSpecification[];
+export interface DiscoverLocalAgentInventoryOptions extends LocalAgentDiscoveryContext {
+    readonly specifications?: readonly LocalAgentSpecification[];
 }
 
 export async function discoverLocalAgentInventory(
-  options: DiscoverLocalAgentInventoryOptions,
+    options: DiscoverLocalAgentInventoryOptions,
 ): Promise<LocalAgentInventory> {
-  const specifications =
-    options.specifications ?? supportedLocalAgentSpecifications();
-  const discoveries = await Promise.all(
-    specifications.map(
-      async (specification) => await discoverAgent(specification, options),
-    ),
-  );
-  return new LocalAgentInventory(discoveries);
+    const specifications = options.specifications ?? supportedLocalAgentSpecifications();
+    const discoveries = await Promise.all(
+        specifications.map(async (specification) => await discoverAgent(specification, options)),
+    );
+    return new LocalAgentInventory(discoveries);
 }

@@ -1,16 +1,16 @@
 {
-  "name": "@moxt-ai/mobius-relay-core",
-  "version": "0.0.1",
-  "private": true,
-  "type": "module",
-  "exports": "./src/index.ts",
-  "scripts": {
-    "build": "tsc --project tsconfig.json",
-    "typecheck": "tsc --project tsconfig.json"
-  },
-  "dependencies": {
-    "@moxt-ai/mobius-protocol": "workspace:*",
-    "hono": "^4.13.5",
-    "typed-inject": "^5.0.0"
-  }
+    "name": "@moxt-ai/mobius-relay-core",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "exports": "./src/index.ts",
+    "scripts": {
+        "build": "tsc --project tsconfig.json",
+        "typecheck": "tsc --project tsconfig.json"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "hono": "^4.13.5",
+        "typed-inject": "^5.0.0"
+    }
 }
