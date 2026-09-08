@@ -8,9 +8,13 @@ import {
   decodeMessageKind,
   decodeSessionPromptCommand,
   decodeWorkspaceListCommand,
+  encodeAgentMessageDeltaEvent,
+  encodeCommittedSessionEvent,
   encodeRuntimeStatusEvent,
+  encodeSessionCompletedEvent,
   encodeWorkspaceEntriesEvent,
   RUNTIME_STATUS_KIND,
+  SESSION_EVENT_COMMITTED_KIND,
   SESSION_PROMPT_KIND,
   WORKSPACE_ENTRIES_KIND,
   WORKSPACE_LIST_KIND,
@@ -89,6 +93,16 @@ interface ClientWebSocketFrame {
   readonly text: string;
 }
 
+class ObservedDelta {
+  readonly sequence: string;
+  readonly text: string;
+
+  constructor(text: string, sequence: string) {
+    this.sequence = sequence;
+    this.text = text;
+  }
+}
+
 function readClientFrame(socket: Duplex): Promise<ClientWebSocketFrame> {
   return new Promise((resolve, reject) => {
     let buffered = Buffer.alloc(0);
@@ -147,7 +161,7 @@ function readClientFrame(socket: Duplex): Promise<ClientWebSocketFrame> {
   });
 }
 
-describe("browser relay connection recovery", () => {
+describe("browser relay connection", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
@@ -256,6 +270,135 @@ describe("browser relay connection recovery", () => {
       });
     } finally {
       client?.close();
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await new Promise<void>((resolve, reject) => {
+        relay.close((error) => {
+          if (error === undefined) {
+            resolve();
+            return;
+          }
+          reject(error);
+        });
+      });
+    }
+  });
+
+  it("Given the relay commits a streaming delta, When a prompt observer receives it, Then the observer receives the durable event sequence", async () => {
+    const relay = createServer();
+    const sockets = new Set<Duplex>();
+    const connections = new ValueFeed<Duplex>();
+    const clientFrames = new ValueFeed<Promise<ClientWebSocketFrame>>();
+    relay.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      socket.on("error", () => undefined);
+    });
+    relay.on("upgrade", (request, socket) => {
+      const key = request.headers["sec-websocket-key"];
+      if (typeof key !== "string") {
+        socket.destroy();
+        return;
+      }
+      const accept = createHash("sha1")
+        .update(`${key}${WEBSOCKET_GUID}`)
+        .digest("base64");
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\n" +
+          "Connection: Upgrade\r\n" +
+          "Upgrade: websocket\r\n" +
+          `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+      );
+      clientFrames.push(readClientFrame(socket));
+      connections.push(socket);
+      writeServerTextFrame(
+        socket,
+        encodeRuntimeStatusEvent({
+          kind: RUNTIME_STATUS_KIND,
+          online: true,
+          runtimeId: "runtime-1",
+        }),
+      );
+    });
+    await listen(relay);
+
+    const deltas = new ValueFeed<ObservedDelta>();
+    let closeClient = (): void => undefined;
+    try {
+      const client = await connectMobiusClient({
+        relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
+      });
+      closeClient = client.close;
+      const socket = await connections.next();
+      const result = client.prompt({
+        agentId: "codex",
+        bindingId: "workspace",
+        commandId: "sequenced-command",
+        observer: {
+          onDelta: (text, sequence) => {
+            deltas.push(new ObservedDelta(text, sequence));
+          },
+        },
+        prompt: "Stream a response",
+        sessionId: "session-1",
+      });
+      const frame = await clientFrames.next();
+      const prompt = decodeSessionPromptCommand(frame.text);
+      const deltaPayload = encodeAgentMessageDeltaEvent({
+        commandId: prompt.commandId,
+        kind: "agent.message.delta",
+        sessionId: prompt.sessionId,
+        text: "Hello",
+      });
+      writeServerTextFrame(
+        socket,
+        encodeCommittedSessionEvent({
+          cursor: "cursor-7",
+          eventId: "delta-7",
+          kind: SESSION_EVENT_COMMITTED_KIND,
+          payload: deltaPayload,
+          recordedAt: "2026-09-08T00:00:00.000Z",
+          sequence: "7",
+          sessionId: prompt.sessionId,
+          source: {
+            attemptId: "attempt-1",
+            kind: "attempt",
+            sourceSeq: "1",
+          },
+        }),
+      );
+      await expect(deltas.next()).resolves.toEqual(
+        new ObservedDelta("Hello", "7"),
+      );
+      writeServerTextFrame(
+        socket,
+        encodeCommittedSessionEvent({
+          cursor: "cursor-8",
+          eventId: "completed-8",
+          kind: SESSION_EVENT_COMMITTED_KIND,
+          payload: encodeSessionCompletedEvent({
+            commandId: prompt.commandId,
+            kind: "session.completed",
+            sessionId: prompt.sessionId,
+            stopReason: "end_turn",
+          }),
+          recordedAt: "2026-09-08T00:00:01.000Z",
+          sequence: "8",
+          sessionId: prompt.sessionId,
+          source: {
+            attemptId: "attempt-1",
+            kind: "attempt",
+            sourceSeq: "2",
+          },
+        }),
+      );
+      await expect(result).resolves.toEqual({
+        sessionId: "session-1",
+        stopReason: "end_turn",
+      });
+    } finally {
+      closeClient();
       for (const socket of sockets) {
         socket.destroy();
       }

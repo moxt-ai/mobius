@@ -50,6 +50,7 @@ const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const MAX_INTERNAL_RESPONSE_LENGTH = 96 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
+const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 
 interface DirectoryRow extends Record<string, unknown> {
   readonly session_id: string;
@@ -411,7 +412,21 @@ function decodeMessages(value: unknown): SessionMessagePage {
       "The message cursor is invalid",
     );
   }
-  return { messages: value["messages"].map(decodeMessage), nextCursor };
+  const lastCommittedSeq = readString(value, "lastCommittedSeq");
+  if (
+    lastCommittedSeq.length > 40 ||
+    !DECIMAL_SEQUENCE_PATTERN.test(lastCommittedSeq)
+  ) {
+    throw new SessionRuntimeError(
+      "session_storage_unavailable",
+      "The message page sequence is invalid",
+    );
+  }
+  return {
+    lastCommittedSeq,
+    messages: value["messages"].map(decodeMessage),
+    nextCursor,
+  };
 }
 
 function decodeEvents(value: unknown): SessionEventPage {

@@ -40,6 +40,7 @@ import {
 const REQUEST_TIMEOUT_MILLISECONDS = 20_000;
 const CHANNEL_CREDENTIAL_PREFIX = "mobius:channel-credential:";
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
+const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set([
   "pending",
@@ -228,6 +229,20 @@ function readText(
 
 function readIdentifier(value: unknown, field: string): string {
   if (typeof value !== "string" || !isIdentifier(value)) {
+    throw new PairingApiError(
+      "invalid_relay_response",
+      `The relay returned an invalid ${field}.`,
+    );
+  }
+  return value;
+}
+
+function readCommittedSequence(value: unknown, field: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length > 40 ||
+    !DECIMAL_SEQUENCE_PATTERN.test(value)
+  ) {
     throw new PairingApiError(
       "invalid_relay_response",
       `The relay returned an invalid ${field}.`,
@@ -1375,6 +1390,10 @@ async function readChannelHistoryWithSignal(
             "The relay returned an invalid message page.",
           );
         }
+        const lastCommittedSeq = readCommittedSequence(
+          page["lastCommittedSeq"],
+          "message page sequence",
+        );
         const additionalDirectoryIds = readSessionAdditionalDirectoryIds(
           page["messages"],
         );
@@ -1401,6 +1420,7 @@ async function readChannelHistoryWithSignal(
             interactions.elicitations,
             interactions.permissions,
             additionalDirectoryIds,
+            lastCommittedSeq,
           ),
         });
       } catch (error) {
@@ -1477,6 +1497,10 @@ function decodeRecordedSession(
       readText(value["title"], "session title", 500),
       readDate(value["updatedAt"], "session update time").toISOString(),
       null,
+      [],
+      [],
+      [],
+      readCommittedSequence(value["lastCommittedSeq"], "session sequence"),
     ),
   };
 }

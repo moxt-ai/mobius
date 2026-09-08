@@ -151,7 +151,7 @@ export interface ConnectMobiusClientOptions {
 export interface PromptObserver {
   readonly onActivity?: (activity: AgentActivityEvent) => void;
   readonly onContent?: (content: AgentContentEvent) => void;
-  readonly onDelta?: (text: string) => void;
+  readonly onDelta?: (text: string, committedSequence: string) => void;
   readonly onStarted?: (attemptId: string) => void;
 }
 
@@ -252,6 +252,17 @@ function readInboundMessage(event: MessageEvent<unknown>): string {
   const committed = decodeCommittedSessionEvent(encoded);
   decodeRecordedSessionEvent(committed.payload);
   return committed.payload;
+}
+
+function readInboundCommittedSequence(event: MessageEvent<unknown>): string {
+  const encoded = readMessageText(event);
+  if (decodeMessageKind(encoded) !== SESSION_EVENT_COMMITTED_KIND) {
+    throw new MobiusClientError(
+      "invalid_protocol_message",
+      "Relay sent an uncommitted Session event",
+    );
+  }
+  return decodeCommittedSessionEvent(encoded).sequence;
 }
 
 function encodeOutboundMessage(encode: () => string): string {
@@ -718,7 +729,10 @@ export class MobiusClient {
           if (kind === AGENT_MESSAGE_DELTA_KIND) {
             const message = decodeAgentMessageDeltaEvent(encoded);
             if (message.commandId === commandId) {
-              request.observer?.onDelta?.(message.text);
+              request.observer?.onDelta?.(
+                message.text,
+                readInboundCommittedSequence(event),
+              );
             }
             return;
           }

@@ -198,7 +198,7 @@ class StatefulDaemon {
   readonly sendSessionEvent = async (
     sessionId: string,
     payload: string,
-  ): Promise<void> => {
+  ): Promise<string> => {
     const eventId = crypto.randomUUID();
     if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
       this.#attemptIdsBySession.set(
@@ -241,6 +241,7 @@ class StatefulDaemon {
         "The relay returned an invalid session event acknowledgement",
       );
     }
+    return acknowledgement.sequence;
   };
 }
 

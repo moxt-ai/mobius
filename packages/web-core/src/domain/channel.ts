@@ -247,6 +247,7 @@ export class RecordedSession {
   readonly updatedAt: string;
   readonly nativeHistory: NativeSessionHistory | null;
   readonly permissions: readonly SessionPermissionRequestedEvent[];
+  readonly lastCommittedSeq: string;
 
   constructor(
     agentId: string,
@@ -261,6 +262,7 @@ export class RecordedSession {
     elicitations: readonly SessionElicitationRequestedEvent[] = [],
     permissions: readonly SessionPermissionRequestedEvent[] = [],
     additionalDirectoryIds: readonly string[] = [],
+    lastCommittedSeq = "0",
   ) {
     this.additionalDirectoryIds = [...additionalDirectoryIds];
     this.agentId = agentId;
@@ -274,6 +276,7 @@ export class RecordedSession {
     this.updatedAt = updatedAt;
     this.nativeHistory = nativeHistory;
     this.permissions = permissions;
+    this.lastCommittedSeq = lastCommittedSeq;
   }
 }
 

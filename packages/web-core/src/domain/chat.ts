@@ -822,6 +822,7 @@ export class AgentChatMessage extends ChatMessage {
   readonly activities: readonly RecordedActivity[];
   readonly commandId: string;
   readonly contents: readonly RecordedContent[];
+  readonly lastCommittedSeq: string;
   readonly state: AgentTurnState;
   readonly text: string;
 
@@ -833,11 +834,13 @@ export class AgentChatMessage extends ChatMessage {
     state: AgentTurnState,
     activities: readonly RecordedActivity[] = [],
     contents: readonly RecordedContent[] = [],
+    lastCommittedSeq = "0",
   ) {
     super(id, createdAt);
     this.activities = activities;
     this.commandId = commandId;
     this.contents = contents;
+    this.lastCommittedSeq = lastCommittedSeq;
     this.text = text;
     this.state = state;
   }
@@ -852,8 +855,14 @@ export class AgentChatMessage extends ChatMessage {
     );
   }
 
-  readonly appendText = (delta: string): AgentChatMessage =>
-    new AgentChatMessage(
+  readonly appendText = (
+    delta: string,
+    committedSequence: string,
+  ): AgentChatMessage => {
+    if (BigInt(committedSequence) <= BigInt(this.lastCommittedSeq)) {
+      return this;
+    }
+    return new AgentChatMessage(
       this.id,
       this.commandId,
       this.createdAt,
@@ -861,7 +870,9 @@ export class AgentChatMessage extends ChatMessage {
       this.state,
       this.activities,
       this.contents,
+      committedSequence,
     );
+  };
 
   readonly recordActivity = (activity: RecordedActivity): AgentChatMessage => {
     const activities = this.activities.filter(
@@ -877,6 +888,7 @@ export class AgentChatMessage extends ChatMessage {
       this.state,
       activities,
       this.contents,
+      this.lastCommittedSeq,
     );
   };
 
@@ -898,6 +910,7 @@ export class AgentChatMessage extends ChatMessage {
       this.state,
       this.activities,
       contents,
+      this.lastCommittedSeq,
     );
   };
 
@@ -910,20 +923,30 @@ export class AgentChatMessage extends ChatMessage {
       state,
       this.activities,
       this.contents,
+      this.lastCommittedSeq,
     );
 
-  readonly reconcileRecorded = (recorded: AgentChatMessage): AgentChatMessage =>
-    new AgentChatMessage(
+  readonly reconcileRecorded = (
+    recorded: AgentChatMessage,
+  ): AgentChatMessage => {
+    const recordedSequenceKnown = recorded.lastCommittedSeq !== "0";
+    const currentSequenceKnown = this.lastCommittedSeq !== "0";
+    const useRecordedText = recordedSequenceKnown
+      ? BigInt(recorded.lastCommittedSeq) >= BigInt(this.lastCommittedSeq)
+      : !currentSequenceKnown && recorded.text.length >= this.text.length;
+    return new AgentChatMessage(
       this.id,
       this.commandId,
       recorded.createdAt,
-      recorded.text.length < this.text.length ? this.text : recorded.text,
+      useRecordedText ? recorded.text : this.text,
       recorded.state.progress < this.state.progress
         ? this.state
         : recorded.state,
       reconcileActivities(this.activities, recorded.activities),
       reconcileContents(this.contents, recorded.contents),
+      useRecordedText ? recorded.lastCommittedSeq : this.lastCommittedSeq,
     );
+  };
 
   readonly withFallbackText = (text: string): AgentChatMessage =>
     new AgentChatMessage(
@@ -934,6 +957,7 @@ export class AgentChatMessage extends ChatMessage {
       this.state,
       this.activities,
       this.contents,
+      this.lastCommittedSeq,
     );
 }
 
@@ -1062,6 +1086,7 @@ export class Conversation {
     agent: AgentOption,
     sessionId: string,
     turns: readonly RecordedTurn[],
+    lastCommittedSeq = "0",
   ): Conversation {
     const firstTurn = turns[0];
     const lastTurn = turns.at(-1);
@@ -1108,6 +1133,7 @@ export class Conversation {
           state,
           turn.activities,
           turn.contents,
+          lastCommittedSeq,
         ).withFallbackText(fallbackText),
       );
     }
@@ -1140,7 +1166,12 @@ export class Conversation {
             "",
             [],
           )
-        : Conversation.restore(agent, recorded.sessionId, turns);
+        : Conversation.restore(
+            agent,
+            recorded.sessionId,
+            turns,
+            recorded.lastCommittedSeq,
+          );
     return new Conversation(
       base.agentId,
       base.agentLabel,
@@ -1168,8 +1199,14 @@ export class Conversation {
   readonly reconcileRecordedTurns = (
     agent: AgentOption,
     turns: readonly RecordedTurn[],
+    lastCommittedSeq = "0",
   ): Conversation => {
-    const recorded = Conversation.restore(agent, this.sessionId, turns);
+    const recorded = Conversation.restore(
+      agent,
+      this.sessionId,
+      turns,
+      lastCommittedSeq,
+    );
     const existingById = new Map(
       this.messages.map((message) => [message.id, message]),
     );

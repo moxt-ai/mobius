@@ -302,7 +302,11 @@ export class SqliteSessionQueries {
   ): Promise<SessionMessagePage> => {
     signal.throwIfAborted();
     validateLimit(limit);
-    this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+    const session = this.#store.requireActiveSessionRow(
+      scope,
+      sessionId,
+      Date.now(),
+    );
     const decoded =
       cursor === null ? null : decodeMessageCursor(cursor, scope, sessionId);
     const values: SessionSqlValue[] = [scopeKey(scope), sessionId];
@@ -325,6 +329,7 @@ export class SqliteSessionQueries {
     );
     const last = pageRows.at(-1);
     return {
+      lastCommittedSeq: (rowNumber(session, "next_sequence") - 1).toString(),
       messages,
       nextCursor:
         rows.length > limit && last !== undefined

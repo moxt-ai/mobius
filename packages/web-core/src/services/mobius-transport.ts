@@ -680,8 +680,10 @@ export async function sendPrompt(prompt: string): Promise<void> {
               ),
             );
         },
-        onDelta: (text) => {
-          useChatStore.getState().appendAgentText(turn, text);
+        onDelta: (text, committedSequence) => {
+          useChatStore
+            .getState()
+            .appendAgentText(turn, text, committedSequence);
         },
         onStarted: (startedAttemptId) => {
           attemptId = startedAttemptId;

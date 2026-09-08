@@ -9,6 +9,7 @@ import {
   encodeSessionElicitationResolvedEvent,
   encodeSessionStartedEvent,
   encodeSessionUsageUpdatedEvent,
+  MOBIUS_API_PREFIX,
   SESSION_ELICITATION_RESPOND_KIND,
   SESSION_PREPARE_KIND,
   SESSION_PROMPT_KIND,
@@ -21,7 +22,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
@@ -153,6 +154,108 @@ describe.sequential("Agent interaction boundaries", () => {
         name: "Review the mobile layout",
       });
     } finally {
+      cleanup();
+      await closeMobiusTransport();
+      paired.daemon.close();
+    }
+  });
+
+  it("Given a persisted response snapshot overlaps a streaming delta, When background synchronization and live delivery reconcile, Then the response renders the text once", async () => {
+    const paired = await pairDaemon();
+    window.history.replaceState(
+      null,
+      "",
+      `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    render(<App />);
+
+    try {
+      const prepare = decodeSessionPrepareCommand(
+        await paired.daemon.receive(SESSION_PREPARE_KIND),
+      );
+      await sendReadySession(paired.daemon, prepare);
+      const promptInput = await screen.findByRole("textbox", {
+        name: "Message the local agent",
+      });
+      await waitFor(() => {
+        expect(promptInput.getAttribute("placeholder")).toContain(
+          "Ask the local agent",
+        );
+      });
+      fireEvent.change(promptInput, { target: { value: "Say hello" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+      const prompt = decodeSessionPromptCommand(
+        await paired.daemon.receive(SESSION_PROMPT_KIND),
+      );
+
+      vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+      vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeSessionStartedEvent({
+          attemptId: "snapshot-race-attempt",
+          commandId: prompt.commandId,
+          kind: "session.started",
+          sessionId: prompt.sessionId,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(screen.getByRole("button", { name: "Stop agent" })).toBeTruthy();
+
+      const response = "Hello. How can I help?";
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeAgentMessageDeltaEvent({
+          commandId: prompt.commandId,
+          kind: "agent.message.delta",
+          sessionId: prompt.sessionId,
+          text: "Hello",
+        }),
+      );
+      const responseSequence = await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeAgentMessageDeltaEvent({
+          commandId: prompt.commandId,
+          kind: "agent.message.delta",
+          sessionId: prompt.sessionId,
+          text: ". How can I help?",
+        }),
+      );
+      const messagePageResponse = await fetch(
+        new URL(
+          `${MOBIUS_API_PREFIX}/projects/${encodeURIComponent(paired.credential.projectId)}/sessions/${encodeURIComponent(prompt.sessionId)}/messages?limit=100`,
+          window.location.origin,
+        ),
+        {
+          headers: {
+            authorization: `Bearer ${paired.credential.hostToken}`,
+          },
+        },
+      );
+      expect(messagePageResponse.status).toBe(200);
+      expect(await messagePageResponse.json()).toMatchObject({
+        lastCommittedSeq: responseSequence,
+      });
+      await vi.advanceTimersByTimeAsync(150);
+      vi.useRealTimers();
+
+      await paired.daemon.sendSessionEvent(
+        prompt.sessionId,
+        encodeSessionCompletedEvent({
+          commandId: prompt.commandId,
+          kind: "session.completed",
+          sessionId: prompt.sessionId,
+          stopReason: "end_turn",
+        }),
+      );
+      await waitFor(() => {
+        const message = screen.getByText(/Hello/);
+        expect(message.textContent).toBe(response);
+      });
+    } finally {
+      vi.useRealTimers();
       cleanup();
       await closeMobiusTransport();
       paired.daemon.close();
@@ -418,6 +521,7 @@ describe.sequential("Agent interaction boundaries", () => {
           stopReason: "end_turn",
         }),
       );
+      await screen.findByText("Agent response completed.");
 
       const agentMessage = await screen.findByRole("article", {
         name: "Message from Codex",

@@ -81,7 +81,11 @@ export interface ChatStore {
   readonly agents: readonly AgentOption[];
   readonly agentInstallations: readonly AgentInstallationViewState[];
   readonly announcement: string;
-  readonly appendAgentText: (turn: PendingTurn, delta: string) => void;
+  readonly appendAgentText: (
+    turn: PendingTurn,
+    delta: string,
+    committedSequence: string,
+  ) => void;
   readonly beginTurn: (prompt: string) => PendingTurn;
   readonly beginAgentInstallation: (agentId: string, requestId: string) => void;
   readonly applyAgentInstallCancelled: (
@@ -428,6 +432,7 @@ function reconcileConversations(
       return withSession.reconcileRecordedTurns(
         readAgent(agents, firstTurn.agentId),
         recordedTurns,
+        recordedSession?.lastCommittedSeq ?? "0",
       );
     } catch {
       return withSession;
@@ -734,7 +739,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
       ),
     }));
   },
-  appendAgentText: (turn, delta) => {
+  appendAgentText: (turn, delta, committedSequence) => {
     set((state) => {
       const conversation = readConversation(
         state.conversations,
@@ -746,7 +751,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
           state.conversations,
           conversation.replaceAgentMessage(
             turn.agentMessageId,
-            agentMessage.appendText(delta),
+            agentMessage.appendText(delta, committedSequence),
           ),
         ),
       };

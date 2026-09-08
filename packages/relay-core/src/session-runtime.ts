@@ -240,6 +240,7 @@ export interface SessionMessage {
 }
 
 export interface SessionMessagePage {
+  readonly lastCommittedSeq: string;
   readonly messages: readonly SessionMessage[];
   readonly nextCursor: string | null;
 }
