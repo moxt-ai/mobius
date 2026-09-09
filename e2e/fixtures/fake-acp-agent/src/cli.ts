@@ -1069,11 +1069,13 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             const responseText =
                 prompt === "Report working directory"
                     ? process.cwd()
-                    : prompt === "exercise ACP controls"
-                      ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
-                      : agentName.length === 0
-                        ? "Echo from ACP: "
-                        : `${agentName} turn ${turnNumber.toString()}: `;
+                    : prompt === "Report prompt blocks"
+                      ? `${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource`
+                      : prompt === "exercise ACP controls"
+                        ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
+                        : agentName.length === 0
+                          ? "Echo from ACP: "
+                          : `${agentName} turn ${turnNumber.toString()}: `;
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
@@ -1084,7 +1086,11 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     sessionUpdate: "agent_message_chunk",
                 },
             });
-            if (prompt !== "exercise ACP controls" && prompt !== "Report working directory") {
+            if (
+                prompt !== "exercise ACP controls" &&
+                prompt !== "Report working directory" &&
+                prompt !== "Report prompt blocks"
+            ) {
                 await context.client.notify(acp.methods.client.session.update, {
                     sessionId: context.params.sessionId,
                     update: {
@@ -1101,7 +1107,11 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 role: "assistant",
                 text:
                     responseText +
-                    (prompt === "exercise ACP controls" || prompt === "Report working directory" ? "" : prompt),
+                    (prompt === "exercise ACP controls" ||
+                    prompt === "Report working directory" ||
+                    prompt === "Report prompt blocks"
+                        ? ""
+                        : prompt),
             });
             persistState(context.params.sessionId, state);
 

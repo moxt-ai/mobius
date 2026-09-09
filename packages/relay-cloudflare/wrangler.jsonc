@@ -12,6 +12,10 @@
             {
                 "name": "SESSION_RELAY",
                 "class_name": "LiteSessionRelay"
+            },
+            {
+                "name": "BOT_CONNECTIONS",
+                "class_name": "BotConnectionActor"
             }
         ]
     },
@@ -23,6 +27,10 @@
         {
             "tag": "lite-session-storage",
             "new_sqlite_classes": ["LiteSessionRelay"]
+        },
+        {
+            "tag": "bot-connections",
+            "new_sqlite_classes": ["BotConnectionActor"]
         }
     ],
     "d1_databases": [

@@ -2,8 +2,8 @@
 
 Unified public Relay client for modern browsers and Node.js 20.19 or later. It
 exposes resource-oriented Runtime, Session, Turn, Attempt, Event, Interaction,
-history, Artifact, credential, and portability operations without exposing
-Relay storage or deployment details.
+history, Artifact, credential, portability, and provider-neutral Bot connector
+operations without exposing Relay storage or deployment details.
 
 ```sh
 pnpm add @moxt-ai/mobius-sdk
@@ -16,4 +16,7 @@ examples. Both entry points execute the same shared resource workflow. The
 browser and shared workflow modules are also exported as
 `@moxt-ai/mobius-sdk/examples/browser` and
 `@moxt-ai/mobius-sdk/examples/workflow`. The packaged Node entry point is
-`@moxt-ai/mobius-sdk/examples/node`.
+`@moxt-ai/mobius-sdk/examples/node`. The [Bot connector
+guide](https://github.com/moxt-ai/mobius/blob/main/docs/bots.md) documents grant
+redemption, scoped credentials, connected conversations, cursor recovery,
+outbound acknowledgement, and connection revocation.

@@ -1,0 +1,1618 @@
+import { env } from "cloudflare:test";
+import { exports } from "cloudflare:workers";
+import {
+    AGENT_ACTIVITY_KIND,
+    BotExecutionBindingApprovedEvent,
+    decodeBotExecutionBindingApprovalRequest,
+    decodeBotSessionPromptCommand,
+    decodeSessionEventAcknowledgement,
+    encodeBotExecutionBindingApprovedEvent,
+    encodeSessionEventEnvelope,
+    MOBIUS_API_PREFIX,
+    SESSION_COMPLETED_KIND,
+    SESSION_EVENT_KIND,
+    SESSION_STARTED_KIND,
+    type SessionEventEnvelope,
+} from "@moxt-ai/mobius-protocol";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const relayOrigin = "https://relay.test";
+const connectorScopeList = [
+    "conversation-events:read",
+    "inbound-conversation:create",
+    "inbound-message:create",
+    "outbound-message:ack",
+    "outbound-message:read",
+    "turn:cancel",
+];
+const readyAgents = [
+    {
+        agentPath: "/usr/local/bin/codex",
+        agentVersion: "codex 1.0.0",
+        capabilities: {
+            additionalDirectories: true,
+            audioPrompt: false,
+            closeSession: true,
+            deleteSession: true,
+            embeddedContextPrompt: true,
+            imagePrompt: true,
+            listSessions: true,
+            loadSession: true,
+            resumeSession: true,
+            unstableForkSession: false,
+        },
+        id: "codex",
+        label: "Codex",
+    },
+];
+
+interface CreatedPairing {
+    readonly channelId: string;
+    readonly daemonToken: string;
+    readonly hostToken: string;
+    readonly pairingCode: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+}
+
+interface CreatedBot {
+    readonly botId: string;
+    readonly lifecycleRevision: number;
+}
+
+interface CreatedBehavior {
+    readonly behaviorRevisionId: string;
+}
+
+interface RedeemedConnection {
+    readonly connectionId: string;
+    readonly credential: string;
+}
+
+interface CreatedConnectionGrant {
+    readonly grantId: string;
+    readonly grantSecret: string;
+}
+
+interface CreatedTarget {
+    readonly deliveryTargetId: string;
+}
+
+interface CreatedBinding {
+    readonly bindingId: string;
+    readonly bindingRevision: number;
+}
+
+interface CreatedConversation {
+    readonly behaviorRevisionId: string;
+    readonly bindingId: string;
+    readonly bindingRevision: number;
+    readonly conversationId: string;
+    readonly sessionId: string;
+}
+
+interface AcceptedMessage {
+    readonly duplicate: boolean;
+    readonly executionId: string;
+    readonly turnId: string;
+}
+
+interface OpenSocket {
+    readonly messages: SocketMessages;
+    readonly socket: WebSocket;
+}
+
+class SocketMessages {
+    readonly #messages: string[] = [];
+    readonly #resolvers: Array<(message: string) => void> = [];
+
+    constructor(socket: WebSocket) {
+        socket.addEventListener("message", (event) => {
+            if (typeof event.data !== "string") {
+                throw new Error("Expected a text WebSocket message");
+            }
+            const resolve = this.#resolvers.shift();
+            if (resolve === undefined) {
+                this.#messages.push(event.data);
+            } else {
+                resolve(event.data);
+            }
+        });
+    }
+
+    readonly next = (): Promise<string> => {
+        const message = this.#messages.shift();
+        if (message !== undefined) {
+            return Promise.resolve(message);
+        }
+        return new Promise((resolve) => this.#resolvers.push(resolve));
+    };
+}
+
+function record(value: unknown): Readonly<Record<string, unknown>> {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new Error("Expected a response object");
+    }
+    return Object.fromEntries(Object.entries(value));
+}
+
+function stringField(value: Readonly<Record<string, unknown>>, key: string): string {
+    const field = value[key];
+    if (typeof field !== "string" || field.length === 0) {
+        throw new Error(`Expected ${key}`);
+    }
+    return field;
+}
+
+function integerField(value: Readonly<Record<string, unknown>>, key: string): number {
+    const field = value[key];
+    if (typeof field !== "number" || !Number.isSafeInteger(field)) {
+        throw new Error(`Expected ${key}`);
+    }
+    return field;
+}
+
+function booleanField(value: Readonly<Record<string, unknown>>, key: string): boolean {
+    const field = value[key];
+    if (typeof field !== "boolean") {
+        throw new Error(`Expected ${key}`);
+    }
+    return field;
+}
+
+function recordArrayField(
+    value: Readonly<Record<string, unknown>>,
+    key: string,
+): readonly Readonly<Record<string, unknown>>[] {
+    const field = value[key];
+    if (!Array.isArray(field)) {
+        throw new Error(`Expected ${key}`);
+    }
+    return field.map(record);
+}
+
+async function json(response: Response, status: number): Promise<Readonly<Record<string, unknown>>> {
+    const detail = response.status === status ? "" : await response.clone().text();
+    expect(response.status, detail).toBe(status);
+    return record(await response.json());
+}
+
+async function expectApiError(response: Response, status: number, code: string): Promise<void> {
+    expect(response.status).toBe(status);
+    await expect(response.json()).resolves.toMatchObject({ error: { code } });
+}
+
+function ownerHeaders(pairing: CreatedPairing): HeadersInit {
+    return {
+        authorization: `Bearer ${pairing.hostToken}`,
+        "content-type": "application/json",
+    };
+}
+
+function connectorHeaders(connection: RedeemedConnection): HeadersInit {
+    return {
+        authorization: `Bearer ${connection.credential}`,
+        "content-type": "application/json",
+    };
+}
+
+async function pairRuntime(): Promise<CreatedPairing> {
+    const created = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+        201,
+    );
+    const claim = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            body: JSON.stringify({
+                agents: readyAgents,
+                installableAgents: [],
+                machineName: "Bot Runtime",
+                pairingCode: stringField(created, "pairingCode"),
+                workspaceName: "mobius",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        }),
+        200,
+    );
+    return {
+        channelId: stringField(created, "channelId"),
+        daemonToken: stringField(claim, "daemonToken"),
+        hostToken: stringField(created, "hostToken"),
+        pairingCode: stringField(created, "pairingCode"),
+        projectId: stringField(created, "projectId"),
+        runtimeId: stringField(created, "runtimeId"),
+    };
+}
+
+function requireWebSocket(response: Response): WebSocket {
+    const socket = response.webSocket;
+    if (socket === null) {
+        throw new Error("Expected a WebSocket response");
+    }
+    return socket;
+}
+
+async function openDaemon(pairing: CreatedPairing): Promise<OpenSocket> {
+    const response = await exports.default.fetch(
+        `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.channelId}/daemon?token=${pairing.daemonToken}`,
+        { headers: { Upgrade: "websocket" } },
+    );
+    expect(response.status).toBe(101);
+    const socket = requireWebSocket(response);
+    const messages = new SocketMessages(socket);
+    socket.accept();
+    return { messages, socket };
+}
+
+async function createBot(pairing: CreatedPairing, name: string): Promise<CreatedBot> {
+    const value = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`, {
+            body: JSON.stringify({
+                avatarRef: "",
+                description: `${name} description`,
+                displayName: name,
+            }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
+        201,
+    );
+    expect(value["lifecycle"]).toBe("draft");
+    return {
+        botId: stringField(value, "botId"),
+        lifecycleRevision: integerField(value, "lifecycleRevision"),
+    };
+}
+
+async function createBehavior(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    name: string,
+    expectedRevision = 0,
+): Promise<CreatedBehavior> {
+    const value = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/behavior-revisions`, {
+            body: JSON.stringify({
+                agentConfiguration: {},
+                expectedRevision,
+                instructions: `You are ${name}.`,
+                requiredCapabilities: ["embedded-context"],
+            }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
+        201,
+    );
+    expect(value["lifecycle"]).toBe("proposed");
+    return { behaviorRevisionId: stringField(value, "behaviorRevisionId") };
+}
+
+async function createConnectionGrant(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    label: string,
+    scopes: readonly string[] = connectorScopeList,
+): Promise<CreatedConnectionGrant> {
+    const grant = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connection-grants`, {
+            body: JSON.stringify({
+                audience: "test-connector",
+                expiresInSeconds: 600,
+                label: `Connection ${label}`,
+                scopes,
+            }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
+        201,
+    );
+    return {
+        grantId: stringField(grant, "grantId"),
+        grantSecret: stringField(grant, "grantSecret"),
+    };
+}
+
+async function redeemConnectionGrant(grant: CreatedConnectionGrant, label: string): Promise<RedeemedConnection> {
+    const redeemed = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connection-grants/redeem`, {
+            body: JSON.stringify({
+                audience: "test-connector",
+                connectorPrincipalId: `principal-${label}`,
+                grantId: grant.grantId,
+                grantSecret: grant.grantSecret,
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        }),
+        201,
+    );
+    return {
+        connectionId: stringField(redeemed, "connectionId"),
+        credential: stringField(redeemed, "credential"),
+    };
+}
+
+async function connectBot(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    label: string,
+    scopes: readonly string[] = connectorScopeList,
+): Promise<RedeemedConnection> {
+    return await redeemConnectionGrant(await createConnectionGrant(pairing, bot, label, scopes), label);
+}
+
+async function createTarget(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    connection: RedeemedConnection,
+    alias: string,
+): Promise<CreatedTarget> {
+    const target = await json(
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connection.connectionId}/delivery-targets`,
+            {
+                body: JSON.stringify({ alias }),
+                headers: connectorHeaders(connection),
+                method: "POST",
+            },
+        ),
+        201,
+    );
+    const deliveryTargetId = stringField(target, "deliveryTargetId");
+    await json(
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/delivery-targets/${deliveryTargetId}/approve`,
+            {
+                body: JSON.stringify({ expectedPolicyRevision: 0 }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
+        200,
+    );
+    return { deliveryTargetId };
+}
+
+async function approveBinding(
+    pairing: CreatedPairing,
+    daemon: OpenSocket,
+    bot: CreatedBot,
+    behavior: CreatedBehavior,
+    target: CreatedTarget,
+    expectedRevision = bot.lifecycleRevision,
+    policy: Readonly<Record<string, unknown>> = { kind: "none" },
+): Promise<CreatedBinding> {
+    const response = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`, {
+            body: JSON.stringify({
+                agentConfigRevision: 1,
+                agentRef: "codex",
+                allowedDeliveryTargetIds: [target.deliveryTargetId],
+                behaviorRevisionId: behavior.behaviorRevisionId,
+                completionPolicy: policy,
+                expectedRevision,
+                runtimeId: pairing.runtimeId,
+                workspaceRef: "default",
+            }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
+        202,
+    );
+    const request = decodeBotExecutionBindingApprovalRequest(await daemon.messages.next());
+    expect(request).toMatchObject({
+        agentRef: "codex",
+        behaviorRevisionId: behavior.behaviorRevisionId,
+        botId: bot.botId,
+        runtimeId: pairing.runtimeId,
+        workspaceRef: "default",
+    });
+    const approved = new BotExecutionBindingApprovedEvent(
+        request.requestId,
+        request.botId,
+        request.behaviorRevisionId,
+        request.bindingId,
+        request.bindingRevision,
+        `grant_${bot.botId}`,
+        "a".repeat(64),
+        "b".repeat(64),
+    );
+    daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
+    expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
+    const active = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
+            headers: ownerHeaders(pairing),
+        }),
+        200,
+    );
+    expect(active).toMatchObject({
+        activeBehaviorRevisionId: behavior.behaviorRevisionId,
+        activeBindingId: request.bindingId,
+        lifecycle: "active",
+    });
+    const approvedLifecycleRevision = integerField(active, "lifecycleRevision");
+    daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
+    expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
+    const replayed = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
+            headers: ownerHeaders(pairing),
+        }),
+        200,
+    );
+    expect(integerField(replayed, "lifecycleRevision")).toBe(approvedLifecycleRevision);
+    return {
+        bindingId: stringField(response, "bindingId"),
+        bindingRevision: integerField(response, "bindingRevision"),
+    };
+}
+
+async function createConnectedConversation(
+    bot: CreatedBot,
+    connection: RedeemedConnection,
+    target: CreatedTarget,
+    key: string,
+): Promise<CreatedConversation> {
+    const response = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+            body: JSON.stringify({
+                clientConversationKey: key,
+                replyDeliveryTargetId: target.deliveryTargetId,
+                title: `Conversation ${key}`,
+            }),
+            headers: connectorHeaders(connection),
+            method: "POST",
+        }),
+        201,
+    );
+    expect(response["creatorKind"]).toBe("connection");
+    return {
+        behaviorRevisionId: stringField(response, "behaviorRevisionId"),
+        bindingId: stringField(response, "bindingId"),
+        bindingRevision: integerField(response, "bindingRevision"),
+        conversationId: stringField(response, "conversationId"),
+        sessionId: stringField(response, "sessionId"),
+    };
+}
+
+async function createConversation(pairing: CreatedPairing, bot: CreatedBot, key: string): Promise<CreatedConversation> {
+    const response = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+            body: JSON.stringify({ clientConversationKey: key, title: `Conversation ${key}` }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
+        201,
+    );
+    expect(response["lifecycle"]).toBe("active");
+    expect(response["creatorKind"]).toBe("owner");
+    return {
+        behaviorRevisionId: stringField(response, "behaviorRevisionId"),
+        bindingId: stringField(response, "bindingId"),
+        bindingRevision: integerField(response, "bindingRevision"),
+        conversationId: stringField(response, "conversationId"),
+        sessionId: stringField(response, "sessionId"),
+    };
+}
+
+async function submitMessage(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    conversation: CreatedConversation,
+    id: string,
+): Promise<AcceptedMessage> {
+    const response = await json(
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+            {
+                body: JSON.stringify({
+                    actorRef: "project-owner",
+                    clientMessageId: id,
+                    resourceRefs: [],
+                    text: `Run ${id}`,
+                }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
+        202,
+    );
+    return {
+        duplicate: booleanField(response, "duplicate"),
+        executionId: stringField(response, "executionId"),
+        turnId: stringField(response, "turnId"),
+    };
+}
+
+function attemptEnvelope(
+    sessionId: string,
+    commandId: string,
+    eventId: string,
+    kind: string,
+    attemptId: string,
+    sourceSequence: number,
+): SessionEventEnvelope {
+    const payload =
+        kind === SESSION_STARTED_KIND
+            ? {
+                  attemptId,
+                  commandId,
+                  kind: SESSION_STARTED_KIND,
+                  sessionId,
+              }
+            : {
+                  commandId,
+                  kind: SESSION_COMPLETED_KIND,
+                  sessionId,
+                  stopReason: "end_turn",
+              };
+    return {
+        eventId,
+        kind: SESSION_EVENT_KIND,
+        payload: JSON.stringify(payload),
+        sessionId,
+        source: {
+            attemptId,
+            kind: "attempt",
+            sourceSeq: sourceSequence.toString(),
+        },
+    };
+}
+
+function activityEnvelope(
+    sessionId: string,
+    commandId: string,
+    attemptId: string,
+    eventId: string,
+    sourceSequence: number,
+): SessionEventEnvelope {
+    return {
+        eventId,
+        kind: SESSION_EVENT_KIND,
+        payload: JSON.stringify({
+            activityId: "activity-sensitive",
+            activityType: "tool",
+            commandId,
+            content: [
+                {
+                    data: "",
+                    mimeType: "",
+                    name: "",
+                    newText: "secret output",
+                    oldText: "",
+                    path: "/private/workspace/secret.txt",
+                    terminalId: "",
+                    text: "",
+                    type: "diff",
+                    uri: "",
+                },
+            ],
+            detail: {
+                content: [],
+                input: '{"path":"/private/workspace/secret.txt"}',
+                kind: "recorded",
+                output: "private result",
+            },
+            input: '{"path":"/private/workspace/secret.txt"}',
+            kind: AGENT_ACTIVITY_KIND,
+            locations: ["/private/workspace/secret.txt"],
+            name: "read_file",
+            output: "private result",
+            sequence: 1,
+            sessionId,
+            status: "completed",
+            title: "Read a private file",
+            toolKind: "read",
+        }),
+        sessionId,
+        source: {
+            attemptId,
+            kind: "attempt",
+            sourceSeq: sourceSequence.toString(),
+        },
+    };
+}
+
+function executionHeaders(pairing: CreatedPairing, capabilitySecret: string): HeadersInit {
+    return {
+        authorization: `Bearer ${pairing.daemonToken}`,
+        "content-type": "application/json",
+        "x-mobius-bot-execution-capability": capabilitySecret,
+    };
+}
+
+async function commitAttemptEvent(daemon: OpenSocket, envelope: SessionEventEnvelope): Promise<void> {
+    daemon.socket.send(encodeSessionEventEnvelope(envelope));
+    expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+        duplicate: false,
+        eventId: envelope.eventId,
+        sessionId: envelope.sessionId,
+    });
+}
+
+async function expectConversationEvents(
+    pairing: CreatedPairing,
+    bot: CreatedBot,
+    conversation: CreatedConversation,
+    accepted: AcceptedMessage,
+    behavior: CreatedBehavior,
+): Promise<void> {
+    const page = await json(
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/events`,
+            { headers: ownerHeaders(pairing) },
+        ),
+        200,
+    );
+    expect(recordArrayField(page, "events")).toMatchObject([
+        {
+            behaviorRevisionId: behavior.behaviorRevisionId,
+            conversationId: conversation.conversationId,
+            kind: SESSION_STARTED_KIND,
+            turnId: accepted.turnId,
+        },
+        {
+            behaviorRevisionId: behavior.behaviorRevisionId,
+            conversationId: conversation.conversationId,
+            kind: SESSION_COMPLETED_KIND,
+            turnId: accepted.turnId,
+        },
+    ]);
+}
+
+beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-08T08:00:00.000Z"));
+});
+
+afterEach(() => {
+    vi.useRealTimers();
+});
+
+describe.sequential("Provider-neutral Bot API", () => {
+    it("Given an unbound Bot and untrusted public requests, When conversation input is decoded, Then execution targets are rejected before authorization or resolution", async () => {
+        const pairing = await pairRuntime();
+        const bot = await createBot(pairing, "Unbound");
+        const validConversation = {
+            clientConversationKey: "unbound-conversation",
+            title: "Unbound conversation",
+        };
+        await expectApiError(
+            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                body: JSON.stringify(validConversation),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            }),
+            409,
+            "binding_not_approved",
+        );
+
+        const forbiddenFields = [
+            "agentId",
+            "runtimeId",
+            "workspaceRef",
+            "command",
+            "path",
+            "provider",
+            "providerDestination",
+            "callbackUrl",
+            "localPermissionDecision",
+        ];
+        for (const field of forbiddenFields) {
+            await expectApiError(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({ ...validConversation, [field]: "untrusted" }),
+                    headers: {
+                        authorization: `Bearer ${"z".repeat(43)}`,
+                        "content-type": "application/json",
+                    },
+                    method: "POST",
+                }),
+                400,
+                "invalid_request",
+            );
+        }
+    });
+
+    it("Given one binding approval is pending for a Bot, When another request races for the same Bot, Then only one local approval can remain outstanding", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Pending binding");
+            const connection = await connectBot(pairing, bot, "pending-binding");
+            const target = await createTarget(pairing, bot, connection, "pending-binding-target");
+            const behavior = await createBehavior(pairing, bot, "Pending binding");
+            const requestBodyValue = {
+                agentConfigRevision: 1,
+                agentRef: "codex",
+                allowedDeliveryTargetIds: [target.deliveryTargetId],
+                behaviorRevisionId: behavior.behaviorRevisionId,
+                completionPolicy: { kind: "none" },
+                expectedRevision: bot.lifecycleRevision,
+                runtimeId: pairing.runtimeId,
+                workspaceRef: "default",
+            };
+            await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    {
+                        body: JSON.stringify(requestBodyValue),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
+                202,
+            );
+            await expectApiError(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    {
+                        body: JSON.stringify(requestBodyValue),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
+                409,
+                "revision_conflict",
+            );
+            const pending = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT COUNT(*) AS count FROM bot_execution_bindings
+                  WHERE bot_id = ? AND lifecycle = 'requested'`,
+            )
+                .bind(bot.botId)
+                .first<{ readonly count: number }>();
+            expect(pending?.count).toBe(1);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a delivery target approval already committed, When a stale revision retries, Then no rejected audit event is persisted", async () => {
+        const pairing = await pairRuntime();
+        const bot = await createBot(pairing, "Target approval audit");
+        const connection = await connectBot(pairing, bot, "target-approval-audit");
+        const target = await createTarget(pairing, bot, connection, "approved-target");
+
+        await expectApiError(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/delivery-targets/${target.deliveryTargetId}/approve`,
+                {
+                    body: JSON.stringify({ expectedPolicyRevision: 0 }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                },
+            ),
+            409,
+            "revision_conflict",
+        );
+
+        const state = await env.DIRECTORY_DATABASE.prepare(
+            `SELECT owner_approved, outbound_policy_revision
+               FROM bot_delivery_targets
+              WHERE delivery_target_id = ?`,
+        )
+            .bind(target.deliveryTargetId)
+            .first<{ readonly outbound_policy_revision: number; readonly owner_approved: number }>();
+        expect(state).toEqual({ outbound_policy_revision: 1, owner_approved: 1 });
+
+        const audit = await env.DIRECTORY_DATABASE.prepare(
+            `SELECT COUNT(*) AS count FROM bot_audit_events
+              WHERE bot_id = ? AND action = 'bot.delivery_target.approved' AND subject_id = ?`,
+        )
+            .bind(bot.botId, target.deliveryTargetId)
+            .first<{ readonly count: number }>();
+        expect(audit?.count).toBe(1);
+    });
+
+    it("Given a single-use connection grant and rotating credentials, When a connector replays, rotates, and revokes, Then each credential boundary is independent", async () => {
+        const pairing = await pairRuntime();
+        const bot = await createBot(pairing, "Credential boundaries");
+        const grant = await createConnectionGrant(pairing, bot, "primary");
+        const primary = await redeemConnectionGrant(grant, "primary");
+
+        await expectApiError(
+            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connection-grants/redeem`, {
+                body: JSON.stringify({
+                    audience: "test-connector",
+                    connectorPrincipalId: "principal-primary-replay",
+                    grantId: grant.grantId,
+                    grantSecret: grant.grantSecret,
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            401,
+            "credential_invalid",
+        );
+
+        const rotation = await json(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${primary.connectionId}/credentials/rotate`,
+                {
+                    body: JSON.stringify({}),
+                    headers: connectorHeaders(primary),
+                    method: "POST",
+                },
+            ),
+            201,
+        );
+        const rotated: RedeemedConnection = {
+            connectionId: primary.connectionId,
+            credential: stringField(rotation, "credential"),
+        };
+        const overlapTarget = await json(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${primary.connectionId}/delivery-targets`,
+                {
+                    body: JSON.stringify({ alias: "during-overlap" }),
+                    headers: connectorHeaders(primary),
+                    method: "POST",
+                },
+            ),
+            201,
+        );
+        expect(overlapTarget["connectionId"]).toBe(primary.connectionId);
+
+        vi.setSystemTime(new Date("2026-09-08T08:05:00.001Z"));
+        await expectApiError(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${primary.connectionId}/outbound-events?after=0`,
+                { headers: connectorHeaders(primary) },
+            ),
+            401,
+            "credential_invalid",
+        );
+        await json(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${rotated.connectionId}/delivery-targets`,
+                {
+                    body: JSON.stringify({ alias: "after-overlap" }),
+                    headers: connectorHeaders(rotated),
+                    method: "POST",
+                },
+            ),
+            201,
+        );
+
+        const secondary = await connectBot(pairing, bot, "secondary");
+        await json(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${rotated.connectionId}/revoke`,
+                {
+                    body: JSON.stringify({}),
+                    headers: connectorHeaders(rotated),
+                    method: "POST",
+                },
+            ),
+            200,
+        );
+        const revokedOperations = [
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${rotated.connectionId}/outbound-events?after=0`,
+                { headers: connectorHeaders(rotated) },
+            ),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${rotated.connectionId}/outbound-messages/out_missing/delivered`,
+                {
+                    body: JSON.stringify({ claimId: "claim_missing" }),
+                    headers: connectorHeaders(rotated),
+                    method: "POST",
+                },
+            ),
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                body: JSON.stringify({
+                    clientConversationKey: "revoked-inbound",
+                    replyDeliveryTargetId: stringField(overlapTarget, "deliveryTargetId"),
+                    title: "Revoked inbound",
+                }),
+                headers: connectorHeaders(rotated),
+                method: "POST",
+            }),
+        ];
+        for (const operation of revokedOperations) {
+            await expectApiError(await exports.default.fetch(operation), 401, "connection_revoked");
+        }
+        const secondaryTarget = await json(
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${secondary.connectionId}/delivery-targets`,
+                {
+                    body: JSON.stringify({ alias: "secondary-still-active" }),
+                    headers: connectorHeaders(secondary),
+                    method: "POST",
+                },
+            ),
+            201,
+        );
+        expect(secondaryTarget["lifecycle"]).toBe("active");
+    });
+
+    it("Given two Bots share one Runtime and Agent, When both execute and send outbound messages, Then their pinned identities and targets remain isolated", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const botAlpha = await createBot(pairing, "Alpha");
+            const botBeta = await createBot(pairing, "Beta");
+            const behaviorAlpha = await createBehavior(pairing, botAlpha, "Alpha");
+            const behaviorBeta = await createBehavior(pairing, botBeta, "Beta");
+            const connectionAlpha = await connectBot(pairing, botAlpha, "alpha");
+            const connectionBeta = await connectBot(pairing, botBeta, "beta");
+            const targetAlpha = await createTarget(pairing, botAlpha, connectionAlpha, "alpha-notifications");
+            const targetBeta = await createTarget(pairing, botBeta, connectionBeta, "beta-notifications");
+            const bindingAlpha = await approveBinding(pairing, daemon, botAlpha, behaviorAlpha, targetAlpha);
+            const bindingBeta = await approveBinding(pairing, daemon, botBeta, behaviorBeta, targetBeta);
+            const conversationAlpha = await createConversation(pairing, botAlpha, "alpha-thread");
+            const conversationBeta = await createConversation(pairing, botBeta, "beta-thread");
+
+            expect(conversationAlpha).toMatchObject({
+                behaviorRevisionId: behaviorAlpha.behaviorRevisionId,
+                bindingRevision: bindingAlpha.bindingRevision,
+            });
+            expect(conversationBeta).toMatchObject({
+                behaviorRevisionId: behaviorBeta.behaviorRevisionId,
+                bindingRevision: bindingBeta.bindingRevision,
+            });
+
+            const acceptedAlpha = await submitMessage(pairing, botAlpha, conversationAlpha, "message-alpha");
+            const acceptedBeta = await submitMessage(pairing, botBeta, conversationBeta, "message-beta");
+            const commandAlpha = decodeBotSessionPromptCommand(await daemon.messages.next());
+            const commandBeta = decodeBotSessionPromptCommand(await daemon.messages.next());
+            expect(new Set([commandAlpha.botId, commandBeta.botId])).toEqual(new Set([botAlpha.botId, botBeta.botId]));
+            const commands = new Map([
+                [commandAlpha.botId, commandAlpha],
+                [commandBeta.botId, commandBeta],
+            ]);
+            const alpha = commands.get(botAlpha.botId);
+            const beta = commands.get(botBeta.botId);
+            if (alpha === undefined || beta === undefined) {
+                throw new Error("Expected both Bot commands");
+            }
+            expect(alpha).toMatchObject({
+                behaviorRevisionId: behaviorAlpha.behaviorRevisionId,
+                bindingRevision: bindingAlpha.bindingRevision,
+                executionId: acceptedAlpha.executionId,
+                turnId: acceptedAlpha.turnId,
+            });
+            expect(beta).toMatchObject({
+                behaviorRevisionId: behaviorBeta.behaviorRevisionId,
+                bindingRevision: bindingBeta.bindingRevision,
+                executionId: acceptedBeta.executionId,
+                turnId: acceptedBeta.turnId,
+            });
+
+            const crossBot = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${alpha.executionId}/delivery-targets/${targetBeta.deliveryTargetId}/messages`,
+                {
+                    body: JSON.stringify({ idempotencyKey: "cross-bot", text: "forbidden" }),
+                    headers: {
+                        authorization: `Bearer ${pairing.daemonToken}`,
+                        "content-type": "application/json",
+                        "x-mobius-bot-execution-capability": alpha.executionCapabilitySecret,
+                    },
+                    method: "POST",
+                },
+            );
+            expect(crossBot.status).toBe(403);
+            await expect(crossBot.json()).resolves.toMatchObject({
+                error: { code: "delivery_target_not_allowed" },
+            });
+
+            for (const command of [alpha, beta]) {
+                const target = command.botId === botAlpha.botId ? targetAlpha : targetBeta;
+                const accepted = await json(
+                    await exports.default.fetch(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${command.executionId}/delivery-targets/${target.deliveryTargetId}/messages`,
+                        {
+                            body: JSON.stringify({
+                                idempotencyKey: `${command.commandId}-completion`,
+                                text: `${command.botId} completed`,
+                            }),
+                            headers: {
+                                authorization: `Bearer ${pairing.daemonToken}`,
+                                "content-type": "application/json",
+                                "x-mobius-bot-execution-capability": command.executionCapabilitySecret,
+                            },
+                            method: "POST",
+                        },
+                    ),
+                    202,
+                );
+                expect(stringField(accepted, "outboundMessageId")).toMatch(/^out_/);
+                const attemptId = `attempt_${command.commandId}`;
+                await commitAttemptEvent(
+                    daemon,
+                    attemptEnvelope(
+                        command.sessionId,
+                        command.commandId,
+                        `event_${command.commandId}_started`,
+                        SESSION_STARTED_KIND,
+                        attemptId,
+                        1,
+                    ),
+                );
+                await commitAttemptEvent(
+                    daemon,
+                    attemptEnvelope(
+                        command.sessionId,
+                        command.commandId,
+                        `event_${command.commandId}_completed`,
+                        SESSION_COMPLETED_KIND,
+                        attemptId,
+                        2,
+                    ),
+                );
+            }
+
+            await expectConversationEvents(pairing, botAlpha, conversationAlpha, acceptedAlpha, behaviorAlpha);
+            await expectConversationEvents(pairing, botBeta, conversationBeta, acceptedBeta, behaviorBeta);
+
+            const outboundAlpha = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-events?after=0`,
+                    { headers: connectorHeaders(connectionAlpha) },
+                ),
+                200,
+            );
+            const outboundBeta = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionBeta.connectionId}/outbound-events?after=0`,
+                    { headers: connectorHeaders(connectionBeta) },
+                ),
+                200,
+            );
+            expect(outboundAlpha["events"]).toMatchObject([
+                {
+                    behaviorRevisionId: behaviorAlpha.behaviorRevisionId,
+                    bindingRevision: bindingAlpha.bindingRevision,
+                    botId: botAlpha.botId,
+                    conversationId: conversationAlpha.conversationId,
+                    deliveryTargetId: targetAlpha.deliveryTargetId,
+                    executionId: acceptedAlpha.executionId,
+                    turnId: acceptedAlpha.turnId,
+                },
+            ]);
+            expect(outboundBeta["events"]).toMatchObject([
+                {
+                    behaviorRevisionId: behaviorBeta.behaviorRevisionId,
+                    bindingRevision: bindingBeta.bindingRevision,
+                    botId: botBeta.botId,
+                    conversationId: conversationBeta.conversationId,
+                    deliveryTargetId: targetBeta.deliveryTargetId,
+                    executionId: acceptedBeta.executionId,
+                    turnId: acceptedBeta.turnId,
+                },
+            ]);
+
+            const firstAlphaEvent = recordArrayField(outboundAlpha, "events")[0];
+            if (firstAlphaEvent === undefined) {
+                throw new Error("Expected the first Alpha outbound event");
+            }
+            const firstClaimId = stringField(firstAlphaEvent, "claimId");
+            const alphaCursor = integerField(outboundAlpha, "cursor");
+            const firstBetaEvent = recordArrayField(outboundBeta, "events")[0];
+            if (firstBetaEvent === undefined) {
+                throw new Error("Expected the first Beta outbound event");
+            }
+            vi.setSystemTime(new Date("2026-09-08T08:01:00.001Z"));
+            const expiredAcknowledgement = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionBeta.connectionId}/outbound-messages/${stringField(firstBetaEvent, "outboundMessageId")}/delivered`,
+                {
+                    body: JSON.stringify({ claimId: stringField(firstBetaEvent, "claimId") }),
+                    headers: connectorHeaders(connectionBeta),
+                    method: "POST",
+                },
+            );
+            expect(expiredAcknowledgement.status).toBe(409);
+            await expect(expiredAcknowledgement.json()).resolves.toMatchObject({
+                error: { code: "revision_conflict" },
+            });
+            const redelivery = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-events?after=${alphaCursor.toString()}`,
+                    { headers: connectorHeaders(connectionAlpha) },
+                ),
+                200,
+            );
+            const redeliveredEvent = recordArrayField(redelivery, "events")[0];
+            if (redeliveredEvent === undefined) {
+                throw new Error("Expected the unacknowledged Alpha message to be redelivered");
+            }
+            expect(stringField(redeliveredEvent, "outboundMessageId")).toBe(
+                stringField(firstAlphaEvent, "outboundMessageId"),
+            );
+            const redeliveryClaimId = stringField(redeliveredEvent, "claimId");
+            expect(redeliveryClaimId).not.toBe(firstClaimId);
+
+            const staleAcknowledgement = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-messages/${stringField(firstAlphaEvent, "outboundMessageId")}/delivered`,
+                {
+                    body: JSON.stringify({ claimId: firstClaimId }),
+                    headers: connectorHeaders(connectionAlpha),
+                    method: "POST",
+                },
+            );
+            expect(staleAcknowledgement.status).toBe(409);
+            await expect(staleAcknowledgement.json()).resolves.toMatchObject({
+                error: { code: "revision_conflict" },
+            });
+
+            const retryableFailureUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-messages/${stringField(firstAlphaEvent, "outboundMessageId")}/retryable-failure`;
+            const retryableBody = JSON.stringify({
+                claimId: redeliveryClaimId,
+                code: "provider_unavailable",
+                retryAfterSeconds: 30,
+            });
+            const retryable = await json(
+                await exports.default.fetch(retryableFailureUrl, {
+                    body: retryableBody,
+                    headers: connectorHeaders(connectionAlpha),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(retryable).toMatchObject({ duplicate: false, state: "retryable_failed" });
+            const duplicateRetryable = await json(
+                await exports.default.fetch(retryableFailureUrl, {
+                    body: retryableBody,
+                    headers: connectorHeaders(connectionAlpha),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(duplicateRetryable).toMatchObject({ duplicate: true, state: "retryable_failed" });
+
+            vi.setSystemTime(new Date("2026-09-08T08:01:30.001Z"));
+            const retryDelivery = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-events?after=${alphaCursor.toString()}`,
+                    { headers: connectorHeaders(connectionAlpha) },
+                ),
+                200,
+            );
+            const retryEvent = recordArrayField(retryDelivery, "events")[0];
+            if (retryEvent === undefined) {
+                throw new Error("Expected the retryable Alpha message to become available");
+            }
+            const deliveredUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connectionAlpha.connectionId}/outbound-messages/${stringField(retryEvent, "outboundMessageId")}/delivered`;
+            const deliveredBody = JSON.stringify({ claimId: stringField(retryEvent, "claimId") });
+            const delivered = await json(
+                await exports.default.fetch(deliveredUrl, {
+                    body: deliveredBody,
+                    headers: connectorHeaders(connectionAlpha),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(delivered).toMatchObject({ duplicate: false, state: "delivered" });
+            const duplicateDelivered = await json(
+                await exports.default.fetch(deliveredUrl, {
+                    body: deliveredBody,
+                    headers: connectorHeaders(connectionAlpha),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(duplicateDelivered).toMatchObject({ duplicate: true, state: "delivered" });
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given idempotent inbound and outbound work with a required completion policy, When a turn completes and the Bot is suspended, Then work is created once, capabilities expire, and audit records remain singular", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Idempotent completion");
+            const connection = await connectBot(pairing, bot, "idempotent-completion");
+            const target = await createTarget(pairing, bot, connection, "completion-notifications");
+            const behavior = await createBehavior(pairing, bot, "Idempotent completion");
+            const binding = await approveBinding(pairing, daemon, bot, behavior, target, bot.lifecycleRevision, {
+                deliveryTargetId: target.deliveryTargetId,
+                kind: "required",
+                messageTemplate: "Turn {status}",
+            });
+            const conversation = await createConversation(pairing, bot, "idempotent-completion");
+
+            const first = await submitMessage(pairing, bot, conversation, "message-once");
+            const command = decodeBotSessionPromptCommand(await daemon.messages.next());
+            const duplicate = await submitMessage(pairing, bot, conversation, "message-once");
+            expect(first.duplicate).toBe(false);
+            expect(duplicate).toEqual({ ...first, duplicate: true });
+
+            const executionCount = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT COUNT(*) AS count FROM bot_execution_directory
+                  WHERE bot_id = ? AND conversation_id = ? AND turn_id = ?`,
+            )
+                .bind(bot.botId, conversation.conversationId, first.turnId)
+                .first<{ readonly count: number }>();
+            expect(executionCount?.count).toBe(1);
+
+            const changedInbound = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                {
+                    body: JSON.stringify({
+                        actorRef: "project-owner",
+                        clientMessageId: "message-once",
+                        resourceRefs: [],
+                        text: "Different content",
+                    }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                },
+            );
+            await expectApiError(changedInbound, 409, "idempotency_conflict");
+
+            const outboundUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${command.executionId}/delivery-targets/${target.deliveryTargetId}/messages`;
+            const outboundBody = JSON.stringify({ idempotencyKey: "manual-once", text: "Manual notification" });
+            const firstOutbound = await json(
+                await exports.default.fetch(outboundUrl, {
+                    body: outboundBody,
+                    headers: executionHeaders(pairing, command.executionCapabilitySecret),
+                    method: "POST",
+                }),
+                202,
+            );
+            const duplicateOutbound = await json(
+                await exports.default.fetch(outboundUrl, {
+                    body: outboundBody,
+                    headers: executionHeaders(pairing, command.executionCapabilitySecret),
+                    method: "POST",
+                }),
+                202,
+            );
+            expect(firstOutbound["duplicate"]).toBe(false);
+            expect(duplicateOutbound).toEqual({
+                duplicate: true,
+                outboundMessageId: stringField(firstOutbound, "outboundMessageId"),
+            });
+            await expectApiError(
+                await exports.default.fetch(outboundUrl, {
+                    body: JSON.stringify({ idempotencyKey: "manual-once", text: "Changed notification" }),
+                    headers: executionHeaders(pairing, command.executionCapabilitySecret),
+                    method: "POST",
+                }),
+                409,
+                "idempotency_conflict",
+            );
+
+            const attemptId = "attempt-idempotent-completion";
+            await commitAttemptEvent(
+                daemon,
+                attemptEnvelope(
+                    command.sessionId,
+                    command.commandId,
+                    "event-idempotent-started",
+                    SESSION_STARTED_KIND,
+                    attemptId,
+                    1,
+                ),
+            );
+            const completion = attemptEnvelope(
+                command.sessionId,
+                command.commandId,
+                "event-idempotent-completed",
+                SESSION_COMPLETED_KIND,
+                attemptId,
+                2,
+            );
+            await commitAttemptEvent(daemon, completion);
+            daemon.socket.send(encodeSessionEventEnvelope(completion));
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                duplicate: true,
+                eventId: completion.eventId,
+            });
+
+            const outbound = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connection.connectionId}/outbound-events?after=0`,
+                    { headers: connectorHeaders(connection) },
+                ),
+                200,
+            );
+            const outboundEvents = recordArrayField(outbound, "events");
+            expect(outboundEvents).toHaveLength(2);
+            expect(outboundEvents.map((event) => event["idempotencyKey"]).sort()).toEqual([
+                `completion:${first.turnId}`,
+                "manual-once",
+            ]);
+            expect(
+                outboundEvents.find((event) => event["idempotencyKey"] === `completion:${first.turnId}`),
+            ).toMatchObject({
+                behaviorRevisionId: behavior.behaviorRevisionId,
+                bindingId: binding.bindingId,
+                bindingRevision: binding.bindingRevision,
+                botId: bot.botId,
+                conversationId: conversation.conversationId,
+                deliveryTargetId: target.deliveryTargetId,
+                executionId: first.executionId,
+                text: "Turn completed",
+                turnId: first.turnId,
+            });
+
+            await expectApiError(
+                await exports.default.fetch(outboundUrl, {
+                    body: JSON.stringify({ idempotencyKey: "after-completion", text: "Too late" }),
+                    headers: executionHeaders(pairing, command.executionCapabilitySecret),
+                    method: "POST",
+                }),
+                410,
+                "execution_capability_expired",
+            );
+
+            await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
+                    body: JSON.stringify({ expectedRevision: 2 }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                200,
+            );
+            await expectApiError(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    {
+                        body: JSON.stringify({
+                            actorRef: "project-owner",
+                            clientMessageId: "while-suspended",
+                            resourceRefs: [],
+                            text: "Must not run",
+                        }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
+                409,
+                "bot_suspended",
+            );
+
+            const audits = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT action, COUNT(*) AS count FROM bot_audit_events
+                  WHERE bot_id = ? AND action IN (
+                    'bot.execution.created', 'bot.outbound.accepted', 'bot.suspended'
+                  ) GROUP BY action ORDER BY action`,
+            )
+                .bind(bot.botId)
+                .all<{ readonly action: string; readonly count: number }>();
+            expect(audits.results).toEqual([
+                { action: "bot.execution.created", count: 1 },
+                { action: "bot.outbound.accepted", count: 1 },
+                { action: "bot.suspended", count: 1 },
+            ]);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a connected conversation emits local Agent activity, When owner and connector principals resume the event stream, Then connector output is sanitized and actor claims never widen scopes", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Sanitized events");
+            const connection = await connectBot(pairing, bot, "sanitized-events");
+            const limited = await connectBot(pairing, bot, "limited-events", ["conversation-events:read"]);
+            const target = await createTarget(pairing, bot, connection, "reply-target");
+            const behavior = await createBehavior(pairing, bot, "Sanitized events");
+            await approveBinding(pairing, daemon, bot, behavior, target);
+            const conversation = await createConnectedConversation(bot, connection, target, "external-thread");
+
+            await expectApiError(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    {
+                        body: JSON.stringify({
+                            actorRef: "project-owner-administrator",
+                            clientMessageId: "limited-actor-claim",
+                            resourceRefs: [],
+                            text: "Claim owner authority",
+                        }),
+                        headers: connectorHeaders(limited),
+                        method: "POST",
+                    },
+                ),
+                403,
+                "scope_denied",
+            );
+
+            const accepted = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    {
+                        body: JSON.stringify({
+                            actorRef: "external-user-42",
+                            clientMessageId: "external-message",
+                            resourceRefs: [],
+                            text: "Inspect a private file",
+                        }),
+                        headers: connectorHeaders(connection),
+                        method: "POST",
+                    },
+                ),
+                202,
+            );
+            const command = decodeBotSessionPromptCommand(await daemon.messages.next());
+            const attemptId = "attempt-sanitized-events";
+            await commitAttemptEvent(
+                daemon,
+                attemptEnvelope(
+                    command.sessionId,
+                    command.commandId,
+                    "event-sanitized-started",
+                    SESSION_STARTED_KIND,
+                    attemptId,
+                    1,
+                ),
+            );
+            await commitAttemptEvent(
+                daemon,
+                activityEnvelope(command.sessionId, command.commandId, attemptId, "event-sensitive-activity", 2),
+            );
+
+            const eventUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/events`;
+            const ownerPage = await json(
+                await exports.default.fetch(eventUrl, { headers: ownerHeaders(pairing) }),
+                200,
+            );
+            const connectorPage = await json(
+                await exports.default.fetch(eventUrl, { headers: connectorHeaders(connection) }),
+                200,
+            );
+            const ownerActivity = recordArrayField(ownerPage, "events").find(
+                (event) => event["kind"] === AGENT_ACTIVITY_KIND,
+            );
+            const connectorActivity = recordArrayField(connectorPage, "events").find(
+                (event) => event["kind"] === AGENT_ACTIVITY_KIND,
+            );
+            expect(ownerActivity).toMatchObject({
+                conversationId: conversation.conversationId,
+                payload: {
+                    input: '{"path":"/private/workspace/secret.txt"}',
+                    locations: ["/private/workspace/secret.txt"],
+                    output: "private result",
+                },
+                turnId: stringField(accepted, "turnId"),
+            });
+            expect(connectorActivity).toMatchObject({
+                conversationId: conversation.conversationId,
+                payload: { kind: AGENT_ACTIVITY_KIND },
+                turnId: stringField(accepted, "turnId"),
+            });
+            expect(Object.keys(record(record(connectorActivity)["payload"]))).toEqual(["kind"]);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given an approved Runtime is temporarily offline, When an inbound Bot message is accepted, Then reconnect dispatches the same durable turn once", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        const recoveredSockets: OpenSocket[] = [];
+        try {
+            const bot = await createBot(pairing, "Offline Runtime");
+            const connection = await connectBot(pairing, bot, "offline-runtime");
+            const target = await createTarget(pairing, bot, connection, "offline-runtime-target");
+            const behavior = await createBehavior(pairing, bot, "Offline Runtime");
+            await approveBinding(pairing, daemon, bot, behavior, target);
+            const conversation = await createConversation(pairing, bot, "offline-runtime");
+            daemon.socket.close(1000, "Runtime offline");
+
+            const accepted = await submitMessage(pairing, bot, conversation, "queued-while-offline");
+            expect(accepted.duplicate).toBe(false);
+            const recovered = await openDaemon(pairing);
+            recoveredSockets.push(recovered);
+            const command = decodeBotSessionPromptCommand(await recovered.messages.next());
+            expect(command).toMatchObject({
+                behaviorRevisionId: behavior.behaviorRevisionId,
+                bindingId: conversation.bindingId,
+                bindingRevision: conversation.bindingRevision,
+                botId: bot.botId,
+                conversationId: conversation.conversationId,
+                executionId: accepted.executionId,
+                turnId: accepted.turnId,
+            });
+
+            const replayed = await submitMessage(pairing, bot, conversation, "queued-while-offline");
+            expect(replayed).toEqual({ ...accepted, duplicate: true });
+            const directory = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT COUNT(*) AS count FROM bot_execution_directory
+                  WHERE execution_id = ? AND conversation_id = ?`,
+            )
+                .bind(accepted.executionId, conversation.conversationId)
+                .first<{ readonly count: number }>();
+            expect(directory?.count).toBe(1);
+        } finally {
+            for (const recovered of recoveredSockets) {
+                recovered.socket.close(1000, "Test complete");
+            }
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given an existing conversation predates a newly approved behavior, When its creation key is replayed, Then the original session and revisions remain pinned", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Pinned");
+            const connection = await connectBot(pairing, bot, "pinned");
+            const target = await createTarget(pairing, bot, connection, "pinned-notifications");
+            const firstBehavior = await createBehavior(pairing, bot, "Pinned revision one");
+            const firstBinding = await approveBinding(pairing, daemon, bot, firstBehavior, target);
+            const original = await createConversation(pairing, bot, "stable-conversation");
+
+            const secondBehavior = await createBehavior(pairing, bot, "Pinned revision two", 1);
+            await approveBinding(pairing, daemon, bot, secondBehavior, target, 2);
+
+            const replayed = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({
+                        clientConversationKey: "stable-conversation",
+                        title: "Conversation stable-conversation",
+                    }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                201,
+            );
+            expect(replayed).toMatchObject({
+                behaviorRevisionId: firstBehavior.behaviorRevisionId,
+                bindingId: firstBinding.bindingId,
+                bindingRevision: firstBinding.bindingRevision,
+                conversationId: original.conversationId,
+                lifecycle: "active",
+                sessionId: original.sessionId,
+            });
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given conversation provisioning was interrupted after Session creation, When the Runtime reconnects, Then the same conversation activates without another session", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Recoverable");
+            const connection = await connectBot(pairing, bot, "recoverable");
+            const target = await createTarget(pairing, bot, connection, "recoverable-notifications");
+            const behavior = await createBehavior(pairing, bot, "Recoverable");
+            await approveBinding(pairing, daemon, bot, behavior, target);
+            const conversation = await createConversation(pairing, bot, "recoverable-conversation");
+
+            const reset = await env.DIRECTORY_DATABASE.batch([
+                env.DIRECTORY_DATABASE.prepare(
+                    `UPDATE bot_conversations
+                        SET lifecycle = 'provisioning', activated_at = NULL
+                      WHERE conversation_id = ?`,
+                ).bind(conversation.conversationId),
+                env.DIRECTORY_DATABASE.prepare(
+                    `UPDATE bot_control_outbox
+                        SET state = 'pending', completed_at = NULL
+                      WHERE subject_id = ? AND message_kind = 'conversation_provisioning'`,
+                ).bind(conversation.conversationId),
+            ]);
+            expect(reset.every((result) => result.meta.changes === 1)).toBe(true);
+
+            const recoveredDaemon = await openDaemon(pairing);
+            try {
+                const recovered = await env.DIRECTORY_DATABASE.prepare(
+                    `SELECT conversations.lifecycle,
+                        (SELECT state FROM bot_control_outbox
+                          WHERE subject_id = conversations.conversation_id
+                            AND message_kind = 'conversation_provisioning') AS outbox_state,
+                        (SELECT COUNT(*) FROM bot_conversations
+                          WHERE session_id = conversations.session_id) AS session_count
+                   FROM bot_conversations AS conversations
+                  WHERE conversation_id = ?`,
+                )
+                    .bind(conversation.conversationId)
+                    .first<{
+                        readonly lifecycle: string;
+                        readonly outbox_state: string;
+                        readonly session_count: number;
+                    }>();
+                expect(recovered).toEqual({ lifecycle: "active", outbox_state: "completed", session_count: 1 });
+            } finally {
+                recoveredDaemon.socket.close(1000, "Test complete");
+            }
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+});

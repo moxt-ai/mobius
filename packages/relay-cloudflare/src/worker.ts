@@ -1,14 +1,17 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { createMobiusApplication, createMobiusDependencies } from "@moxt-ai/mobius-relay-core";
 
+import { CloudflareBotApi } from "./bot-api.ts";
 import { CloudflareChannelRuntime } from "./cloudflare-channel-runtime.ts";
 import { CloudflareSessionRuntime } from "./cloudflare-session-runtime.ts";
 import { D1PairingGateway } from "./d1-pairing-gateway.ts";
+import { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
 import { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 import { LiteSessionRelay, SessionRelay } from "./durable-objects/session-relay.ts";
 import { type LiteSessionConfigurationEnvironment, sessionQuotaFromEnvironment } from "./session-configuration.ts";
 
 export interface RelayBindings extends LiteSessionConfigurationEnvironment {
+    readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
@@ -16,7 +19,7 @@ export interface RelayBindings extends LiteSessionConfigurationEnvironment {
 
 const application = createMobiusApplication();
 const worker: ExportedHandler<RelayBindings> = {
-    fetch: (request, environment) => {
+    fetch: async (request, environment) => {
         const infrastructure = {
             config: { quota: sessionQuotaFromEnvironment(environment) },
             gateways: {
@@ -26,12 +29,17 @@ const worker: ExportedHandler<RelayBindings> = {
             },
         };
         const sessions = new CloudflareSessionRuntime(infrastructure);
+        const channelRuntime = new CloudflareChannelRuntime(infrastructure);
+        const botApi = new CloudflareBotApi(environment, channelRuntime, sessions);
+        if (botApi.handles(request)) {
+            return await botApi.fetch(request);
+        }
         const cx = createMobiusDependencies({
             config: { apiPrefix: MOBIUS_API_PREFIX },
             logger: console,
             gateways: {
                 nowEpochMilliseconds: () => Date.now(),
-                channelGateway: new CloudflareChannelRuntime(infrastructure),
+                channelGateway: channelRuntime,
                 pairingGateway: new D1PairingGateway(infrastructure),
                 sessionCommands: sessions,
                 sessionQueries: sessions,
@@ -40,9 +48,9 @@ const worker: ExportedHandler<RelayBindings> = {
                 sessionEventStreams: sessions,
             },
         });
-        return application.fetch(request, cx);
+        return await application.fetch(request, cx);
     },
 };
 
-export { LiteSessionRelay, RuntimeRelay, SessionRelay };
+export { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay };
 export default worker;

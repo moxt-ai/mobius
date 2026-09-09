@@ -423,15 +423,21 @@ Durable Object, SQLite, filesystem, or deployment-specific types. The Node
 example's 120-second signal is an application-level local wait deadline; it does
 not request remote cancellation if it expires.
 
-## Boundary for future Bot identities
+## Bot connector API
 
-The public data plane deliberately centers on Session, Turn, Attempt, Event, and
-Artifact. It does not add nullable Bot fields or let a Turn caller select an
-execution target.
+The package also exports `redeemMobiusBotConnectionGrant` and
+`createMobiusBotConnectorClient` for provider-neutral external connectors. The
+client supports independently rotatable connection credentials, opaque delivery
+targets, idempotent connected conversations and messages, resumable conversation
+events, outbound claim pages, delivery acknowledgement, and connection
+revocation. It never accepts local Runtime, Agent, executable, workspace,
+permission, provider credential, or provider destination fields.
 
-A future Bot control service can pin a Bot behavior and approved binding while
-creating a BotConversation-to-Session extension, then reuse the existing Turn,
-Event, Interaction, history, and Artifact resources. Bot remains the stable
-project identity; Session remains the execution-history aggregate; Channel and
-Agent remain connection and execution details. Existing direct-Agent Sessions
-need no invented Bot identity.
+Bot is the stable project identity. A BotConversation pins immutable behavior
+and approved binding revisions in a one-to-one Session extension, while Session
+remains the execution-history aggregate. Existing direct-Agent Sessions keep
+their original model and receive no invented Bot identity.
+
+See [Bots and external connectors](bots.md) for the full authorization model,
+HTTP route contract, credential lifecycle, offline guarantees, SDK example, and
+local outbound CLI.

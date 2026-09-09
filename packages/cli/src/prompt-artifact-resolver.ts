@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { PromptImage, PromptResource, SessionPromptCommand } from "@moxt-ai/mobius-protocol";
+import type { PromptImage, PromptResource } from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 
 import type { DaemonConfig } from "./config.ts";
@@ -30,6 +30,13 @@ export class ResolvedPromptArtifacts {
         this.images = images;
         this.resources = resources;
     }
+}
+
+export interface ArtifactPromptCommand {
+    readonly commandId: string;
+    readonly images: readonly PromptImage[];
+    readonly resources: readonly PromptResource[];
+    readonly sessionId: string;
 }
 
 class PromptArtifactReference {
@@ -78,7 +85,7 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
     return new PromptArtifactReference(artifactId, byteLength, sha256, resource);
 }
 
-function downloadUrl(config: DaemonConfig, command: SessionPromptCommand, reference: PromptArtifactReference): URL {
+function downloadUrl(config: DaemonConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
     const url = new URL(config.relayUrl);
     url.protocol = url.protocol === "wss:" ? "https:" : "http:";
     if (!url.pathname.endsWith("/daemon")) {
@@ -140,7 +147,7 @@ async function responseBytes(
 
 async function download(
     config: DaemonConfig,
-    command: SessionPromptCommand,
+    command: ArtifactPromptCommand,
     reference: PromptArtifactReference,
     signal: AbortSignal,
 ): Promise<Uint8Array> {
@@ -207,7 +214,7 @@ function isTextMediaType(mediaType: string): boolean {
 
 export async function resolvePromptArtifacts(
     config: DaemonConfig,
-    command: SessionPromptCommand,
+    command: ArtifactPromptCommand,
     signal: AbortSignal,
 ): Promise<ResolvedPromptArtifacts> {
     const images = [...command.images];

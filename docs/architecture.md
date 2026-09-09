@@ -4,9 +4,9 @@ Mobius is a remotely accessible ACP client runtime with a portable Relay core,
 a Cloudflare deployment profile, and a locally enforced security boundary.
 
 ```text
-Pairing page / channel Web app / external integration
-  -> TypeScript SDK (HTTP resources + Session SSE)
-  -> Relay API + ChannelActor
+Pairing page / channel Web app / external connector
+  -> TypeScript SDK (HTTP resources + Session SSE + Bot API)
+  -> Relay API + ChannelActor + Bot control/data planes
   -> verified Tenant / Project scope
   -> Runtime / Channel connection owner
   -> independent Session runtime and query directory
@@ -107,10 +107,21 @@ cursors, then consume the same committed-event envelope live.
 
 Public Turn submission names a Session, content, and an idempotency key. Relay
 loads the server-owned Session binding, reauthorizes its exact Runtime, commits
-the Turn, and only then requests dispatch. This boundary is reusable by a
-future BotConversation: Bot behavior and binding revisions can be pinned while
-the existing Session remains the execution-history aggregate. Neither Channel
-nor Agent becomes the Bot's durable identity.
+the Turn, and only then requests dispatch. BotConversation uses this boundary as
+a one-to-one Session extension: its immutable behavior and approved binding
+revisions are pinned before a turn is accepted, while Session remains the
+execution-history aggregate. Bot is the durable identity; Channel and
+BotConnection are access paths, and Agent remains a local execution capability.
+
+Bot directory and connection metadata live in D1. Each Session Durable Object
+is the single writer for one Bot conversation's turns, executions, capability
+records, and accepted outbound requests. Each BotConnectionActor is the single
+writer for its ordered outbound delivery stream. Interrupted conversation
+provisioning and outbound forwarding are idempotent sagas with reconciliation,
+so valid inbound work may wait for a disconnected Runtime and accepted outbound
+work may wait for a disconnected connector. See [Bots and external
+connectors](bots.md) for the identity, authorization, API, and threat-model
+contract.
 
 Activity summaries are bounded separately from recorded details. Full permitted
 details are captured before summarization, split into bounded compressed segments,
@@ -240,6 +251,8 @@ events use bounded stages and sanitized stable codes.
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network
   boundaries.
+- `packages/web-sdk` owns the public provider-neutral Bot connector client as
+  well as the Session resource client.
 - `packages/web` owns the Vite application shell, runtime dependencies, and
   Tailwind CSS entrypoint.
 - `packages/web-core` owns the reusable React agent experience, including chat

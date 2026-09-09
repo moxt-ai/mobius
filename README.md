@@ -87,6 +87,23 @@ The dependency direction is from the application to Mobius:
 As a result, `app-slack` and other `app-*` services can be added or removed
 without changing Mobius itself.
 
+### First-class Bots and channel-neutral connectors
+
+Mobius also provides a provider-neutral Bot API for durable, project-scoped Bot
+identities. A Bot owns immutable profile and behavior revisions, an approved
+local execution binding, pinned conversations, and independently revocable
+external connections. External connectors can submit inbound messages and
+consume durable outbound deliveries without receiving authority over the local
+Agent, Runtime, workspace, executable, or permission decisions.
+
+Provider installations, credentials, webhook verification, provider account
+and destination mappings, and physical delivery remain outside this repository.
+The local daemon remains the final authority for execution through a
+daemon-local `LocalBotGrant`; a short-lived `BotExecutionCapability` authorizes
+one running Bot to use only its approved outbound targets. See [Bots and
+external connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and
+security model.
+
 ### Agent harness integrations
 
 Implemented local integrations:

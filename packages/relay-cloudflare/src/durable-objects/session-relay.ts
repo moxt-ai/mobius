@@ -1,25 +1,39 @@
 import {
     decodeInteractionResponse,
+    decodeMessageKind,
     decodeNativeSessionHistory,
+    decodePromptImagesValue,
+    decodePromptResourcesValue,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
+    SESSION_COMPLETED_KIND,
+    SESSION_FAILED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import {
     ArtifactUploadLease,
     type AttemptReconciliationOutcome,
+    BotOutboundAcceptance,
+    BotOutboundSubmission,
+    BotTurnSubmission,
     CreateArtifactUploadRequest,
     CreateSessionBindingRequest,
     CreateSessionRequest,
+    decodeBotSessionProvisioning,
     type ImmutableContentStore,
+    type PendingBotOutbound,
     ProjectScope,
     RequestBodyError,
     readBoundedUtf8Body,
     SessionRecordingPolicy,
     SessionRuntimeError,
     type SessionSqlRow,
+    SqliteBotSessionRuntime,
     SqliteSessionRuntime,
     UploadingArtifactDescriptor,
 } from "@moxt-ai/mobius-relay-core";
+import { BotApiError } from "../bot-api-error.ts";
+import { CloudflareBotConnectionRuntime } from "../cloudflare-bot-connection-runtime.ts";
+import { D1BotConnections } from "../d1-bot-connections.ts";
 import { DurableObjectContentStore } from "../durable-object-content-store.ts";
 import { DurableObjectSqlDatabase } from "../durable-object-sql-database.ts";
 import { R2ContentStore } from "../r2-content-store.ts";
@@ -32,7 +46,17 @@ import {
 
 const MAX_INTERNAL_BODY_LENGTH = 96 * 1024 * 1024;
 
-export interface SessionRelayEnvironment extends SessionConfigurationEnvironment {
+interface BotSessionRelayEnvironment extends SessionConfigurationEnvironment {
+    readonly BOT_CONNECTIONS: DurableObjectNamespace;
+    readonly DIRECTORY_DATABASE: D1Database;
+}
+
+interface LiteBotSessionRelayEnvironment extends LiteSessionConfigurationEnvironment {
+    readonly BOT_CONNECTIONS: DurableObjectNamespace;
+    readonly DIRECTORY_DATABASE: D1Database;
+}
+
+export interface SessionRelayEnvironment extends BotSessionRelayEnvironment {
     readonly SESSION_ARCHIVES: R2Bucket;
 }
 
@@ -83,6 +107,49 @@ function readCreateArtifactUploadRequest(value: Readonly<Record<string, unknown>
         readString(request, "mediaType", 255),
         readInteger(request, "byteLength"),
         readString(request, "sha256", 64),
+    );
+}
+
+function readStringList(value: unknown, maximumCount: number): readonly string[] {
+    if (!Array.isArray(value) || value.length > maximumCount || value.some((entry) => typeof entry !== "string")) {
+        throw new InternalRequestError("invalid_session_operation", "The Bot identifier list is invalid");
+    }
+    return value.filter((entry) => typeof entry === "string");
+}
+
+function readBotTurnSubmission(value: Readonly<Record<string, unknown>>): BotTurnSubmission {
+    const submission = value["submission"];
+    if (!isRecord(submission)) {
+        throw new InternalRequestError("invalid_session_operation", "The Bot turn submission is invalid");
+    }
+    assertExactKeys(submission, [
+        "actorRef",
+        "additionalDirectoryIds",
+        "clientMessageId",
+        "images",
+        "prompt",
+        "resources",
+    ]);
+    return new BotTurnSubmission(
+        readString(submission, "clientMessageId"),
+        readString(submission, "actorRef", 500),
+        readString(submission, "prompt", 100_000, true),
+        readStringList(submission["additionalDirectoryIds"], 16),
+        decodePromptImagesValue(submission["images"]),
+        decodePromptResourcesValue(submission["resources"]),
+    );
+}
+
+function readBotOutboundSubmission(value: Readonly<Record<string, unknown>>): BotOutboundSubmission {
+    const submission = value["submission"];
+    if (!isRecord(submission)) {
+        throw new InternalRequestError("invalid_session_operation", "The Bot outbound request is invalid");
+    }
+    assertExactKeys(submission, ["deliveryTargetId", "idempotencyKey", "text"]);
+    return new BotOutboundSubmission(
+        readString(submission, "idempotencyKey"),
+        readString(submission, "deliveryTargetId"),
+        readString(submission, "text", 10_000),
     );
 }
 
@@ -328,20 +395,22 @@ function errorResponse(error: SessionRuntimeError | InternalRequestError): Respo
 }
 
 class SessionRelayController {
+    readonly #bots: SqliteBotSessionRuntime;
+    readonly #botConnections: D1BotConnections;
+    readonly #connectionRuntime: CloudflareBotConnectionRuntime;
     readonly #database: DurableObjectSqlDatabase;
     readonly #runtime: SqliteSessionRuntime;
     readonly #state: DurableObjectState;
 
-    constructor(
-        state: DurableObjectState,
-        environment: SessionConfigurationEnvironment,
-        content: ImmutableContentStore,
-    ) {
+    constructor(state: DurableObjectState, environment: BotSessionRelayEnvironment, content: ImmutableContentStore) {
         this.#database = new DurableObjectSqlDatabase(state.storage);
         this.#runtime = new SqliteSessionRuntime({
             gateways: { database: this.#database, content },
             config: { quota: sessionQuotaFromEnvironment(environment) },
         });
+        this.#bots = new SqliteBotSessionRuntime(this.#database, this.#runtime);
+        this.#botConnections = new D1BotConnections(environment.DIRECTORY_DATABASE);
+        this.#connectionRuntime = new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS);
         this.#state = state;
     }
 
@@ -353,6 +422,114 @@ class SessionRelayController {
             const operation = operationFromPath(new URL(request.url).pathname);
             const body = await readBody(request);
             const scope = readScope(body);
+            if (operation === "bot-provision") {
+                assertExactKeys(body, ["now", "provisioning", "scope"]);
+                await this.#bots.provisionConversation(
+                    scope,
+                    decodeBotSessionProvisioning(body["provisioning"]),
+                    readInteger(body, "now"),
+                    request.signal,
+                );
+                return Response.json({ provisioned: true });
+            }
+            if (operation === "bot-accept") {
+                assertExactKeys(body, ["now", "scope", "sessionId", "submission"]);
+                return Response.json(
+                    await this.#bots.acceptTurn(
+                        scope,
+                        readString(body, "sessionId"),
+                        readBotTurnSubmission(body),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "bot-execution-authorize") {
+                assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId"]);
+                await this.#bots.authorizeExecutionCapability(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "executionId"),
+                    readString(body, "capabilitySecret", 256),
+                    readInteger(body, "now"),
+                    request.signal,
+                );
+                return Response.json({ authorized: true });
+            }
+            if (operation === "bot-outbound-accept") {
+                assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId", "submission"]);
+                const accepted = await this.#bots.acceptOutbound(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "executionId"),
+                    readString(body, "capabilitySecret", 256),
+                    readBotOutboundSubmission(body),
+                    readInteger(body, "now"),
+                    request.signal,
+                );
+                await this.#state.storage.setAlarm(Date.now());
+                return Response.json(accepted);
+            }
+            if (operation === "bot-outbound-pending") {
+                assertExactKeys(body, ["limit", "now", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#bots.listPendingOutbound(
+                        scope,
+                        readString(body, "sessionId"),
+                        readInteger(body, "limit"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "bot-conversation-events") {
+                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#bots.readConversationEvents(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "cursor", 512, true),
+                        readInteger(body, "limit"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "bot-outbound-forwarded") {
+                assertExactKeys(body, ["now", "outboundMessageId", "scope", "sessionId"]);
+                await this.#bots.markOutboundForwarded(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "outboundMessageId"),
+                    readInteger(body, "now"),
+                    request.signal,
+                );
+                return Response.json({ forwarded: true });
+            }
+            if (operation === "bot-outbound-terminal-failure") {
+                assertExactKeys(body, ["failureCode", "now", "outboundMessageId", "scope", "sessionId"]);
+                await this.#bots.markOutboundTerminalFailure(
+                    scope,
+                    readString(body, "sessionId"),
+                    readString(body, "outboundMessageId"),
+                    readString(body, "failureCode"),
+                    readInteger(body, "now"),
+                    request.signal,
+                );
+                return Response.json({ terminal: true });
+            }
+            if (operation === "bot-execution-settle") {
+                assertExactKeys(body, ["commandId", "now", "outcome", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#bots.settleExecution(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "commandId"),
+                        readString(body, "outcome"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "event-stream") {
                 assertExactKeys(body, ["cursor", "scope", "sessionId"]);
                 return await this.#runtime.openEventStream(
@@ -486,6 +663,34 @@ class SessionRelayController {
                     readInteger(body, "now"),
                     request.signal,
                 );
+                if (!result.duplicate) {
+                    const eventKind = decodeMessageKind(envelope.payload);
+                    if (eventKind === SESSION_COMPLETED_KIND) {
+                        const payload: unknown = JSON.parse(envelope.payload);
+                        const stopReason = isRecord(payload) ? payload["stopReason"] : "";
+                        const pending = await this.#bots.settleExecution(
+                            scope,
+                            envelope.sessionId,
+                            isRecord(payload) && typeof payload["commandId"] === "string" ? payload["commandId"] : "",
+                            stopReason === "cancelled" ? "cancelled" : "completed",
+                            readInteger(body, "now"),
+                            request.signal,
+                        );
+                        await this.reconcileBotOutbound(scope, envelope.sessionId, pending, request.signal);
+                    }
+                    if (eventKind === SESSION_FAILED_KIND) {
+                        const payload: unknown = JSON.parse(envelope.payload);
+                        const pending = await this.#bots.settleExecution(
+                            scope,
+                            envelope.sessionId,
+                            isRecord(payload) && typeof payload["commandId"] === "string" ? payload["commandId"] : "",
+                            "failed",
+                            readInteger(body, "now"),
+                            request.signal,
+                        );
+                        await this.reconcileBotOutbound(scope, envelope.sessionId, pending, request.signal);
+                    }
+                }
                 const summary = await this.#runtime.readSession(scope, envelope.sessionId, request.signal);
                 await this.#state.storage.setAlarm(Date.now());
                 return Response.json({ ...result, summary });
@@ -782,6 +987,15 @@ class SessionRelayController {
                     await this.#runtime.runArchiveWork(scope, sessionId, new AbortController().signal);
                     pending = this.#runtime.hasPendingArchiveWork(scope, sessionId) || pending;
                 }
+                const outbound = await this.#bots.listPendingOutbound(
+                    scope,
+                    sessionId,
+                    100,
+                    Date.now(),
+                    new AbortController().signal,
+                );
+                await this.reconcileBotOutbound(scope, sessionId, outbound, new AbortController().signal);
+                pending = outbound.length > 0 || pending;
             } catch (error) {
                 console.error("Session archive recovery failed", error);
                 pending = true;
@@ -799,12 +1013,80 @@ class SessionRelayController {
         }
         return value;
     };
+
+    private readonly reconcileBotOutbound = async (
+        scope: ProjectScope,
+        sessionId: string,
+        pending: readonly PendingBotOutbound[],
+        signal: AbortSignal,
+    ): Promise<void> => {
+        for (const message of pending) {
+            signal.throwIfAborted();
+            try {
+                const execution = this.#database.query(
+                    `SELECT binding_id FROM bot_executions
+                      WHERE scope_key = ? AND session_id = ? AND execution_id = ?`,
+                    [`${scope.tenantId}:${scope.projectId}`, sessionId, message.executionId],
+                )[0];
+                if (execution === undefined) {
+                    throw new SessionRuntimeError(
+                        "session_storage_unavailable",
+                        "The Bot outbound execution is unavailable",
+                    );
+                }
+                const route = await this.#botConnections.authorizeOutboundTarget(
+                    message.botId,
+                    this.rowString(execution, "binding_id"),
+                    message.deliveryTargetId,
+                    signal,
+                );
+                await this.#connectionRuntime.enqueue(
+                    route,
+                    new BotOutboundAcceptance(
+                        message.outboundMessageId,
+                        message.botId,
+                        message.conversationId,
+                        message.turnId,
+                        message.behaviorRevisionId,
+                        message.bindingId,
+                        message.bindingRevision,
+                        message.executionId,
+                        message.deliveryTargetId,
+                        message.idempotencyKey,
+                        message.text,
+                        message.acceptedAt,
+                        message.expiresAt,
+                        false,
+                    ),
+                    signal,
+                );
+                await this.#bots.markOutboundForwarded(scope, sessionId, message.outboundMessageId, Date.now(), signal);
+            } catch (error) {
+                signal.throwIfAborted();
+                if (
+                    error instanceof BotApiError &&
+                    (error.code === "delivery_target_not_allowed" || error.code === "delivery_target_unavailable")
+                ) {
+                    await this.#bots.markOutboundTerminalFailure(
+                        scope,
+                        sessionId,
+                        message.outboundMessageId,
+                        error.code,
+                        Date.now(),
+                        signal,
+                    );
+                    continue;
+                }
+                throw error;
+            }
+        }
+    };
 }
 
 export class LiteSessionRelay {
     readonly #controller: SessionRelayController;
 
-    constructor(state: DurableObjectState, environment: LiteSessionConfigurationEnvironment) {
+    constructor(state: DurableObjectState, environment: LiteBotSessionRelayEnvironment) {
         this.#controller = new SessionRelayController(
             state,
             environment,

@@ -1,4 +1,8 @@
 import {
+    BOT_BINDING_APPROVED_KIND,
+    BOT_BINDING_UNAVAILABLE_KIND,
+    decodeBotExecutionBindingApprovedEvent,
+    decodeBotExecutionBindingUnavailableEvent,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     encodeRuntimeHeartbeatAckEvent,
@@ -7,7 +11,14 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { ChannelActor, type ChannelPeers, type ChannelSocket, ProjectScope } from "@moxt-ai/mobius-relay-core";
+import {
+    BotSessionRuntimeError,
+    ChannelActor,
+    type ChannelPeers,
+    type ChannelSocket,
+    ProjectScope,
+} from "@moxt-ai/mobius-relay-core";
+import { CloudflareBotSessionRuntime } from "../cloudflare-bot-session-runtime.ts";
 import {
     INTERNAL_CHANNEL_ID_HEADER,
     INTERNAL_HOST_CREDENTIAL_ID_HEADER,
@@ -16,6 +27,8 @@ import {
     INTERNAL_TENANT_ID_HEADER,
 } from "../cloudflare-channel-runtime.ts";
 import { CloudflareSessionRuntime } from "../cloudflare-session-runtime.ts";
+import { D1BotControl } from "../d1-bot-control.ts";
+import { D1BotConversations } from "../d1-bot-conversations.ts";
 import { type SessionConfigurationEnvironment, sessionQuotaFromEnvironment } from "../session-configuration.ts";
 
 const DAEMON_TAG = "daemon";
@@ -164,6 +177,9 @@ class CloudflareChannelPeers implements ChannelPeers {
 }
 
 export class RuntimeRelay {
+    readonly #botConversations: D1BotConversations;
+    readonly #botSessions: CloudflareBotSessionRuntime;
+    readonly #bots: D1BotControl;
     #daemonMessageTail: Promise<void> = Promise.resolve();
     readonly #database: D1Database;
     readonly #peers: CloudflareChannelPeers;
@@ -184,10 +200,13 @@ export class RuntimeRelay {
     `);
         this.#peers = new CloudflareChannelPeers(state);
         this.#database = environment.DIRECTORY_DATABASE;
+        this.#bots = new D1BotControl(environment.DIRECTORY_DATABASE);
         this.#sessions = new CloudflareSessionRuntime({
             gateways: { sessionRelay: environment.SESSION_RELAY, directoryDatabase: environment.DIRECTORY_DATABASE },
             config: { quota: sessionQuotaFromEnvironment(environment) },
         });
+        this.#botConversations = new D1BotConversations(environment.DIRECTORY_DATABASE);
+        this.#botSessions = new CloudflareBotSessionRuntime(environment.SESSION_RELAY, this.#sessions);
         this.#state = state;
     }
 
@@ -225,6 +244,8 @@ export class RuntimeRelay {
         }
         if (request.method === "POST" && pathname.endsWith("/pending-daemon-deliveries")) {
             await this.actor(access.runtimeId, access.scope).dispatchPending(request.signal);
+            await this.dispatchPendingBotControl(access.runtimeId, access.scope, request.signal);
+            await this.reconcilePendingBotConversations(access.runtimeId, access.scope, request.signal);
             return new Response(null, { status: 204 });
         }
         if (request.method === "GET" && pathname.endsWith("/runtime-status")) {
@@ -269,6 +290,25 @@ export class RuntimeRelay {
             );
         }
         return new Response(null, { status: 404 });
+    }
+
+    async alarm(): Promise<void> {
+        const daemon = this.#state.getWebSockets(DAEMON_TAG).find((socket) => {
+            const attachment = readAttachment(socket.deserializeAttachment());
+            return attachment.role === "daemon" && socket.readyState === WebSocket.OPEN;
+        });
+        if (daemon === undefined) {
+            return;
+        }
+        const attachment = readAttachment(daemon.deserializeAttachment());
+        if (attachment.role !== "daemon" || !this.isCurrentConnection(attachment)) {
+            return;
+        }
+        await this.reconcilePendingBotConversations(
+            attachment.runtimeId,
+            new ProjectScope(attachment.tenantId, attachment.projectId),
+            new AbortController().signal,
+        );
     }
 
     async webSocketMessage(socket: WebSocket, message: unknown): Promise<void> {
@@ -326,6 +366,21 @@ export class RuntimeRelay {
                     });
                     socket.close(1012, "Daemon connection replaced");
                     return;
+                }
+                if (typeof message === "string") {
+                    const kind = decodeMessageKind(message);
+                    if (kind === BOT_BINDING_APPROVED_KIND) {
+                        const event = decodeBotExecutionBindingApprovedEvent(message);
+                        await this.#bots.approveBinding(scope, attachment.runtimeId, event, Date.now(), signal);
+                        channelSocket.send(message);
+                        return;
+                    }
+                    if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
+                        const event = decodeBotExecutionBindingUnavailableEvent(message);
+                        await this.#bots.rejectBinding(scope, attachment.runtimeId, event, Date.now(), signal);
+                        channelSocket.send(message);
+                        return;
+                    }
                 }
                 await this.actor(attachment.runtimeId, scope).receiveDaemonMessage(channelSocket, message, signal);
             });
@@ -425,6 +480,8 @@ export class RuntimeRelay {
         );
         try {
             await this.actor(runtimeId, scope).attachDaemon(previousSockets.length > 0, signal);
+            await this.dispatchPendingBotControl(runtimeId, scope, signal);
+            await this.reconcilePendingBotConversations(runtimeId, scope, signal);
         } catch (error) {
             server.close(1011, "Runtime attachment failed");
             throw error;
@@ -566,6 +623,63 @@ export class RuntimeRelay {
             config: { runtimeId, scope },
             gateways: { commands: this.#sessions, queries: this.#sessions, peers: this.#peers },
         });
+
+    private readonly dispatchPendingBotControl = async (
+        runtimeId: string,
+        scope: ProjectScope,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const messages = await this.#bots.listPendingControl(scope, runtimeId, 100, signal);
+        const daemon = this.#peers.daemons().find((socket) => socket.isOpen());
+        if (daemon === undefined) {
+            return;
+        }
+        for (const message of messages) {
+            signal.throwIfAborted();
+            daemon.send(message);
+        }
+    };
+
+    private readonly reconcilePendingBotConversations = async (
+        runtimeId: string,
+        scope: ProjectScope,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const plans = await this.#botConversations.listPendingProvisioning(scope, runtimeId, 100, signal);
+        let retryPending = plans.length === 100;
+        for (const plan of plans) {
+            signal.throwIfAborted();
+            try {
+                await this.#botSessions.provisionConversation(scope, plan.provisioning, Date.now(), signal);
+                await this.#botConversations.activateConversation(
+                    scope,
+                    plan.provisioning.conversationId,
+                    Date.now(),
+                    signal,
+                );
+            } catch (error) {
+                signal.throwIfAborted();
+                if (
+                    error instanceof BotSessionRuntimeError &&
+                    (error.code === "conversation_access_denied" || error.code === "session_conflict")
+                ) {
+                    await this.#botConversations.failConversationProvisioning(
+                        scope,
+                        plan.provisioning.conversationId,
+                        error.code,
+                        Date.now(),
+                        signal,
+                    );
+                    continue;
+                }
+                console.error("Bot conversation provisioning recovery failed", error);
+                retryPending = true;
+            }
+        }
+        if (retryPending) {
+            await this.#state.storage.setAlarm(Date.now() + 30_000);
+        }
+    };
 
     private readonly withSocketSignal = async (
         socket: WebSocket,

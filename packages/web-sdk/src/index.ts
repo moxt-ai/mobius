@@ -57,6 +57,8 @@ export {
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
+export * from "./bot-resources.ts";
+export * from "./bot-service-client.ts";
 export * from "./errors.ts";
 export * from "./resources.ts";
 export * from "./service-client.ts";
