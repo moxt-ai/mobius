@@ -59,6 +59,14 @@ per-Project Runtime slot, backfills explicit Project-owner credentials, and
 adds Runtime-pairing idempotency and audit indexes. Do not replace it with an
 edited initial schema or reset a populated shard.
 
+Keep migration files on LF line endings and parenthesize `CASE` expressions
+inside SQLite trigger bodies. Cloudflare's remote D1 migration path parses
+compound statements differently from the local emulator. The repository
+attributes enforce LF, and the deployment wrapper applies permanent remote D1
+migrations before publishing a Worker that depends on the new schema. Dry runs
+do not migrate, while temporary deployments migrate their temporary database
+after Wrangler creates it.
+
 ## Rollout boundary
 
 These commands target the new Cloud inventory, independently of the existing

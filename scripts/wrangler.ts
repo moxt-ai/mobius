@@ -174,13 +174,19 @@ async function run(signal: AbortSignal): Promise<void> {
     const dryRun = hasArgument(wranglerArguments, "--dry-run");
     const deploymentArguments = ["--filter", CLOUDFLARE_RELAY_PACKAGE, "exec", "wrangler", ...wranglerArguments];
 
+    if (!dryRun && !temporaryDeployment) {
+        await applyD1Migrations("--remote", wranglerArguments, signal);
+    }
+
     const output = await runPnpm(deploymentArguments, signal);
     if (dryRun) {
         process.stdout.write("\nMobius deployment dry-run completed.\n");
         return;
     }
 
-    await applyD1Migrations("--remote", wranglerArguments, signal);
+    if (temporaryDeployment) {
+        await applyD1Migrations("--remote", wranglerArguments, signal);
+    }
 
     const workerUrl = readWorkerUrl(output);
     if (workerUrl.length === 0) {

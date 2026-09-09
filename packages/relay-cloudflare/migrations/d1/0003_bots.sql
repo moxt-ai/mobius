@@ -224,27 +224,27 @@ CREATE INDEX bot_audit_events_bot
 CREATE TRIGGER bot_binding_behavior_ownership
 BEFORE INSERT ON bot_execution_bindings
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM bot_behavior_revisions
     WHERE bot_id = NEW.bot_id
       AND behavior_revision_id = NEW.behavior_revision_id
-  ) THEN RAISE(ABORT, 'binding_behavior_ownership') END;
+  ) THEN RAISE(ABORT, 'binding_behavior_ownership') END);
 END;
 
 CREATE TRIGGER bot_delivery_target_connection_ownership
 BEFORE INSERT ON bot_delivery_targets
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1 FROM bot_connections
     WHERE bot_id = NEW.bot_id
       AND connection_id = NEW.connection_id
-  ) THEN RAISE(ABORT, 'target_connection_ownership') END;
+  ) THEN RAISE(ABORT, 'target_connection_ownership') END);
 END;
 
 CREATE TRIGGER bot_conversation_active_binding
 BEFORE INSERT ON bot_conversations
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1
       FROM bots
       INNER JOIN bot_execution_bindings AS bindings
@@ -257,5 +257,5 @@ BEGIN
       AND bindings.binding_revision = NEW.binding_revision
       AND bindings.behavior_revision_id = NEW.behavior_revision_id
       AND bindings.lifecycle = 'approved'
-  ) THEN RAISE(ABORT, 'conversation_active_binding') END;
+  ) THEN RAISE(ABORT, 'conversation_active_binding') END);
 END;
