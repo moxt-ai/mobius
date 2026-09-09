@@ -15,6 +15,35 @@ conversation event, or Mobius database.
 
 ## Identity and authorization
 
+### Project discovery
+
+`CloudflareBotApi` uses the host's existing `PairingTenantResolver`, shared with
+pairing creation, to resolve the request's tenant:
+
+- `GET /mobius/api/v1/projects` lists the tenant's projects from completed pairings.
+- `GET /mobius/api/v1/projects/:projectId/bots` lists Bots only when that project
+  belongs to the resolved tenant.
+- `GET /mobius/api/v1/projects/:projectId/status` resolves the same tenant-owned
+  project and returns `connected` or `offline` from the Runtime's live connection
+  state. Completing a pairing alone does not imply that the Runtime is online.
+
+Standalone uses `MOBIUS_TENANT_ID` and accepts these reads without a login token.
+Authenticated hosts supply their existing tenant resolver and enforce their own
+authentication. Client-supplied tenant IDs never determine access.
+Listing does not grant mutation rights.
+Creating a Bot still uses the project's owner credential at
+`POST /mobius/api/v1/projects/:projectId/bots`.
+
+Owners can read `GET /mobius/api/v1/bots/:botId/setup` to inspect lifecycle and
+behavior revisions plus the latest execution-binding state and configuration.
+Consumers use those revisions with the existing behavior-revision and
+execution-binding endpoints. A requested binding becomes approved only after
+the runtime validates the local agent and working directory. Project bot lists
+include `setupStatus` so clients can distinguish initial setup from pending or
+failed local approval.
+
+### Bot operation principals
+
 Four principals meet at separate authorization boundaries:
 
 | Principal | Authentication | Authority |

@@ -18,6 +18,7 @@ import {
     BotOutboundSubmission,
     BotTurnSubmission,
     type ChannelGateway,
+    type PairingTenantResolver,
     RequestBodyError,
     readBoundedUtf8Body,
 } from "@moxt-ai/mobius-relay-core";
@@ -334,6 +335,7 @@ export interface CloudflareBotApiEnvironment {
 }
 
 export class CloudflareBotApi {
+    readonly #tenantResolver: PairingTenantResolver;
     readonly #authorization: D1BotAuthorization;
     readonly #channelRuntime: ChannelGateway;
     readonly #connectionRuntime: CloudflareBotConnectionRuntime;
@@ -347,7 +349,9 @@ export class CloudflareBotApi {
         environment: CloudflareBotApiEnvironment,
         channelRuntime: ChannelGateway,
         sessions: CloudflareSessionRuntime,
+        tenantResolver: PairingTenantResolver,
     ) {
+        this.#tenantResolver = tenantResolver;
         this.#authorization = new D1BotAuthorization(environment.DIRECTORY_DATABASE);
         this.#channelRuntime = channelRuntime;
         this.#connectionRuntime = new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS);
@@ -382,6 +386,33 @@ export class CloudflareBotApi {
             return new Response(null, { status: 404 });
         }
         const now = Date.now();
+        if (
+            request.method === "GET" &&
+            segments[1] === "projects" &&
+            (segments.length === 2 || (segments.length === 4 && (segments[3] === "bots" || segments[3] === "status")))
+        ) {
+            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
+            const tenantId = pathIdentifier(await this.#tenantResolver.resolve(request, signal), "tenant");
+            signal.throwIfAborted();
+            if (segments[3] === "status") {
+                const access = await this.#control.resolveProjectRuntime(
+                    tenantId,
+                    pathIdentifier(segments[2] ?? "", "project"),
+                    signal,
+                );
+                const runtime = await this.#channelRuntime.readRuntimeStatus(access, signal);
+                return Response.json({ status: runtime.online ? "connected" : "offline" });
+            }
+            return segments.length === 2
+                ? Response.json({ projects: await this.#control.listProjects(tenantId, signal) })
+                : Response.json({
+                      bots: await this.#control.listProjectBots(
+                          tenantId,
+                          pathIdentifier(segments[2] ?? "", "project"),
+                          signal,
+                      ),
+                  });
+        }
         if (
             request.method === "POST" &&
             segments.length === 4 &&
@@ -462,6 +493,11 @@ export class CloudflareBotApi {
                 ),
                 { status: 201 },
             );
+        }
+        if (request.method === "GET" && segments.length === 4 && segments[3] === "setup") {
+            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), signal);
+            return Response.json(await this.#control.readSetup(access, signal));
         }
         if (request.method === "POST" && segments.length === 4 && segments[3] === "behavior-revisions") {
             const value = await requestBody(request);

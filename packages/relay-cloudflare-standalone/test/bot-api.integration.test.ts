@@ -670,6 +670,90 @@ afterEach(() => {
 });
 
 describe.sequential("Provider-neutral Bot API", () => {
+    it("Given a bot needing setup, When its owner configures an execution target and the runtime approves it, Then setup progresses from unconfigured to awaiting approval to ready", async () => {
+        const pairing = await pairRuntime();
+        const bot = await createBot(pairing, "Setup acceptance");
+        const setupUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/setup`;
+        const initial = await json(await exports.default.fetch(setupUrl, { headers: ownerHeaders(pairing) }), 200);
+        expect(initial).toMatchObject({
+            behaviorRevision: 0,
+            lifecycleRevision: 1,
+            configuration: { kind: "not-configured" },
+        });
+        const behavior = await createBehavior(pairing, bot, "Setup acceptance");
+        const daemon = await openDaemon(pairing);
+        try {
+            await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    {
+                        method: "POST",
+                        headers: ownerHeaders(pairing),
+                        body: JSON.stringify({
+                            agentConfigRevision: 1,
+                            agentRef: "codex",
+                            allowedDeliveryTargetIds: [],
+                            behaviorRevisionId: behavior.behaviorRevisionId,
+                            completionPolicy: { kind: "none" },
+                            expectedRevision: 1,
+                            runtimeId: pairing.runtimeId,
+                            workspaceRef: "default",
+                        }),
+                    },
+                ),
+                202,
+            );
+            expect(
+                await json(await exports.default.fetch(setupUrl, { headers: ownerHeaders(pairing) }), 200),
+            ).toMatchObject({ configuration: { kind: "requested", agentRef: "codex", workspaceRef: "default" } });
+            const request = decodeBotExecutionBindingApprovalRequest(await daemon.messages.next());
+            const approved = new BotExecutionBindingApprovedEvent(
+                request.requestId,
+                request.botId,
+                request.behaviorRevisionId,
+                request.bindingId,
+                request.bindingRevision,
+                `grant_${bot.botId}`,
+                "a".repeat(64),
+                "b".repeat(64),
+            );
+            daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
+            await daemon.messages.next();
+            expect(
+                await json(await exports.default.fetch(setupUrl, { headers: ownerHeaders(pairing) }), 200),
+            ).toMatchObject({
+                lifecycle: "active",
+                configuration: { kind: "approved", runtimeId: pairing.runtimeId, agentRef: "codex" },
+            });
+        } finally {
+            daemon.socket.close();
+        }
+    });
+    it("Given a standalone tenant with a paired project, When projects and bots are listed without a login token, Then the configured tenant's project and bot are returned", async () => {
+        const pairing = await pairRuntime();
+        const bot = await createBot(pairing, "Standalone discovery");
+        const projects = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects`);
+        expect(projects.status).toBe(200);
+        expect(await projects.json()).toMatchObject({
+            projects: expect.arrayContaining([{ projectId: pairing.projectId, displayName: "mobius" }]),
+        });
+        const bots = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`,
+        );
+        expect(bots.status).toBe(200);
+        expect(await bots.json()).toMatchObject({
+            bots: [{ botId: bot.botId, displayName: "Standalone discovery", lifecycle: "draft" }],
+        });
+        const statusUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/status`;
+        expect(await (await exports.default.fetch(statusUrl)).json()).toEqual({ status: "offline" });
+        const daemon = await openDaemon(pairing);
+        try {
+            expect(await (await exports.default.fetch(statusUrl)).json()).toEqual({ status: "connected" });
+        } finally {
+            daemon.socket.close();
+        }
+    });
+
     it("Given an unbound Bot and untrusted public requests, When conversation input is decoded, Then execution targets are rejected before authorization or resolution", async () => {
         const pairing = await pairRuntime();
         const bot = await createBot(pairing, "Unbound");

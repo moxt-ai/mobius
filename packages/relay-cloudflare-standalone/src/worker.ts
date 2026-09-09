@@ -53,7 +53,8 @@ const worker: ExportedHandler<RelayBindings> = {
         };
         const sessions = new CloudflareSessionRuntime(infrastructure);
         const channelRuntime = new CloudflareChannelRuntime(infrastructure);
-        const botApi = new CloudflareBotApi(environment, channelRuntime, sessions);
+        const tenantResolver = new ConfiguredPairingTenantResolver(environment.MOBIUS_TENANT_ID);
+        const botApi = new CloudflareBotApi(environment, channelRuntime, sessions, tenantResolver);
         if (botApi.handles(request)) {
             return await botApi.fetch(request);
         }
@@ -64,7 +65,7 @@ const worker: ExportedHandler<RelayBindings> = {
                 nowEpochMilliseconds: () => Date.now(),
                 channelGateway: channelRuntime,
                 pairingGateway: new D1PairingGateway(infrastructure),
-                pairingTenantResolver: new ConfiguredPairingTenantResolver(environment.MOBIUS_TENANT_ID),
+                pairingTenantResolver: tenantResolver,
                 sessionCommands: sessions,
                 sessionQueries: sessions,
                 sessionTransfers: sessions,

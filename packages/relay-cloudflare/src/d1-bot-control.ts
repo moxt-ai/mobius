@@ -270,6 +270,74 @@ export class D1BotControl {
         this.#database = database;
     }
 
+    readonly listProjects = async (tenantId: string, signal: AbortSignal) => {
+        signal.throwIfAborted();
+        const rows = await this.#database
+            .prepare(
+                `SELECT project_id AS projectId, COALESCE(NULLIF(workspace_name, ''), project_id) AS displayName
+               FROM pairing_channels WHERE tenant_id = ? AND status = 'paired'
+               ORDER BY created_at, project_id`,
+            )
+            .bind(tenantId)
+            .all<{ readonly projectId: string; readonly displayName: string }>();
+        signal.throwIfAborted();
+        return rows.results;
+    };
+
+    readonly listProjectBots = async (tenantId: string, projectId: string, signal: AbortSignal) => {
+        signal.throwIfAborted();
+        const project = await this.#database
+            .prepare(
+                `SELECT project_id FROM pairing_channels WHERE tenant_id = ? AND project_id = ?
+               AND status = 'paired' LIMIT 1`,
+            )
+            .bind(tenantId, projectId)
+            .first();
+        signal.throwIfAborted();
+        if (project === null) {
+            throw new BotApiError(
+                "project_access_denied",
+                "This project is not available in the current workspace",
+                403,
+            );
+        }
+        const rows = await this.#database
+            .prepare(
+                `SELECT b.bot_id AS botId, p.display_name AS displayName, b.lifecycle,
+                  COALESCE((SELECT lifecycle FROM bot_execution_bindings WHERE bot_id = b.bot_id ORDER BY binding_revision DESC LIMIT 1), 'not-configured') AS setupStatus
+               FROM bots b JOIN bot_profile_revisions p ON p.profile_revision_id = b.current_profile_revision_id
+               WHERE b.tenant_id = ? AND b.project_id = ? ORDER BY b.created_at, b.bot_id`,
+            )
+            .bind(tenantId, projectId)
+            .all<{
+                readonly botId: string;
+                readonly displayName: string;
+                readonly lifecycle: string;
+                readonly setupStatus: string;
+            }>();
+        signal.throwIfAborted();
+        return rows.results;
+    };
+
+    readonly resolveProjectRuntime = async (
+        tenantId: string,
+        projectId: string,
+        signal: AbortSignal,
+    ): Promise<VerifiedChannelAccess> => {
+        signal.throwIfAborted();
+        const row = await this.#database
+            .prepare(
+                `SELECT channel_id, runtime_id FROM pairing_channels WHERE tenant_id = ? AND project_id = ? AND status = 'paired' LIMIT 1`,
+            )
+            .bind(tenantId, projectId)
+            .first<{ readonly channel_id: string; readonly runtime_id: string }>();
+        signal.throwIfAborted();
+        if (row === null) {
+            throw new BotApiError("project_access_denied", "This project is not available to this tenant", 403);
+        }
+        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, tenantId, projectId);
+    };
+
     readonly createBot = async (
         access: ProjectOwnerAccess,
         displayName: string,
@@ -807,6 +875,47 @@ export class D1BotControl {
             throw new BotApiError("bot_not_found", "The Bot does not exist", 404);
         }
         return botResource(row);
+    };
+
+    readonly readSetup = async (access: BotOwnerAccess, signal: AbortSignal): Promise<object> => {
+        const bot = await this.botRow(access.botId, signal);
+        const behavior = await this.#database
+            .prepare(
+                `SELECT COALESCE(MAX(revision_number), 0) AS revision FROM bot_behavior_revisions WHERE bot_id = ?`,
+            )
+            .bind(access.botId)
+            .first<{ readonly revision: number }>();
+        signal.throwIfAborted();
+        const binding = await this.#database
+            .prepare(
+                `SELECT bindings.*, behaviors.instructions FROM bot_execution_bindings bindings JOIN bot_behavior_revisions behaviors ON behaviors.behavior_revision_id = bindings.behavior_revision_id WHERE bindings.bot_id = ? ORDER BY bindings.binding_revision DESC LIMIT 1`,
+            )
+            .bind(access.botId)
+            .first<BindingRow & { readonly instructions: string }>();
+        signal.throwIfAborted();
+        const base = {
+            lifecycle: bot.lifecycle,
+            lifecycleRevision: bot.lifecycle_revision,
+            behaviorRevision: behavior?.revision ?? 0,
+        };
+        if (binding === null) {
+            return { ...base, configuration: { kind: "not-configured" } };
+        }
+        return {
+            ...base,
+            configuration: {
+                kind: binding.lifecycle,
+                runtimeId: binding.runtime_id,
+                agentRef: binding.agent_ref,
+                workspaceRef: binding.workspace_ref,
+                instructions: binding.instructions,
+                allowedDeliveryTargetIds: stringArray(
+                    binding.allowed_delivery_target_ids_json,
+                    "Invalid delivery targets",
+                ),
+                completionPolicy: completionPolicy(binding.completion_policy_json),
+            },
+        };
     };
 
     readonly readApprovedBinding = async (botId: string, signal: AbortSignal): Promise<ApprovedBindingContext> => {
