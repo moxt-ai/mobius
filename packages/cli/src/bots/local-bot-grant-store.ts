@@ -37,6 +37,7 @@ export class LocalBotGrant {
     readonly revocationEpoch: number;
     readonly workspaceIdentityDigest: string;
     readonly workspacePath: string;
+    readonly workspaceRef: string;
 
     constructor(
         localGrantId: string,
@@ -47,6 +48,7 @@ export class LocalBotGrant {
         bindingRevision: number,
         agent: LocalAgentDefinition,
         agentIdentityDigest: string,
+        workspaceRef: string,
         workspacePath: string,
         workspaceIdentityDigest: string,
         allowedDeliveryTargetIds: readonly string[],
@@ -61,6 +63,7 @@ export class LocalBotGrant {
         this.bindingRevision = bindingRevision;
         this.agent = agent;
         this.agentIdentityDigest = agentIdentityDigest;
+        this.workspaceRef = workspaceRef;
         this.workspacePath = workspacePath;
         this.workspaceIdentityDigest = workspaceIdentityDigest;
         this.allowedDeliveryTargetIds = Object.freeze([...allowedDeliveryTargetIds]);
@@ -284,7 +287,7 @@ export class LocalBotGrantStore {
                   WHERE local_grant_id = ? AND bot_id = ?
                     AND behavior_revision_id = ? AND behavior_digest = ?
                     AND binding_id = ? AND binding_revision = ?
-                    AND agent_ref = ? AND workspace_ref = ?
+                    AND agent_ref = ?
                     AND revoked_at IS NULL AND expires_at > ?`,
             )
             .get(
@@ -295,7 +298,6 @@ export class LocalBotGrantStore {
                 command.bindingId,
                 command.bindingRevision,
                 command.agentId,
-                command.directoryId,
                 now,
             );
         if (row === undefined) {
@@ -318,7 +320,8 @@ export class LocalBotGrantStore {
             revalidateExecutable(agent.agentIdentity),
         ]);
         signal.throwIfAborted();
-        const workspacePath = await directories.resolve(bindingAuthorityId, command.directoryId, signal);
+        const workspaceRef = rowString(row, "workspace_ref");
+        const workspacePath = await directories.resolve(bindingAuthorityId, workspaceRef, signal);
         const currentAgentDigest = agentDigest(agent);
         const currentWorkspaceDigest = await workspaceDigest(workspacePath);
         signal.throwIfAborted();
@@ -350,6 +353,7 @@ export class LocalBotGrantStore {
             command.bindingRevision,
             agent,
             currentAgentDigest,
+            workspaceRef,
             workspacePath,
             currentWorkspaceDigest,
             approvedTargets,

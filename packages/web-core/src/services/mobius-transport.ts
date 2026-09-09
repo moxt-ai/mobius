@@ -206,11 +206,17 @@ abstract class TransportConnection {
     abstract readonly cancelAgentInstallation: (request: AgentInstallCancelRequest) => Promise<void>;
     abstract readonly cancel: (request: CancelRequest) => Promise<void>;
     abstract readonly close: () => Promise<void>;
-    abstract readonly configure: (request: SessionConfigureRequest) => Promise<SessionConfigUpdatedEvent>;
+    abstract readonly configure: (
+        request: SessionConfigureRequest,
+        signal: AbortSignal,
+    ) => Promise<SessionConfigUpdatedEvent>;
     abstract readonly elicit: (request: ElicitationResponseRequest) => Promise<void>;
-    abstract readonly listWorkspace: (request: WorkspaceListRequest) => Promise<WorkspaceEntriesEvent>;
+    abstract readonly listWorkspace: (
+        request: WorkspaceListRequest,
+        signal: AbortSignal,
+    ) => Promise<WorkspaceEntriesEvent>;
     abstract readonly permission: (request: PermissionResponseRequest) => Promise<void>;
-    abstract readonly prepare: (request: SessionPrepareRequest) => Promise<SessionReadyEvent>;
+    abstract readonly prepare: (request: SessionPrepareRequest, signal: AbortSignal) => Promise<SessionReadyEvent>;
     abstract readonly prompt: (request: PromptRequest) => Promise<PromptResult>;
     abstract readonly installAgent: (request: AgentInstallRequest) => Promise<void>;
 }
@@ -385,9 +391,14 @@ class ConnectedTransport extends TransportConnection {
         client.cancelAgentInstallation(request);
     };
 
-    readonly configure = async (request: SessionConfigureRequest): Promise<SessionConfigUpdatedEvent> => {
+    readonly configure = async (
+        request: SessionConfigureRequest,
+        signal: AbortSignal,
+    ): Promise<SessionConfigUpdatedEvent> => {
+        signal.throwIfAborted();
         const client = await this.#client;
-        const configured = await client.configureSession(request);
+        signal.throwIfAborted();
+        const configured = await client.configureSession(request, signal);
         saveSessionConfigPreferences(this.#channelId, request.agentId, configured.configOptions);
         return configured;
     };
@@ -408,9 +419,14 @@ class ConnectedTransport extends TransportConnection {
         });
     };
 
-    readonly listWorkspace = async (request: WorkspaceListRequest): Promise<WorkspaceEntriesEvent> => {
+    readonly listWorkspace = async (
+        request: WorkspaceListRequest,
+        signal: AbortSignal,
+    ): Promise<WorkspaceEntriesEvent> => {
+        signal.throwIfAborted();
         const client = await this.#client;
-        return await client.listWorkspace(request);
+        signal.throwIfAborted();
+        return await client.listWorkspace(request, signal);
     };
 
     readonly installAgent = async (request: AgentInstallRequest): Promise<void> => {
@@ -429,12 +445,14 @@ class ConnectedTransport extends TransportConnection {
         useChatStore.getState().resolveSessionPermission(request.interactionId, request.sessionId);
     };
 
-    readonly prepare = async (request: SessionPrepareRequest): Promise<SessionReadyEvent> => {
+    readonly prepare = async (request: SessionPrepareRequest, signal: AbortSignal): Promise<SessionReadyEvent> => {
+        signal.throwIfAborted();
         const requestId = request.requestId ?? crypto.randomUUID();
         this.#preparingRequestIds.add(requestId);
         try {
             const client = await this.#client;
-            const ready = await client.prepareSession({ ...request, requestId });
+            signal.throwIfAborted();
+            const ready = await client.prepareSession({ ...request, requestId }, signal);
             if (ready.restored) {
                 return ready;
             }
@@ -461,14 +479,17 @@ class ConnectedTransport extends TransportConnection {
                 } else if (option.booleanValue === preference.booleanValue) {
                     continue;
                 }
-                const configured = await client.configureSession({
-                    ...request,
-                    bindingId,
-                    booleanValue: preference.booleanValue,
-                    configId: option.id,
-                    value: preference.value,
-                    valueType: option.type,
-                });
+                const configured = await client.configureSession(
+                    {
+                        ...request,
+                        bindingId,
+                        booleanValue: preference.booleanValue,
+                        configId: option.id,
+                        value: preference.value,
+                        valueType: option.type,
+                    },
+                    signal,
+                );
                 bindingId = configured.requestId;
                 configOptions = configured.configOptions;
                 saveSessionConfigPreferences(this.#channelId, request.agentId, configOptions);
@@ -776,13 +797,16 @@ export async function prepareActiveSession(expectedSessionId = ""): Promise<void
     }
     initialStore.setSessionPreparing(conversation.sessionId);
     try {
-        const ready = await transport.prepare({
-            additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
-            agentId: conversation.agentId,
-            bindingId: conversation.bindingId,
-            directoryId: conversation.directoryId,
-            sessionId: conversation.sessionId,
-        });
+        const ready = await transport.prepare(
+            {
+                additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: conversation.agentId,
+                bindingId: conversation.bindingId,
+                directoryId: conversation.directoryId,
+                sessionId: conversation.sessionId,
+            },
+            AbortSignal.timeout(120_000),
+        );
         useChatStore.getState().applySessionReady(ready);
     } catch (error) {
         const store = useChatStore.getState();
@@ -807,11 +831,31 @@ export async function prepareActiveSession(expectedSessionId = ""): Promise<void
     }
 }
 
-export async function listWorkspace(directoryId: string): Promise<WorkspaceEntriesEvent> {
-    return await transport.listWorkspace({
-        bindingId: "workspace",
-        directoryId,
-    });
+export async function listWorkspace(
+    directoryId: string,
+    signal: AbortSignal = AbortSignal.timeout(120_000),
+): Promise<WorkspaceEntriesEvent> {
+    return await transport.listWorkspace(
+        {
+            bindingId: "workspace",
+            directoryId,
+        },
+        signal,
+    );
+}
+
+export async function prepareConversationSession(
+    request: SessionPrepareRequest,
+    signal: AbortSignal,
+): Promise<SessionReadyEvent> {
+    return await transport.prepare(request, signal);
+}
+
+export async function configureConversationSession(
+    request: SessionConfigureRequest,
+    signal: AbortSignal,
+): Promise<SessionConfigUpdatedEvent> {
+    return await transport.configure(request, signal);
 }
 
 type NativeSessionAction =
@@ -906,17 +950,20 @@ export async function configureSessionOption(
         return { kind: "ignored" };
     }
     try {
-        await transport.configure({
-            additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
-            agentId: conversation.agentId,
-            bindingId: conversation.bindingId,
-            booleanValue,
-            configId: currentOption.id,
-            directoryId: conversation.directoryId,
-            sessionId: conversation.sessionId,
-            value,
-            valueType: currentOption.type,
-        });
+        await transport.configure(
+            {
+                additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: conversation.agentId,
+                bindingId: conversation.bindingId,
+                booleanValue,
+                configId: currentOption.id,
+                directoryId: conversation.directoryId,
+                sessionId: conversation.sessionId,
+                value,
+                valueType: currentOption.type,
+            },
+            AbortSignal.timeout(120_000),
+        );
         const latestStore = useChatStore.getState();
         if (
             selectActiveConversation(latestStore).matchesPreparation(

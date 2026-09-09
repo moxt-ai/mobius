@@ -105,32 +105,54 @@ function browserFailure(error: unknown): string {
     return error instanceof Error ? error.message : "The directory could not be loaded.";
 }
 
-export function WorkspacePicker() {
-    const conversation = useChatStore(selectActiveConversation);
-    const selectPrimaryDirectory = useChatStore((state) => state.selectPrimaryDirectory);
-    const setErrorMessage = useChatStore((state) => state.setErrorMessage);
-    const toggleAdditionalDirectory = useChatStore((state) => state.toggleAdditionalDirectory);
+interface WorkspacePickerControlProps {
+    readonly additionalDirectories: readonly WorkspaceEntry[];
+    readonly canAddAdditionalDirectories: boolean;
+    readonly directoryId: string;
+    readonly directoryLabel: string;
+    readonly listDirectories: (directoryId: string, signal: AbortSignal) => Promise<WorkspaceEntriesEvent>;
+    readonly locked: boolean;
+    readonly onFailure: (message: string) => void;
+    readonly onSelectPrimary: (directory: WorkspaceEntry) => Promise<void>;
+    readonly onToggleAdditional: (directory: WorkspaceEntry) => void;
+}
+
+export function WorkspacePickerControl({
+    additionalDirectories,
+    canAddAdditionalDirectories,
+    directoryId,
+    directoryLabel,
+    listDirectories,
+    locked,
+    onFailure,
+    onSelectPrimary,
+    onToggleAdditional,
+}: WorkspacePickerControlProps) {
     const [browser, setBrowser] = useState<DirectoryBrowserState>(new ClosedDirectoryBrowserState());
     const [panelLayout, setPanelLayout] = useState<WorkspacePickerPanelLayout>(PENDING_PANEL_LAYOUT);
     const [searchQuery, setSearchQuery] = useState("");
+    const [selecting, setSelecting] = useState(false);
     const panelId = useId();
     const panelRef = useRef<HTMLElement>(null);
+    const requestControllerRef = useRef<AbortController>(null);
     const requestSequenceRef = useRef(0);
     const triggerRef = useRef<HTMLButtonElement>(null);
-    const locked = conversation.contextLocked || conversation.isRunning;
 
     const load = (directoryId: string): void => {
+        requestControllerRef.current?.abort();
+        const controller = new AbortController();
+        requestControllerRef.current = controller;
         const requestSequence = requestSequenceRef.current + 1;
         requestSequenceRef.current = requestSequence;
         setSearchQuery("");
         setBrowser(new LoadingDirectoryBrowserState(directoryId));
-        void listWorkspace(directoryId)
+        void listDirectories(directoryId, AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]))
             .then((entries) => {
                 if (requestSequenceRef.current !== requestSequence) {
                     return;
                 }
                 setBrowser(new LoadedDirectoryBrowserState(entries));
-                setErrorMessage("");
+                onFailure("");
             })
             .catch((error: unknown) => {
                 if (requestSequenceRef.current !== requestSequence) {
@@ -138,11 +160,12 @@ export function WorkspacePicker() {
                 }
                 const message = browserFailure(error);
                 setBrowser(new FailedDirectoryBrowserState(directoryId, message));
-                setErrorMessage(message);
+                onFailure(message);
             });
     };
 
     const close = useCallback((): void => {
+        requestControllerRef.current?.abort();
         requestSequenceRef.current += 1;
         setBrowser(new ClosedDirectoryBrowserState());
         setPanelLayout(PENDING_PANEL_LAYOUT);
@@ -150,9 +173,19 @@ export function WorkspacePicker() {
         triggerRef.current?.focus();
     }, []);
 
-    const choosePrimary = (directory: WorkspaceEntry): void => {
-        selectPrimaryDirectory(directory);
-        close();
+    const choosePrimary = async (directory: WorkspaceEntry): Promise<void> => {
+        setSelecting(true);
+        try {
+            await onSelectPrimary(directory);
+            onFailure("");
+            close();
+        } catch (error) {
+            const message = browserFailure(error);
+            setBrowser(new FailedDirectoryBrowserState(directory.directoryId, message));
+            onFailure(message);
+        } finally {
+            setSelecting(false);
+        }
     };
 
     useLayoutEffect(() => {
@@ -238,6 +271,7 @@ export function WorkspacePicker() {
 
     useEffect(
         () => () => {
+            requestControllerRef.current?.abort();
             requestSequenceRef.current += 1;
         },
         [],
@@ -254,7 +288,7 @@ export function WorkspacePicker() {
                 aria-controls={panelId}
                 aria-expanded={browser.open}
                 aria-haspopup="dialog"
-                aria-label={`Workspace directory: ${conversation.directoryLabel}`}
+                aria-label={`Workspace directory: ${directoryLabel}`}
                 className="h-11 w-11 shrink-0 justify-center rounded-full border-0 bg-transparent px-0 text-xs font-medium text-muted-foreground shadow-none hover:bg-black/[0.04] hover:text-foreground lg:h-9 lg:w-auto lg:max-w-[180px] lg:justify-start lg:bg-black/[0.035] lg:px-2.5"
                 disabled={locked}
                 onClick={() => {
@@ -269,12 +303,12 @@ export function WorkspacePicker() {
                 title={
                     locked
                         ? "The workspace is fixed after the first message"
-                        : `Choose workspace directory · ${conversation.directoryLabel}`
+                        : `Choose workspace directory · ${directoryLabel}`
                 }
                 variant="outline"
             >
                 <FolderOpen className="size-4 shrink-0 text-success" />
-                <span className="sr-only lg:not-sr-only lg:truncate">{conversation.directoryLabel}</span>
+                <span className="sr-only lg:not-sr-only lg:truncate">{directoryLabel}</span>
             </Button>
             {browser.open && (
                 <>
@@ -451,7 +485,7 @@ export function WorkspacePicker() {
                                         </li>
                                     )}
                                     {visibleEntries.map((entry) => {
-                                        const additional = conversation.additionalDirectories.some(
+                                        const additional = additionalDirectories.some(
                                             (directory) => directory.directoryId === entry.directoryId,
                                         );
                                         return (
@@ -472,7 +506,7 @@ export function WorkspacePicker() {
                                                     </span>
                                                     <ChevronRight className="size-3.5 shrink-0 text-copy-tertiary" />
                                                 </button>
-                                                {conversation.session.capabilities.additionalDirectories && (
+                                                {canAddAdditionalDirectories && (
                                                     <Button
                                                         aria-label={
                                                             additional
@@ -485,7 +519,7 @@ export function WorkspacePicker() {
                                                             additional &&
                                                                 "bg-success-subtle text-success hover:bg-success-subtle/80 hover:text-success",
                                                         )}
-                                                        onClick={() => toggleAdditionalDirectory(entry)}
+                                                        onClick={() => onToggleAdditional(entry)}
                                                         title={
                                                             additional
                                                                 ? "Remove from conversation context"
@@ -517,21 +551,17 @@ export function WorkspacePicker() {
                                     </div>
                                     <Button
                                         className="min-h-11 rounded-lg px-4 text-xs disabled:opacity-100 lg:min-h-9"
-                                        disabled={browser.entries.directoryId === conversation.directoryId}
+                                        disabled={selecting || browser.entries.directoryId === directoryId}
                                         onClick={() =>
-                                            choosePrimary({
+                                            void choosePrimary({
                                                 directoryId: browser.entries.directoryId,
                                                 name: browser.entries.directoryLabel,
                                             })
                                         }
                                         size="sm"
-                                        variant={
-                                            browser.entries.directoryId === conversation.directoryId
-                                                ? "secondary"
-                                                : "default"
-                                        }
+                                        variant={browser.entries.directoryId === directoryId ? "secondary" : "default"}
                                     >
-                                        {browser.entries.directoryId === conversation.directoryId ? (
+                                        {browser.entries.directoryId === directoryId ? (
                                             <>
                                                 <Check className="size-3.5" />
                                                 Current workspace
@@ -547,5 +577,28 @@ export function WorkspacePicker() {
                 </>
             )}
         </div>
+    );
+}
+
+export function WorkspacePicker() {
+    const conversation = useChatStore(selectActiveConversation);
+    const selectPrimaryDirectory = useChatStore((state) => state.selectPrimaryDirectory);
+    const setErrorMessage = useChatStore((state) => state.setErrorMessage);
+    const toggleAdditionalDirectory = useChatStore((state) => state.toggleAdditionalDirectory);
+    return (
+        <WorkspacePickerControl
+            additionalDirectories={conversation.additionalDirectories}
+            canAddAdditionalDirectories={conversation.session.capabilities.additionalDirectories}
+            directoryId={conversation.directoryId}
+            directoryLabel={conversation.directoryLabel}
+            listDirectories={listWorkspace}
+            locked={conversation.contextLocked || conversation.isRunning}
+            onFailure={setErrorMessage}
+            onSelectPrimary={(directory) => {
+                selectPrimaryDirectory(directory);
+                return Promise.resolve();
+            }}
+            onToggleAdditional={toggleAdditionalDirectory}
+        />
     );
 }

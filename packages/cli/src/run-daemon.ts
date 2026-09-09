@@ -66,6 +66,7 @@ import {
     encodeWorkspaceEntriesEvent,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
+    OwnerBotReplyRoute,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_CANCEL_KIND,
@@ -978,12 +979,6 @@ async function executeBotPrompt(
     signal: AbortSignal,
 ): Promise<void> {
     try {
-        if (command.additionalDirectoryIds.length > 0) {
-            throw new LocalBotAuthorizationError(
-                "binding_not_approved",
-                "The Bot execution requested unapproved additional directories",
-            );
-        }
         const deadline = Date.parse(command.executionDeadlineAt);
         const remaining = deadline - Date.now();
         if (!Number.isSafeInteger(deadline) || remaining <= 0) {
@@ -997,6 +992,37 @@ async function executeBotPrompt(
             Date.now(),
             signal,
         );
+        const requestedExecutionTargetOverridden =
+            command.directoryId !== grant.workspaceRef || command.additionalDirectoryIds.length > 0;
+        if (requestedExecutionTargetOverridden && !(command.replyRoute instanceof OwnerBotReplyRoute)) {
+            throw new LocalBotAuthorizationError(
+                "binding_not_approved",
+                "Only a paired owner conversation can override the approved Bot workspace",
+            );
+        }
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            command.directoryId,
+            command.additionalDirectoryIds,
+            signal,
+        );
+        const executionTargetOverridden =
+            resolved.cwd !== grant.workspacePath || resolved.additionalDirectories.length > 0;
+        if (
+            executionTargetOverridden &&
+            !sessions.hasPreparedSession(
+                command.sessionId,
+                grant.agent.id,
+                resolved.cwd,
+                resolved.additionalDirectories,
+            )
+        ) {
+            throw new LocalBotAuthorizationError(
+                "local_approval_required",
+                "Open this Bot conversation in the paired local Web app before using the selected workspace",
+            );
+        }
         const attachments = await resolvePromptArtifacts(config, command, signal);
         const applied = await applicator.apply(command, grant, attachments.resources, signal);
         const lease = contexts.activate(command);
@@ -1004,6 +1030,13 @@ async function executeBotPrompt(
             const deadlineSignal = AbortSignal.timeout(remaining);
             const executionSignal = AbortSignal.any([signal, deadlineSignal]);
             const agent = botExecutionAgent(grant.agent, lease.context.contextHandle, ipc.socketPath);
+            await sessions.prepareExecutionSession({
+                additionalDirectories: resolved.additionalDirectories,
+                agent,
+                cwd: resolved.cwd,
+                sessionId: command.sessionId,
+                signal: executionSignal,
+            });
             audit.record({
                 commandId: command.commandId,
                 details: {
@@ -1028,10 +1061,10 @@ async function executeBotPrompt(
                 attemptId,
             );
             const result = await sessions.runPrompt({
-                additionalDirectories: [],
+                additionalDirectories: resolved.additionalDirectories,
                 agent,
                 commandId: command.commandId,
-                cwd: grant.workspacePath,
+                cwd: resolved.cwd,
                 images: attachments.images,
                 onActivity: (activity) => {
                     publisher.recordAttempt(

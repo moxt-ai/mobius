@@ -489,12 +489,29 @@ export class SqliteBotSessionRuntime {
             throw new BotSessionRuntimeError("conversation_access_denied", "The Bot conversation does not exist");
         }
         const context = contextFromRow(contextRow);
+        let sessionBindingId = context.bindingId;
+        let workspaceRef = context.workspaceRef;
+        if (context.replyRoute instanceof OwnerBotReplyRoute) {
+            const session = await this.#sessions.readSession(scope, sessionId, signal);
+            if (
+                session.defaultBinding.runtimeId !== context.runtimeId ||
+                session.defaultBinding.agentRef !== context.agentRef
+            ) {
+                throw new BotSessionRuntimeError(
+                    "conversation_access_denied",
+                    "The owner conversation execution identity no longer matches its approved Bot binding",
+                );
+            }
+            sessionBindingId = session.defaultBinding.bindingId;
+            workspaceRef = session.defaultBinding.workspaceRef;
+        }
+        signal.throwIfAborted();
         const ordinaryCommand: SessionPromptCommand = {
             additionalDirectoryIds: submission.additionalDirectoryIds,
             agentId: context.agentRef,
-            bindingId: context.bindingId,
+            bindingId: sessionBindingId,
             commandId: submission.clientMessageId,
-            directoryId: context.workspaceRef,
+            directoryId: workspaceRef,
             images: decodePromptImagesValue(submission.images),
             kind: SESSION_PROMPT_KIND,
             prompt: submission.prompt,
@@ -554,7 +571,7 @@ export class SqliteBotSessionRuntime {
                         submission.clientMessageId,
                         context.agentRef,
                         context.bindingId,
-                        context.workspaceRef,
+                        workspaceRef,
                         submission.additionalDirectoryIds,
                         submission.images,
                         submission.resources,
@@ -587,7 +604,7 @@ export class SqliteBotSessionRuntime {
                     sessionId,
                     submission.clientMessageId,
                     turnId,
-                    context.bindingId,
+                    sessionBindingId,
                     submission.clientMessageId,
                     requestDigest,
                     encodedOrdinaryCommand,

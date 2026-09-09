@@ -1,5 +1,23 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-
+import {
+    decodeMobiusBot,
+    decodeMobiusBotBehavior,
+    decodeMobiusOwnerBotConversation,
+    type MobiusBot,
+    MobiusBotBehaviorDirectory,
+    type MobiusBotBehaviorRevision,
+    MobiusBotBindingDirectory,
+    MobiusBotBindingRequestAcceptance,
+    MobiusBotCompletionPolicy,
+    MobiusBotConnectionDirectory,
+    MobiusBotConnectionGrant,
+    type MobiusBotConversation,
+    MobiusBotConversationDirectory,
+    MobiusBotDirectory,
+    MobiusBotProfileRevision,
+    MobiusNoBotCompletionPolicy,
+    MobiusRequiredBotCompletionPolicy,
+} from "./bot-owner-resources.ts";
 import {
     MobiusBotConnectionCredential,
     MobiusBotConnectionCredentialRotation,
@@ -42,6 +60,50 @@ export interface MobiusBotConnectorClientOptions extends MobiusBotApiOptions {
     readonly credentialProvider: MobiusCredentialProvider;
 }
 
+export interface MobiusBotOwnerClientOptions extends MobiusBotApiOptions {
+    readonly credentialProvider: MobiusCredentialProvider;
+    readonly projectId: string;
+}
+
+export interface CreateMobiusBotRequest {
+    readonly avatarRef: string;
+    readonly description: string;
+    readonly displayName: string;
+}
+
+export interface ReviseMobiusBotProfileRequest extends CreateMobiusBotRequest {
+    readonly expectedRevision: number;
+}
+
+export interface CreateMobiusBotBehaviorRequest {
+    readonly agentConfiguration: Readonly<Record<string, unknown>>;
+    readonly expectedRevision: number;
+    readonly instructions: string;
+    readonly requiredCapabilities: readonly string[];
+}
+
+export interface CreateMobiusBotBindingRequest {
+    readonly agentConfigRevision: number;
+    readonly agentRef: string;
+    readonly allowedDeliveryTargetIds: readonly string[];
+    readonly behaviorRevisionId: string;
+    readonly completionPolicy: MobiusBotCompletionPolicy;
+    readonly expectedRevision: number;
+    readonly runtimeId: string;
+    readonly workspaceRef: string;
+}
+
+export interface CreateMobiusBotConnectionGrantRequest {
+    readonly audience: string;
+    readonly expiresInSeconds: number;
+    readonly label: string;
+    readonly scopes: readonly string[];
+}
+
+export interface CreateMobiusOwnerConversationRequest {
+    readonly clientConversationKey: string;
+}
+
 export interface RedeemMobiusBotConnectionGrantRequest {
     readonly audience: string;
     readonly connectorPrincipalId: string;
@@ -63,6 +125,13 @@ export interface SubmitMobiusBotMessageRequest {
     readonly actorRef: string;
     readonly clientMessageId: string;
     readonly resourceRefs: readonly string[];
+    readonly text: string;
+}
+
+export interface SubmitMobiusOwnerBotMessageRequest {
+    readonly actorRef: string;
+    readonly artifactIds: readonly string[];
+    readonly clientMessageId: string;
     readonly text: string;
 }
 
@@ -119,8 +188,8 @@ function identifiers(value: unknown, name: string, maximum: number): readonly st
     return Object.freeze(normalized);
 }
 
-function boundedInteger(value: number, name: string, minimum: number, maximum: number): number {
-    if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+function boundedInteger(value: unknown, name: string, minimum: number, maximum: number): number {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum || value > maximum) {
         throw new MobiusValidationError(`The ${name} is invalid`);
     }
     return value;
@@ -309,6 +378,358 @@ class BotRequestExecutor {
 
 function botPath(botId: string, resource: string): string {
     return `${MOBIUS_BOT_API_VERSION}/bots/${encodeURIComponent(identifier(botId, "Bot"))}/${resource}`;
+}
+
+function projectBotsPath(projectId: string): string {
+    return `${MOBIUS_BOT_API_VERSION}/projects/${encodeURIComponent(identifier(projectId, "project"))}/bots`;
+}
+
+function serializedCompletionPolicy(policy: MobiusBotCompletionPolicy): Readonly<Record<string, unknown>> {
+    if (policy instanceof MobiusNoBotCompletionPolicy) {
+        return { kind: "none" };
+    }
+    if (policy instanceof MobiusRequiredBotCompletionPolicy) {
+        return {
+            deliveryTargetId: identifier(policy.deliveryTargetId, "delivery target"),
+            kind: "required",
+            messageTemplate: boundedText(policy.messageTemplate, "completion message template", 10_000),
+        };
+    }
+    throw new MobiusValidationError("The Bot completion policy is invalid");
+}
+
+export class MobiusBotOwnerClient {
+    readonly #executor: BotRequestExecutor;
+    readonly #projectId: string;
+
+    constructor(options: MobiusBotOwnerClientOptions) {
+        this.#projectId = identifier(options.projectId, "project");
+        this.#executor = new BotRequestExecutor(
+            options,
+            new CredentialBotRequestAuthentication(options.credentialProvider),
+        );
+    }
+
+    readonly listBots = async (signal: AbortSignal): Promise<MobiusBotDirectory> =>
+        new MobiusBotDirectory(await this.#executor.get(projectBotsPath(this.#projectId), signal));
+
+    readonly createBot = async (request: CreateMobiusBotRequest, signal: AbortSignal): Promise<MobiusBot> => {
+        const value = requestRecord(request, ["avatarRef", "description", "displayName"], "Bot creation request");
+        return decodeMobiusBot(
+            await this.#executor.post(
+                projectBotsPath(this.#projectId),
+                {
+                    avatarRef: boundedText(value["avatarRef"], "Bot avatar reference", 4_096, true),
+                    description: boundedText(value["description"], "Bot description", 2_000, true),
+                    displayName: boundedText(value["displayName"], "Bot display name", 80),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly readBot = async (botId: string, signal: AbortSignal): Promise<MobiusBot> =>
+        decodeMobiusBot(await this.#executor.get(botPath(botId, ""), signal));
+
+    readonly reviseProfile = async (
+        botId: string,
+        request: ReviseMobiusBotProfileRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotProfileRevision> => {
+        const value = requestRecord(
+            request,
+            ["avatarRef", "description", "displayName", "expectedRevision"],
+            "Bot profile revision request",
+        );
+        return new MobiusBotProfileRevision(
+            await this.#executor.post(
+                botPath(botId, "profile-revisions"),
+                {
+                    avatarRef: boundedText(value["avatarRef"], "Bot avatar reference", 4_096, true),
+                    description: boundedText(value["description"], "Bot description", 2_000, true),
+                    displayName: boundedText(value["displayName"], "Bot display name", 80),
+                    expectedRevision: boundedInteger(
+                        value["expectedRevision"],
+                        "Bot lifecycle revision",
+                        1,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly listBehaviors = async (botId: string, signal: AbortSignal): Promise<MobiusBotBehaviorDirectory> =>
+        new MobiusBotBehaviorDirectory(await this.#executor.get(botPath(botId, "behavior-revisions"), signal));
+
+    readonly createBehavior = async (
+        botId: string,
+        request: CreateMobiusBotBehaviorRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotBehaviorRevision> => {
+        const value = requestRecord(
+            request,
+            ["agentConfiguration", "expectedRevision", "instructions", "requiredCapabilities"],
+            "Bot behavior request",
+        );
+        const configuration = value["agentConfiguration"];
+        if (!isRecord(configuration)) {
+            throw new MobiusValidationError("The Bot Agent configuration is invalid");
+        }
+        return decodeMobiusBotBehavior(
+            await this.#executor.post(
+                botPath(botId, "behavior-revisions"),
+                {
+                    agentConfiguration: Object.freeze(Object.fromEntries(Object.entries(configuration))),
+                    expectedRevision: boundedInteger(
+                        value["expectedRevision"],
+                        "Bot behavior revision",
+                        0,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                    instructions: boundedText(value["instructions"], "Bot behavior instructions", 100_000, true),
+                    requiredCapabilities: identifiers(value["requiredCapabilities"], "Bot behavior capability", 32),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly listBindings = async (botId: string, signal: AbortSignal): Promise<MobiusBotBindingDirectory> =>
+        new MobiusBotBindingDirectory(await this.#executor.get(botPath(botId, "execution-bindings"), signal));
+
+    readonly createBinding = async (
+        botId: string,
+        request: CreateMobiusBotBindingRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotBindingRequestAcceptance> => {
+        const value = requestRecord(
+            request,
+            [
+                "agentConfigRevision",
+                "agentRef",
+                "allowedDeliveryTargetIds",
+                "behaviorRevisionId",
+                "completionPolicy",
+                "expectedRevision",
+                "runtimeId",
+                "workspaceRef",
+            ],
+            "Bot binding request",
+        );
+        const policy = value["completionPolicy"];
+        if (!(policy instanceof MobiusBotCompletionPolicy)) {
+            throw new MobiusValidationError("The Bot completion policy is invalid");
+        }
+        return new MobiusBotBindingRequestAcceptance(
+            await this.#executor.post(
+                botPath(botId, "execution-bindings"),
+                {
+                    agentConfigRevision: boundedInteger(
+                        value["agentConfigRevision"],
+                        "Agent configuration revision",
+                        1,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                    agentRef: identifier(value["agentRef"], "Agent"),
+                    allowedDeliveryTargetIds: identifiers(value["allowedDeliveryTargetIds"], "delivery target", 64),
+                    behaviorRevisionId: identifier(value["behaviorRevisionId"], "Bot behavior"),
+                    completionPolicy: serializedCompletionPolicy(policy),
+                    expectedRevision: boundedInteger(
+                        value["expectedRevision"],
+                        "Bot lifecycle revision",
+                        1,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                    runtimeId: identifier(value["runtimeId"], "Runtime"),
+                    workspaceRef: boundedText(value["workspaceRef"], "Bot workspace", 2_048),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly suspendBot = async (botId: string, expectedRevision: number, signal: AbortSignal): Promise<MobiusBot> =>
+        await this.transitionBot(botId, "suspend", expectedRevision, signal);
+
+    readonly resumeBot = async (botId: string, expectedRevision: number, signal: AbortSignal): Promise<MobiusBot> =>
+        await this.transitionBot(botId, "resume", expectedRevision, signal);
+
+    readonly archiveBot = async (botId: string, expectedRevision: number, signal: AbortSignal): Promise<MobiusBot> =>
+        await this.transitionBot(botId, "archive", expectedRevision, signal);
+
+    readonly listConversations = async (botId: string, signal: AbortSignal): Promise<MobiusBotConversationDirectory> =>
+        new MobiusBotConversationDirectory(await this.#executor.get(botPath(botId, "conversations"), signal));
+
+    readonly createConversation = async (
+        botId: string,
+        request: CreateMobiusOwnerConversationRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotConversation> => {
+        const value = requestRecord(request, ["clientConversationKey"], "owner Bot conversation request");
+        return decodeMobiusOwnerBotConversation(
+            await this.#executor.post(
+                botPath(botId, "conversations"),
+                {
+                    clientConversationKey: identifier(value["clientConversationKey"], "client conversation"),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly submitMessage = async (
+        botId: string,
+        conversationId: string,
+        request: SubmitMobiusOwnerBotMessageRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotTurnAcceptance> => {
+        const value = requestRecord(
+            request,
+            ["actorRef", "artifactIds", "clientMessageId", "text"],
+            "owner Bot message request",
+        );
+        return new MobiusBotTurnAcceptance(
+            await this.#executor.post(
+                botPath(
+                    botId,
+                    `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/messages`,
+                ),
+                {
+                    actorRef: boundedText(value["actorRef"], "Bot actor reference", 500),
+                    artifactIds: identifiers(value["artifactIds"], "artifact", 16),
+                    clientMessageId: identifier(value["clientMessageId"], "client message"),
+                    text: boundedText(value["text"], "Bot message text", 100_000, true),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly readConversationEvents = async (
+        botId: string,
+        conversationId: string,
+        after: string,
+        signal: AbortSignal,
+    ): Promise<MobiusBotConversationEventPage> => {
+        const path = new URL(
+            botPath(botId, `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`),
+            "https://mobius.invalid/",
+        );
+        if (after.length > 0) {
+            path.searchParams.set("after", boundedText(after, "Bot event cursor", 512));
+        }
+        return new MobiusBotConversationEventPage(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+        );
+    };
+
+    readonly cancelTurn = async (
+        botId: string,
+        turnId: string,
+        idempotencyKey: string,
+        signal: AbortSignal,
+    ): Promise<MobiusBotTurnCancellationAcceptance> =>
+        new MobiusBotTurnCancellationAcceptance(
+            await this.#executor.post(
+                botPath(botId, `turns/${encodeURIComponent(identifier(turnId, "turn"))}/cancel`),
+                { idempotencyKey: identifier(idempotencyKey, "cancellation idempotency key") },
+                signal,
+            ),
+        );
+
+    readonly listConnections = async (botId: string, signal: AbortSignal): Promise<MobiusBotConnectionDirectory> =>
+        new MobiusBotConnectionDirectory(await this.#executor.get(botPath(botId, "connections"), signal));
+
+    readonly createConnectionGrant = async (
+        botId: string,
+        request: CreateMobiusBotConnectionGrantRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotConnectionGrant> => {
+        const value = requestRecord(
+            request,
+            ["audience", "expiresInSeconds", "label", "scopes"],
+            "Bot connection grant request",
+        );
+        return new MobiusBotConnectionGrant(
+            await this.#executor.post(
+                botPath(botId, "connection-grants"),
+                {
+                    audience: identifier(value["audience"], "connector audience"),
+                    expiresInSeconds: boundedInteger(value["expiresInSeconds"], "connection grant lifetime", 60, 3_600),
+                    label: boundedText(value["label"], "connection label", 200),
+                    scopes: identifiers(value["scopes"], "Bot connection scope", 32),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly approveDeliveryTarget = async (
+        botId: string,
+        deliveryTargetId: string,
+        expectedPolicyRevision: number,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        await this.#executor.post(
+            botPath(
+                botId,
+                `delivery-targets/${encodeURIComponent(identifier(deliveryTargetId, "delivery target"))}/approve`,
+            ),
+            {
+                expectedPolicyRevision: boundedInteger(
+                    expectedPolicyRevision,
+                    "delivery target policy revision",
+                    0,
+                    Number.MAX_SAFE_INTEGER,
+                ),
+            },
+            signal,
+        );
+    };
+
+    readonly revokeConnection = async (
+        botId: string,
+        connectionId: string,
+        expectedRevision: number,
+        signal: AbortSignal,
+    ): Promise<MobiusRevokedBotConnection> =>
+        new MobiusRevokedBotConnection(
+            await this.#executor.post(
+                botPath(botId, `connections/${encodeURIComponent(identifier(connectionId, "connection"))}/revoke`),
+                {
+                    expectedRevision: boundedInteger(
+                        expectedRevision,
+                        "Bot connection revision",
+                        1,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                },
+                signal,
+            ),
+        );
+
+    private readonly transitionBot = async (
+        botId: string,
+        action: string,
+        expectedRevision: number,
+        signal: AbortSignal,
+    ): Promise<MobiusBot> =>
+        decodeMobiusBot(
+            await this.#executor.post(
+                botPath(botId, action),
+                {
+                    expectedRevision: boundedInteger(
+                        expectedRevision,
+                        "Bot lifecycle revision",
+                        1,
+                        Number.MAX_SAFE_INTEGER,
+                    ),
+                },
+                signal,
+            ),
+        );
 }
 
 function connectionPath(connectionId: string, resource: string): string {

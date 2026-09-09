@@ -59,6 +59,8 @@ function panelStyle(layout: SessionConfigPanelLayout): CSSProperties | undefined
 }
 
 interface ConfigControlProps {
+    readonly disabled: boolean;
+    readonly onConfigure: (option: SessionConfigOption, value: string, booleanValue: boolean) => Promise<string>;
     readonly option: SessionConfigOption;
     readonly pending: boolean;
     readonly setPending: (id: string, pending: boolean) => void;
@@ -90,13 +92,18 @@ function groupConfigValues(values: SessionConfigOption["values"]): readonly Conf
     return Array.from(groups.values());
 }
 
-function SelectConfigControl({ option, pending, setPending }: ConfigControlProps) {
-    const conversation = useChatStore(selectActiveConversation);
+function SelectConfigControl({
+    disabled: controlDisabled,
+    onConfigure,
+    option,
+    pending,
+    setPending,
+}: ConfigControlProps) {
     const labelId = useId();
     const descriptionId = useId();
     const errorId = useId();
     const [failure, setFailure] = useState("");
-    const disabled = conversation.isRunning || pending || option.values.length < 2;
+    const disabled = controlDisabled || pending || option.values.length < 2;
     const valueGroups = groupConfigValues(option.values);
     const describedBy = [option.description.length > 0 ? descriptionId : "", failure.length > 0 ? errorId : ""]
         .filter((id) => id.length > 0)
@@ -122,20 +129,8 @@ function SelectConfigControl({ option, pending, setPending }: ConfigControlProps
                     }
                     setFailure("");
                     setPending(option.id, true);
-                    void configureSessionOption(
-                        conversation.agentId,
-                        conversation.sessionId,
-                        conversation.directoryId,
-                        conversation.additionalDirectories.map((directory) => directory.directoryId),
-                        option,
-                        value,
-                        false,
-                    )
-                        .then((result) => {
-                            if (result.kind === "failed") {
-                                setFailure(`${result.code}: ${result.message}`);
-                            }
-                        })
+                    void onConfigure(option, value, false)
+                        .then(setFailure)
                         .finally(() => {
                             setPending(option.id, false);
                         });
@@ -183,12 +178,17 @@ function SelectConfigControl({ option, pending, setPending }: ConfigControlProps
     );
 }
 
-function BooleanConfigControl({ option, pending, setPending }: ConfigControlProps) {
-    const conversation = useChatStore(selectActiveConversation);
+function BooleanConfigControl({
+    disabled: controlDisabled,
+    onConfigure,
+    option,
+    pending,
+    setPending,
+}: ConfigControlProps) {
     const descriptionId = useId();
     const errorId = useId();
     const [failure, setFailure] = useState("");
-    const disabled = conversation.isRunning || pending;
+    const disabled = controlDisabled || pending;
     const describedBy = [option.description.length > 0 ? descriptionId : "", failure.length > 0 ? errorId : ""]
         .filter((id) => id.length > 0)
         .join(" ");
@@ -203,20 +203,8 @@ function BooleanConfigControl({ option, pending, setPending }: ConfigControlProp
                 onClick={() => {
                     setFailure("");
                     setPending(option.id, true);
-                    void configureSessionOption(
-                        conversation.agentId,
-                        conversation.sessionId,
-                        conversation.directoryId,
-                        conversation.additionalDirectories.map((directory) => directory.directoryId),
-                        option,
-                        "",
-                        !option.booleanValue,
-                    )
-                        .then((result) => {
-                            if (result.kind === "failed") {
-                                setFailure(`${result.code}: ${result.message}`);
-                            }
-                        })
+                    void onConfigure(option, "", !option.booleanValue)
+                        .then(setFailure)
                         .finally(() => {
                             setPending(option.id, false);
                         });
@@ -266,21 +254,42 @@ function BooleanConfigControl({ option, pending, setPending }: ConfigControlProp
     );
 }
 
-export function SessionConfigControls() {
-    const conversation = useChatStore(selectActiveConversation);
+interface SessionConfigControlsViewProps {
+    readonly agentLabel: string;
+    readonly directoryLabel: string;
+    readonly failure: string;
+    readonly isPreparing: boolean;
+    readonly isReady: boolean;
+    readonly isRunning: boolean;
+    readonly onConfigure: (option: SessionConfigOption, value: string, booleanValue: boolean) => Promise<string>;
+    readonly onRetry: () => void;
+    readonly options: readonly SessionConfigOption[];
+    readonly statusLabel: string;
+}
+
+export function SessionConfigControlsView({
+    agentLabel,
+    directoryLabel,
+    failure,
+    isPreparing,
+    isReady,
+    isRunning,
+    onConfigure,
+    onRetry,
+    options,
+    statusLabel,
+}: SessionConfigControlsViewProps) {
     const [open, setOpen] = useState(false);
     const [panelLayout, setPanelLayout] = useState<SessionConfigPanelLayout>(PENDING_PANEL_LAYOUT);
     const [pendingIds, setPendingIds] = useState<readonly string[]>([]);
     const panelRef = useRef<HTMLElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
     const panelId = useId();
-    const ready = conversation.session instanceof ReadySessionState;
-    const options = ready ? conversation.session.configOptions : [];
-    const summary = ready
+    const summary = isReady
         ? summarizeSessionConfig(options)
         : {
-              accessibleLabel: conversation.session.label,
-              compactLabel: conversation.session.label,
+              accessibleLabel: statusLabel,
+              compactLabel: statusLabel,
           };
 
     const close = useCallback((): void => {
@@ -392,7 +401,7 @@ export function SessionConfigControls() {
                 aria-label={summary.accessibleLabel}
                 className={cn(
                     "group h-11 w-auto max-w-full min-w-0 gap-0 rounded-full bg-transparent p-1 text-xs text-copy-secondary hover:bg-transparent lg:h-9 lg:max-w-[240px] lg:p-0",
-                    conversation.session instanceof SessionPreparationFailedState && "text-destructive",
+                    failure.length > 0 && "text-destructive",
                 )}
                 onClick={() => {
                     if (open) {
@@ -407,7 +416,7 @@ export function SessionConfigControls() {
                 variant="ghost"
             >
                 <span className="flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-full border-[0.5px] border-black/8 bg-black/[0.025] px-2.5 transition-colors duration-150 group-hover:border-black/12 group-hover:bg-black/[0.05] motion-reduce:transition-none max-[360px]:w-9 max-[360px]:justify-center max-[360px]:gap-0 max-[360px]:border-transparent max-[360px]:bg-transparent max-[360px]:px-0 max-[360px]:group-hover:bg-black/[0.04]">
-                    {conversation.session.isPreparing ? (
+                    {isPreparing ? (
                         <LoaderCircle className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
                     ) : (
                         <Settings2 className="size-4 shrink-0" />
@@ -456,7 +465,7 @@ export function SessionConfigControls() {
                             <span className="min-w-0 flex-1">
                                 <strong className="block text-sm font-semibold">Run settings</strong>
                                 <span className="block truncate text-[11px] text-muted-foreground">
-                                    {conversation.agentLabel} · {conversation.directoryLabel}
+                                    {agentLabel} · {directoryLabel}
                                 </span>
                             </span>
                             <Button
@@ -470,18 +479,18 @@ export function SessionConfigControls() {
                             </Button>
                         </header>
                         <div className="conversation-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain bg-surface-subtle/70 p-3">
-                            {conversation.isRunning && (
+                            {isRunning && (
                                 <p className="mb-3 rounded-lg bg-black/[0.045] px-3 py-2 text-[11px] leading-[18px] text-muted-foreground">
                                     Settings are locked while this run is active.
                                 </p>
                             )}
-                            {conversation.session instanceof SessionPreparationFailedState ? (
+                            {failure.length > 0 ? (
                                 <div className="rounded-xl border-[0.5px] border-destructive/15 bg-destructive/5 p-4 text-center">
-                                    <p className="text-xs leading-5 text-destructive">{conversation.session.error}</p>
+                                    <p className="text-xs leading-5 text-destructive">{failure}</p>
                                     <Button
                                         className="mt-3 min-h-11 lg:min-h-9"
                                         onClick={() => {
-                                            void prepareActiveSession(conversation.sessionId);
+                                            onRetry();
                                         }}
                                         size="sm"
                                         variant="outline"
@@ -490,7 +499,7 @@ export function SessionConfigControls() {
                                         Retry agent
                                     </Button>
                                 </div>
-                            ) : ready ? (
+                            ) : isReady ? (
                                 options.length === 0 ? (
                                     <p className="px-3 py-8 text-center text-xs leading-5 text-muted-foreground">
                                         This agent uses its default run settings.
@@ -506,14 +515,18 @@ export function SessionConfigControls() {
                                                     {section.options.map((option) =>
                                                         option.type === "select" ? (
                                                             <SelectConfigControl
+                                                                disabled={isRunning || pendingIds.length > 0}
                                                                 key={option.id}
+                                                                onConfigure={onConfigure}
                                                                 option={option}
                                                                 pending={pendingIds.includes(option.id)}
                                                                 setPending={setPending}
                                                             />
                                                         ) : (
                                                             <BooleanConfigControl
+                                                                disabled={isRunning || pendingIds.length > 0}
                                                                 key={option.id}
+                                                                onConfigure={onConfigure}
                                                                 option={option}
                                                                 pending={pendingIds.includes(option.id)}
                                                                 setPending={setPending}
@@ -531,7 +544,7 @@ export function SessionConfigControls() {
                                     className="flex min-h-32 items-center justify-center gap-2 text-xs text-muted-foreground"
                                 >
                                     <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
-                                    {conversation.session.label}
+                                    {statusLabel}
                                 </div>
                             )}
                         </div>
@@ -539,5 +552,37 @@ export function SessionConfigControls() {
                 </>
             )}
         </div>
+    );
+}
+
+export function SessionConfigControls() {
+    const conversation = useChatStore(selectActiveConversation);
+    const ready = conversation.session instanceof ReadySessionState;
+    return (
+        <SessionConfigControlsView
+            agentLabel={conversation.agentLabel}
+            directoryLabel={conversation.directoryLabel}
+            failure={conversation.session instanceof SessionPreparationFailedState ? conversation.session.error : ""}
+            isPreparing={conversation.session.isPreparing}
+            isReady={ready}
+            isRunning={conversation.isRunning}
+            onConfigure={async (option, value, booleanValue) => {
+                const result = await configureSessionOption(
+                    conversation.agentId,
+                    conversation.sessionId,
+                    conversation.directoryId,
+                    conversation.additionalDirectories.map((directory) => directory.directoryId),
+                    option,
+                    value,
+                    booleanValue,
+                );
+                return result.kind === "failed" ? `${result.code}: ${result.message}` : "";
+            }}
+            onRetry={() => {
+                void prepareActiveSession(conversation.sessionId);
+            }}
+            options={ready ? conversation.session.configOptions : []}
+            statusLabel={conversation.session.label}
+        />
     );
 }

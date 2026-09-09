@@ -280,6 +280,12 @@ function arraysEqual(left: readonly string[], right: readonly string[]): boolean
     return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
+function recordsEqual(left: Readonly<Record<string, string>>, right: Readonly<Record<string, string>>): boolean {
+    const leftEntries = Object.entries(left);
+    const rightEntries = Object.entries(right);
+    return leftEntries.length === rightEntries.length && leftEntries.every(([name, value]) => right[name] === value);
+}
+
 function elicitationFieldType(value: unknown): SessionElicitationField["type"] {
     if (value === "boolean") {
         return "boolean";
@@ -640,6 +646,7 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #child: ReturnType<typeof spawn>;
     readonly #connection: ClientConnection;
     readonly #cwd: string;
+    readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => AcpSessionObserver;
     readonly #mobiusSessionId: string;
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
@@ -690,6 +697,7 @@ class AcpProcessSession implements AcpClientHandler {
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
         this.#cwd = cwd;
+        this.#environment = agent.environment;
         this.#getObserver = getObserver;
         this.#mobiusSessionId = mobiusSessionId;
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
@@ -798,6 +806,9 @@ class AcpProcessSession implements AcpClientHandler {
         this.#agentId === agentId &&
         this.#cwd === cwd &&
         arraysEqual(this.#additionalDirectories, additionalDirectories);
+
+    readonly usesEnvironment = (environment: Readonly<Record<string, string>>): boolean =>
+        recordsEqual(this.#environment, environment);
 
     readonly canRebind = (): boolean => !this.#prompted && !this.#turn.running;
 
@@ -1859,6 +1870,65 @@ export class AcpSessionManager {
         return await operation;
     }
 
+    async #replaceExecutionPreparation(
+        existing: AcpProcessSession,
+        options: AcpPrepareOptions,
+    ): Promise<AcpProcessSession> {
+        const desiredConfigOptions = existing.prepared().configOptions;
+        const operation = (async () => {
+            try {
+                this.#sessions.delete(options.sessionId);
+                await existing.close();
+                this.#store.remove(options.sessionId);
+                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store);
+                try {
+                    for (const desired of desiredConfigOptions) {
+                        const current = runtime.prepared().configOptions.find((option) => option.id === desired.id);
+                        if (current === undefined || current.type !== desired.type) {
+                            continue;
+                        }
+                        if (desired.type === "boolean") {
+                            if (current.booleanValue !== desired.booleanValue) {
+                                await runtime.configure({
+                                    ...options,
+                                    booleanValue: desired.booleanValue,
+                                    configId: desired.id,
+                                    requestId: `execution-prepare-${desired.id}`,
+                                    value: "",
+                                    valueType: "boolean",
+                                });
+                            }
+                            continue;
+                        }
+                        if (
+                            current.currentValue !== desired.currentValue &&
+                            current.values.some((value) => value.value === desired.currentValue)
+                        ) {
+                            await runtime.configure({
+                                ...options,
+                                booleanValue: false,
+                                configId: desired.id,
+                                requestId: `execution-prepare-${desired.id}`,
+                                value: desired.currentValue,
+                                valueType: "select",
+                            });
+                        }
+                    }
+                } catch (error) {
+                    await runtime.close();
+                    this.#store.remove(options.sessionId);
+                    throw error;
+                }
+                this.#sessions.set(options.sessionId, runtime);
+                return runtime;
+            } finally {
+                this.#preparing.delete(options.sessionId);
+            }
+        })();
+        this.#preparing.set(options.sessionId, operation);
+        return await operation;
+    }
+
     readonly prepareSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
         const stored = this.#store.read(options.sessionId);
         if (stored instanceof DeletedAcpStoredSession) {
@@ -1899,6 +1969,36 @@ export class AcpSessionManager {
         }
         const runtime = await this.#startPreparation(options);
         return runtime.prepared();
+    };
+
+    readonly prepareExecutionSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
+        const pending = this.#preparing.get(options.sessionId);
+        if (pending !== undefined) {
+            await pending;
+            return await this.prepareExecutionSession(options);
+        }
+        const existing = this.#sessions.get(options.sessionId);
+        if (existing === undefined) {
+            return (await this.#startPreparation(options)).prepared();
+        }
+        if (!existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+            throw new AcpExecutionError(
+                "The agent or workspace cannot change after a conversation has started",
+                {},
+                "session_identity_mismatch",
+            );
+        }
+        if (existing.usesEnvironment(options.agent.environment)) {
+            return existing.prepared();
+        }
+        if (!existing.canRebind()) {
+            throw new AcpExecutionError(
+                "The execution environment cannot change after a conversation has started",
+                {},
+                "session_identity_mismatch",
+            );
+        }
+        return (await this.#replaceExecutionPreparation(existing, options)).prepared();
     };
 
     readonly prepareNativeSessionBrowser = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
@@ -2041,6 +2141,13 @@ export class AcpSessionManager {
         this.#nativeBrowserSessions.clear();
         await Promise.all([...sessions, ...nativeBrowserSessions].map(async (session) => await session.close()));
     };
+
+    readonly hasPreparedSession = (
+        sessionId: string,
+        agentId: string,
+        cwd: string,
+        additionalDirectories: readonly string[],
+    ): boolean => this.#sessions.get(sessionId)?.belongsTo(agentId, cwd, additionalDirectories) === true;
 
     readonly ensureSession = async (options: AcpPrepareOptions): Promise<AcpProcessSession> => {
         const existing = this.#sessions.get(options.sessionId);

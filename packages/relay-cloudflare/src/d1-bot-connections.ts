@@ -23,10 +23,28 @@ interface TargetRow {
     readonly bot_id: string;
     readonly connection_id: string;
     readonly connection_lifecycle: string;
+    readonly created_at: number;
     readonly delivery_target_id: string;
+    readonly disabled_at: unknown;
     readonly lifecycle: string;
+    readonly lifecycle_revision: number;
     readonly outbound_policy_revision: number;
     readonly owner_approved: number;
+    readonly updated_at: number;
+}
+
+interface ConnectionRow {
+    readonly audience: string;
+    readonly bot_id: string;
+    readonly connection_id: string;
+    readonly connector_principal_id: string;
+    readonly created_at: number;
+    readonly label: string;
+    readonly last_used_at: number;
+    readonly lifecycle: string;
+    readonly lifecycle_revision: number;
+    readonly revoked_at: unknown;
+    readonly scopes_json: string;
 }
 
 export class BotDeliveryRoute {
@@ -58,12 +76,95 @@ function decodeScopes(encoded: string): readonly string[] {
     return value.filter((entry) => typeof entry === "string");
 }
 
+function timestamp(value: unknown): string {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+        throw new BotApiError("bot_service_unavailable", "The Bot connection record is invalid", 503);
+    }
+    return new Date(value).toISOString();
+}
+
+function connectionResource(row: ConnectionRow): object {
+    const resource = {
+        audience: row.audience,
+        botId: row.bot_id,
+        connectionId: row.connection_id,
+        connectorPrincipalId: row.connector_principal_id,
+        createdAt: timestamp(row.created_at),
+        label: row.label,
+        lifecycle: row.lifecycle,
+        lifecycleRevision: row.lifecycle_revision,
+        scopes: decodeScopes(row.scopes_json),
+    };
+    if (row.lifecycle === "active") {
+        return { ...resource, lastUsedAt: timestamp(row.last_used_at) };
+    }
+    if (row.lifecycle === "revoked") {
+        return { ...resource, revokedAt: timestamp(row.revoked_at) };
+    }
+    throw new BotApiError("bot_service_unavailable", "The Bot connection lifecycle is invalid", 503);
+}
+
+function targetResource(row: TargetRow): object {
+    const resource = {
+        alias: row.alias,
+        botId: row.bot_id,
+        connectionId: row.connection_id,
+        createdAt: timestamp(row.created_at),
+        deliveryTargetId: row.delivery_target_id,
+        lifecycle: row.lifecycle,
+        lifecycleRevision: row.lifecycle_revision,
+        outboundPolicyRevision: row.outbound_policy_revision,
+        ownerApproved: row.owner_approved === 1,
+        updatedAt: timestamp(row.updated_at),
+    };
+    if (row.lifecycle === "active") {
+        return resource;
+    }
+    if (row.lifecycle === "disabled") {
+        return { ...resource, disabledAt: timestamp(row.disabled_at) };
+    }
+    throw new BotApiError("bot_service_unavailable", "The Bot delivery target lifecycle is invalid", 503);
+}
+
 export class D1BotConnections {
     readonly #database: D1Database;
 
     constructor(database: D1Database) {
         this.#database = database;
     }
+
+    readonly listForOwner = async (access: BotOwnerAccess, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const [connectionRows, targetRows] = await Promise.all([
+            this.#database
+                .prepare(
+                    `SELECT connections.*
+                       FROM bot_connections AS connections
+                       INNER JOIN bots ON bots.bot_id = connections.bot_id
+                      WHERE connections.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                      ORDER BY connections.created_at DESC, connections.connection_id DESC`,
+                )
+                .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+                .all<ConnectionRow>(),
+            this.#database
+                .prepare(
+                    `SELECT targets.*, connections.lifecycle AS connection_lifecycle
+                       FROM bot_delivery_targets AS targets
+                       INNER JOIN bot_connections AS connections
+                         ON connections.connection_id = targets.connection_id
+                       INNER JOIN bots ON bots.bot_id = targets.bot_id
+                      WHERE targets.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                      ORDER BY targets.created_at DESC, targets.delivery_target_id DESC`,
+                )
+                .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+                .all<TargetRow>(),
+        ]);
+        signal.throwIfAborted();
+        return {
+            connections: connectionRows.results.map(connectionResource),
+            deliveryTargets: targetRows.results.map(targetResource),
+        };
+    };
 
     readonly createGrant = async (
         access: BotOwnerAccess,
@@ -370,6 +471,80 @@ export class D1BotConnections {
         };
     };
 
+    readonly revokeConnectionForOwner = async (
+        access: BotOwnerAccess,
+        connectionId: string,
+        expectedRevision: number,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        signal.throwIfAborted();
+        const normalizedConnectionId = validateIdentifier(connectionId, "connection_id");
+        const connection = await this.#database
+            .prepare(
+                `SELECT connections.*
+                   FROM bot_connections AS connections
+                   INNER JOIN bots ON bots.bot_id = connections.bot_id
+                  WHERE connections.connection_id = ? AND connections.bot_id = ?
+                    AND bots.tenant_id = ? AND bots.project_id = ?`,
+            )
+            .bind(normalizedConnectionId, access.botId, access.scope.tenantId, access.scope.projectId)
+            .first<ConnectionRow>();
+        signal.throwIfAborted();
+        if (connection === null) {
+            throw new BotApiError("connection_not_found", "The Bot connection does not exist", 404);
+        }
+        if (connection.lifecycle !== "active" || connection.lifecycle_revision !== expectedRevision) {
+            throw new BotApiError("revision_conflict", "The Bot connection revision changed", 409);
+        }
+        const nextRevision = expectedRevision + 1;
+        const results = await this.#database.batch([
+            this.#database
+                .prepare(
+                    `UPDATE bot_connections
+                        SET lifecycle = 'revoked', lifecycle_revision = ?, revoked_at = ?
+                      WHERE connection_id = ? AND bot_id = ? AND lifecycle = 'active'
+                        AND lifecycle_revision = ?`,
+                )
+                .bind(nextRevision, now, normalizedConnectionId, access.botId, expectedRevision),
+            this.audit(
+                access.scope,
+                access.botId,
+                "owner",
+                access.credentialId,
+                "bot.connection.revoked",
+                normalizedConnectionId,
+                {},
+                now,
+            ),
+            this.#database
+                .prepare(
+                    `UPDATE bot_connection_credentials SET revoked_at = COALESCE(revoked_at, ?)
+                      WHERE connection_id = ? AND revoked_at IS NULL`,
+                )
+                .bind(now, normalizedConnectionId),
+            this.#database
+                .prepare(
+                    `UPDATE bot_delivery_targets SET lifecycle = 'disabled',
+                        lifecycle_revision = lifecycle_revision + 1,
+                        updated_at = ?, disabled_at = COALESCE(disabled_at, ?)
+                      WHERE connection_id = ? AND lifecycle = 'active'`,
+                )
+                .bind(now, now, normalizedConnectionId),
+        ]);
+        signal.throwIfAborted();
+        if (results[0]?.meta.changes !== 1 || results[1]?.meta.changes !== 1) {
+            throw new BotApiError("revision_conflict", "The Bot connection revision changed", 409);
+        }
+        return {
+            botId: access.botId,
+            connectionId: normalizedConnectionId,
+            lifecycle: "revoked",
+            lifecycleRevision: nextRevision,
+            revokedAt: new Date(now).toISOString(),
+        };
+    };
+
     readonly createTarget = async (
         access: BotConnectorAccess,
         alias: string,
@@ -588,7 +763,8 @@ export class D1BotConnections {
             .prepare(
                 `SELECT targets.delivery_target_id, targets.bot_id, targets.connection_id,
                         targets.alias, targets.outbound_policy_revision,
-                        targets.lifecycle, targets.owner_approved,
+                        targets.lifecycle, targets.lifecycle_revision, targets.owner_approved,
+                        targets.created_at, targets.updated_at, targets.disabled_at,
                         connections.lifecycle AS connection_lifecycle
                    FROM bot_delivery_targets AS targets
                    INNER JOIN bot_connections AS connections

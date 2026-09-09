@@ -40,6 +40,7 @@ interface BotRow {
 
 interface BehaviorRow {
     readonly agent_configuration_json: string;
+    readonly approved_at: unknown;
     readonly behavior_revision_id: string;
     readonly bot_id: string;
     readonly content_digest: string;
@@ -47,6 +48,7 @@ interface BehaviorRow {
     readonly instructions: string;
     readonly lifecycle: string;
     readonly required_capabilities_json: string;
+    readonly retired_at: unknown;
     readonly revision_number: number;
 }
 
@@ -70,6 +72,7 @@ interface TargetRow {
 interface BindingRow {
     readonly agent_config_revision: number;
     readonly agent_ref: string;
+    readonly approved_at: unknown;
     readonly allowed_delivery_target_ids_json: string;
     readonly behavior_revision_id: string;
     readonly binding_id: string;
@@ -79,7 +82,11 @@ interface BindingRow {
     readonly created_at: number;
     readonly lifecycle: string;
     readonly local_grant_id: unknown;
+    readonly revoked_at: unknown;
     readonly runtime_id: string;
+    readonly unavailable_at: unknown;
+    readonly unavailable_code: unknown;
+    readonly unavailable_message: unknown;
     readonly workspace_ref: string;
 }
 
@@ -161,6 +168,19 @@ function stringArray(encoded: string, message: string): readonly string[] {
         throw new BotApiError("bot_service_unavailable", message, 503);
     }
     return value.filter((candidate) => typeof candidate === "string");
+}
+
+function objectValue(encoded: string, message: string): Readonly<Record<string, unknown>> {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+    } catch (cause) {
+        throw new BotApiError("bot_service_unavailable", message, 503, { cause });
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new BotApiError("bot_service_unavailable", message, 503);
+    }
+    return Object.freeze(Object.fromEntries(Object.entries(value)));
 }
 
 function completionPolicy(encoded: string): BotCompletionDeliveryPolicy {
@@ -263,6 +283,69 @@ function botResource(row: BotProfileRow): object {
     };
 }
 
+function behaviorResource(row: BehaviorRow): object {
+    const resource = {
+        agentConfiguration: objectValue(row.agent_configuration_json, "The behavior configuration is invalid"),
+        behaviorRevisionId: row.behavior_revision_id,
+        botId: row.bot_id,
+        contentDigest: row.content_digest,
+        createdAt: timestamp(row.created_at),
+        instructions: row.instructions,
+        lifecycle: row.lifecycle,
+        requiredCapabilities: stringArray(row.required_capabilities_json, "The behavior requirements are invalid"),
+        revisionNumber: row.revision_number,
+    };
+    if (row.lifecycle === "proposed" || row.lifecycle === "awaiting_local_approval") {
+        return resource;
+    }
+    if (row.lifecycle === "approved") {
+        return { ...resource, approvedAt: timestamp(row.approved_at) };
+    }
+    if (row.lifecycle === "retired") {
+        return { ...resource, retiredAt: timestamp(row.retired_at) };
+    }
+    throw new BotApiError("bot_service_unavailable", "The Bot behavior lifecycle is invalid", 503);
+}
+
+function bindingResource(row: BindingRow): object {
+    const resource = {
+        agentConfigRevision: row.agent_config_revision,
+        agentRef: row.agent_ref,
+        allowedDeliveryTargetIds: stringArray(row.allowed_delivery_target_ids_json, "The binding targets are invalid"),
+        behaviorRevisionId: row.behavior_revision_id,
+        bindingId: row.binding_id,
+        bindingRevision: row.binding_revision,
+        botId: row.bot_id,
+        completionPolicy: completionPolicy(row.completion_policy_json),
+        createdAt: timestamp(row.created_at),
+        lifecycle: row.lifecycle,
+        runtimeId: row.runtime_id,
+        workspaceRef: row.workspace_ref,
+    };
+    if (row.lifecycle === "requested") {
+        return resource;
+    }
+    if (row.lifecycle === "approved") {
+        return { ...resource, approvedAt: timestamp(row.approved_at) };
+    }
+    if (
+        row.lifecycle === "unavailable" &&
+        typeof row.unavailable_code === "string" &&
+        typeof row.unavailable_message === "string"
+    ) {
+        return {
+            ...resource,
+            code: row.unavailable_code,
+            message: row.unavailable_message,
+            unavailableAt: timestamp(row.unavailable_at),
+        };
+    }
+    if (row.lifecycle === "revoked") {
+        return { ...resource, revokedAt: timestamp(row.revoked_at) };
+    }
+    throw new BotApiError("bot_service_unavailable", "The Bot binding lifecycle is invalid", 503);
+}
+
 export class D1BotControl {
     readonly #database: D1Database;
 
@@ -336,6 +419,24 @@ export class D1BotControl {
             throw new BotApiError("project_access_denied", "This project is not available to this tenant", 403);
         }
         return new VerifiedChannelAccess(row.channel_id, row.runtime_id, tenantId, projectId);
+    };
+
+    readonly listBots = async (access: ProjectOwnerAccess, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const rows = await this.#database
+            .prepare(
+                `SELECT bots.*, profiles.display_name, profiles.avatar_ref,
+                        profiles.description, profiles.revision_number AS profile_revision_number
+                   FROM bots
+                   INNER JOIN bot_profile_revisions AS profiles
+                     ON profiles.profile_revision_id = bots.current_profile_revision_id
+                  WHERE bots.tenant_id = ? AND bots.project_id = ?
+                  ORDER BY bots.updated_at DESC, bots.bot_id DESC`,
+            )
+            .bind(access.scope.tenantId, access.scope.projectId)
+            .all<BotProfileRow>();
+        signal.throwIfAborted();
+        return { bots: rows.results.map(botResource) };
     };
 
     readonly createBot = async (
@@ -918,6 +1019,38 @@ export class D1BotControl {
         };
     };
 
+    readonly listBehaviorRevisions = async (access: BotOwnerAccess, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const rows = await this.#database
+            .prepare(
+                `SELECT behaviors.*
+                   FROM bot_behavior_revisions AS behaviors
+                   INNER JOIN bots ON bots.bot_id = behaviors.bot_id
+                  WHERE behaviors.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                  ORDER BY behaviors.revision_number DESC`,
+            )
+            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .all<BehaviorRow>();
+        signal.throwIfAborted();
+        return { behaviorRevisions: rows.results.map(behaviorResource) };
+    };
+
+    readonly listExecutionBindings = async (access: BotOwnerAccess, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const rows = await this.#database
+            .prepare(
+                `SELECT bindings.*
+                   FROM bot_execution_bindings AS bindings
+                   INNER JOIN bots ON bots.bot_id = bindings.bot_id
+                  WHERE bindings.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                  ORDER BY bindings.binding_revision DESC`,
+            )
+            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .all<BindingRow>();
+        signal.throwIfAborted();
+        return { executionBindings: rows.results.map(bindingResource) };
+    };
+
     readonly readApprovedBinding = async (botId: string, signal: AbortSignal): Promise<ApprovedBindingContext> => {
         signal.throwIfAborted();
         const binding = await this.#database
@@ -993,6 +1126,15 @@ export class D1BotControl {
                 throw new BotApiError("bot_not_active", "Only an active Bot can be suspended", 409);
             }
             lifecycle = "suspended";
+        } else if (action === "resume") {
+            if (
+                bot.lifecycle !== "suspended" ||
+                typeof bot.active_behavior_revision_id !== "string" ||
+                typeof bot.active_binding_id !== "string"
+            ) {
+                throw new BotApiError("bot_not_active", "Only a suspended executable Bot can be resumed", 409);
+            }
+            lifecycle = "active";
         } else if (action === "archive") {
             if (bot.lifecycle === "archived") {
                 throw new BotApiError("bot_not_active", "The Bot is already archived", 409);
@@ -1001,17 +1143,28 @@ export class D1BotControl {
         } else {
             throw new BotApiError("invalid_request", "The Bot lifecycle action is invalid", 400);
         }
-        const timeColumn = lifecycle === "suspended" ? "suspended_at" : "archived_at";
         const nextRevision = expectedRevision + 1;
-        const actionName = lifecycle === "suspended" ? "bot.suspended" : "bot.archived";
+        const actionName =
+            action === "suspend" ? "bot.suspended" : action === "resume" ? "bot.resumed" : "bot.archived";
+        const auditSubjectId = `${access.botId}:${nextRevision.toString()}`;
+        const lifecycleUpdate =
+            action === "suspend"
+                ? "updated_at = ?, suspended_at = ?"
+                : action === "resume"
+                  ? "updated_at = ?, suspended_at = NULL"
+                  : "updated_at = ?, archived_at = ?";
+        const updateValues =
+            action === "resume"
+                ? [lifecycle, now, access.botId, expectedRevision]
+                : [lifecycle, now, now, access.botId, expectedRevision];
         const results = await this.#database.batch([
             this.#database
                 .prepare(
                     `UPDATE bots SET lifecycle = ?, lifecycle_revision = lifecycle_revision + 1,
-                        updated_at = ?, ${timeColumn} = ?
+                        ${lifecycleUpdate}
                       WHERE bot_id = ? AND lifecycle_revision = ?`,
                 )
-                .bind(lifecycle, now, now, access.botId, expectedRevision),
+                .bind(...updateValues),
             this.#database
                 .prepare(
                     `INSERT INTO bot_audit_events (
@@ -1035,7 +1188,7 @@ export class D1BotControl {
                     access.botId,
                     access.credentialId,
                     actionName,
-                    access.botId,
+                    auditSubjectId,
                     JSON.stringify({ lifecycleRevision: nextRevision.toString() }),
                     now,
                     access.botId,
@@ -1043,7 +1196,7 @@ export class D1BotControl {
                     nextRevision,
                     access.botId,
                     actionName,
-                    access.botId,
+                    auditSubjectId,
                 ),
         ]);
         signal.throwIfAborted();

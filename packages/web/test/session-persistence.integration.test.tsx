@@ -366,14 +366,15 @@ describe.sequential("Session persistence boundaries", () => {
             });
             await sendReadySession(paired.daemon, directoryPreparation);
 
-            const agentPicker = screen.getByRole("combobox", {
-                name: "Agent for this conversation",
+            const agentPicker = screen.getByRole("button", {
+                name: "Agent or Bot for this conversation",
             });
-            fireEvent.pointerDown(agentPicker, {
-                button: 0,
-                pointerType: "mouse",
-            });
-            fireEvent.click(await screen.findByRole("option", { name: "Claude" }));
+            fireEvent.click(agentPicker);
+            fireEvent.click(
+                within(screen.getByRole("tabpanel", { name: "Local Agents" })).getByRole("button", {
+                    name: "Claude",
+                }),
+            );
             const selectedAgentPreparation = decodeSessionPrepareCommand(
                 await paired.daemon.receive(SESSION_PREPARE_KIND),
             );
@@ -443,8 +444,8 @@ describe.sequential("Session persistence boundaries", () => {
                 }),
             );
             expect(
-                screen.getByRole("combobox", {
-                    name: "Agent for this conversation",
+                screen.getByRole("button", {
+                    name: "Agent or Bot for this conversation",
                 }).textContent,
             ).toContain("Claude");
             await screen.findByRole("button", { name: /Run settings: Plan/ });

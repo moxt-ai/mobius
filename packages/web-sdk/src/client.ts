@@ -327,7 +327,10 @@ export class MobiusClient {
         await waitForOpen(this.#socket);
     };
 
-    readonly listWorkspace = async (request: WorkspaceListRequest): Promise<WorkspaceEntriesEvent> => {
+    readonly listWorkspace = async (
+        request: WorkspaceListRequest,
+        signal: AbortSignal,
+    ): Promise<WorkspaceEntriesEvent> => {
         const requestId = request.requestId ?? crypto.randomUUID();
         return await this.#requestReply(
             requestId,
@@ -342,10 +345,14 @@ export class MobiusClient {
             WORKSPACE_ENTRIES_KIND,
             decodeWorkspaceEntriesEvent,
             (event) => event.requestId,
+            signal,
         );
     };
 
-    readonly prepareSession = async (request: SessionPrepareRequest): Promise<SessionReadyEvent> => {
+    readonly prepareSession = async (
+        request: SessionPrepareRequest,
+        signal: AbortSignal,
+    ): Promise<SessionReadyEvent> => {
         const requestId = request.requestId ?? crypto.randomUUID();
         return await this.#requestReply(
             requestId,
@@ -363,6 +370,7 @@ export class MobiusClient {
             SESSION_READY_KIND,
             decodeSessionReadyEvent,
             (event) => event.requestId,
+            signal,
         );
     };
 
@@ -397,7 +405,10 @@ export class MobiusClient {
         );
     };
 
-    readonly configureSession = async (request: SessionConfigureRequest): Promise<SessionConfigUpdatedEvent> => {
+    readonly configureSession = async (
+        request: SessionConfigureRequest,
+        signal: AbortSignal,
+    ): Promise<SessionConfigUpdatedEvent> => {
         const requestId = request.requestId ?? crypto.randomUUID();
         return await this.#requestReply(
             requestId,
@@ -419,6 +430,7 @@ export class MobiusClient {
             SESSION_CONFIG_UPDATED_KIND,
             decodeSessionConfigUpdatedEvent,
             (event) => event.requestId,
+            signal,
         );
     };
 

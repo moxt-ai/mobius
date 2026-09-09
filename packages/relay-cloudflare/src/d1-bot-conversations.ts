@@ -13,6 +13,7 @@ import {
 
 import { BotApiError } from "./bot-api-error.ts";
 import {
+    type BotOwnerAccess,
     InboundBotConnectorPrincipal,
     type InboundBotOwnerPrincipal,
     type InboundBotPrincipal,
@@ -159,7 +160,8 @@ function assertProvisioningMatches(row: ProvisioningOutboxRow, provisioning: Bot
         provisioning.bindingRevision !== row.binding_revision ||
         provisioning.creatorKind !== row.creator_kind ||
         provisioning.creatorPrincipalId !== row.creator_principal_id ||
-        provisioning.title !== row.title ||
+        (provisioning.title !== row.title &&
+            !(row.creator_kind === "owner" && row.lifecycle === "active" && provisioning.title === "New chat")) ||
         provisioning.replyRoute.kind !== route.kind
     ) {
         throw new BotApiError("bot_service_unavailable", "The Bot conversation provisioning is inconsistent", 503);
@@ -181,27 +183,67 @@ export class D1BotConversations {
         this.#database = database;
     }
 
+    readonly listForOwner = async (access: BotOwnerAccess, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const rows = await this.#database
+            .prepare(
+                `SELECT conversations.*
+                   FROM bot_conversations AS conversations
+                   INNER JOIN bots ON bots.bot_id = conversations.bot_id
+                  WHERE conversations.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                    AND (
+                      conversations.creator_kind <> 'owner'
+                      OR EXISTS (
+                        SELECT 1 FROM bot_execution_directory AS executions
+                         WHERE executions.conversation_id = conversations.conversation_id
+                      )
+                      OR EXISTS (
+                        SELECT 1 FROM bot_owner_conversation_drafts AS drafts
+                         WHERE drafts.bot_id = conversations.bot_id
+                           AND drafts.conversation_id = conversations.conversation_id
+                      )
+                    )
+                  ORDER BY conversations.created_at DESC, conversations.conversation_id DESC`,
+            )
+            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .all<ConversationRow>();
+        signal.throwIfAborted();
+        return { conversations: rows.results.map(conversationResponse) };
+    };
+
     readonly createOwnerConversation = async (
         principal: InboundBotOwnerPrincipal,
         binding: ApprovedBindingContext,
         clientConversationKey: string,
-        title: string,
         now: number,
         signal: AbortSignal,
-    ): Promise<BotConversationPlan> =>
-        await this.createConversation(
+    ): Promise<BotConversationPlan> => {
+        for (const duplicate of await this.readDuplicateConversations(
+            principal.botId,
+            "owner",
+            clientConversationKey,
+            signal,
+        )) {
+            return this.planFromOutbox(duplicate);
+        }
+        for (const draft of await this.readOwnerDrafts(principal.botId, signal)) {
+            return this.planFromOutbox(draft);
+        }
+        return await this.createConversation(
             principal.scope,
             principal.botId,
             principal.kind,
             principal.principalId,
             "owner",
             clientConversationKey,
-            title,
+            "New chat",
             new OwnerBotReplyRoute(),
             binding,
+            true,
             now,
             signal,
         );
+    };
 
     readonly createConnectedConversation = async (
         principal: InboundBotConnectorPrincipal,
@@ -222,6 +264,7 @@ export class D1BotConversations {
             title,
             new BotConnectionReplyRoute(principal.connection.connectionId, replyDeliveryTargetId),
             binding,
+            false,
             now,
             signal,
         );
@@ -353,6 +396,9 @@ export class D1BotConversations {
                         AND state = 'pending'`,
                 )
                 .bind(now, failureCode, normalizedConversationId),
+            this.#database
+                .prepare(`DELETE FROM bot_owner_conversation_drafts WHERE conversation_id = ?`)
+                .bind(normalizedConversationId),
             this.audit(
                 scope,
                 row.bot_id,
@@ -465,31 +511,91 @@ export class D1BotConversations {
         execution: BotExecutionRecord,
         now: number,
         signal: AbortSignal,
+    ): Promise<void> => await this.persistExecution(scope, execution, [], now, signal);
+
+    readonly registerOwnerExecution = async (
+        scope: ProjectScope,
+        execution: BotExecutionRecord,
+        title: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<void> =>
+        await this.persistExecution(
+            scope,
+            execution,
+            [
+                this.#database
+                    .prepare(
+                        `UPDATE bot_conversations
+                            SET title = ?
+                          WHERE bot_id = ? AND conversation_id = ? AND creator_kind = 'owner'
+                            AND EXISTS (
+                              SELECT 1 FROM bot_owner_conversation_drafts AS drafts
+                               WHERE drafts.bot_id = bot_conversations.bot_id
+                                 AND drafts.conversation_id = bot_conversations.conversation_id
+                            )
+                            AND EXISTS (
+                              SELECT 1 FROM bot_execution_directory AS executions
+                               WHERE executions.execution_id = ?
+                                 AND executions.bot_id = bot_conversations.bot_id
+                                 AND executions.conversation_id = bot_conversations.conversation_id
+                            )`,
+                    )
+                    .bind(title, execution.botId, execution.conversationId, execution.executionId),
+                this.#database
+                    .prepare(
+                        `DELETE FROM bot_owner_conversation_drafts
+                          WHERE bot_id = ? AND conversation_id = ?
+                            AND EXISTS (
+                              SELECT 1 FROM bot_execution_directory
+                               WHERE execution_id = ? AND bot_id = ? AND conversation_id = ?
+                            )`,
+                    )
+                    .bind(
+                        execution.botId,
+                        execution.conversationId,
+                        execution.executionId,
+                        execution.botId,
+                        execution.conversationId,
+                    ),
+            ],
+            now,
+            signal,
+        );
+
+    private readonly persistExecution = async (
+        scope: ProjectScope,
+        execution: BotExecutionRecord,
+        additionalStatements: readonly D1PreparedStatement[],
+        now: number,
+        signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        await this.#database
-            .prepare(
-                `INSERT OR IGNORE INTO bot_execution_directory (
+        await this.#database.batch([
+            this.#database
+                .prepare(
+                    `INSERT OR IGNORE INTO bot_execution_directory (
                    execution_id, bot_id, conversation_id, turn_id, session_id,
                    behavior_revision_id, binding_id, binding_revision, runtime_id,
                    capability_id, created_at, deadline_at
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .bind(
-                execution.executionId,
-                execution.botId,
-                execution.conversationId,
-                execution.turnId,
-                execution.sessionId,
-                execution.behaviorRevisionId,
-                execution.bindingId,
-                execution.bindingRevision,
-                execution.runtimeId,
-                execution.capabilityId,
-                now,
-                Date.parse(execution.deadlineAt),
-            )
-            .run();
+                )
+                .bind(
+                    execution.executionId,
+                    execution.botId,
+                    execution.conversationId,
+                    execution.turnId,
+                    execution.sessionId,
+                    execution.behaviorRevisionId,
+                    execution.bindingId,
+                    execution.bindingRevision,
+                    execution.runtimeId,
+                    execution.capabilityId,
+                    now,
+                    Date.parse(execution.deadlineAt),
+                ),
+            ...additionalStatements,
+        ]);
         signal.throwIfAborted();
         const existing = await this.#database
             .prepare(
@@ -602,6 +708,7 @@ export class D1BotConversations {
         title: string,
         replyRoute: BotReplyRoute,
         binding: ApprovedBindingContext,
+        reserveOwnerDraft: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<BotConversationPlan> => {
@@ -633,7 +740,7 @@ export class D1BotConversations {
             replyRoute,
         );
         try {
-            const results = await this.#database.batch([
+            const statements = [
                 this.#database
                     .prepare(
                         `INSERT INTO bot_conversations (
@@ -660,6 +767,18 @@ export class D1BotConversations {
                         title,
                         now,
                     ),
+            ];
+            if (reserveOwnerDraft) {
+                statements.push(
+                    this.#database
+                        .prepare(
+                            `INSERT INTO bot_owner_conversation_drafts (bot_id, conversation_id, created_at)
+                             VALUES (?, ?, ?)`,
+                        )
+                        .bind(botId, conversationId, now),
+                );
+            }
+            statements.push(
                 this.#database
                     .prepare(
                         `INSERT INTO bot_control_outbox (
@@ -685,7 +804,8 @@ export class D1BotConversations {
                     { bindingId: binding.bindingId },
                     now,
                 ),
-            ]);
+            );
+            const results = await this.#database.batch(statements);
             signal.throwIfAborted();
             if (results.some((result) => result.meta.changes !== 1)) {
                 throw new BotApiError("bot_service_unavailable", "The Bot conversation was not created", 503);
@@ -695,27 +815,40 @@ export class D1BotConversations {
             if (cause instanceof BotApiError) {
                 throw cause;
             }
-            const duplicate = await this.readDuplicateConversation(botId, creatorKey, clientConversationKey, signal);
-            signal.throwIfAborted();
-            const duplicateRoute = replyRouteFromRow(duplicate);
-            if (
-                duplicate.creator_kind !== creatorKind ||
-                duplicate.creator_principal_id !== creatorPrincipalId ||
-                duplicate.title !== title ||
-                duplicateRoute.kind !== replyRoute.kind ||
-                (duplicateRoute instanceof BotConnectionReplyRoute &&
-                    (!(replyRoute instanceof BotConnectionReplyRoute) ||
-                        duplicateRoute.connectionId !== replyRoute.connectionId ||
-                        duplicateRoute.deliveryTargetId !== replyRoute.deliveryTargetId))
-            ) {
-                throw new BotApiError(
-                    "idempotency_conflict",
-                    "The conversation key was reused with different content",
-                    409,
-                    { cause },
-                );
+            for (const duplicate of await this.readDuplicateConversations(
+                botId,
+                creatorKey,
+                clientConversationKey,
+                signal,
+            )) {
+                const duplicateRoute = replyRouteFromRow(duplicate);
+                if (
+                    duplicate.creator_kind !== creatorKind ||
+                    duplicate.creator_principal_id !== creatorPrincipalId ||
+                    duplicate.title !== title ||
+                    duplicateRoute.kind !== replyRoute.kind ||
+                    (duplicateRoute instanceof BotConnectionReplyRoute &&
+                        (!(replyRoute instanceof BotConnectionReplyRoute) ||
+                            duplicateRoute.connectionId !== replyRoute.connectionId ||
+                            duplicateRoute.deliveryTargetId !== replyRoute.deliveryTargetId))
+                ) {
+                    throw new BotApiError(
+                        "idempotency_conflict",
+                        "The conversation key was reused with different content",
+                        409,
+                        { cause },
+                    );
+                }
+                return this.planFromOutbox(duplicate);
             }
-            return this.planFromOutbox(duplicate);
+            if (reserveOwnerDraft) {
+                for (const draft of await this.readOwnerDrafts(botId, signal)) {
+                    return this.planFromOutbox(draft);
+                }
+            }
+            throw new BotApiError("bot_service_unavailable", "The Bot conversation was not created", 503, {
+                cause,
+            });
         }
         const row = await this.readConversation(conversationId, signal);
         return new BotConversationPlan(provisioning, conversationResponse(row));
@@ -738,13 +871,13 @@ export class D1BotConversations {
         return new BotConversationPlan(provisioning, conversationResponse(row));
     };
 
-    private readonly readDuplicateConversation = async (
+    private readonly readDuplicateConversations = async (
         botId: string,
         creatorKey: string,
         clientConversationKey: string,
         signal: AbortSignal,
-    ): Promise<ProvisioningOutboxRow> => {
-        const row = await this.#database
+    ): Promise<readonly ProvisioningOutboxRow[]> => {
+        const rows = await this.#database
             .prepare(
                 `SELECT conversations.*,
                         outbox.bot_id AS outbox_bot_id,
@@ -761,12 +894,37 @@ export class D1BotConversations {
                     AND conversations.client_conversation_key = ?`,
             )
             .bind(botId, creatorKey, clientConversationKey)
-            .first<ProvisioningOutboxRow>();
+            .all<ProvisioningOutboxRow>();
         signal.throwIfAborted();
-        if (row === null) {
-            throw new BotApiError("binding_not_approved", "The approved Bot binding changed", 409);
-        }
-        return row;
+        return rows.results;
+    };
+
+    private readonly readOwnerDrafts = async (
+        botId: string,
+        signal: AbortSignal,
+    ): Promise<readonly ProvisioningOutboxRow[]> => {
+        const rows = await this.#database
+            .prepare(
+                `SELECT conversations.*,
+                        outbox.bot_id AS outbox_bot_id,
+                        outbox.subject_id AS outbox_subject_id,
+                        outbox.runtime_id AS outbox_runtime_id,
+                        outbox.state AS outbox_state,
+                        outbox.payload
+                   FROM bot_owner_conversation_drafts AS drafts
+                   INNER JOIN bot_conversations AS conversations
+                     ON conversations.bot_id = drafts.bot_id
+                    AND conversations.conversation_id = drafts.conversation_id
+                   INNER JOIN bot_control_outbox AS outbox
+                     ON outbox.subject_id = conversations.conversation_id
+                    AND outbox.bot_id = conversations.bot_id
+                    AND outbox.message_kind = 'conversation_provisioning'
+                  WHERE drafts.bot_id = ?`,
+            )
+            .bind(botId)
+            .all<ProvisioningOutboxRow>();
+        signal.throwIfAborted();
+        return rows.results;
     };
 
     private readonly readProvisioningOutbox = async (

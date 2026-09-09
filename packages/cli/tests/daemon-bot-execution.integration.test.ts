@@ -12,15 +12,23 @@ import {
     BotSessionPromptCommand,
     decodeBotExecutionBindingApprovedEvent,
     decodeMessageKind,
+    decodeSessionConfigUpdatedEvent,
     decodeSessionEventEnvelope,
+    decodeSessionReadyEvent,
     encodeBotExecutionBindingApprovalRequest,
     encodeBotExecutionBindingApprovedEvent,
     encodeBotSessionPromptCommand,
+    encodeSessionConfigureCommand,
+    encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
     NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
     SESSION_COMPLETED_KIND,
+    SESSION_CONFIG_UPDATED_KIND,
+    SESSION_CONFIGURE_KIND,
     SESSION_FAILED_KIND,
+    SESSION_PREPARE_KIND,
+    SESSION_READY_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
@@ -120,12 +128,31 @@ function restore(name: string, value: NodeJS.ProcessEnv[string]): void {
     process.env[name] = value;
 }
 
+async function readCompletedText(frames: ClientFrames): Promise<string> {
+    let observedText = "";
+    let completed = false;
+    while (!completed) {
+        const envelope = decodeSessionEventEnvelope(await frames.next());
+        const kind = decodeMessageKind(envelope.payload);
+        completed = kind === SESSION_COMPLETED_KIND;
+        const payload: unknown = JSON.parse(envelope.payload);
+        if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
+            const text = Reflect.get(payload, "text");
+            if (typeof text === "string") {
+                observedText += text;
+            }
+        }
+    }
+    return observedText;
+}
+
 describe("daemon Bot execution boundary", () => {
     it("Given a Bot binding proposal, When the relay acknowledges approval and the daemon executes a turn, Then the connection stays usable and the exact local target and pinned behavior are enforced", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
+        const overrideWorkspace = join(stateDirectory, "override-workspace");
         const native = join(stateDirectory, "native");
-        await Promise.all([mkdir(workspace), mkdir(native)]);
+        await Promise.all([mkdir(workspace), mkdir(overrideWorkspace), mkdir(native)]);
         const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
         const daemonToken = "d".repeat(43);
         const socketReady = Promise.withResolvers<Duplex>();
@@ -238,6 +265,114 @@ describe("daemon Bot execution boundary", () => {
                 bindingId: proposal.bindingId,
                 botId: proposal.botId,
             });
+
+            const overrideDirectoryId = `path-${Buffer.from(overrideWorkspace, "utf8").toString("base64url")}`;
+            const unpreparedOverride = new BotSessionPromptCommand(
+                "session_override",
+                "message_unprepared_override",
+                "codex",
+                proposal.bindingId,
+                overrideDirectoryId,
+                [],
+                [],
+                [],
+                "Must require local preparation",
+                "execution_unprepared_override",
+                "capability_unprepared_override",
+                "b".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_override",
+                "turn_unprepared_override",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(unpreparedOverride));
+            const unpreparedFailure = decodeSessionEventEnvelope(await frames.next());
+            expect(decodeMessageKind(unpreparedFailure.payload)).toBe(SESSION_FAILED_KIND);
+            expect(JSON.parse(unpreparedFailure.payload)).toMatchObject({
+                code: "local_approval_required",
+                commandId: unpreparedOverride.commandId,
+                sessionId: unpreparedOverride.sessionId,
+            });
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionPrepareCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    directoryId: overrideDirectoryId,
+                    kind: SESSION_PREPARE_KIND,
+                    requestId: "prepare_override",
+                    sessionId: unpreparedOverride.sessionId,
+                }),
+            );
+            const readyEnvelope = decodeSessionEventEnvelope(await frames.next());
+            expect(decodeMessageKind(readyEnvelope.payload)).toBe(SESSION_READY_KIND);
+            const ready = decodeSessionReadyEvent(readyEnvelope.payload);
+            expect(ready).toMatchObject({
+                agentId: "codex",
+                directoryId: overrideDirectoryId,
+                sessionId: unpreparedOverride.sessionId,
+            });
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionConfigureCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: config.bindingId,
+                    booleanValue: false,
+                    configId: "model",
+                    directoryId: overrideDirectoryId,
+                    kind: SESSION_CONFIGURE_KIND,
+                    requestId: "configure_override_model",
+                    sessionId: unpreparedOverride.sessionId,
+                    value: "test-large",
+                    valueType: "select",
+                }),
+            );
+            const configuredEnvelope = decodeSessionEventEnvelope(await frames.next());
+            expect(decodeMessageKind(configuredEnvelope.payload)).toBe(SESSION_CONFIG_UPDATED_KIND);
+            expect(decodeSessionConfigUpdatedEvent(configuredEnvelope.payload).configOptions).toEqual(
+                expect.arrayContaining([expect.objectContaining({ currentValue: "test-large", id: "model" })]),
+            );
+
+            const preparedOverride = new BotSessionPromptCommand(
+                unpreparedOverride.sessionId,
+                "message_prepared_override",
+                "codex",
+                proposal.bindingId,
+                overrideDirectoryId,
+                [],
+                [],
+                [],
+                "Report Bot execution settings",
+                "execution_prepared_override",
+                "capability_prepared_override",
+                "f".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_override",
+                "turn_prepared_override",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(preparedOverride));
+            expect(await readCompletedText(frames)).toBe(
+                `test-large|${await realpath(overrideWorkspace)}|bot-context|relay-cleared`,
+            );
 
             const prompt = new BotSessionPromptCommand(
                 "session_alpha",

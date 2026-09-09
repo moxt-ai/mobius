@@ -14,17 +14,28 @@ import {
 } from "react-router";
 import { AgentInstallationPage } from "@/components/agent-installation-panel";
 import { AgentSettingsPage } from "@/components/agent-settings-page";
+import { BotConnectionsPage } from "@/components/bots/bot-connections-page";
+import { BotConversationPage, BotConversationsPage } from "@/components/bots/bot-conversations-page";
+import { BotDirectoryPage } from "@/components/bots/bot-directory-page";
+import { BotOverviewPage } from "@/components/bots/bot-overview-page";
+import { BotWorkspace } from "@/components/bots/bot-workspace";
 import { ChannelAccessPage } from "@/components/channel-access-panel";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatHeader } from "@/components/chat-header";
 import { ChatMessageList } from "@/components/chat-message-list";
 import { ConversationSidebar } from "@/components/conversation-sidebar";
+import { ConversationTargetProvider } from "@/components/conversation-target-provider";
 import { PairingPage } from "@/components/pairing-page";
 import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
 import { isIdentifier, PairingApiError } from "@/domain/channel";
-import { channelRoutePath, sessionRoutePath, sessionSettingsRoutePath } from "@/services/app-routes";
+import {
+    botConversationRoutePath,
+    channelRoutePath,
+    sessionRoutePath,
+    sessionSettingsRoutePath,
+} from "@/services/app-routes";
 import { ChannelHistorySynchronizer } from "@/services/channel-history-synchronizer";
 import { closeMobiusTransport, initializeMobiusTransport } from "@/services/mobius-transport";
 import {
@@ -45,6 +56,7 @@ const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
 
 export interface ChatProps {
     readonly channelId: string;
+    readonly connection: ChannelConnection;
     readonly desktopSidebarCollapsed: boolean;
     readonly onCreateConversation: () => void;
     readonly onToggleDesktopSidebar: () => void;
@@ -134,7 +146,10 @@ function ChannelWorkspace({
     const legacySettingsMatch = useMatch("/channels/:channelId/settings");
     const sessionSettingsMatch = useMatch("/channels/:channelId/sessions/:sessionId/settings");
     const settingsOpen = legacySettingsMatch !== null || sessionSettingsMatch !== null;
-    const managementPageOpen = accessOpen || runtimesOpen || settingsOpen;
+    const botDirectoryOpen = useMatch("/channels/:channelId/bots") !== null;
+    const botDetailOpen = useMatch("/channels/:channelId/bots/*") !== null;
+    const botsOpen = botDirectoryOpen || botDetailOpen;
+    const managementPageOpen = accessOpen || runtimesOpen || settingsOpen || botsOpen;
     const [sidebarLayout, setSidebarLayout] = useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
     useEffect(() => {
@@ -211,6 +226,7 @@ function ChannelWorkspace({
 
     const context: ChatProps = {
         channelId: connection.channelId,
+        connection,
         desktopSidebarCollapsed: sidebarLayout.kind === "collapsed",
         onCreateConversation: createAndOpenConversation,
         onToggleDesktopSidebar: () => {
@@ -231,7 +247,9 @@ function ChannelWorkspace({
                       ? "Skip to device access"
                       : settingsOpen
                         ? "Skip to Agent settings"
-                        : "Skip to conversation"}
+                        : botsOpen
+                          ? "Skip to Bot management"
+                          : "Skip to conversation"}
             </a>
             <div className="flex h-dvh w-full bg-background">
                 <ConversationSidebar
@@ -421,7 +439,18 @@ export function Chat({ channelId, desktopSidebarCollapsed, onCreateConversation,
 
 function ConversationRoutePage() {
     const context = useOutletContext<ChatProps>();
-    return <Chat {...context} />;
+    const navigate = useNavigate();
+    const openBotConversation = useCallback(
+        (botId: string, conversationId: string): void => {
+            void navigate(botConversationRoutePath(context.channelId, botId, conversationId));
+        },
+        [context.channelId, navigate],
+    );
+    return (
+        <ConversationTargetProvider connection={context.connection} onOpenBotConversation={openBotConversation}>
+            <Chat {...context} />
+        </ConversationTargetProvider>
+    );
 }
 
 function AgentSettingsRoutePage() {
@@ -458,6 +487,31 @@ function RuntimeManagementRoutePage() {
     );
 }
 
+function BotDirectoryRoutePage() {
+    const context = useOutletContext<ChatProps>();
+    return (
+        <BotDirectoryPage
+            connection={context.connection}
+            desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+            key={context.channelId}
+            onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+        />
+    );
+}
+
+function BotWorkspaceRoutePage() {
+    const context = useOutletContext<ChatProps>();
+    const params = useParams<"botId">();
+    return (
+        <BotWorkspace
+            connection={context.connection}
+            desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+            key={`${context.channelId}:${params.botId ?? ""}`}
+            onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+        />
+    );
+}
+
 function ChannelRouteNotFound() {
     return (
         <ChannelContentError
@@ -475,6 +529,13 @@ function AppRoutes() {
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<ChannelAccessRoutePage />} path="access" />
                 <Route element={<RuntimeManagementRoutePage />} path="runtimes" />
+                <Route element={<BotDirectoryRoutePage />} path="bots" />
+                <Route element={<BotWorkspaceRoutePage />} path="bots/:botId">
+                    <Route element={<BotOverviewPage />} index />
+                    <Route element={<BotConversationsPage />} path="conversations" />
+                    <Route element={<BotConversationPage />} path="conversations/:conversationId" />
+                    <Route element={<BotConnectionsPage />} path="connections" />
+                </Route>
                 <Route element={<LegacyAgentSettingsRoute />} path="settings" />
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />

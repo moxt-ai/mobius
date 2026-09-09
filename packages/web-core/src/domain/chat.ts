@@ -15,6 +15,7 @@ import type {
     SessionUsageUpdatedEvent,
     WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk";
+import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
 import {
     type AgentOption,
     CompletedRecordedTurn,
@@ -1044,7 +1045,7 @@ export class Conversation {
             agent.label,
             sessionId,
             sessionId,
-            titleFromPrompt(firstTurn.prompt),
+            conversationTitleFromText(firstTurn.prompt),
             lastTurn.prompt.replaceAll(/\s+/g, " ").trim(),
             "",
             messages,
@@ -1625,35 +1626,8 @@ function previewFromPrompt(
 function titleFromTurn(prompt: string, images: readonly PromptImage[], resources: readonly PromptResource[]): string {
     const compact = prompt.trim();
     if (compact.length > 0) {
-        return titleFromPrompt(prompt);
+        return conversationTitleFromText(prompt);
     }
     const firstAttachment = images[0]?.name ?? resources[0]?.name ?? "Attachment";
-    return titleFromPrompt(firstAttachment);
-}
-
-function titleFromPrompt(prompt: string): string {
-    let compact = "";
-    for (const line of prompt.split(/\r?\n/u)) {
-        const candidate = line.replaceAll(/\s+/g, " ").trim();
-        if (candidate.length === 0 || candidate.startsWith("```") || candidate.startsWith("~~~")) {
-            continue;
-        }
-        const readable = candidate
-            .replace(/^(?:>\s*)+/u, "")
-            .replace(/^#{1,6}(?:\s+|$)/u, "")
-            .replace(/^(?:[-*+]|\d+[.)])\s+/u, "")
-            .trim();
-        if (readable.length > 0) {
-            compact = readable;
-            break;
-        }
-    }
-    if (compact.length === 0) {
-        compact = prompt.replaceAll(/\s+/g, " ").trim();
-    }
-    const characters = Array.from(compact);
-    if (characters.length <= 42) {
-        return compact;
-    }
-    return `${characters.slice(0, 41).join("")}…`;
+    return conversationTitleFromText(firstAttachment);
 }

@@ -2,6 +2,7 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     type BotCompletionDeliveryPolicy,
     BotConnectionReplyRoute,
+    conversationTitleFromText,
     MOBIUS_API_PREFIX,
     NoBotCompletionDeliveryPolicy,
     RequiredBotCompletionDeliveryPolicy,
@@ -158,36 +159,33 @@ function completionPolicy(value: Readonly<Record<string, unknown>>): BotCompleti
 
 abstract class CreateBotConversationRequest {
     readonly clientConversationKey: string;
-    readonly title: string;
 
-    protected constructor(clientConversationKey: string, title: string) {
+    protected constructor(clientConversationKey: string) {
         this.clientConversationKey = clientConversationKey;
-        this.title = title;
     }
 }
 
 class CreateOwnerBotConversationRequest extends CreateBotConversationRequest {
-    constructor(clientConversationKey: string, title: string) {
-        super(clientConversationKey, title);
+    constructor(clientConversationKey: string) {
+        super(clientConversationKey);
     }
 }
 
 class CreateConnectedBotConversationRequest extends CreateBotConversationRequest {
     readonly replyDeliveryTargetId: string;
+    readonly title: string;
 
     constructor(clientConversationKey: string, title: string, replyDeliveryTargetId: string) {
-        super(clientConversationKey, title);
+        super(clientConversationKey);
+        this.title = title;
         this.replyDeliveryTargetId = replyDeliveryTargetId;
     }
 }
 
 function createConversationRequest(value: Readonly<Record<string, unknown>>): CreateBotConversationRequest {
     const keys = Object.keys(value);
-    if (keys.length === 2 && keys.every((key) => ["clientConversationKey", "title"].includes(key))) {
-        return new CreateOwnerBotConversationRequest(
-            identifier(value, "clientConversationKey"),
-            string(value, "title", 500, true),
-        );
+    if (keys.length === 1 && keys[0] === "clientConversationKey") {
+        return new CreateOwnerBotConversationRequest(identifier(value, "clientConversationKey"));
     }
     if (
         keys.length === 3 &&
@@ -389,7 +387,10 @@ export class CloudflareBotApi {
         if (
             request.method === "GET" &&
             segments[1] === "projects" &&
-            (segments.length === 2 || (segments.length === 4 && (segments[3] === "bots" || segments[3] === "status")))
+            (segments.length === 2 ||
+                (segments.length === 4 &&
+                    (segments[3] === "status" ||
+                        (segments[3] === "bots" && request.headers.get("authorization") === null))))
         ) {
             const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
             const tenantId = pathIdentifier(await this.#tenantResolver.resolve(request, signal), "tenant");
@@ -414,15 +415,18 @@ export class CloudflareBotApi {
                   });
         }
         if (
-            request.method === "POST" &&
+            (request.method === "GET" || request.method === "POST") &&
             segments.length === 4 &&
             segments[1] === "projects" &&
             segments[3] === "bots"
         ) {
             const projectId = pathIdentifier(segments[2] ?? "", "project");
+            const access = await this.#authorization.authorizeProjectOwner(projectId, bearer(request), request.signal);
+            if (request.method === "GET") {
+                return Response.json(await this.#control.listBots(access, request.signal));
+            }
             const value = await requestBody(request);
             exact(value, ["avatarRef", "description", "displayName"]);
-            const access = await this.#authorization.authorizeProjectOwner(projectId, bearer(request), request.signal);
             return Response.json(
                 await this.#control.createBot(
                     access,
@@ -476,6 +480,22 @@ export class CloudflareBotApi {
         if (request.method === "GET" && segments.length === 3) {
             const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
             return Response.json(await this.#control.readBot(access, request.signal));
+        }
+        if (request.method === "GET" && segments.length === 4 && segments[3] === "behavior-revisions") {
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
+            return Response.json(await this.#control.listBehaviorRevisions(access, request.signal));
+        }
+        if (request.method === "GET" && segments.length === 4 && segments[3] === "execution-bindings") {
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
+            return Response.json(await this.#control.listExecutionBindings(access, request.signal));
+        }
+        if (request.method === "GET" && segments.length === 4 && segments[3] === "conversations") {
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
+            return Response.json(await this.#conversations.listForOwner(access, request.signal));
+        }
+        if (request.method === "GET" && segments.length === 4 && segments[3] === "connections") {
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
+            return Response.json(await this.#connections.listForOwner(access, request.signal));
         }
         if (request.method === "POST" && segments.length === 4 && segments[3] === "profile-revisions") {
             const value = await requestBody(request);
@@ -595,7 +615,7 @@ export class CloudflareBotApi {
         if (
             request.method === "POST" &&
             segments.length === 4 &&
-            (segments[3] === "suspend" || segments[3] === "archive")
+            (segments[3] === "suspend" || segments[3] === "resume" || segments[3] === "archive")
         ) {
             const value = await requestBody(request);
             exact(value, ["expectedRevision"]);
@@ -605,6 +625,25 @@ export class CloudflareBotApi {
                     access,
                     integer(value, "expectedRevision"),
                     segments[3] ?? "",
+                    now,
+                    request.signal,
+                ),
+            );
+        }
+        if (
+            request.method === "POST" &&
+            segments.length === 6 &&
+            segments[3] === "connections" &&
+            segments[5] === "revoke"
+        ) {
+            const value = await requestBody(request);
+            exact(value, ["expectedRevision"]);
+            const access = await this.#authorization.authorizeBotOwner(botId, bearer(request), request.signal);
+            return Response.json(
+                await this.#connections.revokeConnectionForOwner(
+                    access,
+                    pathIdentifier(segments[4] ?? "", "connection"),
+                    integer(value, "expectedRevision"),
                     now,
                     request.signal,
                 ),
@@ -698,7 +737,6 @@ export class CloudflareBotApi {
                 principal,
                 binding,
                 decoded.clientConversationKey,
-                decoded.title,
                 now,
                 request.signal,
             );
@@ -744,22 +782,6 @@ export class CloudflareBotApi {
         now: number,
     ): Promise<Response> => {
         const value = await requestBody(request);
-        exact(value, ["actorRef", "clientMessageId", "resourceRefs", "text"]);
-        const resourceReferences = identifiers(value, "resourceRefs", 16);
-        const submission = new BotTurnSubmission(
-            identifier(value, "clientMessageId"),
-            string(value, "actorRef", 500),
-            string(value, "text", 100_000),
-            [],
-            [],
-            resourceReferences.map((reference) => ({
-                mimeType: "",
-                name: reference,
-                text: "",
-                type: "link",
-                uri: `mobius://resource/${encodeURIComponent(reference)}`,
-            })),
-        );
         const principal = await this.#authorization.authorizeInbound(
             botId,
             bearer(request),
@@ -767,6 +789,47 @@ export class CloudflareBotApi {
             request.signal,
         );
         const conversation = await this.#conversations.authorizeNewTurn(principal, conversationId, request.signal);
+        let submission: BotTurnSubmission;
+        if (principal instanceof InboundBotOwnerPrincipal) {
+            exact(value, ["actorRef", "artifactIds", "clientMessageId", "text"]);
+            const artifactIds = identifiers(value, "artifactIds", 16);
+            const text = string(value, "text", 100_000, true);
+            if (text.trim().length === 0 && artifactIds.length === 0) {
+                throw new BotApiError("invalid_request", "The Bot message has no content", 400);
+            }
+            submission = new BotTurnSubmission(
+                identifier(value, "clientMessageId"),
+                string(value, "actorRef", 500),
+                text,
+                [],
+                [],
+                await this.#sessions.resolveArtifactResources(
+                    principal.scope,
+                    conversation.sessionId,
+                    artifactIds,
+                    request.signal,
+                ),
+            );
+        } else if (principal instanceof InboundBotConnectorPrincipal) {
+            exact(value, ["actorRef", "clientMessageId", "resourceRefs", "text"]);
+            const resourceReferences = identifiers(value, "resourceRefs", 16);
+            submission = new BotTurnSubmission(
+                identifier(value, "clientMessageId"),
+                string(value, "actorRef", 500),
+                string(value, "text", 100_000),
+                [],
+                [],
+                resourceReferences.map((reference) => ({
+                    mimeType: "",
+                    name: reference,
+                    text: "",
+                    type: "link",
+                    uri: `mobius://resource/${encodeURIComponent(reference)}`,
+                })),
+            );
+        } else {
+            throw new BotApiError("invalid_request", "The Bot message principal is invalid", 400);
+        }
         const accepted = await this.#sessionRuntime.acceptTurn(
             principal.scope,
             conversation.sessionId,
@@ -774,7 +837,21 @@ export class CloudflareBotApi {
             now,
             request.signal,
         );
-        await this.#conversations.registerExecution(principal.scope, accepted.execution, now, request.signal);
+        if (principal instanceof InboundBotOwnerPrincipal) {
+            const titleSource =
+                submission.prompt.trim().length > 0
+                    ? submission.prompt
+                    : (submission.resources[0]?.name ?? "Attachment");
+            await this.#conversations.registerOwnerExecution(
+                principal.scope,
+                accepted.execution,
+                conversationTitleFromText(titleSource),
+                now,
+                request.signal,
+            );
+        } else {
+            await this.#conversations.registerExecution(principal.scope, accepted.execution, now, request.signal);
+        }
         const runtimeAccess = await this.#control.readRuntimeAccess(
             principal.scope,
             accepted.execution.runtimeId,

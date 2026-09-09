@@ -12,13 +12,13 @@ import { AgentRichContent } from "@/components/agent-rich-content";
 import { ChatComposer } from "@/components/chat-composer";
 import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
+import { UserPromptMessage } from "@/components/user-prompt-message";
 import { AgentChatMessage, type ChatMessage, NativeHistoryChatMessage, UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import { sendPrompt } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const SCROLL_TAIL_THRESHOLD = 96;
-const SAFE_IMAGE_MIME = /^image\/(?:gif|jpeg|png|webp)$/;
 const suggestions = [
     "Explain the current project structure",
     "Find the entry point for this workspace",
@@ -73,55 +73,6 @@ function EmptyConversation() {
                 ))}
             </fieldset>
         </section>
-    );
-}
-
-function UserMessage({ message }: { readonly message: Pick<UserChatMessage, "text" | "images" | "resources"> }) {
-    return (
-        <article
-            aria-label="Message from you"
-            className="mb-5 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
-        >
-            <div className="min-w-0 max-w-[85%] max-md:max-w-[94%]">
-                <div className="grid min-w-0 gap-2 rounded-[18px] rounded-br-[6px] border-[0.5px] border-primary/12 bg-success-subtle px-3.5 py-2.5 text-[15px] leading-6 whitespace-pre-wrap text-foreground [overflow-wrap:anywhere] md:px-4 md:py-3">
-                    {message.images.length > 0 && (
-                        <div className={cn("grid min-w-0 gap-1.5", message.images.length > 1 && "grid-cols-2")}>
-                            {message.images.map((image, index) =>
-                                SAFE_IMAGE_MIME.test(image.mimeType) ? (
-                                    <img
-                                        alt={image.name}
-                                        className="h-auto max-h-56 max-w-full rounded-lg object-contain object-left"
-                                        key={`${index.toString()}:${image.name}`}
-                                        loading="lazy"
-                                        src={`data:${image.mimeType};base64,${image.data}`}
-                                    />
-                                ) : (
-                                    <span
-                                        className="rounded-lg border-[0.5px] border-black/9 bg-white/70 p-2 text-[10px] text-muted-foreground"
-                                        key={`${index.toString()}:${image.name}`}
-                                    >
-                                        {image.name}
-                                    </span>
-                                ),
-                            )}
-                        </div>
-                    )}
-                    {message.resources.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5">
-                            {message.resources.map((resource) => (
-                                <span
-                                    className="rounded-md border-[0.5px] border-black/10 bg-white/70 px-2 py-1 font-mono text-[10px]"
-                                    key={`${resource.uri}:${resource.name}`}
-                                >
-                                    {resource.name}
-                                </span>
-                            ))}
-                        </div>
-                    )}
-                    {message.text.length > 0 && <span>{message.text}</span>}
-                </div>
-            </div>
-        </article>
     );
 }
 
@@ -243,13 +194,11 @@ export function NativeSessionHistoryView({
             {messages.map((entry, index) => {
                 const parsed = parseNativeHistoryText(entry.text);
                 return entry.role === "user" ? (
-                    <UserMessage
+                    <UserPromptMessage
                         key={index.toString()}
-                        message={{
-                            text: parsed.text,
-                            images: [...(entry.images ?? []), ...parsed.images],
-                            resources: [],
-                        }}
+                        images={[...(entry.images ?? []), ...parsed.images]}
+                        resources={[]}
+                        text={parsed.text}
                     />
                 ) : (
                     <article
@@ -280,7 +229,7 @@ function Message({
         return <NativeSessionHistoryView history={message.history} agentLabel={agentLabel} />;
     }
     if (message instanceof UserChatMessage) {
-        return <UserMessage message={message} />;
+        return <UserPromptMessage images={message.images} resources={message.resources} text={message.text} />;
     }
     if (message instanceof AgentChatMessage) {
         return <AgentMessage agentLabel={agentLabel} channelId={channelId} message={message} sessionId={sessionId} />;

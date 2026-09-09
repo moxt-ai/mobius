@@ -515,7 +515,7 @@ async function createConnectedConversation(
 async function createConversation(pairing: CreatedPairing, bot: CreatedBot, key: string): Promise<CreatedConversation> {
     const response = await json(
         await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-            body: JSON.stringify({ clientConversationKey: key, title: `Conversation ${key}` }),
+            body: JSON.stringify({ clientConversationKey: key }),
             headers: ownerHeaders(pairing),
             method: "POST",
         }),
@@ -544,8 +544,8 @@ async function submitMessage(
             {
                 body: JSON.stringify({
                     actorRef: "project-owner",
+                    artifactIds: [],
                     clientMessageId: id,
-                    resourceRefs: [],
                     text: `Run ${id}`,
                 }),
                 headers: ownerHeaders(pairing),
@@ -791,13 +791,238 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
+    it("Given an owner manages an active Bot, When its owner directories and lifecycle controls are used, Then Web-safe resources remain durable and locally sensitive binding details stay private", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Managed Bot");
+            const botDirectory = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`,
+                    { headers: ownerHeaders(pairing) },
+                ),
+                200,
+            );
+            expect(recordArrayField(botDirectory, "bots")).toMatchObject([
+                { botId: bot.botId, displayName: "Managed Bot", lifecycle: "draft" },
+            ]);
+
+            const connection = await connectBot(pairing, bot, "managed");
+            const target = await createTarget(pairing, bot, connection, "managed-target");
+            const behavior = await createBehavior(pairing, bot, "Managed Bot");
+            await approveBinding(pairing, daemon, bot, behavior, target);
+            const conversation = await createConversation(pairing, bot, "managed-conversation");
+
+            const behaviors = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/behavior-revisions`,
+                    { headers: ownerHeaders(pairing) },
+                ),
+                200,
+            );
+            expect(recordArrayField(behaviors, "behaviorRevisions")).toMatchObject([
+                { behaviorRevisionId: behavior.behaviorRevisionId, lifecycle: "approved", revisionNumber: 1 },
+            ]);
+
+            const bindings = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    { headers: ownerHeaders(pairing) },
+                ),
+                200,
+            );
+            const binding = recordArrayField(bindings, "executionBindings")[0];
+            expect(binding).toMatchObject({ agentRef: "codex", lifecycle: "approved", workspaceRef: "default" });
+            expect(binding).not.toHaveProperty("localGrantId");
+            expect(binding).not.toHaveProperty("agentIdentityDigest");
+            expect(binding).not.toHaveProperty("workspaceIdentityDigest");
+
+            const conversations = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    headers: ownerHeaders(pairing),
+                }),
+                200,
+            );
+            expect(recordArrayField(conversations, "conversations")).toMatchObject([
+                { conversationId: conversation.conversationId, creatorKind: "owner", lifecycle: "active" },
+            ]);
+
+            const connectionDirectory = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections`, {
+                    headers: ownerHeaders(pairing),
+                }),
+                200,
+            );
+            expect(recordArrayField(connectionDirectory, "connections")).toMatchObject([
+                { connectionId: connection.connectionId, lifecycle: "active" },
+            ]);
+            expect(recordArrayField(connectionDirectory, "deliveryTargets")).toMatchObject([
+                { deliveryTargetId: target.deliveryTargetId, lifecycle: "active", ownerApproved: true },
+            ]);
+
+            const active = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
+                    headers: ownerHeaders(pairing),
+                }),
+                200,
+            );
+            const suspended = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
+                    body: JSON.stringify({ expectedRevision: integerField(active, "lifecycleRevision") }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(suspended["lifecycle"]).toBe("suspended");
+            const resumed = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/resume`, {
+                    body: JSON.stringify({ expectedRevision: integerField(suspended, "lifecycleRevision") }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(resumed["lifecycle"]).toBe("active");
+            const suspendedAgain = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
+                    body: JSON.stringify({ expectedRevision: integerField(resumed, "lifecycleRevision") }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                200,
+            );
+            const resumedAgain = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/resume`, {
+                    body: JSON.stringify({ expectedRevision: integerField(suspendedAgain, "lifecycleRevision") }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                200,
+            );
+            expect(resumedAgain["lifecycle"]).toBe("active");
+
+            await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections/${connection.connectionId}/revoke`,
+                    {
+                        body: JSON.stringify({ expectedRevision: 1 }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
+                200,
+            );
+            const revokedDirectory = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections`, {
+                    headers: ownerHeaders(pairing),
+                }),
+                200,
+            );
+            expect(recordArrayField(revokedDirectory, "connections")).toMatchObject([
+                { connectionId: connection.connectionId, lifecycle: "revoked" },
+            ]);
+            expect(recordArrayField(revokedDirectory, "deliveryTargets")).toMatchObject([
+                { deliveryTargetId: target.deliveryTargetId, lifecycle: "disabled", ownerApproved: true },
+            ]);
+        } finally {
+            daemon.socket.close(1000, "Owner management contract complete");
+        }
+    });
+
+    it("Given an owner Bot has an untouched New chat, When another draft is requested and the first prompt is sent, Then one draft is reused and titled automatically", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Single draft");
+            const connection = await connectBot(pairing, bot, "single-draft");
+            const target = await createTarget(pairing, bot, connection, "single-draft-target");
+            const behavior = await createBehavior(pairing, bot, "Single draft");
+            await approveBinding(pairing, daemon, bot, behavior, target);
+
+            const first = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                201,
+            );
+            const reopened = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({ clientConversationKey: "owner-draft-two" }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                201,
+            );
+            expect(first["title"]).toBe("New chat");
+            expect(reopened).toMatchObject({
+                conversationId: stringField(first, "conversationId"),
+                sessionId: stringField(first, "sessionId"),
+                title: "New chat",
+            });
+
+            const conversation: CreatedConversation = {
+                behaviorRevisionId: stringField(first, "behaviorRevisionId"),
+                bindingId: stringField(first, "bindingId"),
+                bindingRevision: integerField(first, "bindingRevision"),
+                conversationId: stringField(first, "conversationId"),
+                sessionId: stringField(first, "sessionId"),
+            };
+            await submitMessage(pairing, bot, conversation, "owner-first-prompt");
+            await daemon.messages.next();
+
+            const afterPrompt = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    headers: ownerHeaders(pairing),
+                }),
+                200,
+            );
+            expect(recordArrayField(afterPrompt, "conversations")).toMatchObject([
+                {
+                    conversationId: conversation.conversationId,
+                    title: "Run owner-first-prompt",
+                },
+            ]);
+
+            const nextDraft = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({ clientConversationKey: "owner-draft-three" }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                201,
+            );
+            expect(stringField(nextDraft, "conversationId")).not.toBe(conversation.conversationId);
+            expect(nextDraft["title"]).toBe("New chat");
+            const originalReplay = await json(
+                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                    body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                }),
+                201,
+            );
+            expect(originalReplay).toMatchObject({
+                conversationId: conversation.conversationId,
+                title: "Run owner-first-prompt",
+            });
+            const draftCount = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT COUNT(*) AS count FROM bot_owner_conversation_drafts WHERE bot_id = ?`,
+            )
+                .bind(bot.botId)
+                .first<{ readonly count: number }>();
+            expect(draftCount?.count).toBe(1);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
     it("Given an unbound Bot and untrusted public requests, When conversation input is decoded, Then execution targets are rejected before authorization or resolution", async () => {
         const pairing = await pairRuntime();
         const bot = await createBot(pairing, "Unbound");
-        const validConversation = {
-            clientConversationKey: "unbound-conversation",
-            title: "Unbound conversation",
-        };
+        const validConversation = { clientConversationKey: "unbound-conversation" };
         await expectApiError(
             await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
                 body: JSON.stringify(validConversation),
@@ -818,6 +1043,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             "providerDestination",
             "callbackUrl",
             "localPermissionDecision",
+            "title",
         ];
         for (const field of forbiddenFields) {
             await expectApiError(
@@ -1507,8 +1733,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                 {
                     body: JSON.stringify({
                         actorRef: "project-owner",
+                        artifactIds: [],
                         clientMessageId: "message-once",
-                        resourceRefs: [],
                         text: "Different content",
                     }),
                     headers: ownerHeaders(pairing),
@@ -1628,8 +1854,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                     {
                         body: JSON.stringify({
                             actorRef: "project-owner",
+                            artifactIds: [],
                             clientMessageId: "while-suspended",
-                            resourceRefs: [],
                             text: "Must not run",
                         }),
                         headers: ownerHeaders(pairing),
@@ -1818,10 +2044,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
             const replayed = await json(
                 await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({
-                        clientConversationKey: "stable-conversation",
-                        title: "Conversation stable-conversation",
-                    }),
+                    body: JSON.stringify({ clientConversationKey: "stable-conversation" }),
                     headers: ownerHeaders(pairing),
                     method: "POST",
                 }),

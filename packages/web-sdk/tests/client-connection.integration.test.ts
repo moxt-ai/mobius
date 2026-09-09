@@ -227,11 +227,14 @@ describe("browser relay connection", () => {
             expect(await reconnectedSocket).not.toBe(firstSocket);
             expect(await statuses.next()).toBe(true);
 
-            const workspaceResult = client.listWorkspace({
-                bindingId: "workspace",
-                directoryId: "default",
-                requestId: "after-reconnect",
-            });
+            const workspaceResult = client.listWorkspace(
+                {
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    requestId: "after-reconnect",
+                },
+                AbortSignal.timeout(5_000),
+            );
             const secondFrame = await clientFrames.next();
             expect(decodeMessageKind(secondFrame.text)).toBe(WORKSPACE_LIST_KIND);
             const workspaceRequest = decodeWorkspaceListCommand(secondFrame.text);

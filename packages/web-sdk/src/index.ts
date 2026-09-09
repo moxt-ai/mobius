@@ -33,6 +33,7 @@ export type {
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 export {
+    conversationTitleFromText,
     decodeAgentContentEvent,
     decodeAgentDisplayContentValue,
     decodeInteraction,
@@ -57,6 +58,7 @@ export {
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
+export * from "./bot-owner-resources.ts";
 export * from "./bot-resources.ts";
 export * from "./bot-service-client.ts";
 export * from "./errors.ts";
