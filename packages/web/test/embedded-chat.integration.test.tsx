@@ -7,7 +7,7 @@ import { pairDaemon, saveBrowserCredential, setupWebIntegrationEnvironment } fro
 setupWebIntegrationEnvironment();
 
 describe.sequential("Embedded Mobius chat", () => {
-    it("Given a paired machine has no detected Agent, When a workspace opens Chat, Then it shows the missing Agent and integration action instead of preparing forever", async () => {
+    it("Given a paired machine has no detected Agent, When a workspace opens Chat, Then a loading indicator gives way to the missing Agent and integration action", async () => {
         const paired = await pairDaemon({
             agents: [],
             installableAgents: [{ id: "codex", label: "Codex", status: "agent_not_installed" }],
@@ -21,7 +21,7 @@ describe.sequential("Embedded Mobius chat", () => {
             const settled = new Promise<void>((resolve) => {
                 observer = new MutationObserver(() => {
                     if (
-                        screen.queryByText("Preparing Mobius chat…") !== null ||
+                        screen.queryByRole("status", { name: "Preparing Mobius chat" }) !== null ||
                         screen.queryByRole("heading", { name: "Local Agents" }) !== null
                     ) {
                         resolve();
@@ -32,6 +32,8 @@ describe.sequential("Embedded Mobius chat", () => {
             // MobiusChat is the complete public application mounted by host workspaces.
             // It uses the real Worker and a stateful daemon at the protocol boundary.
             render(<MobiusChat connection={connection} />);
+            expect(screen.getByRole("status", { name: "Loading Mobius chat" })).toBeTruthy();
+            expect(screen.queryByText("Loading Mobius chat…")).toBeNull();
             await settled;
             await act(async () => {});
             expect(screen.getByRole("heading", { name: "Local Agents" })).toBeTruthy();
@@ -39,6 +41,7 @@ describe.sequential("Embedded Mobius chat", () => {
             expect(screen.getByText("Not installed")).toBeTruthy();
             expect(screen.getByRole("button", { name: "Install integration" })).toBeTruthy();
             expect(screen.queryByText("Preparing Mobius chat…")).toBeNull();
+            expect(screen.queryByRole("status", { name: "Loading Mobius chat" })).toBeNull();
         } finally {
             observer?.disconnect();
             cleanup();

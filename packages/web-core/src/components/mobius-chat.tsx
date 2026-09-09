@@ -1,3 +1,4 @@
+import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
@@ -15,6 +16,18 @@ type MobiusChatLoadState =
     | { readonly kind: "loading" }
     | { readonly kind: "failed"; readonly message: string }
     | { readonly kind: "ready"; readonly history: ChannelHistory };
+
+function ChatLoading({ label }: { readonly label: string }) {
+    return (
+        <div
+            role="status"
+            aria-label={label}
+            className="flex min-h-[560px] flex-1 items-center justify-center text-muted-foreground"
+        >
+            <LoaderCircle aria-hidden="true" className="size-6 animate-spin motion-reduce:animate-none" />
+        </div>
+    );
+}
 
 function ConnectedMobiusChat({
     connection,
@@ -77,7 +90,7 @@ function ConnectedMobiusChat({
     }
 
     if (!ready || activeConversation === undefined) {
-        return <p role="status">Preparing Mobius chat…</p>;
+        return <ChatLoading label="Preparing Mobius chat" />;
     }
 
     return (
@@ -145,7 +158,7 @@ export function MobiusChat({ connection }: { readonly connection: ChannelConnect
     }, [connection]);
 
     if (state.kind === "loading") {
-        return <p role="status">Loading Mobius chat…</p>;
+        return <ChatLoading label="Loading Mobius chat" />;
     }
     if (state.kind === "failed") {
         return <p role="alert">{state.message}</p>;
