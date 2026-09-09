@@ -1,9 +1,14 @@
-import type { SessionSqlDatabase, SessionSqlRow, SessionSqlValue } from "@moxt-ai/mobius-relay-core";
+import type { DoSqlDatabase, DoSqlRow, DoSqlValue } from "@moxt-ai/mobius-relay-core/database";
 
-function decodeRow(value: Readonly<Record<string, SqlStorageValue>>): SessionSqlRow {
-    const row: Record<string, SessionSqlValue> = {};
+function decodeRow(value: Readonly<Record<string, SqlStorageValue>>): DoSqlRow {
+    const row: Record<string, DoSqlValue> = {};
     for (const [key, field] of Object.entries(value)) {
-        if (field !== null && typeof field !== "number" && typeof field !== "string") {
+        if (
+            field !== null &&
+            typeof field !== "number" &&
+            typeof field !== "string" &&
+            !(field instanceof ArrayBuffer)
+        ) {
             throw new Error("Durable Object SQLite returned an unsupported value");
         }
         row[key] = field;
@@ -11,7 +16,7 @@ function decodeRow(value: Readonly<Record<string, SqlStorageValue>>): SessionSql
     return row;
 }
 
-export class DurableObjectSqlDatabase implements SessionSqlDatabase {
+export class DurableObjectSqlDatabase implements DoSqlDatabase {
     readonly #storage: DurableObjectStorage;
 
     constructor(storage: DurableObjectStorage) {
@@ -22,13 +27,13 @@ export class DurableObjectSqlDatabase implements SessionSqlDatabase {
         this.#storage.sql.exec(script);
     };
 
-    readonly query = (sql: string, values: readonly SessionSqlValue[] = []): readonly SessionSqlRow[] =>
+    readonly query = (sql: string, values: readonly DoSqlValue[] = []): readonly DoSqlRow[] =>
         this.#storage.sql
             .exec(sql, ...values)
             .toArray()
             .map(decodeRow);
 
-    readonly run = (sql: string, values: readonly SessionSqlValue[] = []): { readonly changes: number } => {
+    readonly run = (sql: string, values: readonly DoSqlValue[] = []): { readonly changes: number } => {
         this.#storage.sql.exec(sql, ...values);
         const result = this.#storage.sql.exec("SELECT changes() AS changes").one();
         if (typeof result["changes"] !== "number") {

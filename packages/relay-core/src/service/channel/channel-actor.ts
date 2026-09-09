@@ -55,8 +55,6 @@ import {
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-
-import type { SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
 import {
     CreateSessionBindingRequest,
     CreateSessionRequest,
@@ -64,7 +62,8 @@ import {
     type SessionMessage,
     SessionRecordingPolicy,
     SessionRuntimeError,
-} from "../session/session.ts";
+} from "../../entity/do/session.ts";
+import type { SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;

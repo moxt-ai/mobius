@@ -54,6 +54,8 @@ Make illegal states unrepresentable.
 
 ## Abstraction
 
+- Storage must not import any upper layer: services, HTTP/routes, composition/DI, application gateways, or platform adapters. This includes type-only imports and re-exports through package barrels. Shared values and records belong in `entity`; execution contracts belong in `infra`. Those lower-level modules must not depend on upper layers either.
+
 - Prefer direct, local, linear code.
 - Add an abstraction only for a real external boundary, a second real use case, or proven duplication.
 - Do not add speculative extension points, generic frameworks, or unused layers.

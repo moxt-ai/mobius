@@ -1,4 +1,4 @@
-import type { ChannelDescriptor } from "../pairing/pairing.ts";
+import type { ChannelDescriptor } from "../../entity/pairing/pairing.ts";
 
 export class RuntimeStatus {
     readonly online: boolean;

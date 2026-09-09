@@ -1,18 +1,48 @@
 import {
     type ContentInspection,
+    type ContentPersistence,
     ContentStorageError,
     type ContentTarget,
+    type ContentWriteResult,
     type ImmutableContent,
-    type ImmutableContentStore,
 } from "@moxt-ai/mobius-relay-core";
 import type { BucketResolver } from "./bucket-resolver.ts";
 import type { TenantShardingDirectory } from "./tenant-sharding-directory.ts";
 
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
 
-async function digest(bytes: Uint8Array): Promise<string> {
-    const value = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes).buffer);
-    return Array.from(new Uint8Array(value), (byte) => byte.toString(16).padStart(2, "0")).join("");
+async function r2Operation<Value>(
+    operation: (signal: AbortSignal) => Promise<Value>,
+    signal: AbortSignal,
+): Promise<Value> {
+    signal.throwIfAborted();
+    const controller = new AbortController();
+    const cancel = () => controller.abort(signal.reason);
+    signal.addEventListener("abort", cancel, { once: true });
+    const timer = setTimeout(
+        () =>
+            controller.abort(new ContentStorageError("content_storage_timeout", "The R2 content operation timed out")),
+        15_000,
+    );
+    let rejectAbort = (): void => {};
+    try {
+        const aborted = new Promise<never>((_resolve, reject) => {
+            rejectAbort = () => reject(controller.signal.reason);
+            controller.signal.addEventListener("abort", rejectAbort, { once: true });
+            if (signal.aborted) {
+                cancel();
+            }
+        });
+        return await Promise.race([aborted, operation(controller.signal)]);
+    } catch (cause) {
+        signal.throwIfAborted();
+        controller.signal.throwIfAborted();
+        throw cause;
+    } finally {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", cancel);
+        controller.signal.removeEventListener("abort", rejectAbort);
+    }
 }
 
 function unavailable(message: string, cause: unknown): ContentStorageError {
@@ -51,7 +81,7 @@ function metadata(object: R2Object): {
     return { contentEncoding, mediaType, sha256 };
 }
 
-export class R2ContentStore implements ImmutableContentStore {
+export class R2ContentStore implements ContentPersistence {
     readonly #buckets: BucketResolver;
     readonly #tenants: TenantShardingDirectory;
 
@@ -63,121 +93,143 @@ export class R2ContentStore implements ImmutableContentStore {
     }
 
     readonly delete = async (target: ContentTarget, signal: AbortSignal): Promise<void> => {
-        signal.throwIfAborted();
-        try {
-            const key = this.keyPrefix + objectKey(target);
-            const tenant = await this.#tenants.resolve(target.tenantId, signal);
-            const bucket = this.#buckets.resolve(tenant.tenantSharding);
-            await bucket.delete(key);
+        return r2Operation(async (signal) => {
             signal.throwIfAborted();
-        } catch (error) {
-            if (signal.aborted) {
-                throw error;
+            try {
+                const key = this.keyPrefix + objectKey(target);
+                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                signal.throwIfAborted();
+                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                await bucket.delete(key);
+                signal.throwIfAborted();
+            } catch (error) {
+                if (signal.aborted) {
+                    throw error;
+                }
+                throw unavailable("The R2 content could not be deleted", error);
             }
-            throw unavailable("The R2 content could not be deleted", error);
-        }
+        }, signal);
     };
 
     readonly inspect = async (target: ContentTarget, signal: AbortSignal): Promise<ContentInspection> => {
-        signal.throwIfAborted();
-        try {
-            const key = this.keyPrefix + objectKey(target);
-            const tenant = await this.#tenants.resolve(target.tenantId, signal);
-            const bucket = this.#buckets.resolve(tenant.tenantSharding);
-            const object = await bucket.head(key);
+        return r2Operation(async (signal): Promise<ContentInspection> => {
             signal.throwIfAborted();
-            if (object === null) {
-                return { kind: "missing" };
+            try {
+                const key = this.keyPrefix + objectKey(target);
+                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                signal.throwIfAborted();
+                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const object = await bucket.head(key);
+                signal.throwIfAborted();
+                if (object === null) {
+                    return { kind: "missing" };
+                }
+                const values = metadata(object);
+                return {
+                    byteLength: object.size,
+                    contentEncoding: values.contentEncoding,
+                    kind: "available",
+                    mediaType: values.mediaType,
+                    sha256: values.sha256,
+                };
+            } catch (error) {
+                if (signal.aborted) {
+                    throw error;
+                }
+                throw unavailable("The R2 content could not be inspected", error);
             }
-            const values = metadata(object);
-            return {
-                byteLength: object.size,
-                contentEncoding: values.contentEncoding,
-                kind: "available",
-                mediaType: values.mediaType,
-                sha256: values.sha256,
-            };
-        } catch (error) {
-            if (signal.aborted) {
-                throw error;
-            }
-            throw unavailable("The R2 content could not be inspected", error);
-        }
+        }, signal);
     };
 
     readonly read = async (target: ContentTarget, signal: AbortSignal): Promise<ImmutableContent> => {
-        signal.throwIfAborted();
-        try {
-            const key = this.keyPrefix + objectKey(target);
-            const tenant = await this.#tenants.resolve(target.tenantId, signal);
-            const bucket = this.#buckets.resolve(tenant.tenantSharding);
-            const object = await bucket.get(key);
-            if (object === null) {
-                throw new ContentStorageError("content_not_found", "The R2 content does not exist");
-            }
-            const values = metadata(object);
-            const bytes = new Uint8Array(await object.arrayBuffer());
+        return r2Operation(async (signal) => {
             signal.throwIfAborted();
-            if ((await digest(bytes)) !== values.sha256) {
-                throw new ContentStorageError(
-                    "content_storage_unavailable",
-                    "The R2 content failed integrity validation",
-                );
+            try {
+                const key = this.keyPrefix + objectKey(target);
+                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                signal.throwIfAborted();
+                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const object = await bucket.get(key);
+                if (object === null) {
+                    throw new ContentStorageError("content_not_found", "The R2 content does not exist");
+                }
+                try {
+                    signal.throwIfAborted();
+                    const values = metadata(object);
+                    const chunks: Uint8Array[] = [];
+                    let length = 0;
+                    await object.body.pipeTo(
+                        new WritableStream<Uint8Array>({
+                            write: (chunk) => {
+                                chunks.push(chunk);
+                                length += chunk.byteLength;
+                            },
+                        }),
+                        { signal },
+                    );
+                    signal.throwIfAborted();
+                    const bytes = new Uint8Array(length);
+                    let offset = 0;
+                    for (const chunk of chunks) {
+                        bytes.set(chunk, offset);
+                        offset += chunk.byteLength;
+                    }
+                    return { bytes, ...values };
+                } finally {
+                    if (!object.bodyUsed) {
+                        await object.body.cancel();
+                    }
+                }
+            } catch (error) {
+                if (signal.aborted) {
+                    throw error;
+                }
+                throw unavailable("The R2 content could not be read", error);
             }
-            return { bytes, ...values };
-        } catch (error) {
-            if (signal.aborted) {
-                throw error;
-            }
-            throw unavailable("The R2 content could not be read", error);
-        }
+        }, signal);
     };
 
-    readonly write = async (target: ContentTarget, content: ImmutableContent, signal: AbortSignal): Promise<void> => {
-        signal.throwIfAborted();
-        try {
-            if ((await digest(content.bytes)) !== content.sha256) {
-                throw new ContentStorageError("content_conflict", "The supplied content digest is invalid");
-            }
-            const key = this.keyPrefix + objectKey(target);
-            const tenant = await this.#tenants.resolve(target.tenantId, signal);
-            const bucket = this.#buckets.resolve(tenant.tenantSharding);
-            const written = await bucket.put(key, Uint8Array.from(content.bytes).buffer, {
-                customMetadata: {
-                    contentEncoding: content.contentEncoding,
-                    mediaType: content.mediaType,
-                    sha256: content.sha256,
-                },
-                onlyIf: { etagDoesNotMatch: "*" },
-            });
+    readonly insert = async (
+        target: ContentTarget,
+        content: ImmutableContent,
+        _byteLimit: number | null,
+        signal: AbortSignal,
+    ): Promise<ContentWriteResult> => {
+        return r2Operation(async (signal): Promise<ContentWriteResult> => {
             signal.throwIfAborted();
-            if (written !== null) {
-                return;
+            try {
+                const key = this.keyPrefix + objectKey(target);
+                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                signal.throwIfAborted();
+                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const written = await bucket.put(key, Uint8Array.from(content.bytes).buffer, {
+                    customMetadata: {
+                        contentEncoding: content.contentEncoding,
+                        mediaType: content.mediaType,
+                        sha256: content.sha256,
+                    },
+                    onlyIf: { etagDoesNotMatch: "*" },
+                });
+                signal.throwIfAborted();
+                if (written !== null) {
+                    return { kind: "inserted" };
+                }
+                const existing = await bucket.head(key);
+                signal.throwIfAborted();
+                if (existing === null) {
+                    throw new ContentStorageError(
+                        "content_storage_unavailable",
+                        "The immutable R2 write was not committed",
+                    );
+                }
+                const values = metadata(existing);
+                return { kind: "existing", metadata: { kind: "available", byteLength: existing.size, ...values } };
+            } catch (error) {
+                if (signal.aborted) {
+                    throw error;
+                }
+                throw unavailable("The R2 content could not be written", error);
             }
-            const existing = await bucket.head(key);
-            if (existing === null) {
-                throw new ContentStorageError(
-                    "content_storage_unavailable",
-                    "The immutable R2 write was not committed",
-                );
-            }
-            const values = metadata(existing);
-            if (
-                existing.size !== content.bytes.byteLength ||
-                values.sha256 !== content.sha256 ||
-                values.mediaType !== content.mediaType ||
-                values.contentEncoding !== content.contentEncoding
-            ) {
-                throw new ContentStorageError(
-                    "content_conflict",
-                    "Immutable R2 content already exists with different bytes",
-                );
-            }
-        } catch (error) {
-            if (signal.aborted) {
-                throw error;
-            }
-            throw unavailable("The R2 content could not be written", error);
-        }
+        }, signal);
     };
 }

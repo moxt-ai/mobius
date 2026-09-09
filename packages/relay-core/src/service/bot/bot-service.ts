@@ -1,0 +1,1237 @@
+import type { BotCompletionDeliveryPolicy } from "@moxt-ai/mobius-protocol";
+import {
+    BotConnectionReplyRoute,
+    BotDeliveryTargetReference,
+    BotExecutionBindingApprovalRequest,
+    conversationTitleFromText,
+    DraftBot,
+    RequiredBotCompletionDeliveryPolicy,
+} from "@moxt-ai/mobius-protocol";
+import {
+    InboundBotConnectorPrincipal,
+    InboundBotOwnerPrincipal,
+    type InboundBotPrincipal,
+} from "../../entity/bot/bot-access.ts";
+import { type ApprovedBindingContext, completionPolicy, stringArray } from "../../entity/bot/bot-binding.ts";
+import { BotApiError } from "../../entity/bot/bot-error.ts";
+import type { BotBehaviorRevision, BotProfileRevision } from "../../entity/bot/bot-revisions.ts";
+import { BotOutboundSubmission, type BotSessionRuntime, BotTurnSubmission } from "../../entity/bot/bot-session.ts";
+import type { ProjectScope } from "../../entity/do/session.ts";
+import {
+    createRandomToken,
+    hashSecret,
+    parseAgents,
+    VerifiedChannelAccess,
+    validateIdentifier,
+} from "../../entity/pairing/pairing.ts";
+import type { BotConnectionGateway } from "../../gateway/bot-connection-gateway.ts";
+import type { ChannelGateway, SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import type { SessionArtifactGateway } from "../../gateway/session-artifact-gateway.ts";
+import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
+import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
+import type { BotConversationStorage } from "../../storage/bot-conversation-storage.ts";
+import type { PairingTenantResolver } from "../pairing/pairing-tenant-resolver.ts";
+import type { BotAuthorization } from "./bot-authorization.ts";
+import type { BotConversationService } from "./bot-conversation-service.ts";
+import { connectorEventPage } from "./bot-event-visibility.ts";
+import type { BotManagementService } from "./bot-management-service.ts";
+import { botResource } from "./bot-resource.ts";
+import type { BotTargetService } from "./bot-target-service.ts";
+
+const BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
+const BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS = 5 * 60 * 1_000;
+
+import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
+
+export interface BotTenantContext {
+    readonly services: {
+        readonly targets: BotTargetService;
+        readonly conversations: BotConversationService;
+        readonly management: BotManagementService;
+    };
+    readonly storages: {
+        readonly connections: BotConnectionStorage;
+        readonly control: BotControlStorage;
+        readonly conversations: BotConversationStorage;
+    };
+}
+
+export interface BotServiceContext {
+    readonly services: { readonly authorization: BotAuthorization };
+    readonly forTenant: (tenant: TenantContext) => BotTenantContext;
+    readonly gateways: {
+        readonly tenants: TenantShardingDirectory;
+        readonly tenantResolver: PairingTenantResolver;
+        readonly channels: ChannelGateway;
+        readonly connections: BotConnectionGateway;
+        readonly botSessions: BotSessionRuntime;
+        readonly sessions: SessionCommandGateway & SessionQueryGateway & SessionArtifactGateway;
+    };
+}
+
+export type NewBotConversation =
+    | { readonly kind: "owner"; readonly clientConversationKey: string }
+    | {
+          readonly kind: "connection";
+          readonly clientConversationKey: string;
+          readonly title: string;
+          readonly replyDeliveryTargetId: string;
+      };
+
+export type NewBotMessage = {
+    readonly clientMessageId: string;
+    readonly actorRef: string;
+    readonly text: string;
+} & (
+    | { readonly kind: "owner"; readonly artifactIds: readonly string[] }
+    | { readonly kind: "connection"; readonly resourceRefs: readonly string[] }
+);
+
+export class BotService {
+    private readonly cx: BotServiceContext;
+
+    constructor(cx: BotServiceContext) {
+        this.cx = cx;
+    }
+
+    private readonly context = async (tenantId: string, signal: AbortSignal) => {
+        const tenant = await this.cx.gateways.tenants.resolve(tenantId, signal);
+        signal.throwIfAborted();
+        if (tenant.tenantId !== tenantId) {
+            throw new BotApiError("bot_service_unavailable", "The tenant placement is invalid", "unavailable");
+        }
+        return this.cx.forTenant(tenant);
+    };
+
+    private readonly readLifecycle = async (cx: BotTenantContext, botId: string, signal: AbortSignal) => {
+        const bot = await cx.storages.control.readLifecycle(botId, signal);
+        if (bot === null) {
+            throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
+        }
+        return bot;
+    };
+
+    readonly listOwnedBots = async (projectId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProjectOwner(projectId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return cx.services.management.listBots(access, signal);
+    };
+
+    readonly listBehaviorRevisions = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return cx.services.management.listBehaviorRevisions(access, signal);
+    };
+
+    readonly listExecutionBindings = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return cx.services.management.listExecutionBindings(access, signal);
+    };
+
+    readonly listConnections = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return cx.services.management.listConnections(access, signal);
+    };
+
+    readonly listConversations = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return cx.services.management.listConversations(access, signal);
+    };
+
+    private readonly readRuntimeAccess = async (
+        cx: BotTenantContext,
+        scope: ProjectScope,
+        runtimeId: string,
+        signal: AbortSignal,
+    ) => {
+        const row = await cx.storages.control.readRuntime(scope, runtimeId, signal);
+        if (row === null) {
+            throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+        }
+        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.tenant_id, row.project_id);
+    };
+
+    private readonly authorizeConversation = async (
+        cx: BotTenantContext,
+        principal: InboundBotPrincipal,
+        conversationId: string,
+        signal: AbortSignal,
+    ) => {
+        const row = await cx.services.conversations.readConversation(conversationId, signal);
+        if (row.bot_id !== principal.botId || row.lifecycle !== "active") {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "The Bot conversation is not accessible",
+                "access-denied",
+            );
+        }
+        if (
+            principal instanceof InboundBotConnectorPrincipal &&
+            row.connection_id !== principal.connection.connectionId
+        ) {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "The Bot conversation belongs to another connection",
+                "access-denied",
+            );
+        }
+        return {
+            botId: row.bot_id,
+            conversationId: row.conversation_id,
+            sessionId: row.session_id,
+            bindingId: row.binding_id,
+            bindingRevision: row.binding_revision,
+            creatorKind: row.creator_kind,
+            connectionId: typeof row.connection_id === "string" ? row.connection_id : "",
+        };
+    };
+
+    private readonly approvedTargets = async (
+        cx: BotTenantContext,
+        botId: string,
+        identifiers: readonly string[],
+        signal: AbortSignal,
+    ) => {
+        const targets: BotDeliveryTargetReference[] = [];
+        const unique = new Set<string>();
+        for (const identifier of identifiers) {
+            const targetId = validateIdentifier(identifier, "delivery_target_id");
+            if (unique.has(targetId)) {
+                throw new BotApiError("invalid_request", "Delivery targets must be unique", "invalid-input");
+            }
+            unique.add(targetId);
+            const target = await cx.storages.control.readDeliveryTarget(targetId, signal);
+            if (
+                target === null ||
+                target.bot_id !== botId ||
+                target.lifecycle !== "active" ||
+                target.connection_lifecycle !== "active" ||
+                target.owner_approved !== 1
+            ) {
+                throw new BotApiError(
+                    "delivery_target_not_allowed",
+                    "The delivery target is not approved for this Bot",
+                    "access-denied",
+                );
+            }
+            targets.push(new BotDeliveryTargetReference(target.alias, target.delivery_target_id));
+        }
+        return targets;
+    };
+
+    private readonly readApprovedBinding = async (
+        cx: BotTenantContext,
+        botId: string,
+        signal: AbortSignal,
+    ): Promise<ApprovedBindingContext> => {
+        const binding = await cx.storages.control.readActiveBinding(botId, signal);
+        if (binding === null) {
+            const bot = await this.readLifecycle(cx, botId, signal);
+            if (bot.lifecycle === "suspended") {
+                throw new BotApiError("bot_suspended", "The Bot is suspended", "conflict");
+            }
+            throw new BotApiError("binding_not_approved", "The Bot has no approved binding", "conflict");
+        }
+        const behavior = await cx.storages.control.readBehavior(binding.bot_id, binding.behavior_revision_id, signal);
+        if (behavior === null || behavior.lifecycle !== "approved") {
+            throw new BotApiError("behavior_not_approved", "The Bot behavior is not approved", "conflict");
+        }
+        const targets = await this.approvedTargets(
+            cx,
+            binding.bot_id,
+            stringArray(binding.allowed_delivery_target_ids_json, "The binding targets are invalid"),
+            signal,
+        );
+        const policy = completionPolicy(binding.completion_policy_json);
+        if (typeof binding.local_grant_id !== "string") {
+            throw new BotApiError("binding_not_approved", "The Bot binding is not approved", "conflict");
+        }
+        return {
+            bindingId: binding.binding_id,
+            bindingRevision: binding.binding_revision,
+            botId: binding.bot_id,
+            behaviorRevisionId: binding.behavior_revision_id,
+            runtimeId: binding.runtime_id,
+            agentRef: binding.agent_ref,
+            workspaceRef: binding.workspace_ref,
+            agentConfigRevision: binding.agent_config_revision,
+            localGrantId: binding.local_grant_id,
+            behaviorInstructions: behavior.instructions,
+            behaviorDigest: behavior.content_digest,
+            allowedDeliveryTargets: Object.freeze(targets),
+            completionPolicy: policy,
+        };
+    };
+
+    readonly resolveTenant = async (request: Request, signal: AbortSignal) =>
+        validateIdentifier(await this.cx.gateways.tenantResolver.resolve(request, signal), "tenant_id");
+
+    readonly listProjects = async (tenantId: string, signal: AbortSignal) => {
+        const cx = await this.context(tenantId, signal);
+        return cx.storages.control.listProjects(tenantId, signal);
+    };
+    readonly listProjectBots = async (tenantId: string, projectId: string, signal: AbortSignal) => {
+        const cx = await this.context(tenantId, signal);
+        const project = await cx.storages.control.readProjectRuntime(tenantId, projectId, signal);
+        if (project === null) {
+            throw new BotApiError(
+                "project_access_denied",
+                "This project is not available in the current workspace",
+                "access-denied",
+            );
+        }
+        return cx.storages.control.listProjectBots(tenantId, projectId, signal);
+    };
+    readonly readProjectStatus = async (tenantId: string, projectId: string, signal: AbortSignal) => {
+        const cx = await this.context(tenantId, signal);
+        const project = await cx.storages.control.readProjectRuntime(tenantId, projectId, signal);
+        if (project === null) {
+            throw new BotApiError(
+                "project_access_denied",
+                "This project is not available to this tenant",
+                "access-denied",
+            );
+        }
+        const access = new VerifiedChannelAccess(project.channel_id, project.runtime_id, tenantId, projectId);
+        const runtime = await this.cx.gateways.channels.readRuntimeStatus(access, signal);
+        return { status: runtime.online ? "connected" : "offline" };
+    };
+
+    readonly createBot = async (
+        projectId: string,
+        token: string,
+        displayName: string,
+        avatarRef: string,
+        description: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeProjectOwner(projectId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const profile: BotProfileRevision = {
+            botId: `bot_${createRandomToken(18)}`,
+            profileRevisionId: `bpr_${createRandomToken(18)}`,
+            revisionNumber: 1,
+            lifecycleRevision: 1,
+            displayName,
+            avatarRef,
+            description,
+            createdAt: new Date(now).toISOString(),
+        };
+        if (!(await cx.storages.control.writeBot(access, profile, now, signal))) {
+            throw new BotApiError("bot_service_unavailable", "The Bot was not created", "unavailable");
+        }
+        return {
+            ...new DraftBot(
+                profile.botId,
+                access.scope.projectId,
+                profile.profileRevisionId,
+                1,
+                profile.createdAt,
+                profile.createdAt,
+            ),
+            avatarRef,
+            description,
+            displayName,
+            profileRevision: 1,
+        };
+    };
+    readonly readBot = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        return botResource(await cx.storages.control.readBot(access, signal));
+    };
+    readonly readSetup = async (botId: string, token: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const { bot, behavior, binding } = await cx.storages.control.readSetup(access, signal);
+        if (bot === null) {
+            throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
+        }
+        const base = {
+            lifecycle: bot.lifecycle,
+            lifecycleRevision: bot.lifecycle_revision,
+            behaviorRevision: behavior?.revision ?? 0,
+        };
+        if (binding === null) {
+            return { ...base, configuration: { kind: "not-configured" } };
+        }
+        return {
+            ...base,
+            configuration: {
+                kind: binding.lifecycle,
+                runtimeId: binding.runtime_id,
+                agentRef: binding.agent_ref,
+                workspaceRef: binding.workspace_ref,
+                instructions: binding.instructions,
+                allowedDeliveryTargetIds: stringArray(
+                    binding.allowed_delivery_target_ids_json,
+                    "Invalid delivery targets",
+                ),
+                completionPolicy: completionPolicy(binding.completion_policy_json),
+            },
+        };
+    };
+    readonly createProfileRevision = async (
+        botId: string,
+        token: string,
+        revision: number,
+        displayName: string,
+        avatarRef: string,
+        description: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const bot = await this.readLifecycle(cx, access.botId, signal);
+        if (bot.lifecycle === "archived") {
+            throw new BotApiError("bot_not_active", "An archived Bot cannot be changed", "conflict");
+        }
+        if (bot.revision !== revision) {
+            throw new BotApiError("revision_conflict", "The Bot revision changed", "conflict");
+        }
+        const revisionNumber = (await cx.storages.control.readLatestProfileRevision(access.botId, signal)) + 1;
+        const profile: BotProfileRevision = {
+            avatarRef,
+            botId: access.botId,
+            createdAt: new Date(now).toISOString(),
+            description,
+            displayName,
+            lifecycleRevision: revision + 1,
+            profileRevisionId: `bpr_${createRandomToken(18)}`,
+            revisionNumber,
+        };
+        if (!(await cx.storages.control.writeProfileRevision(access, revision, profile, now, signal))) {
+            throw new BotApiError("revision_conflict", "The Bot revision changed", "conflict");
+        }
+        return profile;
+    };
+    readonly createBehaviorRevision = async (
+        botId: string,
+        token: string,
+        revision: number,
+        instructions: string,
+        capabilities: readonly string[],
+        configuration: Readonly<Record<string, unknown>>,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        if (capabilities.some((capability) => capability !== "embedded-context")) {
+            throw new BotApiError("invalid_request", "The behavior capability is not supported", "invalid-input");
+        }
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const bot = await this.readLifecycle(cx, access.botId, signal);
+        if (bot.lifecycle === "archived") {
+            throw new BotApiError("bot_not_active", "An archived Bot cannot be changed", "conflict");
+        }
+        if ((await cx.storages.control.readLatestBehaviorRevision(access.botId, signal)) !== revision) {
+            throw new BotApiError("revision_conflict", "The Bot behavior revision changed", "conflict");
+        }
+        const behaviorRevisionId = `bbr_${createRandomToken(18)}`;
+        const contentDigest = await hashSecret(
+            JSON.stringify({
+                agentConfiguration: configuration,
+                instructions,
+                requiredCapabilities: [...capabilities].sort(),
+            }),
+        );
+        signal.throwIfAborted();
+        const behavior: BotBehaviorRevision = {
+            agentConfiguration: configuration,
+            behaviorRevisionId,
+            botId: access.botId,
+            contentDigest,
+            createdAt: new Date(now).toISOString(),
+            instructions,
+            lifecycle: "proposed",
+            requiredCapabilities: capabilities,
+            revisionNumber: revision + 1,
+        };
+        if (!(await cx.storages.control.writeBehaviorRevision(access, behavior, now, signal))) {
+            throw new BotApiError("bot_service_unavailable", "The Bot behavior was not created", "unavailable");
+        }
+        return behavior;
+    };
+    readonly createExecutionBinding = async (
+        botId: string,
+        token: string,
+        revision: number,
+        behaviorRevisionId: string,
+        runtimeId: string,
+        agentRef: string,
+        workspaceRef: string,
+        agentConfigRevision: number,
+        targets: readonly string[],
+        policy: BotCompletionDeliveryPolicy,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const bot = await this.readLifecycle(cx, access.botId, signal);
+        if (bot.lifecycle === "archived") {
+            throw new BotApiError("bot_not_active", "An archived Bot cannot be bound", "conflict");
+        }
+        if (bot.revision !== revision) {
+            throw new BotApiError("revision_conflict", "The Bot revision changed", "conflict");
+        }
+        const behavior = await cx.storages.control.readBehavior(
+            access.botId,
+            validateIdentifier(behaviorRevisionId, "behavior_revision_id"),
+            signal,
+        );
+        if (
+            behavior === null ||
+            (behavior.lifecycle !== "proposed" && behavior.lifecycle !== "awaiting_local_approval")
+        ) {
+            throw new BotApiError("behavior_not_approved", "The Bot behavior cannot be bound", "conflict");
+        }
+        const runtime = await cx.storages.control.readBindingRuntime(
+            access.scope,
+            validateIdentifier(runtimeId, "runtime_id"),
+            signal,
+        );
+        if (runtime === null) {
+            throw new BotApiError("binding_incompatible", "The requested Runtime is unavailable", "conflict");
+        }
+        const agent = parseAgents(runtime.agents_json).find((candidate) => candidate.id === agentRef);
+        if (agent === undefined) {
+            throw new BotApiError("binding_incompatible", "The requested Agent is unavailable", "conflict");
+        }
+        const requirements = stringArray(behavior.required_capabilities_json, "The behavior requirements are invalid");
+        if (requirements.includes("embedded-context") && !agent.capabilities.embeddedContextPrompt) {
+            throw new BotApiError(
+                "binding_incompatible",
+                "The Agent cannot apply the required Bot behavior",
+                "conflict",
+            );
+        }
+        const approvedTargets = await this.approvedTargets(cx, access.botId, targets, signal);
+        if (policy instanceof RequiredBotCompletionDeliveryPolicy && !targets.includes(policy.deliveryTargetId)) {
+            throw new BotApiError(
+                "delivery_target_not_allowed",
+                "The completion target is not included in the binding",
+                "access-denied",
+            );
+        }
+        const bindingRevision = (await cx.storages.control.readLatestBindingRevision(access.botId, signal)) + 1;
+        const bindingId = `beb_${createRandomToken(18)}`;
+        const requestId = `apr_${createRandomToken(18)}`;
+        const outboxId = `bco_${createRandomToken(18)}`;
+        const request = new BotExecutionBindingApprovalRequest(
+            requestId,
+            access.botId,
+            behavior.behavior_revision_id,
+            bindingId,
+            bindingRevision,
+            runtime.runtime_id,
+            agentRef,
+            workspaceRef,
+            agentConfigRevision,
+            behavior.instructions,
+            behavior.content_digest,
+            requirements,
+            approvedTargets,
+            policy,
+        );
+        let written: boolean;
+        try {
+            written = await cx.storages.control.writeBinding(access, request, targets, outboxId, now, signal);
+        } catch (cause) {
+            signal.throwIfAborted();
+            throw new BotApiError("revision_conflict", "The Bot binding could not be requested", "conflict", { cause });
+        }
+        if (!written) {
+            throw new BotApiError("revision_conflict", "The Bot binding could not be requested", "conflict");
+        }
+        await this.cx.gateways.channels.dispatchPending(
+            new VerifiedChannelAccess(runtime.channel_id, runtime.runtime_id, runtime.tenant_id, runtime.project_id),
+            signal,
+        );
+        return { bindingId, bindingRevision, lifecycle: "requested" };
+    };
+    readonly transitionBot = async (
+        botId: string,
+        token: string,
+        revision: number,
+        action: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const bot = await this.readLifecycle(cx, access.botId, signal);
+        if (bot.revision !== revision) {
+            throw new BotApiError("revision_conflict", "The Bot revision changed", "conflict");
+        }
+        let lifecycle: "active" | "suspended" | "archived";
+        if (action === "suspend") {
+            if (bot.lifecycle !== "active") {
+                throw new BotApiError("bot_not_active", "Only an active Bot can be suspended", "conflict");
+            }
+            lifecycle = "suspended";
+        } else if (action === "resume") {
+            if (
+                bot.lifecycle !== "suspended" ||
+                typeof bot.activeBehaviorRevisionId !== "string" ||
+                typeof bot.activeBindingId !== "string"
+            ) {
+                throw new BotApiError("bot_not_active", "Only a suspended executable Bot can be resumed", "conflict");
+            }
+            lifecycle = "active";
+        } else if (action === "archive") {
+            if (bot.lifecycle === "archived") {
+                throw new BotApiError("bot_not_active", "The Bot is already archived", "conflict");
+            }
+            lifecycle = "archived";
+        } else {
+            throw new BotApiError("invalid_request", "The Bot lifecycle action is invalid", "invalid-input");
+        }
+        if (!(await cx.storages.control.writeLifecycle(access, revision, lifecycle, now, signal))) {
+            throw new BotApiError("revision_conflict", "The Bot revision changed", "conflict");
+        }
+        return botResource(await cx.storages.control.readBot(access, signal));
+    };
+    readonly createGrant = async (
+        botId: string,
+        token: string,
+        audience: string,
+        label: string,
+        scopes: readonly string[],
+        expiresInSeconds: number,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 3_600) {
+            throw new BotApiError("invalid_request", "The connection grant lifetime is invalid", "invalid-input");
+        }
+        const bot = await this.readLifecycle(cx, access.botId, signal);
+        if (bot.lifecycle === "archived") {
+            throw new BotApiError("bot_not_active", "The Bot cannot create a connection grant", "conflict");
+        }
+        const grantId = `bcg_${createRandomToken(18)}`;
+        const grantSecret = createRandomToken(32);
+        const expiresAt = now + expiresInSeconds * 1_000;
+        const secretDigest = await hashSecret(grantSecret);
+        signal.throwIfAborted();
+        if (
+            !(await cx.storages.connections.writeGrant(
+                access,
+                { grantId, secretDigest, audience, label, scopes, expiresAt },
+                now,
+                signal,
+            ))
+        ) {
+            throw new BotApiError("bot_service_unavailable", "The Bot connection grant was not created", "unavailable");
+        }
+        return {
+            audience,
+            botId: access.botId,
+            expiresAt: new Date(expiresAt).toISOString(),
+            grantId,
+            grantSecret,
+            label,
+            scopes,
+        };
+    };
+
+    readonly revokeConnectionForOwner = async (
+        botId: string,
+        token: string,
+        connectionId: string,
+        expectedRevision: number,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const normalizedConnectionId = validateIdentifier(connectionId, "connection_id");
+        const connection = await cx.storages.connections.readOwnerConnection(access, normalizedConnectionId, signal);
+        if (connection === null) {
+            throw new BotApiError("connection_not_found", "The Bot connection does not exist", "not-found");
+        }
+        if (
+            connection.lifecycle !== "active" ||
+            connection.lifecycle_revision !== expectedRevision ||
+            !(await cx.storages.connections.writeOwnerRevocation(
+                access,
+                normalizedConnectionId,
+                expectedRevision,
+                now,
+                signal,
+            ))
+        ) {
+            throw new BotApiError("revision_conflict", "The Bot connection revision changed", "conflict");
+        }
+        return {
+            botId: access.botId,
+            connectionId: normalizedConnectionId,
+            lifecycle: "revoked",
+            lifecycleRevision: expectedRevision + 1,
+            revokedAt: new Date(now).toISOString(),
+        };
+    };
+    readonly redeemGrant = async (
+        grantId: string,
+        grantSecret: string,
+        audience: string,
+        connectorPrincipalId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        signal.throwIfAborted();
+        const normalizedGrantId = validateIdentifier(grantId, "grant_id");
+        const grantDigest = await hashSecret(grantSecret);
+        signal.throwIfAborted();
+        const grant = await this.cx.services.authorization.authenticateGrant(
+            normalizedGrantId,
+            grantDigest,
+            audience,
+            now,
+            signal,
+        );
+        const cx = await this.context(grant.tenant_id, signal);
+        const connectionId = `bcn_${createRandomToken(18)}`;
+        const credentialId = `bcc_${createRandomToken(18)}`;
+        const credential = createRandomToken(32);
+        const credentialDigest = await hashSecret(credential);
+        signal.throwIfAborted();
+        const expiresAt = now + BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS;
+        if (
+            !(await cx.storages.connections.writeGrantRedemption(
+                grant,
+                {
+                    grantId: normalizedGrantId,
+                    grantDigest,
+                    audience,
+                    connectorPrincipalId,
+                    connectionId,
+                    credentialId,
+                    credentialDigest,
+                    expiresAt,
+                },
+                now,
+                signal,
+            ))
+        ) {
+            throw new BotApiError(
+                "credential_invalid",
+                "The Bot connection grant is invalid or consumed",
+                "unauthenticated",
+            );
+        }
+        return {
+            audience: grant.audience,
+            botId: grant.bot_id,
+            connectionId,
+            connectorPrincipalId,
+            credential,
+            credentialExpiresAt: new Date(expiresAt).toISOString(),
+            credentialId,
+            label: grant.label,
+            lifecycle: "active",
+            lifecycleRevision: 1,
+            scopes: stringArray(grant.scopes_json, "The Bot connection grant is invalid"),
+        };
+    };
+    readonly approveTarget = async (
+        botId: string,
+        token: string,
+        targetId: string,
+        revision: number,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const deliveryTargetId = validateIdentifier(targetId, "delivery_target_id");
+        if (
+            !(await cx.storages.connections.writeTargetApproval(
+                access,
+                deliveryTargetId,
+                revision,
+                revision + 1,
+                now,
+                signal,
+            ))
+        ) {
+            throw new BotApiError("revision_conflict", "The delivery target policy revision changed", "conflict");
+        }
+        const target = await cx.storages.connections.readTarget(deliveryTargetId, signal);
+        if (target === null) {
+            throw new BotApiError("delivery_target_unavailable", "The delivery target does not exist", "not-found");
+        }
+        return {
+            alias: target.alias,
+            botId: target.bot_id,
+            connectionId: target.connection_id,
+            deliveryTargetId: target.delivery_target_id,
+            lifecycle: target.lifecycle,
+            lifecycleRevision: 1,
+            outboundPolicyRevision: target.outbound_policy_revision,
+            ownerApproved: true,
+        };
+    };
+
+    readonly createConversation = async (
+        botId: string,
+        token: string,
+        request: NewBotConversation,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const principal = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            "inbound-conversation:create",
+            signal,
+        );
+        const cx = await this.context(principal.scope.tenantId, signal);
+        const binding = await this.readApprovedBinding(cx, botId, signal);
+        await this.readRuntimeAccess(cx, principal.scope, binding.runtimeId, signal);
+        const createPlan = async () => {
+            if (principal instanceof InboundBotOwnerPrincipal && request.kind === "owner") {
+                return cx.services.conversations.createOwnerConversation(
+                    principal,
+                    binding,
+                    request.clientConversationKey,
+                    now,
+                    signal,
+                );
+            }
+            if (principal instanceof InboundBotConnectorPrincipal && request.kind === "connection") {
+                await cx.services.targets.authorizeConversationReplyTarget(
+                    botId,
+                    principal.connection.connectionId,
+                    request.replyDeliveryTargetId,
+                    signal,
+                );
+                return cx.services.conversations.createConnectedConversation(
+                    principal,
+                    binding,
+                    request.clientConversationKey,
+                    request.title,
+                    request.replyDeliveryTargetId,
+                    now,
+                    signal,
+                );
+            }
+            throw new BotApiError(
+                "invalid_request",
+                "The conversation request does not match its principal",
+                "invalid-input",
+            );
+        };
+        const plan = await createPlan();
+        await this.cx.gateways.botSessions.provisionConversation(principal.scope, plan.provisioning, now, signal);
+        return cx.services.conversations.activateConversation(
+            principal.scope,
+            plan.provisioning.conversationId,
+            now,
+            signal,
+        );
+    };
+    readonly submitMessage = async (
+        botId: string,
+        token: string,
+        conversationId: string,
+        request: NewBotMessage,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const principal = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            "inbound-message:create",
+            signal,
+        );
+        const cx = await this.context(principal.scope.tenantId, signal);
+        const conversation = await this.authorizeConversation(cx, principal, conversationId, signal);
+        const bot = await cx.storages.conversations.readBotLifecycle(principal, signal);
+        if (bot?.lifecycle === "suspended") {
+            throw new BotApiError("bot_suspended", "The Bot is suspended", "conflict");
+        }
+        if (bot?.lifecycle !== "active") {
+            throw new BotApiError("bot_not_active", "The Bot is not active", "conflict");
+        }
+        const executionState = await cx.storages.conversations.readExecutionState(
+            principal,
+            conversation.bindingId,
+            conversation.bindingRevision,
+            signal,
+        );
+        if (
+            executionState === null ||
+            executionState.binding_lifecycle !== "approved" ||
+            executionState.runtime_status !== "paired"
+        ) {
+            throw new BotApiError("binding_incompatible", "The conversation Runtime is unavailable", "conflict");
+        }
+        let submission: BotTurnSubmission;
+        if (principal instanceof InboundBotOwnerPrincipal && request.kind === "owner") {
+            submission = new BotTurnSubmission(
+                request.clientMessageId,
+                request.actorRef,
+                request.text,
+                [],
+                [],
+                await this.cx.gateways.sessions.resolveArtifactResources(
+                    principal.scope,
+                    conversation.sessionId,
+                    request.artifactIds,
+                    signal,
+                ),
+            );
+        } else if (principal instanceof InboundBotConnectorPrincipal && request.kind === "connection") {
+            submission = new BotTurnSubmission(
+                request.clientMessageId,
+                request.actorRef,
+                request.text,
+                [],
+                [],
+                request.resourceRefs.map((reference) => ({
+                    mimeType: "",
+                    name: reference,
+                    text: "",
+                    type: "link",
+                    uri: `mobius://resource/${encodeURIComponent(reference)}`,
+                })),
+            );
+        } else {
+            throw new BotApiError("invalid_request", "The Bot message does not match its principal", "invalid-input");
+        }
+        const accepted = await this.cx.gateways.botSessions.acceptTurn(
+            principal.scope,
+            conversation.sessionId,
+            submission,
+            now,
+            signal,
+        );
+        await cx.services.conversations.registerExecution(
+            principal.scope,
+            accepted.execution,
+            principal instanceof InboundBotOwnerPrincipal
+                ? {
+                      kind: "owner",
+                      title: conversationTitleFromText(
+                          submission.prompt.trim().length > 0
+                              ? submission.prompt
+                              : (submission.resources[0]?.name ?? "Attachment"),
+                      ),
+                  }
+                : { kind: "connection" },
+            now,
+            signal,
+        );
+        const access = await this.readRuntimeAccess(cx, principal.scope, accepted.execution.runtimeId, signal);
+        await this.cx.gateways.channels.dispatchPending(access, signal);
+        return {
+            duplicate: accepted.duplicate,
+            eventCursor: "0",
+            executionId: accepted.execution.executionId,
+            turnId: accepted.execution.turnId,
+        };
+    };
+    readonly readConversationEvents = async (
+        botId: string,
+        token: string,
+        conversationId: string,
+        after: string,
+        signal: AbortSignal,
+    ) => {
+        const principal = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            "conversation-events:read",
+            signal,
+        );
+        const cx = await this.context(principal.scope.tenantId, signal);
+        const conversation = await this.authorizeConversation(cx, principal, conversationId, signal);
+        const page = await this.cx.gateways.botSessions.readConversationEvents(
+            principal.scope,
+            conversation.sessionId,
+            after,
+            100,
+            signal,
+        );
+        return principal instanceof InboundBotConnectorPrincipal ? connectorEventPage(page) : page;
+    };
+    readonly cancelTurn = async (
+        botId: string,
+        token: string,
+        turnId: string,
+        idempotencyKey: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const principal = await this.cx.services.authorization.authorizeInbound(botId, token, "turn:cancel", signal);
+        const cx = await this.context(principal.scope.tenantId, signal);
+        const turn = await cx.storages.conversations.readTurnConversation(
+            principal.botId,
+            validateIdentifier(turnId, "turn_id"),
+            signal,
+        );
+        if (turn === null) {
+            throw new BotApiError("conversation_access_denied", "The Bot turn is not accessible", "access-denied");
+        }
+        const conversation = await this.authorizeConversation(cx, principal, turn.conversation_id, signal);
+        const runtimeId = await this.cx.gateways.sessions.readTurnRuntime(
+            principal.scope,
+            conversation.sessionId,
+            turnId,
+            signal,
+        );
+        const access = await this.readRuntimeAccess(cx, principal.scope, runtimeId, signal);
+        const accepted = await this.cx.gateways.sessions.acceptTurnCancellation(
+            principal.scope,
+            runtimeId,
+            conversation.sessionId,
+            turnId,
+            idempotencyKey,
+            now,
+            signal,
+        );
+        await this.cx.gateways.channels.dispatchPending(access, signal);
+        return { duplicate: accepted.duplicate, turnId: accepted.turn.turnId };
+    };
+
+    readonly rotateCredential = async (id: string, token: string, now: number, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeConnectorManagement(id, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const credentialId = `bcc_${createRandomToken(18)}`;
+        const credential = createRandomToken(32);
+        const expiresAt = now + BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS;
+        const oldExpiresAt = now + BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS;
+        const credentialDigest = await hashSecret(credential);
+        signal.throwIfAborted();
+        if (
+            !(await cx.storages.connections.writeCredentialRotation(
+                access,
+                { credentialId, credentialDigest, expiresAt, oldExpiresAt },
+                now,
+                signal,
+            ))
+        ) {
+            throw new BotApiError(
+                "credential_invalid",
+                "The Bot connection credential could not rotate",
+                "unauthenticated",
+            );
+        }
+        return {
+            connectionId: access.connectionId,
+            credential,
+            credentialExpiresAt: new Date(expiresAt).toISOString(),
+            credentialId,
+            overlapEndsAt: new Date(oldExpiresAt).toISOString(),
+        };
+    };
+    readonly revokeConnection = async (id: string, token: string, now: number, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeConnectorManagement(id, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        if (!(await cx.storages.connections.writeConnectionRevocation(access, now, signal))) {
+            throw new BotApiError("connection_revoked", "The Bot connection was already revoked", "unauthenticated");
+        }
+        return {
+            botId: access.botId,
+            connectionId: access.connectionId,
+            lifecycle: "revoked",
+            lifecycleRevision: 2,
+            revokedAt: new Date(now).toISOString(),
+        };
+    };
+    readonly createTarget = async (id: string, token: string, alias: string, now: number, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeConnectorManagement(id, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const deliveryTargetId = `bdt_${createRandomToken(18)}`;
+        let written: boolean;
+        try {
+            written = await cx.storages.connections.writeTarget(access, deliveryTargetId, alias, now, signal);
+        } catch (cause) {
+            signal.throwIfAborted();
+            throw new BotApiError("revision_conflict", "The delivery target alias is already registered", "conflict", {
+                cause,
+            });
+        }
+        if (!written) {
+            throw new BotApiError("revision_conflict", "The delivery target alias is already registered", "conflict");
+        }
+        return {
+            alias,
+            botId: access.botId,
+            connectionId: access.connectionId,
+            createdAt: new Date(now).toISOString(),
+            deliveryTargetId,
+            lifecycle: "active",
+            lifecycleRevision: 1,
+            outboundPolicyRevision: 0,
+            ownerApproved: false,
+        };
+    };
+    readonly disableTarget = async (id: string, token: string, targetId: string, now: number, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeConnectorManagement(id, token, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const deliveryTargetId = validateIdentifier(targetId, "delivery_target_id");
+        if (!(await cx.storages.connections.writeTargetDisabling(access, deliveryTargetId, now, signal))) {
+            throw new BotApiError("delivery_target_unavailable", "The delivery target is unavailable", "conflict");
+        }
+        return {
+            connectionId: access.connectionId,
+            deliveryTargetId,
+            disabledAt: new Date(now).toISOString(),
+            lifecycle: "disabled",
+        };
+    };
+    readonly readOutbound = async (
+        id: string,
+        token: string,
+        after: number,
+        limit: number,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeConnector(
+            id,
+            token,
+            "outbound-message:read",
+            signal,
+        );
+        const cx = await this.context(access.scope.tenantId, signal);
+        const targets = await cx.storages.connections.listActiveTargetIds(access.connectionId, signal);
+        return this.cx.gateways.connections.read(id, after, limit, now, targets, signal);
+    };
+    readonly delivered = async (
+        id: string,
+        token: string,
+        messageId: string,
+        claimId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeConnector(
+            id,
+            token,
+            "outbound-message:ack",
+            signal,
+        );
+        return this.cx.gateways.connections.delivered(access.connectionId, messageId, claimId, now, signal);
+    };
+    readonly retryableFailure = async (
+        id: string,
+        token: string,
+        messageId: string,
+        claimId: string,
+        code: string,
+        retryAfterSeconds: number,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeConnector(
+            id,
+            token,
+            "outbound-message:ack",
+            signal,
+        );
+        if (retryAfterSeconds < 1 || retryAfterSeconds > 3_600) {
+            throw new BotApiError("invalid_request", "The retry delay is invalid", "invalid-input");
+        }
+        return this.cx.gateways.connections.retryableFailure(
+            access.connectionId,
+            messageId,
+            claimId,
+            code,
+            now + retryAfterSeconds * 1_000,
+            now,
+            signal,
+        );
+    };
+    readonly terminalFailure = async (
+        id: string,
+        token: string,
+        messageId: string,
+        claimId: string,
+        code: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeConnector(
+            id,
+            token,
+            "outbound-message:ack",
+            signal,
+        );
+        return this.cx.gateways.connections.terminalFailure(access.connectionId, messageId, claimId, code, now, signal);
+    };
+
+    readonly acceptOutbound = async (
+        executionId: string,
+        token: string,
+        capability: string,
+        target: { readonly kind: "reply" } | { readonly kind: "target"; readonly id: string },
+        outbound: { readonly idempotencyKey: string; readonly text: string },
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const runtime = await this.cx.services.authorization.authorizeRuntimeExecution(executionId, token, signal);
+        const cx = await this.context(runtime.scope.tenantId, signal);
+        await this.cx.gateways.botSessions.authorizeExecutionCapability(
+            runtime.scope,
+            runtime.sessionId,
+            runtime.executionId,
+            capability,
+            now,
+            signal,
+        );
+        const resolveTarget = async () => {
+            if (target.kind === "target") {
+                return target.id;
+            }
+            const reply = await cx.services.conversations.readReplyRoute(runtime.conversationId, signal);
+            if (!(reply instanceof BotConnectionReplyRoute)) {
+                throw new BotApiError(
+                    "delivery_target_not_allowed",
+                    "The Bot conversation has no external reply target",
+                    "access-denied",
+                );
+            }
+            return reply.deliveryTargetId;
+        };
+        const route = await cx.services.targets.authorizeOutboundTarget(
+            runtime.botId,
+            runtime.bindingId,
+            await resolveTarget(),
+            signal,
+        );
+        const accepted = await this.cx.gateways.botSessions.acceptOutbound(
+            runtime.scope,
+            runtime.sessionId,
+            runtime.executionId,
+            capability,
+            new BotOutboundSubmission(outbound.idempotencyKey, route.deliveryTargetId, outbound.text),
+            now,
+            signal,
+        );
+        await cx.services.conversations.recordOutboundAccepted(runtime.scope, runtime.runtimeId, accepted, now, signal);
+        try {
+            await this.cx.gateways.connections.enqueue(route, accepted, signal);
+            await this.cx.gateways.botSessions.markOutboundForwarded(
+                runtime.scope,
+                runtime.sessionId,
+                accepted.outboundMessageId,
+                now,
+                signal,
+            );
+        } catch (error) {
+            signal.throwIfAborted();
+            console.error("Bot outbound forwarding will be reconciled", error);
+        }
+        return { duplicate: accepted.duplicate, outboundMessageId: accepted.outboundMessageId };
+    };
+}

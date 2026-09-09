@@ -1,26 +1,22 @@
-import type {
-    ChannelGateway,
-    PairingGateway,
-    SessionArtifactGateway,
-    SessionQueryGateway,
-} from "../../gateway/index.ts";
-import type { AgentDescriptor, InstallableAgentDescriptor } from "../pairing/pairing.ts";
-import { ProjectScope, SessionRuntimeError } from "../session/session.ts";
+import { ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
+import type { AgentDescriptor, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
+import type { ChannelGateway, SessionArtifactGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import type { PairingOperations } from "../pairing/pairing-operations.ts";
 export class ChannelService {
-    readonly #pairingGateway: PairingGateway;
+    readonly #pairings: PairingOperations;
     readonly #channelGateway: ChannelGateway;
     readonly #sessionQueries: SessionQueryGateway;
     readonly #sessionArtifacts: SessionArtifactGateway;
     constructor(cx: {
+        readonly services: { readonly pairings: PairingOperations };
         readonly gateways: {
-            readonly pairingGateway: PairingGateway;
             readonly channelGateway: ChannelGateway;
             readonly sessionQueries: SessionQueryGateway;
             readonly sessionArtifacts: SessionArtifactGateway;
         };
     }) {
-        const { pairingGateway, channelGateway, sessionQueries, sessionArtifacts } = cx.gateways;
-        this.#pairingGateway = pairingGateway;
+        const { channelGateway, sessionQueries, sessionArtifacts } = cx.gateways;
+        this.#pairings = cx.services.pairings;
         this.#channelGateway = channelGateway;
         this.#sessionQueries = sessionQueries;
         this.#sessionArtifacts = sessionArtifacts;
@@ -31,16 +27,16 @@ export class ChannelService {
         agents: readonly AgentDescriptor[],
         installableAgents: readonly InstallableAgentDescriptor[],
         signal: AbortSignal,
-    ) => this.#pairingGateway.updateAgentCatalog(channelId, token, agents, installableAgents, signal);
+    ) => this.#pairings.updateAgentCatalog(channelId, token, agents, installableAgents, signal);
 
     readonly createAccessGrant = (channelId: string, token: string, signal: AbortSignal) =>
-        this.#pairingGateway.createChannelAccessGrant(channelId, token, signal);
+        this.#pairings.createChannelAccessGrant(channelId, token, signal);
 
     readonly redeemAccessGrant = (channelId: string, grantId: string, grantSecret: string, signal: AbortSignal) =>
-        this.#pairingGateway.redeemChannelAccessGrant(channelId, grantId, grantSecret, signal);
+        this.#pairings.redeemChannelAccessGrant(channelId, grantId, grantSecret, signal);
 
     readonly listLinkedDevices = (channelId: string, token: string, signal: AbortSignal) =>
-        this.#pairingGateway.listLinkedChannelDevices(channelId, token, signal);
+        this.#pairings.listLinkedChannelDevices(channelId, token, signal);
 
     readonly revokeLinkedDevice = async (
         channelId: string,
@@ -48,12 +44,12 @@ export class ChannelService {
         token: string,
         signal: AbortSignal,
     ): Promise<void> => {
-        const credential = await this.#pairingGateway.revokeLinkedChannelDevice(channelId, credentialId, token, signal);
+        const credential = await this.#pairings.revokeLinkedChannelDevice(channelId, credentialId, token, signal);
         await this.#channelGateway.disconnectHost(credential, signal);
     };
 
     readonly readChannel = (channelId: string, token: string, signal: AbortSignal) =>
-        this.#pairingGateway.readChannel(channelId, token, signal);
+        this.#pairings.readChannel(channelId, token, signal);
 
     readonly acceptHost = async (
         channelId: string,
@@ -61,7 +57,7 @@ export class ChannelService {
         request: Request,
         signal: AbortSignal,
     ): Promise<Response> => {
-        const access = await this.#pairingGateway.authorizeHost(channelId, token, signal);
+        const access = await this.#pairings.authorizeHost(channelId, token, signal);
         return await this.#channelGateway.acceptHost(access, request, signal);
     };
 
@@ -71,7 +67,7 @@ export class ChannelService {
         request: Request,
         signal: AbortSignal,
     ): Promise<Response> => {
-        const access = await this.#pairingGateway.authorizeDaemon(channelId, token, signal);
+        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
         return await this.#channelGateway.acceptDaemon(access, request, signal);
     };
 
@@ -83,7 +79,7 @@ export class ChannelService {
         artifactId: string,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairingGateway.authorizeDaemon(channelId, token, signal);
+        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
         const scope = new ProjectScope(access.tenantId, access.projectId);
         const runtimeId = await this.#sessionQueries.readCommandRuntime(scope, sessionId, commandId, signal);
         if (runtimeId !== access.runtimeId) {

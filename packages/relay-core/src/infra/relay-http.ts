@@ -1,10 +1,10 @@
-import { PairingDirectoryError, validateIdentifier } from "../service/pairing/pairing.ts";
 import {
     type AttemptReconciliationOutcome,
     CreateSessionRequest,
     SessionRecordingPolicy,
     SessionRuntimeError,
-} from "../service/session/session.ts";
+} from "../entity/do/session.ts";
+import { PairingDirectoryError, validateIdentifier } from "../entity/pairing/pairing.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "./bounded-request-body.ts";
 
 const MAX_REQUEST_BODY_LENGTH = 16 * 1024;
@@ -106,7 +106,7 @@ export function optionalCursor(value: string | undefined): string | null {
 }
 
 function reportUnexpectedError(error: unknown): void {
-    console["error"]("Mobius relay request failed", error);
+    console.error("Mobius relay request failed", error);
 }
 
 export function preserveCancellation(signal: AbortSignal, error: unknown): void {

@@ -483,13 +483,12 @@ packages/
   relay-core/        Portable Relay API, channel actor, state contracts, and ports
   relay-cloudflare/  Reusable Cloudflare Durable Objects, D1, and R2 adapters
   relay-cloudflare-standalone/  Standalone Worker entry point and deployment composition
-  relay-node/        Reserved for a future single-instance Node profile
   cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
   web-sdk/           Browser-and-Node TypeScript SDK
 deploy/
-  docker/            Reserved for the future relay-node image
+  docker/            Reserved for a future Docker deployment profile
 e2e/
   fixtures/
     fake-acp-agent/
@@ -497,10 +496,8 @@ docs/
 scripts/
 ```
 
-All runnable and importable product workspaces live under `packages/`. The empty
-`relay-node` and `deploy/docker` placeholders keep the intended deployment
-boundary explicit without claiming Node or Docker support before those profiles
-exist. External boundary fixtures remain under `e2e/fixtures` because they are
+All runnable and importable product workspaces live under `packages/`.
+External boundary fixtures remain under `e2e/fixtures` because they are
 deterministic test dependencies rather than shipped product units.
 
 ## D1 migrations

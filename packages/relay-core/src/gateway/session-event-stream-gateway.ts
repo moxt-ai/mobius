@@ -1,4 +1,4 @@
-import type { ProjectScope } from "../service/session/session.ts";
+import type { ProjectScope } from "../entity/do/session.ts";
 export interface SessionEventStreamGateway {
     readonly openEventStream: (
         scope: ProjectScope,

@@ -1,18 +1,19 @@
-import type { ChannelGateway, PairingGateway } from "../../gateway/index.ts";
-import { PairingDirectoryError } from "./pairing.ts";
+import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
+import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
+import type { PairingOperations } from "./pairing-operations.ts";
 
 export class PairingService {
     readonly #channels: ChannelGateway;
-    readonly #pairings: PairingGateway;
+    readonly #pairings: PairingOperations;
 
     constructor(cx: {
+        readonly services: { readonly pairings: PairingOperations };
         readonly gateways: {
             readonly channelGateway: ChannelGateway;
-            readonly pairingGateway: PairingGateway;
         };
     }) {
         this.#channels = cx.gateways.channelGateway;
-        this.#pairings = cx.gateways.pairingGateway;
+        this.#pairings = cx.services.pairings;
     }
 
     readonly createProjectRuntimePairing = (

@@ -1,4 +1,4 @@
-import { PairingDirectoryError, validateIdentifier } from "./pairing.ts";
+import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 
 export interface PairingTenantResolver {
     readonly resolve: (request: Request, signal: AbortSignal) => Promise<string>;

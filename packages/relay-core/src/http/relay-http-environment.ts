@@ -1,3 +1,3 @@
-import type { RelayContext } from "../create-dependencies.ts";
+import type { RelayContext } from "../di/create-relay-dependencies.ts";
 
 export type RelayHttpEnvironment = { Bindings: RelayContext };

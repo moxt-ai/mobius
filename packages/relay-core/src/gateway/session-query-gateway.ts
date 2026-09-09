@@ -6,7 +6,7 @@ import type {
     SessionEventPage,
     SessionMessagePage,
     SessionSummary,
-} from "../service/session/session.ts";
+} from "../entity/do/session.ts";
 export interface SessionQueryGateway {
     readonly listSessions: (
         scope: ProjectScope,

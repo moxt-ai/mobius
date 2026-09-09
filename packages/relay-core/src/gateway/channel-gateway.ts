@@ -1,5 +1,5 @@
+import type { ChannelHostCredential, VerifiedChannelAccess } from "../entity/pairing/pairing.ts";
 import type { RuntimeStatus } from "../service/channel/channel.ts";
-import type { ChannelHostCredential, VerifiedChannelAccess } from "../service/pairing/pairing.ts";
 export interface ChannelGateway {
     readonly acceptDaemon: (access: VerifiedChannelAccess, request: Request, signal: AbortSignal) => Promise<Response>;
     readonly acceptHost: (access: ChannelHostCredential, request: Request, signal: AbortSignal) => Promise<Response>;

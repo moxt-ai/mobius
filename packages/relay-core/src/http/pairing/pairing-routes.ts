@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { assertExactKeys, directoryError, parseJsonBody, preserveCancellation } from "../../infra/relay-http.ts";
 import {
     PairingDirectoryError,
     validateAgentCatalog,
@@ -8,19 +7,17 @@ import {
     validateIdentifier,
     validateInstallableAgents,
     validatePairingCode,
-} from "../../service/pairing/pairing.ts";
+} from "../../entity/pairing/pairing.ts";
+import { assertExactKeys, directoryError, parseJsonBody, preserveCancellation } from "../../infra/relay-http.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createPairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .post("/", async (context) => {
-            const pairings = context.env.gateways.pairingGateway;
             const request = context.req.raw;
             const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
             try {
-                const tenantId = await context.env.gateways.pairingTenantResolver.resolve(request, signal);
-                signal.throwIfAborted();
-                return context.json(await pairings.createPairing(tenantId, signal), 201);
+                return context.json(await context.env.services.createPairing(request, signal), 201);
             } catch (error) {
                 preserveCancellation(request.signal, error);
                 if (signal.aborted) {
@@ -32,7 +29,7 @@ export function createPairingRoutes() {
             }
         })
         .post("/claim", async (context) => {
-            const pairings = context.env.gateways.pairingGateway;
+            const pairings = context.env.services.pairings;
             try {
                 const body = await parseJsonBody(context.req.raw);
                 assertExactKeys(body, ["agents", "installableAgents", "machineName", "pairingCode", "workspaceName"]);
@@ -62,7 +59,7 @@ export function createPairingRoutes() {
             }
         })
         .get("/:pairingId", async (context) => {
-            const pairings = context.env.gateways.pairingGateway;
+            const pairings = context.env.services.pairings;
             try {
                 return context.json(
                     await pairings.readPairingStatus(

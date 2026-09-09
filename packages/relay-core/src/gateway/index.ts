@@ -1,5 +1,13 @@
+export {
+    BotConnectorAccess,
+    BotOwnerAccess,
+    BotRuntimeExecutionAccess,
+    InboundBotConnectorPrincipal,
+    InboundBotOwnerPrincipal,
+    InboundBotPrincipal,
+    ProjectOwnerAccess,
+} from "../entity/bot/bot-access.ts";
 export type { ChannelGateway } from "./channel-gateway.ts";
-export type { PairingGateway } from "./pairing-gateway.ts";
 export type { SessionArtifactGateway } from "./session-artifact-gateway.ts";
 export type { SessionCommandGateway } from "./session-command-gateway.ts";
 export type { SessionEventStreamGateway } from "./session-event-stream-gateway.ts";

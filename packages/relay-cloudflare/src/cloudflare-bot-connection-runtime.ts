@@ -1,7 +1,6 @@
-import type { BotOutboundAcceptance } from "@moxt-ai/mobius-relay-core";
+import { BotApiError, type BotConnectionGateway, type BotOutboundAcceptance } from "@moxt-ai/mobius-relay-core";
 
-import { BotApiError } from "./bot-api-error.ts";
-import type { BotDeliveryRoute } from "./d1-bot-connections.ts";
+type BotDeliveryRoute = Parameters<BotConnectionGateway["enqueue"]>[0];
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 64 * 1024;
 
@@ -9,7 +8,28 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export class CloudflareBotConnectionRuntime {
+function deliveryError(code: unknown, message: unknown): BotApiError | null {
+    if (typeof message !== "string") {
+        return null;
+    }
+    switch (code) {
+        case "connection_storage_unavailable":
+            return new BotApiError(code, message, "unavailable");
+        case "connection_not_found":
+            return new BotApiError(code, message, "not-found");
+        case "idempotency_conflict":
+        case "revision_conflict":
+            return new BotApiError(code, message, "conflict");
+        case "invalid_request":
+            return new BotApiError(code, message, "invalid-input");
+        case "queue_full":
+            return new BotApiError(code, message, "capacity-exceeded");
+        default:
+            return null;
+    }
+}
+
+export class CloudflareBotConnectionRuntime implements BotConnectionGateway {
     readonly #namespace: DurableObjectNamespace;
 
     constructor(namespace: DurableObjectNamespace) {
@@ -116,7 +136,7 @@ export class CloudflareBotConnectionRuntime {
             throw new BotApiError(
                 "connection_storage_unavailable",
                 "The Bot connection delivery stream is unavailable",
-                503,
+                "unavailable",
                 { cause },
             );
         }
@@ -125,7 +145,7 @@ export class CloudflareBotConnectionRuntime {
             throw new BotApiError(
                 "connection_storage_unavailable",
                 "The Bot connection delivery stream returned an invalid response",
-                503,
+                "unavailable",
             );
         }
         let value: unknown;
@@ -135,7 +155,7 @@ export class CloudflareBotConnectionRuntime {
             throw new BotApiError(
                 "connection_storage_unavailable",
                 "The Bot connection delivery stream returned invalid JSON",
-                503,
+                "unavailable",
                 { cause },
             );
         }
@@ -143,21 +163,22 @@ export class CloudflareBotConnectionRuntime {
             if (isRecord(value) && isRecord(value["error"])) {
                 const code = value["error"]["code"];
                 const message = value["error"]["message"];
-                if (typeof code === "string" && typeof message === "string") {
-                    throw new BotApiError(code, message, response.status);
+                const failure = deliveryError(code, message);
+                if (failure !== null) {
+                    throw failure;
                 }
             }
             throw new BotApiError(
                 "connection_storage_unavailable",
                 "The Bot connection delivery stream rejected the operation",
-                503,
+                "unavailable",
             );
         }
         if (!isRecord(value)) {
             throw new BotApiError(
                 "connection_storage_unavailable",
                 "The Bot connection delivery stream returned invalid data",
-                503,
+                "unavailable",
             );
         }
         return Object.fromEntries(Object.entries(value));

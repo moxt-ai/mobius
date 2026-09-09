@@ -20,32 +20,71 @@ Pairing page / channel Web app / external connector
 `packages/relay-core` owns inferred Hono feature route factories, orchestration services,
 gateway contracts, input validation, pairing and channel contracts, the
 platform-independent `ChannelActor`, and ports for content storage and peers.
-Pairing, channel, and session logic is grouped by feature under `service/`;
-Valibot schemas and inferred persisted-record types live under `entity/session/`.
-Storage methods expose semantic persistence operations, validate database results
-with these schemas, and execute one SQL statement each. Services own validation,
-lifecycle decisions, transaction boundaries, and multi-step composition.
+Pairing, channel, session, and Bot logic is grouped by feature under `service/`.
+Shared values, credentials, records, and codecs live under `entity/`; SQL and
+content persistence contracts live under `infra/`. Storage must not import services,
+HTTP routes, DI, application gateways, or platform adapters, including through
+type-only imports or package barrels. Shared lower-layer modules follow the same
+dependency direction.
+Storage methods expose semantic persistence operations, including atomic SQL
+batches and transactions. Services own authorization, lifecycle decisions,
+revision planning, credential lifetimes, replay handling, and orchestration.
+Bot target authorization is shared by HTTP submission and runtime recovery;
+conversation provisioning and recovery use the same core conversation service.
+Bot credential authentication searches the configured identity databases before
+resolving tenant placement. Composition supplies Bot storage with the resolved
+`TenantContext` and database resolver; HTTP Bot configuration has no fixed database.
+Bot session storage atomically commits turn/execution/capability records, outbound
+requests with usage accounting, and settlement with capability revocation and
+completion delivery. Services prepare these operations and interpret persistence
+results. Archive publication and session creation/deletion likewise have dedicated
+atomic storage operations.
+Session imports use a typed import plan: services validate terminal interactions
+and artifact ownership, while storage serializes and restores the records and
+archive work in one transaction. Failed imports use a dedicated atomic rollback.
+Event projection services likewise prepare typed changes without writing SQL.
+Event storage rechecks the planned session/source sequence, then commits the
+projection, archive work, event, and sequence advance together. Core DO services
+do not receive SQL executors; the core service tree has no transaction callbacks.
+Bot failures carry typed domain codes and failure categories. HTTP boundaries
+own the status mappings, including distinctions between missing and inaccessible
+resources. Bot delivery failures likewise expose typed codes without HTTP status
+fields in the service layer.
 Portable SQLite persistence lives under `storage/`, while shared HTTP boundary
 code lives under `infra/`.
+The core content service verifies digests and handles immutable-write conflicts
+and quota results. SQLite performs atomic usage checks and insertion; the R2
+adapter selects the tenant bucket and executes conditional object writes. Neither
+adapter performs content hashing or decides how conflicting content is handled.
+R2 operations have an owned 15-second deadline covering placement and object
+access. Timeout is reported as `content_storage_timeout`; caller cancellation
+retains its original reason. Body streaming propagates cancellation, and both
+R2 and D1 adapters release their deadline timers when operations settle.
 `createMobiusApplication()` builds the reusable, chained route graph with a validated
-API prefix. `createMobiusDependencies()` accepts caller-created gateways and builds
+API prefix. `createRelayDependencies()` accepts caller-created gateways and builds
 a plain readonly context. Constructors declare only their required `services`,
 `storages`, `gateways`, or `config` subset; HTTP routes read the request's context.
-`createSessionDependencies()` constructs schema-backed storages and session services
-in dependency order. Bootstrap pairing routes use the pairing gateway, while
-Project-scoped create/read/revoke operations use `PairingService` to compose D1
-lifecycle changes with targeted Runtime disconnection. There is no
+`src/di/` exposes two composition functions: `createRelayDependencies()` for HTTP
+services and direct host pairing, and `createDurableObjectDependencies()` for the
+shared runtime, session, and Bot delivery context. Helpers are private. Both
+factories construct core storage and services from platform ports; the DO context
+has a top-level `doDatabase` and no DO-kind selector. Pairing routes call
+pairing services. Project-scoped revocation composes atomic directory lifecycle
+changes with targeted Runtime disconnection. There is no
 container, registration metadata, or application subclass. Core imports no
 Cloudflare API. The actor validates protocol
 messages, selects the one active daemon, routes commands, and commits reliable
 session events before acknowledging them.
+Runtime disconnect cleanup persists its intent and per-session progress. Alarms
+and reconnects resume unfinished cleanup after cancellation or a handler deadline;
+completed sessions are not disconnected again when recovery resumes.
 `SqliteSessionRuntime` owns atomic command deduplication, attempt transitions,
 monotonic event sequencing, paginated query projections, retention, deletion,
 and recoverable archive work.
 
 `packages/relay-cloudflare-standalone` is the standalone composition root, using
-the shared adapters in `packages/relay-cloudflare`. D1 implements the
-pairing gateway and stores the daemon token hash, machine metadata, and locally
+the shared adapters in `packages/relay-cloudflare`. Core pairing storage uses the
+D1 SQL executor for the daemon token hash, machine metadata, and locally
 advertised agent catalog. Ready Agent entries include output-only executable
 path and version metadata together with capability booleans normalized from a
 bounded, successful ACP readiness probe. Persisted pre-capability catalogs are
@@ -248,8 +287,6 @@ events use bounded stages and sanitized stable codes.
   Durable Objects, R2 adapter, and Cloudflare migrations.
 - `packages/relay-cloudflare-standalone` owns the standalone Worker entry point,
   single-binding resolvers, Wrangler deployment profiles, and Worker Assets composition.
-- `packages/relay-node` is an empty placeholder for a future single-instance
-  Node profile; it does not provide a server or storage implementation.
 - `packages/cli` is the publishable `@moxt-ai/mobius` CLI and owns its local daemon,
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network

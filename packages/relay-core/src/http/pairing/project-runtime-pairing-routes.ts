@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import {
     assertExactKeys,
     bearerToken,
@@ -7,7 +8,6 @@ import {
     preserveCancellation,
     readString,
 } from "../../infra/relay-http.ts";
-import { PairingDirectoryError, validateIdentifier } from "../../service/pairing/pairing.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 const PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS = 15_000;
@@ -24,7 +24,7 @@ export function createProjectRuntimePairingRoutes() {
                 const body = await parseJsonBody(request);
                 assertExactKeys(body, ["idempotencyKey"]);
                 return context.json(
-                    await context.env.services.pairings.createProjectRuntimePairing(
+                    await context.env.services.runtimePairings.createProjectRuntimePairing(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
                         bearerToken(request),
                         validateIdentifier(readString(body, "idempotencyKey"), "idempotency_key"),
@@ -52,7 +52,7 @@ export function createProjectRuntimePairingRoutes() {
             ]);
             try {
                 return context.json(
-                    await context.env.services.pairings.readProjectRuntimePairing(
+                    await context.env.services.runtimePairings.readProjectRuntimePairing(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
                         validateIdentifier(context.req.param("pairingId"), "pairing_id"),
                         bearerToken(request),
@@ -78,7 +78,7 @@ export function createProjectRuntimePairingRoutes() {
                 AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
             ]);
             try {
-                await context.env.services.pairings.revokeProjectRuntime(
+                await context.env.services.runtimePairings.revokeProjectRuntime(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                     bearerToken(request),

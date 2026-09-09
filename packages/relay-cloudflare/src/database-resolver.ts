@@ -1,5 +1,1 @@
-import type { TenantShardResolution } from "./tenant-sharding-directory.ts";
-
-export interface DatabaseResolver {
-    readonly resolve: (sharding: TenantShardResolution) => D1Database;
-}
+export type { DatabaseResolver } from "@moxt-ai/mobius-relay-core/database";

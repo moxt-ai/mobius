@@ -19,7 +19,7 @@ import type {
     SessionSummary,
     TurnAcceptance,
     TurnCancellationAcceptance,
-} from "../service/session/session.ts";
+} from "../entity/do/session.ts";
 export interface SessionCommandGateway {
     readonly acceptInteractionResponse: (
         scope: ProjectScope,

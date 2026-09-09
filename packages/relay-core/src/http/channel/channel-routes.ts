@@ -1,5 +1,11 @@
 import { Hono } from "hono";
 import {
+    validateAgentCatalog,
+    validateAgents,
+    validateIdentifier,
+    validateInstallableAgents,
+} from "../../entity/pairing/pairing.ts";
+import {
     assertExactKeys,
     bearerToken,
     directoryError,
@@ -8,12 +14,6 @@ import {
     readString,
     sessionError,
 } from "../../infra/relay-http.ts";
-import {
-    validateAgentCatalog,
-    validateAgents,
-    validateIdentifier,
-    validateInstallableAgents,
-} from "../../service/pairing/pairing.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createChannelRoutes() {

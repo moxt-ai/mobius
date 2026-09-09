@@ -629,7 +629,9 @@ describe.sequential("Bot management and conversations", () => {
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const followUp = decodeBotSessionPromptCommand(await paired.daemon.receive(BOT_SESSION_PROMPT_KIND));
             fireEvent.click(screen.getByRole("button", { name: "Refresh conversation" }));
-            expect(await screen.findByRole("button", { name: "Send message" })).toHaveProperty("disabled", true);
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: "Send message" })).toHaveProperty("disabled", true);
+            });
             await paired.daemon.sendSessionEvent(
                 followUp.sessionId,
                 encodeSessionStartedEvent({

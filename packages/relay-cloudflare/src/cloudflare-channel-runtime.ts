@@ -5,11 +5,11 @@ import {
     type VerifiedChannelAccess,
 } from "@moxt-ai/mobius-relay-core";
 
-export const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
-export const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
-export const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
-export const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
-export const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
+const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
+const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
+const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
+const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
+const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
 
 export class CloudflareChannelRuntime implements ChannelGateway {
     readonly #namespace: DurableObjectNamespace;

@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { exports } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
@@ -1694,6 +1694,55 @@ describe.sequential("Provider-neutral Bot API", () => {
                 200,
             );
             expect(duplicateDelivered).toMatchObject({ duplicate: true, state: "delivered" });
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a Bot execution with an invalid persisted quota counter, When its runtime submits an outbound message, Then storage rejects the message without delivering it", async () => {
+        const pairing = await pairRuntime();
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await createBot(pairing, "Invalid quota");
+            const connection = await connectBot(pairing, bot, "invalid-quota");
+            const target = await createTarget(pairing, bot, connection, "notifications");
+            const behavior = await createBehavior(pairing, bot, "Invalid quota");
+            await approveBinding(pairing, daemon, bot, behavior, target, bot.lifecycleRevision);
+            const conversation = await createConversation(pairing, bot, "invalid-quota");
+            await submitMessage(pairing, bot, conversation, "invalid-quota-message");
+            const command = decodeBotSessionPromptCommand(await daemon.messages.next());
+            const session = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${pairing.projectId}:${command.sessionId}`),
+            );
+            await runInDurableObject(session, (_instance, state) => {
+                state.storage.sql.exec(
+                    "UPDATE bot_execution_capabilities SET usage_count = -1 WHERE execution_id = ?",
+                    command.executionId,
+                );
+            });
+            await expectApiError(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${command.executionId}/delivery-targets/${target.deliveryTargetId}/messages`,
+                    {
+                        method: "POST",
+                        headers: executionHeaders(pairing, command.executionCapabilitySecret),
+                        body: JSON.stringify({
+                            idempotencyKey: "invalid-quota-outbound",
+                            text: "Must not be delivered",
+                        }),
+                    },
+                ),
+                503,
+                "session_storage_unavailable",
+            );
+            const outbound = await json(
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connection.connectionId}/outbound-events?after=0`,
+                    { headers: connectorHeaders(connection) },
+                ),
+                200,
+            );
+            expect(recordArrayField(outbound, "events")).toEqual([]);
         } finally {
             daemon.socket.close(1000, "Test complete");
         }

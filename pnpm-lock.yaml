@@ -76,12 +76,12 @@ importers:
 
   packages/relay-cloudflare:
     dependencies:
-      '@moxt-ai/mobius-protocol':
-        specifier: workspace:*
-        version: link:../protocol
       '@moxt-ai/mobius-relay-core':
         specifier: workspace:*
         version: link:../relay-core
+      valibot:
+        specifier: 1.4.2
+        version: 1.4.2(typescript@7.0.2)
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20260905.1

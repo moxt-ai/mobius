@@ -57,7 +57,9 @@ import {
     MobiusRuntimePairingRequest,
 } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RuntimeRelay } from "../src/durable-objects.ts";
 import worker from "../src/worker.ts";
+import { runtimeWithTransport, SuspendedDisconnectTransport } from "./runtime-recovery-transport.ts";
 
 const relayOrigin = "https://relay.test";
 const verifiedAgentCapabilities = {
@@ -2684,6 +2686,256 @@ describe.sequential("Cloudflare session deployment", () => {
             host.socket.close(1000, "Test complete");
         }
     });
+
+    it("Given an active turn, When disconnect cleanup times out and the relay wakes again, Then its alarm recovers the interrupted turn", async () => {
+        vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+        const pairing = await pairChannel();
+        const sessionId = "disconnect-recovery-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        const command = prompt(sessionId, "disconnect-recovery-command", "recover this turn");
+        await submitPrompt(host, daemon, command);
+        await commit(
+            host,
+            daemon,
+            envelope(sessionId, "disconnect-recovery-started", {
+                commandId: command.commandId,
+                kind: SESSION_STARTED_KIND,
+                attemptId: "disconnect-recovery-attempt",
+                sessionId,
+            }),
+        );
+        const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+        try {
+            await runInDurableObject(stub, async (instance, state) => {
+                const socket = state.getWebSockets("daemon")[0];
+                if (socket === undefined || instance.webSocketClose === undefined) {
+                    throw new Error("Expected a connected runtime");
+                }
+                vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+                vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+                try {
+                    const closing = instance.webSocketClose(socket, 1000, "Runtime stopped", true);
+                    vi.advanceTimersByTime(30_000);
+                    await expect(closing).rejects.toMatchObject({ name: "TimeoutError" });
+                    expect(await state.storage.getAlarm()).not.toBeNull();
+                } finally {
+                    vi.useRealTimers();
+                    vi.useFakeTimers({ toFake: ["Date"] });
+                    vi.setSystemTime(new Date("2030-09-06T00:00:30.000Z"));
+                }
+            });
+            await runInDurableObject(stub, async (_instance, state) => {
+                await state.storage.deleteAlarm();
+                await new RuntimeRelay(state, env).alarm();
+            });
+            const history = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            await expect(history.json()).resolves.toMatchObject({
+                messages: [{ commandId: command.commandId, attempt: { kind: "indeterminate" } }],
+            });
+        } finally {
+            host.socket.close(1000, "Test complete");
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given disconnect cleanup has recovered one of two turns, When its deadline expires and the daemon reconnects, Then only unfinished recovery resumes and later alarms preserve running work", async () => {
+        vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+        const pairing = await pairChannel();
+        const sessionIds = ["checkpoint-session-a", "checkpoint-session-b"];
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        for (const sessionId of sessionIds) {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+            const command = prompt(sessionId, `${sessionId}-command`, "recover independently");
+            await submitPrompt(host, daemon, command);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, `${sessionId}-started`, {
+                    commandId: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    attemptId: `${sessionId}-attempt`,
+                    sessionId,
+                }),
+            );
+        }
+        const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+        try {
+            const completedSessionId = await runInDurableObject(stub, async (_instance, state) => {
+                const socket = state.getWebSockets("daemon")[0];
+                if (socket === undefined) {
+                    throw new Error("Expected a connected runtime");
+                }
+                const transport = new SuspendedDisconnectTransport();
+                vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+                vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+                try {
+                    const closing = runtimeWithTransport(state, transport).webSocketClose(socket);
+                    const rejected = expect(closing).rejects.toMatchObject({ name: "TimeoutError" });
+                    const completed = await transport.suspended;
+                    vi.advanceTimersByTime(30_000);
+                    await rejected;
+                    expect(await state.storage.getAlarm()).not.toBeNull();
+                    return completed;
+                } finally {
+                    vi.useRealTimers();
+                    vi.useFakeTimers({ toFake: ["Date"] });
+                    vi.setSystemTime(new Date("2030-09-06T00:00:30.000Z"));
+                }
+            });
+            // The completed session is reconciled through the daemon's supported HTTP boundary.
+            // Replaying that session's disconnect after restart would regress it to indeterminate.
+            const reconcile = async (sessionId: string) =>
+                exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/${sessionId}-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
+                    {
+                        method: "POST",
+                        headers: { "content-type": "application/json" },
+                        body: JSON.stringify({ outcome: { kind: "running" } }),
+                    },
+                );
+            expect((await reconcile(completedSessionId)).status).toBe(200);
+            // Close the transport after the timed-out callback; the durable connection is
+            // already offline, so this duplicate platform notification cannot finish the job.
+            daemon.socket.close(1000, "Restarting runtime");
+            const replacement = await openChannelSocket(
+                `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+            );
+            try {
+                for (const sessionId of sessionIds) {
+                    const history = await exports.default.fetch(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                        { headers: authorization(pairing.created) },
+                    );
+                    await expect(history.json()).resolves.toMatchObject({
+                        messages: [
+                            { attempt: { kind: sessionId === completedSessionId ? "running" : "indeterminate" } },
+                        ],
+                    });
+                    expect((await reconcile(sessionId)).status).toBe(200);
+                }
+                await runInDurableObject(stub, async (_instance, state) => {
+                    await state.storage.deleteAlarm();
+                    await new RuntimeRelay(state, env).alarm();
+                });
+                for (const sessionId of sessionIds) {
+                    const history = await exports.default.fetch(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                        { headers: authorization(pairing.created) },
+                    );
+                    await expect(history.json()).resolves.toMatchObject({
+                        messages: [{ attempt: { kind: "running" } }],
+                    });
+                }
+            } finally {
+                replacement.socket.close(1000, "Test complete");
+            }
+        } finally {
+            host.socket.close(1000, "Test complete");
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it.each(["replacement", "reconnect"])(
+        "Given a %s is waiting for disconnect cleanup, When its runtime is revoked, Then pending and future connections remain forbidden",
+        async (mode) => {
+            vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
+            const pairing = await pairChannel();
+            for (const suffix of ["a", "b"]) {
+                expect((await createSession(pairing.created, `revocation-race-${mode}-${suffix}`)).status).toBe(201);
+            }
+            const daemon = await openChannelSocket(
+                `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+            );
+            const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            try {
+                await runInDurableObject(stub, async (_instance, state) => {
+                    const transport = new SuspendedDisconnectTransport();
+                    const runtime = runtimeWithTransport(state, transport);
+                    const headers = {
+                        "x-mobius-channel-id": pairing.created.channelId,
+                        "x-mobius-runtime-id": pairing.created.runtimeId,
+                        "x-mobius-tenant-id": pairing.created.tenantId,
+                        "x-mobius-project-id": pairing.created.projectId,
+                    };
+                    const connect = () =>
+                        new Request("https://runtime.internal/daemon", {
+                            headers: { ...headers, Upgrade: "websocket" },
+                        });
+                    let closing: Promise<void> = Promise.resolve();
+                    if (mode === "reconnect") {
+                        const socket = state.getWebSockets("daemon")[0];
+                        if (socket === undefined) {
+                            throw new Error("Expected connected daemon");
+                        }
+                        closing = runtime.webSocketClose(socket);
+                        await transport.suspended;
+                    }
+                    const pending = runtime.fetch(connect());
+                    await transport.suspended;
+                    const queued = runtime.fetch(connect());
+                    const revoked = runtime.fetch(
+                        new Request("https://runtime.internal/runtime/revoke", {
+                            method: "DELETE",
+                            headers,
+                        }),
+                    );
+                    try {
+                        // Revocation must complete while session cleanup is still suspended.
+                        expect((await revoked).status).toBe(204);
+                    } finally {
+                        transport.resume();
+                    }
+                    await closing;
+                    for (const response of await Promise.all([pending, queued])) {
+                        if (response.webSocket !== null) {
+                            response.webSocket.accept();
+                            response.webSocket.close(1000, "Test complete");
+                        }
+                        expect(response.status).toBe(401);
+                        await expect(response.json()).resolves.toMatchObject({ error: { code: "runtime_revoked" } });
+                    }
+                    const restored = new RuntimeRelay(state, env);
+                    await restored.alarm();
+                    const status = await restored.fetch(
+                        new Request("https://runtime.internal/runtime-status", { headers }),
+                    );
+                    await expect(status.json()).resolves.toEqual({ online: false });
+                    const future = await restored.fetch(connect());
+                    expect(future.status).toBe(401);
+                    await expect(future.json()).resolves.toMatchObject({ error: { code: "runtime_revoked" } });
+                    const host = await restored.fetch(
+                        new Request("https://runtime.internal/host", {
+                            headers: {
+                                ...headers,
+                                Upgrade: "websocket",
+                                "x-mobius-host-credential-id": "verified-host",
+                            },
+                        }),
+                    );
+                    expect(host.status).toBe(401);
+                    await expect(host.json()).resolves.toMatchObject({ error: { code: "runtime_revoked" } });
+                });
+            } finally {
+                daemon.socket.close(1000, "Test complete");
+            }
+        },
+    );
 
     it("Given an archived event window, When a client resumes from an old durable cursor and retransmits an archived event, Then catch-up and deduplication remain complete", async () => {
         const pairing = await pairChannel();
