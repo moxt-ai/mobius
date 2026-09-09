@@ -1,4 +1,4 @@
-import { evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { createExecutionContext, evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
@@ -48,6 +48,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { MobiusArtifactUploadRequest, MobiusClient, MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import worker from "../src/worker.ts";
 
 const relayOrigin = "https://relay.test";
 const verifiedAgentCapabilities = {
@@ -512,6 +513,39 @@ afterEach(() => {
 });
 
 describe.sequential("Cloudflare session deployment", () => {
+    it("Given a deployment assigned to an existing tenant, When two machines pair and create sessions, Then both use that tenant while their project credentials remain isolated", async () => {
+        const first = await pairChannel();
+        const second = await pairChannel();
+        expect(first.created.tenantId).toBe("standalone");
+        expect(second.created.tenantId).toBe("standalone");
+        expect(first.created.projectId).not.toBe(second.created.projectId);
+        const session = await createSession(first.created, "existing-tenant-session");
+        expect(session.status).toBe(201);
+        await expect(session.json()).resolves.toMatchObject({ tenantId: "standalone" });
+        const secondSession = await createSession(second.created, "existing-tenant-second-session");
+        expect(secondSession.status).toBe(201);
+        await expect(secondSession.json()).resolves.toMatchObject({ tenantId: "standalone" });
+        const denied = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions/existing-tenant-session`,
+            { headers: authorization(second.created) },
+        );
+        expect(denied.status).toBe(401);
+    });
+
+    it("Given a deployment without a configured tenant, When a browser creates a pairing, Then it receives an availability error instead of an anonymous tenant", async () => {
+        const fetch = worker.fetch;
+        if (fetch === undefined) {
+            throw new Error("Worker fetch is unavailable");
+        }
+        const response = await fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            { ...env, MOBIUS_TENANT_ID: "" },
+            createExecutionContext(),
+        );
+        expect(response.status).toBe(503);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "pairing_tenant_unavailable" } });
+    });
+
     it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
         const created = await createPairing();
         const pending = await exports.default.fetch(
@@ -1797,7 +1831,7 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
-    it("Given sessions in different tenant scopes and bounded retention, When callers export, import, delete, and expire data, Then isolation and availability outcomes are explicit", async () => {
+    it("Given sessions in different project scopes and bounded retention, When callers export, import, delete, and expire data, Then isolation and availability outcomes are explicit", async () => {
         const source = await pairChannel();
         const destination = await pairChannel();
         const sessionId = "lifecycle-session";

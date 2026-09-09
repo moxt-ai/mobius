@@ -42,7 +42,7 @@ export interface PairingGateway {
         lifetimeMilliseconds: number,
         signal: AbortSignal,
     ) => Promise<CreatedBrowserCredential>;
-    readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
+    readonly createPairing: (tenantId: string, signal: AbortSignal) => Promise<CreatedPairing>;
     readonly listLinkedChannelDevices: (
         channelId: string,
         token: string,

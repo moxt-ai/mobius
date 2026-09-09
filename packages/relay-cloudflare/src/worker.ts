@@ -1,5 +1,9 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-import { createMobiusApplication, createMobiusDependencies } from "@moxt-ai/mobius-relay-core";
+import {
+    ConfiguredPairingTenantResolver,
+    createMobiusApplication,
+    createMobiusDependencies,
+} from "@moxt-ai/mobius-relay-core";
 
 import { CloudflareBotApi } from "./bot-api.ts";
 import { CloudflareChannelRuntime } from "./cloudflare-channel-runtime.ts";
@@ -12,6 +16,7 @@ import { type LiteSessionConfigurationEnvironment, sessionQuotaFromEnvironment }
 
 export interface RelayBindings extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
+    readonly MOBIUS_TENANT_ID?: string;
     readonly DIRECTORY_DATABASE: D1Database;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
@@ -41,6 +46,7 @@ const worker: ExportedHandler<RelayBindings> = {
                 nowEpochMilliseconds: () => Date.now(),
                 channelGateway: channelRuntime,
                 pairingGateway: new D1PairingGateway(infrastructure),
+                pairingTenantResolver: new ConfiguredPairingTenantResolver(environment.MOBIUS_TENANT_ID),
                 sessionCommands: sessions,
                 sessionQueries: sessions,
                 sessionTransfers: sessions,

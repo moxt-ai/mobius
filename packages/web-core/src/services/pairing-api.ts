@@ -841,11 +841,16 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
 }
 
-export async function createBrowserPairing(): Promise<CreatedPairing> {
+export async function createBrowserPairing(signal: AbortSignal, token: string | null): Promise<CreatedPairing> {
     const pairing = decodeCreatedPairing(
-        await requestJson(mobiusApiUrl(window.location.origin, "/pairings"), {
-            method: "POST",
-        }),
+        await requestJson(
+            mobiusApiUrl(window.location.origin, "/pairings"),
+            {
+                method: "POST",
+                headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+            },
+            requestSignal(signal),
+        ),
     );
     saveChannelCredential(pairing);
     return pairing;

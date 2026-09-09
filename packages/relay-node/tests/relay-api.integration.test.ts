@@ -25,6 +25,7 @@ import {
 import {
     ChannelDescriptor,
     type ChannelGateway,
+    ConfiguredPairingTenantResolver,
     createRelayApp,
     PairingDirectoryError,
     type PairingGateway,
@@ -550,6 +551,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: new InertChannelGateway(),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -611,6 +613,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: new ExecutingChannelRuntime(sessionRuntime),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -761,6 +764,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: new ExecutingChannelRuntime(sessionRuntime),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -864,6 +868,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: new InertChannelGateway(),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -974,6 +979,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: channelRuntime,
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -1065,6 +1071,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: channelRuntime,
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -1190,6 +1197,7 @@ describe("Node public Relay API", () => {
         const application = createRelayApp({
             channelGateway: channelRuntime,
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sessionRuntime,
             sessionQueries: sessionRuntime,
             sessionTransfers: sessionRuntime,
@@ -1307,6 +1315,7 @@ describe("Node public Relay API", () => {
             {
                 channelGateway: new InertChannelGateway(),
                 pairingGateway: new ScopedPairingGateway(),
+                pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
                 sessionCommands: sessionRuntime,
                 sessionQueries: sessionRuntime,
                 sessionTransfers: sessionRuntime,
@@ -1348,6 +1357,7 @@ describe("Node public Relay API", () => {
         const sourceApplication = createRelayApp({
             channelGateway: new ExecutingChannelRuntime(sourceRuntime),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: sourceRuntime,
             sessionQueries: sourceRuntime,
             sessionTransfers: sourceRuntime,
@@ -1357,6 +1367,7 @@ describe("Node public Relay API", () => {
         const targetApplication = createRelayApp({
             channelGateway: new InertChannelGateway(),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
             sessionCommands: targetRuntime,
             sessionQueries: targetRuntime,
             sessionTransfers: targetRuntime,
@@ -1480,6 +1491,7 @@ describe("Node public Relay API", () => {
                 {
                     channelGateway: new InertChannelGateway(),
                     pairingGateway: new ScopedPairingGateway(),
+                    pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
                     sessionCommands: sessionRuntime,
                     sessionQueries: sessionRuntime,
                     sessionTransfers: sessionRuntime,
@@ -1500,6 +1512,7 @@ describe("Node public Relay API", () => {
             contentRoot: join(directory, "content"),
             databasePath: join(directory, "relay.sqlite"),
             pairingGateway: new ScopedPairingGateway(),
+            pairingTenantResolver: new ConfiguredPairingTenantResolver("tenant-node"),
         });
         const signal = new AbortController().signal;
         const sessionId = "node-session-a";

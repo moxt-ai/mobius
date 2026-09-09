@@ -9,11 +9,13 @@ import type {
     SessionTransferGateway,
 } from "./gateway/index.ts";
 import { ChannelService } from "./service/channel/channel-service.ts";
+import type { PairingTenantResolver } from "./service/pairing/pairing-tenant-resolver.ts";
 import { SessionService } from "./service/session/session-service.ts";
 
 export interface RelayGateways {
     readonly channelGateway: ChannelGateway;
     readonly pairingGateway: PairingGateway;
+    readonly pairingTenantResolver: PairingTenantResolver;
     readonly sessionCommands: SessionCommandGateway;
     readonly sessionQueries: SessionQueryGateway;
     readonly sessionTransfers: SessionTransferGateway;

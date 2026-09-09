@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { assertExactKeys, directoryError, parseJsonBody, preserveCancellation } from "../../infra/relay-http.ts";
 import {
+    PairingDirectoryError,
     validateAgentCatalog,
     validateAgents,
     validateDisplayName,
@@ -14,10 +15,19 @@ export function createPairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .post("/", async (context) => {
             const pairings = context.env.gateways.pairingGateway;
+            const request = context.req.raw;
+            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
             try {
-                return context.json(await pairings.createPairing(context.req.raw.signal), 201);
+                const tenantId = await context.env.gateways.pairingTenantResolver.resolve(request, signal);
+                signal.throwIfAborted();
+                return context.json(await pairings.createPairing(tenantId, signal), 201);
             } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
+                preserveCancellation(request.signal, error);
+                if (signal.aborted) {
+                    return directoryError(
+                        new PairingDirectoryError("pairing_timeout", "Pairing creation timed out", { cause: error }),
+                    );
+                }
                 return directoryError(error);
             }
         })

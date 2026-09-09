@@ -134,7 +134,13 @@ export function directoryError(error: unknown): Response {
                       ? 410
                       : error.code === "access_grant_redeemed"
                         ? 409
-                        : 400;
+                        : error.code === "pairing_timeout"
+                          ? 504
+                          : error.code === "pairing_tenant_unavailable"
+                            ? 503
+                            : error.code === "workspace_required"
+                              ? 403
+                              : 400;
         return Response.json({ error: { code: error.code, message: error.message } }, { status });
     }
     reportUnexpectedError(error);

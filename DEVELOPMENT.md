@@ -1,5 +1,28 @@
 # Development Guide
 
+## Pairing tenant ownership
+
+Pairing creation uses an existing tenant supplied by the host's `PairingTenantResolver`.
+Mobius does not generate a tenant per pairing. The resolver must derive ownership
+from verified identity or trusted deployment configuration, never a client-supplied
+tenant ID. Embedding applications supply this port alongside `pairingGateway`.
+
+Standalone Workers configure `MOBIUS_TENANT_ID`; the supplied Wrangler profiles
+explicitly use `standalone`. Set it to the deployment's tenant ID when deploying.
+The embedded `Pair` component requires `getPairingToken(signal)`. Authenticated
+hosts return their identity token; the standalone page explicitly returns `null`
+and relies on the server's configured tenant.
+Missing or invalid configuration rejects pairing creation with
+`pairing_tenant_unavailable` (503). Health and existing credential-based operations
+do not require creating a new tenant. Node hosts can use
+`ConfiguredPairingTenantResolver` with their existing tenant ID.
+
+Each pairing still creates a separate project, channel, runtime, and owner
+credential. Pairing and session responses carry the resolved tenant ID. Tenant
+quotas now aggregate new projects assigned to the same tenant. Previously issued
+credentials and stored sessions keep their original ownership; this change does
+not reassign existing data.
+
 ## Local Execution Boundary
 
 Mobius connects remote clients to agent harnesses running on a user's machine. The process that performs a local side effect is therefore the final and only trusted enforcement point.

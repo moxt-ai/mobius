@@ -289,9 +289,11 @@ function PairingInstructions({ pairing }: { readonly pairing: CreatedPairing }) 
 function PairingWorkflow({
     onConnected,
     onRetry,
+    getPairingToken,
 }: {
     readonly onConnected: (connection: ChannelConnection) => void;
     readonly onRetry: () => void;
+    readonly getPairingToken: (signal: AbortSignal) => Promise<string | null>;
 }) {
     const [state, setState] = useState<PairingPageState>(new CreatingPairingPageState());
 
@@ -300,7 +302,10 @@ function PairingWorkflow({
 
         const run = async (): Promise<void> => {
             try {
-                const pairing = await createBrowserPairing();
+                const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(15_000)]);
+                const token = await getPairingToken(signal);
+                signal.throwIfAborted();
+                const pairing = await createBrowserPairing(signal, token);
                 if (controller.signal.aborted) {
                     return;
                 }
@@ -341,7 +346,7 @@ function PairingWorkflow({
 
         void run();
         return () => controller.abort();
-    }, [onConnected]);
+    }, [onConnected, getPairingToken]);
 
     let content = <PairingLoading />;
     if (state instanceof WaitingPairingPageState) {
@@ -357,11 +362,24 @@ function PairingWorkflow({
     return content;
 }
 
-export function Pair({ onConnected }: { readonly onConnected: (connection: ChannelConnection) => void }) {
+export function Pair({
+    onConnected,
+    getPairingToken,
+}: {
+    readonly onConnected: (connection: ChannelConnection) => void;
+    readonly getPairingToken: (signal: AbortSignal) => Promise<string | null>;
+}) {
     const [generation, setGeneration] = useState(0);
     const retry = (): void => setGeneration((value) => value + 1);
 
-    return <PairingWorkflow key={generation} onConnected={onConnected} onRetry={retry} />;
+    return (
+        <PairingWorkflow key={generation} onConnected={onConnected} onRetry={retry} getPairingToken={getPairingToken} />
+    );
+}
+
+async function getStandalonePairingToken(signal: AbortSignal): Promise<null> {
+    signal.throwIfAborted();
+    return null;
 }
 
 export function PairingPage() {
@@ -377,6 +395,7 @@ export function PairingPage() {
             </header>
             <main className="mx-auto flex min-h-[calc(100dvh-112px)] w-[min(1120px,calc(100%-40px))] items-center py-8 max-sm:w-[calc(100%-24px)] max-sm:py-4">
                 <Pair
+                    getPairingToken={getStandalonePairingToken}
                     onConnected={(connection) => {
                         void navigate(channelRoutePath(connection.channelId));
                     }}

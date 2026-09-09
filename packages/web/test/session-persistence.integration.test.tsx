@@ -180,7 +180,9 @@ describe.sequential("Session persistence boundaries", () => {
         }
     }, 45_000);
 
-    it("Given the built-in Web application has an attachment, When a user submits the core chat workflow, Then it uses the public artifact and Turn API instead of placing content in the channel control message", async () => {
+    it("Given the built-in Web application has an attachment, When a user submits the core chat workflow, Then it uses the public artifact and Turn API instead of placing content in the channel control message", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -207,7 +209,29 @@ describe.sequential("Session persistence boundaries", () => {
             fireEvent.change(promptInput, {
                 target: { value: "Use the public attachment" },
             });
-            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const sendButton = screen.getByRole("button", { name: "Send message" });
+            await new Promise<void>((resolve, reject) => {
+                signal.throwIfAborted();
+                const cleanup = () => {
+                    observer.disconnect();
+                    signal.removeEventListener("abort", aborted);
+                };
+                const ready = () => {
+                    if (!sendButton.hasAttribute("disabled")) {
+                        cleanup();
+                        resolve();
+                    }
+                };
+                const aborted = () => {
+                    cleanup();
+                    reject(signal.reason);
+                };
+                const observer = new MutationObserver(ready);
+                observer.observe(sendButton, { attributes: true, attributeFilter: ["disabled"] });
+                signal.addEventListener("abort", aborted, { once: true });
+                ready();
+            });
+            fireEvent.click(sendButton);
 
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
             expect(prompt.resources).toHaveLength(1);

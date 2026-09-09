@@ -2,6 +2,7 @@ import {
     type ChannelGateway,
     createRelayApp,
     type PairingGateway,
+    type PairingTenantResolver,
     type SessionQuotaPolicy,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -12,6 +13,7 @@ export interface NodeRelayOptions {
     readonly contentRoot: string;
     readonly databasePath: string;
     readonly pairingGateway: PairingGateway;
+    readonly pairingTenantResolver: PairingTenantResolver;
     readonly quota?: SessionQuotaPolicy;
 }
 
@@ -26,6 +28,7 @@ export function createNodeRelay(options: NodeRelayOptions): NodeRelay {
     const app = createRelayApp({
         channelGateway: options.channelGateway,
         pairingGateway: options.pairingGateway,
+        pairingTenantResolver: options.pairingTenantResolver,
         sessionCommands: sessions,
         sessionQueries: sessions,
         sessionTransfers: sessions,

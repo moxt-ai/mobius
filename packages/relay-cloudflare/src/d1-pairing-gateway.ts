@@ -517,8 +517,9 @@ export class D1PairingGateway implements PairingGateway {
         );
     };
 
-    readonly createPairing = async (signal: AbortSignal): Promise<CreatedPairing> => {
+    readonly createPairing = async (tenantId: string, signal: AbortSignal): Promise<CreatedPairing> => {
         signal.throwIfAborted();
+        validateIdentifier(tenantId, "tenant_id");
         const now = Date.now();
         const pairingId = crypto.randomUUID();
         const pairingCode = createRandomPairingCode();
@@ -527,7 +528,6 @@ export class D1PairingGateway implements PairingGateway {
         const ownerCredentialId = `hcr_${createRandomToken(18)}`;
         const channelId = `chn_${createRandomToken(18)}`;
         const runtimeId = `rnt_${createRandomToken(18)}`;
-        const tenantId = `tnt_${createRandomToken(18)}`;
         const projectId = `prj_${createRandomToken(18)}`;
         const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
 
