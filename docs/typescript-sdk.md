@@ -417,8 +417,8 @@ node --input-type=module --eval \
   'await import("@moxt-ai/mobius-sdk/examples/node")'
 ```
 
-Only the endpoint and corresponding credential provider change between a
-self-hosted Node Relay and the managed service. Neither example imports D1, R2,
+The Node example is a Node.js client for an existing Relay deployment; it does
+not provide a Node Relay implementation. Neither example imports D1, R2,
 Durable Object, SQLite, filesystem, or deployment-specific types. The Node
 example's 120-second signal is an application-level local wait deadline; it does
 not request remote cancellation if it expires.

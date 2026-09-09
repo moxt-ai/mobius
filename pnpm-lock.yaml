@@ -108,22 +108,6 @@ importers:
         specifier: 1.4.2
         version: 1.4.2(typescript@7.0.2)
 
-  packages/relay-node:
-    dependencies:
-      '@moxt-ai/mobius-relay-core':
-        specifier: workspace:*
-        version: link:../relay-core
-    devDependencies:
-      '@moxt-ai/mobius-protocol':
-        specifier: workspace:*
-        version: link:../protocol
-      '@moxt-ai/mobius-sdk':
-        specifier: workspace:*
-        version: link:../web-sdk
-      '@types/node':
-        specifier: ^24.13.3
-        version: 24.13.3
-
   packages/web:
     dependencies:
       '@moxt-ai/mobius-sdk':

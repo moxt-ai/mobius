@@ -14,8 +14,7 @@ hosts return their identity token; the standalone page explicitly returns `null`
 and relies on the server's configured tenant.
 Missing or invalid configuration rejects pairing creation with
 `pairing_tenant_unavailable` (503). Health and existing credential-based operations
-do not require creating a new tenant. Node hosts can use
-`ConfiguredPairingTenantResolver` with their existing tenant ID.
+do not require creating a new tenant.
 
 Each pairing still creates a separate project, channel, runtime, and owner
 credential. Pairing and session responses carry the resolved tenant ID. Tenant

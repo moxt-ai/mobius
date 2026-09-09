@@ -57,16 +57,6 @@ The Worker creates its application once at module scope and constructs dependenc
 from the current bindings for each request. Durable Objects retain their owned
 session resources for their instance lifetime.
 
-`packages/relay-node` supplies the same public Relay API composition with a
-single SQLite database and a containment-checked local filesystem content store.
-The embedding process supplies its pairing and channel gateways and HTTP
-listener. The Node and Cloudflare profiles share the session gateway contracts
-and are exercised by matching public API scenarios. `NodeSessionRuntime` and
-`CloudflareSessionRuntime` implement those contracts directly without adapter
-wrappers.
-Node creates a stable application context for its runtime lifetime and closes
-event streams and its database through the returned `close()` operation.
-
 For Cloudflare deployment, the Web build is uploaded as Worker Static Assets in
 the same deployment as the Relay. API and WebSocket requests continue into the
 Worker, while browser assets are served at the Worker origin. The browser derives
@@ -245,8 +235,8 @@ events use bounded stages and sanitized stable codes.
 - `packages/relay-cloudflare` owns the Worker entry point, D1 implementation,
   Runtime and Session Durable Objects, R2 adapter, Cloudflare migrations, and
   Worker Assets composition.
-- `packages/relay-node` owns the single-instance Node composition, SQLite adapter,
-  and local filesystem content adapter.
+- `packages/relay-node` is an empty placeholder for a future single-instance
+  Node profile; it does not provide a server or storage implementation.
 - `packages/cli` is the publishable `@moxt-ai/mobius` CLI and owns its local daemon,
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network
@@ -263,6 +253,6 @@ events use bounded stages and sanitized stable codes.
 - `deploy/docker` is an empty placeholder for a future packaged Node image.
 
 Cloudflare is therefore a deployment profile rather than a core dependency. The
-repository also provides the embeddable single-process Node profile. A packaged
-Node server, Docker image, multi-process channel ownership, leases, and fencing
-remain intentionally deferred.
+current product provides only the Cloudflare profile. Node adaptation, a
+packaged Node server, a Docker image, multi-process channel ownership, leases,
+and fencing remain intentionally deferred.

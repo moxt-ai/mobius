@@ -474,7 +474,7 @@ selected agent advertises that capability.
 packages/
   relay-core/        Portable Relay API, channel actor, state contracts, and ports
   relay-cloudflare/  Worker, Durable Objects, D1, and Worker Assets composition
-  relay-node/        Single-instance SQLite and filesystem Relay composition
+  relay-node/        Reserved for a future single-instance Node profile
   cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
@@ -488,11 +488,11 @@ docs/
 scripts/
 ```
 
-All runnable and importable product workspaces live under `packages/`. The Node
-profile is embeddable and expects the host process to provide its pairing/channel
-ports and HTTP listener; `deploy/docker` remains a placeholder for a packaged
-server image. External boundary fixtures remain under `e2e/fixtures` because
-they are deterministic test dependencies rather than shipped product units.
+All runnable and importable product workspaces live under `packages/`. The empty
+`relay-node` and `deploy/docker` placeholders keep the intended deployment
+boundary explicit without claiming Node or Docker support before those profiles
+exist. External boundary fixtures remain under `e2e/fixtures` because they are
+deterministic test dependencies rather than shipped product units.
 
 ## D1 migrations
 
