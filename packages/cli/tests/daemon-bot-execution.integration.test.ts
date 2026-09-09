@@ -14,6 +14,7 @@ import {
     decodeMessageKind,
     decodeSessionEventEnvelope,
     encodeBotExecutionBindingApprovalRequest,
+    encodeBotExecutionBindingApprovedEvent,
     encodeBotSessionPromptCommand,
     MOBIUS_API_PREFIX,
     NoBotCompletionDeliveryPolicy,
@@ -120,7 +121,7 @@ function restore(name: string, value: NodeJS.ProcessEnv[string]): void {
 }
 
 describe("daemon Bot execution boundary", () => {
-    it("Given a Bot binding proposal, When the daemon approves and executes a turn, Then the exact local target and pinned behavior are enforced", async () => {
+    it("Given a Bot binding proposal, When the relay acknowledges approval and the daemon executes a turn, Then the connection stays usable and the exact local target and pinned behavior are enforced", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const native = join(stateDirectory, "native");
@@ -231,6 +232,7 @@ describe("daemon Bot execution boundary", () => {
             const approvalFrame = frames.next();
             writeServerTextFrame(socket, encodeBotExecutionBindingApprovalRequest(proposal));
             const approved = decodeBotExecutionBindingApprovedEvent(await approvalFrame);
+            writeServerTextFrame(socket, encodeBotExecutionBindingApprovedEvent(approved));
             expect(approved).toMatchObject({
                 behaviorRevisionId: proposal.behaviorRevisionId,
                 bindingId: proposal.bindingId,

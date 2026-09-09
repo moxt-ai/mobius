@@ -14,12 +14,16 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     type AgentContentEvent,
     BOT_BINDING_APPROVAL_REQUEST_KIND,
+    BOT_BINDING_APPROVED_KIND,
+    BOT_BINDING_UNAVAILABLE_KIND,
     BOT_SESSION_PROMPT_KIND,
     BotExecutionBindingUnavailableEvent,
     type BotSessionPromptCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
     decodeBotExecutionBindingApprovalRequest,
+    decodeBotExecutionBindingApprovedEvent,
+    decodeBotExecutionBindingUnavailableEvent,
     decodeBotSessionPromptCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
@@ -1304,6 +1308,16 @@ async function runRelayConnection(
                         } else {
                             console.warn("Mobius daemon ignored a rejection for an unknown session event");
                         }
+                        return;
+                    }
+                    // The relay echoes binding outcomes after persisting them. These
+                    // acknowledgements never grant or change local execution access.
+                    if (kind === BOT_BINDING_APPROVED_KIND) {
+                        decodeBotExecutionBindingApprovedEvent(encoded);
+                        return;
+                    }
+                    if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
+                        decodeBotExecutionBindingUnavailableEvent(encoded);
                         return;
                     }
                     if (kind === BOT_BINDING_APPROVAL_REQUEST_KIND) {
