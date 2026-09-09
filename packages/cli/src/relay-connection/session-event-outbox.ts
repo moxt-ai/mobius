@@ -7,6 +7,7 @@ import {
     SESSION_EVENT_KIND,
     type SessionEventAcknowledgement,
     type SessionEventEnvelope,
+    type SessionEventRejection,
 } from "@moxt-ai/mobius-protocol";
 
 function readPendingEnvelope(row: unknown): string {
@@ -44,6 +45,15 @@ export class SessionEventOutbox {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS relay_session_event_outbox_order
         ON relay_session_event_outbox(ordinal);
+      CREATE TABLE IF NOT EXISTS relay_session_event_dead_letters (
+        ordinal INTEGER PRIMARY KEY,
+        event_id TEXT NOT NULL UNIQUE,
+        session_id TEXT NOT NULL,
+        envelope_json TEXT NOT NULL,
+        rejection_code TEXT NOT NULL CHECK (
+          rejection_code IN ('session_deleted', 'session_not_found')
+        )
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS relay_session_event_sources (
         source_key TEXT PRIMARY KEY,
         next_source_seq INTEGER NOT NULL
@@ -131,6 +141,40 @@ export class SessionEventOutbox {
          WHERE event_id = ? AND session_id = ?`,
             )
             .run(acknowledgement.eventId, acknowledgement.sessionId);
+    };
+
+    readonly quarantine = (rejection: SessionEventRejection): boolean => {
+        this.#database.exec("BEGIN IMMEDIATE");
+        try {
+            const insertion = this.#database
+                .prepare(
+                    `INSERT INTO relay_session_event_dead_letters (
+             ordinal, event_id, session_id, envelope_json, rejection_code
+           )
+           SELECT ordinal, event_id, session_id, envelope_json, ?
+           FROM relay_session_event_outbox
+           WHERE event_id = ? AND session_id = ?`,
+                )
+                .run(rejection.code, rejection.eventId, rejection.sessionId);
+            if (insertion.changes !== 1) {
+                this.#database.exec("COMMIT");
+                return false;
+            }
+            const deletion = this.#database
+                .prepare(
+                    `DELETE FROM relay_session_event_outbox
+           WHERE event_id = ? AND session_id = ?`,
+                )
+                .run(rejection.eventId, rejection.sessionId);
+            if (deletion.changes !== 1) {
+                throw new Error("The rejected session event could not be removed from the durable outbox");
+            }
+            this.#database.exec("COMMIT");
+            return true;
+        } catch (error) {
+            this.#database.exec("ROLLBACK");
+            throw error;
+        }
     };
 
     readonly close = (): void => {

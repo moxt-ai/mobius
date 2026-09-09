@@ -23,6 +23,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventRejection,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -59,6 +60,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -1063,6 +1065,20 @@ async function runRelayConnection(
                     const kind = decodeMessageKind(encoded);
                     if (kind === SESSION_EVENT_ACK_KIND) {
                         outbox.acknowledge(decodeSessionEventAcknowledgement(encoded));
+                        return;
+                    }
+                    if (kind === SESSION_EVENT_REJECTED_KIND) {
+                        const rejection = decodeSessionEventRejection(encoded);
+                        if (outbox.quarantine(rejection)) {
+                            audit.record({
+                                commandId: rejection.eventId,
+                                details: { code: rejection.code },
+                                event: "session_event_rejected",
+                                sessionId: rejection.sessionId,
+                            });
+                        } else {
+                            console.warn("Mobius daemon ignored a rejection for an unknown session event");
+                        }
                         return;
                     }
                     if (kind === NATIVE_SESSION_CANCEL_KIND) {

@@ -16,6 +16,7 @@ import {
     decodeRuntimeLivenessReadyEvent,
     decodeRuntimeStatusEvent,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventRejection,
     decodeSessionFailedEvent,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -35,11 +36,13 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REJECTED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
+    SessionEventRejectionCode,
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -227,6 +230,29 @@ class SocketMessages {
         }
         return new Promise((resolve) => this.#resolvers.push(resolve));
     };
+}
+
+function receiveMessageBeforeClose(socket: WebSocket): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const receive = (event: MessageEvent): void => {
+            cleanup();
+            if (typeof event.data !== "string") {
+                reject(new Error("Expected a text WebSocket message"));
+                return;
+            }
+            resolve(event.data);
+        };
+        const close = (event: CloseEvent): void => {
+            cleanup();
+            reject(new Error(`Daemon connection closed with code ${event.code.toString()}`));
+        };
+        const cleanup = (): void => {
+            socket.removeEventListener("message", receive);
+            socket.removeEventListener("close", close);
+        };
+        socket.addEventListener("message", receive, { once: true });
+        socket.addEventListener("close", close, { once: true });
+    });
 }
 
 interface OpenSocket {
@@ -1857,6 +1883,65 @@ describe.sequential("Cloudflare session deployment", () => {
         await expect(expired.json()).resolves.toMatchObject({
             error: { code: "session_deleted" },
         });
+    });
+
+    it("Given a deleted Session and a live Session share one daemon, When stale and valid events arrive, Then only the stale event is rejected and the Channel stays online", async () => {
+        const pairing = await pairChannel();
+        const deletedSessionId = "deleted-event-session";
+        const liveSessionId = "live-event-session";
+        expect((await createSession(pairing.created, deletedSessionId)).status).toBe(201);
+        expect((await createSession(pairing.created, liveSessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const deleted = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${deletedSessionId}`,
+                {
+                    headers: authorization(pairing.created),
+                    method: "DELETE",
+                },
+            );
+            expect(deleted.status).toBe(200);
+            await expect(deleted.json()).resolves.toMatchObject({ kind: "deleted" });
+
+            const staleEnvelope = envelope(deletedSessionId, "stale-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: deletedSessionId,
+                title: "Too late",
+                updatedAt: "2026-09-06T00:00:00.000Z",
+            });
+            const rejectionMessage = receiveMessageBeforeClose(daemon.socket);
+            daemon.socket.send(encodeSessionEventEnvelope(staleEnvelope));
+            expect(decodeSessionEventRejection(await rejectionMessage)).toEqual({
+                code: SessionEventRejectionCode.SessionDeleted,
+                eventId: staleEnvelope.eventId,
+                kind: SESSION_EVENT_REJECTED_KIND,
+                sessionId: staleEnvelope.sessionId,
+            });
+            await daemon.messages.next();
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+
+            await commit(
+                host,
+                daemon,
+                envelope(liveSessionId, "live-event", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId: liveSessionId,
+                    title: "Still live",
+                    updatedAt: "2026-09-06T00:00:01.000Z",
+                }),
+            );
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            host.socket.close(1000, "Worker integration complete");
+            daemon.socket.close(1000, "Worker integration complete");
+        }
     });
 
     it("Given one Host has an active Turn, When a second Host submits another Turn to the same Session, Then only that request fails and both Host connections stay open", async () => {

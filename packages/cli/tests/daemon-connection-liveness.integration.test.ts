@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -12,19 +13,25 @@ import {
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
+    encodeSessionEventRejection,
+    encodeSessionInfoUpdatedEvent,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
     MOBIUS_API_PREFIX,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    SESSION_EVENT_REJECTED_KIND,
+    SESSION_INFO_UPDATED_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "../../protocol/src/index.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
+import { SessionEventOutbox } from "../src/relay-connection/session-event-outbox.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../src/relay-connection/timer.ts";
 import { runDaemon } from "../src/run-daemon.ts";
 
@@ -192,6 +199,189 @@ function respondToClientClose(socket: Duplex): void {
 describe("daemon relay connection liveness", () => {
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("Given a deleted Session event is durably queued, When the Relay rejects it and sends another command, Then the daemon quarantines the event and remains on the same connection", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-rejected-event-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/rejected-event-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const upgradeWaiters: Array<() => void> = [];
+        const daemonSockets: Duplex[] = [];
+        const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
+        let connectionCount = 0;
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            clientFrames.push(readClientFrame(socket));
+            respondToClientClose(socket);
+            connectionCount += 1;
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
+        const encodedStaleEnvelope = seededOutbox.enqueue(
+            "deleted-session",
+            encodeSessionInfoUpdatedEvent({
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: "deleted-session",
+                title: "Stale title",
+                updatedAt: "2026-09-08T00:00:00.000Z",
+            }),
+        );
+        const staleEnvelope = decodeSessionEventEnvelope(encodedStaleEnvelope);
+        seededOutbox.close();
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            auditDatabasePath,
+            channelId: "rejected-event-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/rejected-event-channel/daemon`,
+            ),
+        });
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            await firstConnection;
+            const firstFrame = clientFrames[0];
+            const firstSocket = daemonSockets[0];
+            if (firstFrame === undefined || firstSocket === undefined) {
+                throw new Error("Test relay did not observe the daemon connection");
+            }
+            expect(decodeSessionEventEnvelope((await firstFrame).text)).toEqual(staleEnvelope);
+
+            const commandResponse = readClientFrame(firstSocket);
+            writeServerTextFrame(
+                firstSocket,
+                encodeSessionEventRejection({
+                    code: SessionEventRejectionCode.SessionDeleted,
+                    eventId: staleEnvelope.eventId,
+                    kind: SESSION_EVENT_REJECTED_KIND,
+                    sessionId: staleEnvelope.sessionId,
+                }),
+            );
+            writeServerTextFrame(
+                firstSocket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "after-event-rejection",
+                }),
+            );
+            const response = await commandResponse;
+            expect(response.opcode).toBe(1);
+            expect(decodeMessageKind(response.text)).toBe(WORKSPACE_ENTRIES_KIND);
+            expect(connectionCount).toBe(1);
+
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                expect(
+                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
+                ).toMatchObject({ count: 0 });
+                expect(
+                    database
+                        .prepare(
+                            `SELECT event_id, session_id, envelope_json, rejection_code
+                             FROM relay_session_event_dead_letters`,
+                        )
+                        .get(),
+                ).toMatchObject({
+                    event_id: staleEnvelope.eventId,
+                    envelope_json: encodedStaleEnvelope,
+                    rejection_code: SessionEventRejectionCode.SessionDeleted,
+                    session_id: staleEnvelope.sessionId,
+                });
+                expect(
+                    database
+                        .prepare(
+                            `SELECT command_id, event, session_id, details_json
+                             FROM audit_events WHERE event = 'session_event_rejected'`,
+                        )
+                        .get(),
+                ).toMatchObject({
+                    command_id: staleEnvelope.eventId,
+                    details_json: JSON.stringify({ code: SessionEventRejectionCode.SessionDeleted }),
+                    event: "session_event_rejected",
+                    session_id: staleEnvelope.sessionId,
+                });
+            } finally {
+                database.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
     });
 
     it("Given a liveness-capable relay stops acknowledging heartbeats, When the acknowledgement deadline expires, Then the daemon reconnects", async () => {

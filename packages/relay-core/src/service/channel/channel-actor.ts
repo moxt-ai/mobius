@@ -31,6 +31,7 @@ import {
     encodeNativeSessionResult,
     encodeRuntimeStatusEvent,
     encodeSessionEventAcknowledgement,
+    encodeSessionEventRejection,
     encodeSessionFailedEvent,
     encodeSessionOperationFailedEvent,
     NATIVE_SESSION_CANCEL_KIND,
@@ -44,11 +45,13 @@ import {
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -216,13 +219,40 @@ export class ChannelActor {
             const kind = decodeMessageKind(message);
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(message);
-                const result = await this.#commands.commitEvent(
-                    this.#scope,
-                    this.#runtimeId,
-                    envelope,
-                    this.#clock.now(),
-                    signal,
-                );
+                let result: Awaited<ReturnType<SessionCommandGateway["commitEvent"]>>;
+                try {
+                    result = await this.#commands.commitEvent(
+                        this.#scope,
+                        this.#runtimeId,
+                        envelope,
+                        this.#clock.now(),
+                        signal,
+                    );
+                } catch (error) {
+                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_deleted") {
+                        socket.send(
+                            encodeSessionEventRejection({
+                                code: SessionEventRejectionCode.SessionDeleted,
+                                eventId: envelope.eventId,
+                                kind: SESSION_EVENT_REJECTED_KIND,
+                                sessionId: envelope.sessionId,
+                            }),
+                        );
+                        return;
+                    }
+                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_not_found") {
+                        socket.send(
+                            encodeSessionEventRejection({
+                                code: SessionEventRejectionCode.SessionNotFound,
+                                eventId: envelope.eventId,
+                                kind: SESSION_EVENT_REJECTED_KIND,
+                                sessionId: envelope.sessionId,
+                            }),
+                        );
+                        return;
+                    }
+                    throw error;
+                }
                 socket.send(
                     encodeSessionEventAcknowledgement({
                         cursor: result.committed.cursor,

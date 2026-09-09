@@ -10,6 +10,7 @@ import {
     decodeSessionCancelCommand,
     decodeSessionEventAcknowledgement,
     decodeSessionEventEnvelope,
+    decodeSessionEventRejection,
     decodeSessionPromptCommand,
     encodeAgentActivityEvent,
     encodeRuntimeHeartbeatAckEvent,
@@ -18,6 +19,7 @@ import {
     encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionEventEnvelope,
+    encodeSessionEventRejection,
     encodeSessionPromptCommand,
     encodeSessionStartedEvent,
     ProtocolMessageError,
@@ -30,8 +32,10 @@ import {
     SESSION_CANCEL_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REJECTED_KIND,
     SESSION_PROMPT_KIND,
     type SessionCancelCommand,
+    SessionEventRejectionCode,
     type SessionPromptCommand,
 } from "../src/index.ts";
 
@@ -67,6 +71,17 @@ describe("reliable session event protocol", () => {
         expect(decodeSessionEventAcknowledgement(encodeSessionEventAcknowledgement(acknowledgement))).toEqual(
             acknowledgement,
         );
+    });
+
+    it("Given a stale daemon event targets a terminal Session, When the Relay rejects it, Then the event identity and terminal code round-trip exactly", () => {
+        const rejection = {
+            code: SessionEventRejectionCode.SessionDeleted,
+            eventId: "event-1",
+            kind: SESSION_EVENT_REJECTED_KIND,
+            sessionId: "session-1",
+        } as const;
+
+        expect(decodeSessionEventRejection(encodeSessionEventRejection(rejection))).toEqual(rejection);
     });
 });
 
