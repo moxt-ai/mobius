@@ -68,6 +68,12 @@ function failureMessage(error: unknown): string {
     return `${failure.code}: ${failure.message}`;
 }
 
+function isInterruptedChannelOperation(error: unknown): boolean {
+    return (
+        error instanceof MobiusChannelError && (error.code === "connection_closed" || error.code === "runtime_offline")
+    );
+}
+
 function sessionConfigurationPriority(category: string): number {
     if (category === "model") {
         return 0;
@@ -779,13 +785,25 @@ export async function prepareActiveSession(expectedSessionId = ""): Promise<void
         });
         useChatStore.getState().applySessionReady(ready);
     } catch (error) {
-        useChatStore.getState().setSessionPreparationFailed(
-            conversation.sessionId,
-            conversation.agentId,
-            conversation.directoryId,
-            conversation.additionalDirectories.map((directory) => directory.directoryId),
-            failureMessage(error),
-        );
+        const store = useChatStore.getState();
+        const additionalDirectoryIds = conversation.additionalDirectories.map((directory) => directory.directoryId);
+        if (isInterruptedChannelOperation(error)) {
+            store.setSessionPreparationInterrupted(
+                conversation.sessionId,
+                conversation.agentId,
+                conversation.directoryId,
+                additionalDirectoryIds,
+                failureMessage(error),
+            );
+        } else {
+            store.setSessionPreparationFailed(
+                conversation.sessionId,
+                conversation.agentId,
+                conversation.directoryId,
+                additionalDirectoryIds,
+                failureMessage(error),
+            );
+        }
     }
 }
 

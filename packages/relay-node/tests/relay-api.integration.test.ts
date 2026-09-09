@@ -15,6 +15,7 @@ import {
     type RecordedSessionEvent,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
+    SESSION_INFO_UPDATED_KIND,
     SESSION_PERMISSION_REQUESTED_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
@@ -365,12 +366,22 @@ class CapturingChannelRuntime implements ChannelGateway {
 
 class ApplicationHttpTransport implements MobiusHttpTransport {
     readonly #fetch: (request: Request) => Promise<Response>;
+    #streamRequestCount = 0;
 
     constructor(fetchApplication: (request: Request) => Promise<Response>) {
         this.#fetch = fetchApplication;
     }
 
-    readonly fetch = async (request: Request): Promise<Response> => await this.#fetch(request);
+    get streamRequestCount(): number {
+        return this.#streamRequestCount;
+    }
+
+    readonly fetch = async (request: Request): Promise<Response> => {
+        if (request.headers.get("accept") === "text/event-stream") {
+            this.#streamRequestCount += 1;
+        }
+        return await this.#fetch(request);
+    };
 }
 
 class InterruptedApplicationHttpTransport implements MobiusHttpTransport {
@@ -838,6 +849,115 @@ describe("Node public Relay API", () => {
                 }
                 expect(error).toMatchObject({ code: "invalid_cursor", status: 400 });
             }
+        } finally {
+            client.close();
+            sessionRuntime.close();
+        }
+    });
+
+    it("Given more persisted Session events than the live buffer can hold, When another event is committed while a slow SDK observer catches up, Then every event arrives in order without reconnecting", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-node-event-backlog-"));
+        createdDirectories.push(directory);
+        const sessionRuntime = new NodeSessionRuntime({
+            config: { databasePath: join(directory, "relay.sqlite"), contentRoot: join(directory, "content") },
+        });
+        const application = createRelayApp({
+            channelGateway: new InertChannelGateway(),
+            pairingGateway: new ScopedPairingGateway(),
+            sessionCommands: sessionRuntime,
+            sessionQueries: sessionRuntime,
+            sessionTransfers: sessionRuntime,
+            sessionArtifacts: sessionRuntime,
+            sessionEventStreams: sessionRuntime,
+        });
+        const transport = new ApplicationHttpTransport(async (request) => await application.fetch(request));
+        const client = new MobiusClient({
+            credentialProvider: new StaticMobiusCredentialProvider(token),
+            endpoint: "https://node.relay.test",
+            maxStreamReconnectAttempts: 1,
+            projectId: scope.projectId,
+            transport,
+        });
+        const signal = new AbortController().signal;
+        const persistedEventCount = 400;
+        const expectedEventCount = persistedEventCount + 1;
+        const receivedSequences: string[] = [];
+        let releaseFirstEvent = (): void => {};
+        const firstEventRelease = new Promise<void>((resolve) => {
+            releaseFirstEvent = resolve;
+        });
+        let markFirstEventReceived = (): void => {};
+        const firstEventReceived = new Promise<void>((resolve) => {
+            markFirstEventReceived = resolve;
+        });
+
+        try {
+            const session = await client.sessions.create(
+                {
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    directoryId: "root",
+                    policy: new MobiusRecordingPolicy("full", 86_400_000, 1_000, 100_000),
+                    runtimeId: "runtime-node",
+                    sessionId: "sdk-event-backlog-session",
+                    title: "SDK event backlog session",
+                },
+                signal,
+            );
+            for (let index = 0; index < persistedEventCount; index += 1) {
+                await sessionRuntime.commitEvent(
+                    scope,
+                    "runtime-node",
+                    envelope(session.sessionId, `backlog-${index}`, {
+                        kind: SESSION_INFO_UPDATED_KIND,
+                        sessionId: session.sessionId,
+                        title: `Backlog title ${index}`,
+                        updatedAt: new Date(fixedTime + index).toISOString(),
+                    }),
+                    fixedTime + index,
+                    signal,
+                );
+            }
+
+            const subscription = await client.events.subscribe(
+                session.sessionId,
+                "",
+                {
+                    receive: async (event) => {
+                        receivedSequences.push(event.sequence);
+                        if (receivedSequences.length === 1) {
+                            markFirstEventReceived();
+                            await firstEventRelease;
+                        }
+                        return receivedSequences.length < expectedEventCount;
+                    },
+                },
+                signal,
+            );
+            await firstEventReceived;
+            for (let pendingCatchUpPage = 0; pendingCatchUpPage < 5; pendingCatchUpPage += 1) {
+                await Promise.resolve();
+            }
+            await sessionRuntime.commitEvent(
+                scope,
+                "runtime-node",
+                envelope(session.sessionId, "live-during-backlog", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId: session.sessionId,
+                    title: "Live during backlog",
+                    updatedAt: new Date(fixedTime + persistedEventCount).toISOString(),
+                }),
+                fixedTime + persistedEventCount,
+                signal,
+            );
+            releaseFirstEvent();
+            await subscription.completed;
+
+            expect(transport.streamRequestCount).toBe(1);
+            expect(receivedSequences).toHaveLength(expectedEventCount);
+            expect(receivedSequences).toEqual(
+                Array.from({ length: expectedEventCount }, (_entry, index) => (index + 1).toString()),
+            );
         } finally {
             client.close();
             sessionRuntime.close();

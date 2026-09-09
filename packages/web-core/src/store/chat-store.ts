@@ -119,6 +119,13 @@ export interface ChatStore {
         additionalDirectoryIds: readonly string[],
         message: string,
     ) => void;
+    readonly setSessionPreparationInterrupted: (
+        sessionId: string,
+        agentId: string,
+        directoryId: string,
+        additionalDirectoryIds: readonly string[],
+        message: string,
+    ) => void;
     readonly setSessionPreparing: (sessionId: string) => void;
     readonly setSidebarOpen: (open: boolean) => void;
     readonly sidebarOpen: boolean;
@@ -909,6 +916,22 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
             return {
                 conversations: replaceSessionConversation(state.conversations, sessionId, (conversation) =>
                     conversation.markSessionFailed(message),
+                ),
+                errorMessage: message,
+            };
+        });
+    },
+    setSessionPreparationInterrupted: (sessionId, agentId, directoryId, additionalDirectoryIds, message) => {
+        set((state) => {
+            const matchesSelection = state.conversations.some((conversation) =>
+                conversation.matchesPreparation(agentId, sessionId, directoryId, additionalDirectoryIds),
+            );
+            if (!matchesSelection) {
+                return {};
+            }
+            return {
+                conversations: replaceSessionConversation(state.conversations, sessionId, (conversation) =>
+                    conversation.markSessionInterrupted(),
                 ),
                 errorMessage: message,
             };

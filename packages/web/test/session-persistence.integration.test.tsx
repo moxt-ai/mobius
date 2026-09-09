@@ -15,7 +15,7 @@ import {
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
@@ -29,7 +29,7 @@ import {
     setupWebIntegrationEnvironment,
 } from "./app-integration-harness.ts";
 
-setupWebIntegrationEnvironment();
+const environment = setupWebIntegrationEnvironment();
 
 function modelConfigOptions(model: string): readonly SessionConfigOption[] {
     return [
@@ -92,6 +92,94 @@ function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
 }
 
 describe.sequential("Session persistence boundaries", () => {
+    it("Given a Session contains more recorded events than the browser stream buffer, When the user starts another Agent turn, Then the complete response appears without an event-stream recovery failure", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, initialPreparation);
+            await closeMobiusTransport();
+            cleanup();
+
+            const recordedEventCount = 400;
+            const batchSize = 10;
+            for (let offset = 0; offset < recordedEventCount; offset += batchSize) {
+                const count = Math.min(batchSize, recordedEventCount - offset);
+                await Promise.all(
+                    Array.from({ length: count }, async (_entry, index) => {
+                        const eventIndex = offset + index;
+                        await paired.daemon.sendSessionEvent(
+                            initialPreparation.sessionId,
+                            encodeSessionInfoUpdatedEvent({
+                                kind: "session.info.updated",
+                                sessionId: initialPreparation.sessionId,
+                                title: `Recorded backlog ${eventIndex.toString()}`,
+                                updatedAt: new Date(Date.UTC(2026, 8, 8, 0, 0, 0, eventIndex)).toISOString(),
+                            }),
+                        );
+                    }),
+                );
+            }
+
+            render(<App />);
+            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, resumedPreparation);
+            await completeRenderedPrompt(
+                paired.daemon,
+                "Continue after replaying recorded history",
+                "The complete response survived the recorded event backlog.",
+            );
+
+            expect(screen.queryByText(/The Mobius event stream could not recover/u)).toBeNull();
+            expect(screen.queryByText(/Agent response failed/u)).toBeNull();
+        } finally {
+            await closeMobiusTransport();
+            cleanup();
+            paired.daemon.close();
+        }
+    }, 45_000);
+
+    it("Given Cloudflare resets the Runtime while Agent settings are loading, When the daemon and browser reconnect, Then the interrupted preparation resumes without a permanent connection error", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+        let reconnectedDaemon = paired.daemon;
+
+        try {
+            await paired.daemon.receive(SESSION_PREPARE_KIND);
+            vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
+            vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+            await environment.evictRuntime(paired.channelId);
+            await paired.daemon.waitForClose();
+            reconnectedDaemon = await paired.reconnectDaemon();
+            await vi.advanceTimersByTimeAsync(10_000);
+            vi.useRealTimers();
+
+            const prepare = decodeSessionPrepareCommand(await reconnectedDaemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(reconnectedDaemon, prepare);
+
+            const promptInput = await screen.findByRole("textbox", {
+                name: "Message the local agent",
+            });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            expect(screen.queryByText(/connection_closed/u)).toBeNull();
+        } finally {
+            vi.useRealTimers();
+            await closeMobiusTransport();
+            cleanup();
+            paired.daemon.close();
+            reconnectedDaemon.close();
+        }
+    }, 45_000);
+
     it("Given the built-in Web application has an attachment, When a user submits the core chat workflow, Then it uses the public artifact and Turn API instead of placing content in the channel control message", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
@@ -112,6 +200,9 @@ describe.sequential("Session persistence boundaries", () => {
             await screen.findByText("public-api-context.txt");
             const promptInput = screen.getByRole("textbox", {
                 name: "Message the local agent",
+            });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
             });
             fireEvent.change(promptInput, {
                 target: { value: "Use the public attachment" },
@@ -147,8 +238,8 @@ describe.sequential("Session persistence boundaries", () => {
                 }),
             );
         } finally {
-            cleanup();
             await closeMobiusTransport();
+            cleanup();
             paired.daemon.close();
         }
     });

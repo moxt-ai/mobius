@@ -89,6 +89,7 @@ function setHappyDomUrl(url: URL): void {
 
 class StatefulDaemon {
     readonly #attemptIdsBySession = new Map<string, string>();
+    readonly #closed: Promise<void>;
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
     readonly #socket: WebSocket;
@@ -96,6 +97,13 @@ class StatefulDaemon {
 
     private constructor(socket: WebSocket) {
         this.#socket = socket;
+        this.#closed = new Promise((resolve) => {
+            if (socket.readyState === WebSocket.CLOSED) {
+                resolve();
+                return;
+            }
+            socket.addEventListener("close", () => resolve(), { once: true });
+        });
         socket.addEventListener("message", (event) => {
             if (typeof event.data !== "string") {
                 return;
@@ -121,6 +129,7 @@ class StatefulDaemon {
         await new Promise<void>((resolve, reject) => {
             const signal = AbortSignal.timeout(8_000);
             const cleanupListeners = (): void => {
+                socket.removeEventListener("close", handleClose);
                 socket.removeEventListener("open", handleOpen);
                 socket.removeEventListener("error", handleError);
                 signal.removeEventListener("abort", handleAbort);
@@ -133,10 +142,15 @@ class StatefulDaemon {
                 cleanupListeners();
                 reject(new Error("The local daemon WebSocket failed while opening"));
             };
+            const handleClose = (): void => {
+                cleanupListeners();
+                reject(new Error("The local daemon WebSocket closed while opening"));
+            };
             const handleOpen = (): void => {
                 cleanupListeners();
                 resolve();
             };
+            socket.addEventListener("close", handleClose, { once: true });
             socket.addEventListener("open", handleOpen, { once: true });
             socket.addEventListener("error", handleError, { once: true });
             signal.addEventListener("abort", handleAbort, { once: true });
@@ -147,6 +161,8 @@ class StatefulDaemon {
     readonly close = (): void => {
         this.#socket.close(1000, "Web integration complete");
     };
+
+    readonly waitForClose = async (): Promise<void> => await this.#closed;
 
     readonly receive = (kind: string): Promise<string> => {
         const existingIndex = this.#messages.findIndex((message) => decodeMessageKind(message) === kind);
@@ -232,6 +248,7 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     readonly channelId: string;
     readonly credential: CreatedPairing;
     readonly daemon: StatefulDaemon;
+    readonly reconnectDaemon: () => Promise<StatefulDaemon>;
 }> {
     const createdResponse = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings`, window.location.origin), {
         method: "POST",
@@ -273,10 +290,12 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     const daemonUrl = new URL(`${MOBIUS_API_PREFIX}/channels/${claimed.channelId}/daemon`, window.location.origin);
     daemonUrl.protocol = "ws:";
     daemonUrl.searchParams.set("token", claimed.daemonToken);
+    const reconnectDaemon = async (): Promise<StatefulDaemon> => await StatefulDaemon.connect(daemonUrl);
     return {
         channelId: claimed.channelId,
         credential: created,
-        daemon: await StatefulDaemon.connect(daemonUrl),
+        daemon: await reconnectDaemon(),
+        reconnectDaemon,
     };
 }
 
@@ -375,12 +394,19 @@ export async function completeRenderedPrompt(
     await screen.findByText(responseText);
 }
 
-export function setupWebIntegrationEnvironment(): void {
+export interface WebIntegrationEnvironment {
+    readonly evictRuntime: (channelId: string) => Promise<void>;
+}
+
+export function setupWebIntegrationEnvironment(): WebIntegrationEnvironment {
     let closeRelay = (): Promise<void> => Promise.resolve();
+    let evictRuntime = (_channelId: string): Promise<void> =>
+        Promise.reject(new Error("The Web integration relay is not running"));
 
     beforeAll(async () => {
         const relay = await startLocalRelay();
         closeRelay = relay.close;
+        evictRuntime = relay.evictRuntime;
         setHappyDomUrl(relay.url);
     });
 
@@ -389,4 +415,8 @@ export function setupWebIntegrationEnvironment(): void {
         await closeMobiusTransport();
         await closeRelay();
     });
+
+    return {
+        evictRuntime: async (channelId) => await evictRuntime(channelId),
+    };
 }

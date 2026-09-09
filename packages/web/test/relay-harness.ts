@@ -74,6 +74,7 @@ async function applyMigrations(harness: TestHarness, token: string, queries: rea
 
 export interface LocalRelay {
     readonly close: () => Promise<void>;
+    readonly evictRuntime: (channelId: string) => Promise<void>;
     readonly url: URL;
 }
 
@@ -113,6 +114,12 @@ export async function startLocalRelay(): Promise<LocalRelay> {
         return {
             close: async () => {
                 await harness.close();
+            },
+            evictRuntime: async (channelId) => {
+                await harness.getWorker().evictDurableObject("RUNTIME_RELAY", {
+                    name: channelId,
+                    webSockets: "close",
+                });
             },
             url: listening.url,
         };

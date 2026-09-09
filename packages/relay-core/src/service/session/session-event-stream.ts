@@ -17,31 +17,20 @@ function streamKey(scope: ProjectScope, sessionId: string): string {
     return `${scope.tenantId}\u0000${scope.projectId}\u0000${sessionId}`;
 }
 
-function compareEventSequence(left: CommittedSessionEvent, right: CommittedSessionEvent): number {
-    const leftSequence = BigInt(left.sequence);
-    const rightSequence = BigInt(right.sequence);
-    if (leftSequence < rightSequence) {
-        return -1;
-    }
-    if (leftSequence > rightSequence) {
-        return 1;
-    }
-    return 0;
-}
-
 class SessionEventSubscriber {
     readonly #abortController = new AbortController();
+    readonly #catchUpCapacityWaiters = new Set<() => void>();
     readonly #controller: ReadableStreamDefaultController<Uint8Array>;
     readonly #encoder = new TextEncoder();
     readonly #onClose: () => void;
     readonly #queuedEvents: CommittedSessionEvent[] = [];
     readonly #requestSignal: AbortSignal;
-    readonly #waitingLiveEvents: CommittedSessionEvent[] = [];
     #catchingUp = true;
     #closed = false;
     #hasQueuedSequence = false;
     #heartbeatId: ReturnType<typeof globalThis.setInterval>;
     #lastQueuedSequence = 0n;
+    #latestPublishedSequence = 0n;
 
     constructor(
         controller: ReadableStreamDefaultController<Uint8Array>,
@@ -68,34 +57,31 @@ class SessionEventSubscriber {
             return;
         }
         if (this.#catchingUp) {
-            if (this.#waitingLiveEvents.length >= EVENT_BUFFER_CAPACITY) {
-                this.fail(new Error("The live Session event buffer filled before catch-up completed"));
-                return;
+            const sequence = BigInt(event.sequence);
+            if (sequence > this.#latestPublishedSequence) {
+                this.#latestPublishedSequence = sequence;
             }
-            this.#waitingLiveEvents.push(event);
             return;
         }
         this.queue(event);
     };
 
-    readonly queueCatchUp = (event: CommittedSessionEvent): void => {
-        if (!this.#closed) {
-            this.queue(event);
+    readonly queueCatchUp = async (event: CommittedSessionEvent): Promise<void> => {
+        this.#abortController.signal.throwIfAborted();
+        while (this.#queuedEvents.length >= EVENT_BUFFER_CAPACITY) {
+            await this.waitForCatchUpCapacity();
+            this.#abortController.signal.throwIfAborted();
         }
+        this.queue(event);
     };
+
+    readonly needsCatchUp = (): boolean => this.#latestPublishedSequence > this.#lastQueuedSequence;
 
     readonly finishCatchUp = (): void => {
         if (this.#closed) {
             return;
         }
         this.#catchingUp = false;
-        for (const event of this.#waitingLiveEvents.toSorted(compareEventSequence)) {
-            this.queue(event);
-            if (this.#closed) {
-                return;
-            }
-        }
-        this.#waitingLiveEvents.length = 0;
         this.flush();
     };
 
@@ -150,6 +136,38 @@ class SessionEventSubscriber {
                 ),
             );
         }
+        this.notifyCatchUpCapacity();
+    };
+
+    private readonly notifyCatchUpCapacity = (): void => {
+        if (this.#queuedEvents.length >= EVENT_BUFFER_CAPACITY) {
+            return;
+        }
+        for (const waiter of [...this.#catchUpCapacityWaiters]) {
+            waiter();
+        }
+    };
+
+    private readonly waitForCatchUpCapacity = async (): Promise<void> => {
+        if (this.#queuedEvents.length < EVENT_BUFFER_CAPACITY) {
+            return;
+        }
+        await new Promise<void>((resolve, reject) => {
+            const cleanup = (): void => {
+                this.#catchUpCapacityWaiters.delete(capacityAvailable);
+                this.#abortController.signal.removeEventListener("abort", aborted);
+            };
+            const capacityAvailable = (): void => {
+                cleanup();
+                resolve();
+            };
+            const aborted = (): void => {
+                cleanup();
+                reject(this.#abortController.signal.reason);
+            };
+            this.#catchUpCapacityWaiters.add(capacityAvailable);
+            this.#abortController.signal.addEventListener("abort", aborted, { once: true });
+        });
     };
 
     private readonly writeHeartbeat = (): void => {
@@ -214,9 +232,9 @@ export class SessionEventStreams {
                 subscriber.signal,
             );
             for (const event of page.events) {
-                subscriber.queueCatchUp(event);
+                await subscriber.queueCatchUp(event);
             }
-            if (page.hasMore) {
+            if (page.hasMore || subscriber.needsCatchUp()) {
                 const catchUp = this.catchUp(subscriber, scope, sessionId, page.cursor);
                 void catchUp.catch(subscriber.fail);
             } else {
@@ -266,10 +284,10 @@ export class SessionEventStreams {
             subscriber.signal.throwIfAborted();
             page = await this.#queries.readEvents(scope, sessionId, cursor, CATCH_UP_PAGE_SIZE, subscriber.signal);
             for (const event of page.events) {
-                subscriber.queueCatchUp(event);
+                await subscriber.queueCatchUp(event);
             }
             cursor = page.cursor;
-        } while (page.hasMore && subscriber.active);
+        } while ((page.hasMore || subscriber.needsCatchUp()) && subscriber.active);
         subscriber.finishCatchUp();
     };
 

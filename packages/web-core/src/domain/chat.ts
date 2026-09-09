@@ -1311,6 +1311,9 @@ export class Conversation {
     readonly markSessionFailed = (error: string): Conversation =>
         this.withSession(new SessionPreparationFailedState(error, this.session.elicitations, this.session.permissions));
 
+    readonly markSessionInterrupted = (): Conversation =>
+        this.withSession(new UnpreparedSessionState(this.session.elicitations, this.session.permissions));
+
     readonly markSessionPreparing = (): Conversation =>
         this.withSession(new PreparingSessionState(this.session.elicitations, this.session.permissions));
 
