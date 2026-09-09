@@ -37,12 +37,12 @@ SELECT candidate.bot_id, candidate.conversation_id, candidate.created_at
 CREATE TRIGGER bot_owner_conversation_draft_ownership
 BEFORE INSERT ON bot_owner_conversation_drafts
 BEGIN
-  SELECT CASE WHEN NOT EXISTS (
+  SELECT (CASE WHEN NOT EXISTS (
     SELECT 1
       FROM bot_conversations
      WHERE bot_id = NEW.bot_id
        AND conversation_id = NEW.conversation_id
        AND creator_kind = 'owner'
        AND lifecycle IN ('provisioning', 'active')
-  ) THEN RAISE(ABORT, 'owner_conversation_draft_ownership') END;
+  ) THEN RAISE(ABORT, 'owner_conversation_draft_ownership') END);
 END;
