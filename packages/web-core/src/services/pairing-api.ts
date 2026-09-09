@@ -9,6 +9,10 @@ import {
     MobiusClient,
     MobiusError,
     MobiusPageRequest,
+    type MobiusRuntimeDescriptor,
+    type MobiusRuntimePairing,
+    MobiusRuntimePairingRequest,
+    type MobiusRuntimePairingStatus,
     type MobiusSession,
     mobiusApiUrl,
     type SessionElicitationRequestedEvent,
@@ -530,16 +534,42 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
     );
 }
 
-interface BrowserChannelCredential {
+abstract class BrowserChannelCredential {
+    abstract readonly authority: string;
     readonly hostToken: string;
     readonly projectId: string;
     readonly tenantId: string;
+
+    constructor(hostToken: string, projectId: string, tenantId: string) {
+        this.hostToken = hostToken;
+        this.projectId = projectId;
+        this.tenantId = tenantId;
+    }
 }
+
+class OwnerBrowserChannelCredential extends BrowserChannelCredential {
+    readonly authority = "owner";
+}
+
+class LinkedBrowserChannelCredential extends BrowserChannelCredential {
+    readonly authority = "linked";
+}
+
+class LegacyBrowserChannelCredential extends BrowserChannelCredential {
+    readonly authority = "legacy";
+}
+
+export abstract class RuntimeManagementAccess {}
+
+export class OwnerRuntimeManagementAccess extends RuntimeManagementAccess {}
+
+class ReadOnlyRuntimeManagementAccess extends RuntimeManagementAccess {}
 
 function saveBrowserChannelCredential(channelId: string, credential: BrowserChannelCredential): void {
     window.localStorage.setItem(
         `${CHANNEL_CREDENTIAL_PREFIX}${channelId}`,
         JSON.stringify({
+            authority: credential.authority,
             hostToken: credential.hostToken,
             projectId: credential.projectId,
             tenantId: credential.tenantId,
@@ -548,11 +578,10 @@ function saveBrowserChannelCredential(channelId: string, credential: BrowserChan
 }
 
 function saveChannelCredential(pairing: CreatedPairing): void {
-    saveBrowserChannelCredential(pairing.channelId, {
-        hostToken: pairing.hostToken,
-        projectId: pairing.projectId,
-        tenantId: pairing.tenantId,
-    });
+    saveBrowserChannelCredential(
+        pairing.channelId,
+        new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId, pairing.tenantId),
+    );
 }
 
 function readChannelCredential(channelId: string): BrowserChannelCredential {
@@ -569,6 +598,7 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
     const hostToken = value["hostToken"];
     const tenantId = value["tenantId"];
     const projectId = value["projectId"];
+    const authority = value["authority"];
     if (
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
@@ -579,7 +609,16 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
     ) {
         throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
     }
-    return { hostToken, projectId, tenantId };
+    if (authority === "owner") {
+        return new OwnerBrowserChannelCredential(hostToken, projectId, tenantId);
+    }
+    if (authority === "linked") {
+        return new LinkedBrowserChannelCredential(hostToken, projectId, tenantId);
+    }
+    if (authority === undefined) {
+        return new LegacyBrowserChannelCredential(hostToken, projectId, tenantId);
+    }
+    throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
 
 function decodeCreatedChannelAccessGrant(value: unknown): CreatedChannelAccessGrant {
@@ -642,7 +681,7 @@ function decodeRedeemedChannelCredential(value: unknown, expectedChannelId: stri
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel credential.");
     }
-    return { hostToken, projectId, tenantId };
+    return new LinkedBrowserChannelCredential(hostToken, projectId, tenantId);
 }
 
 abstract class ChannelAccessFragmentState {}
@@ -873,11 +912,11 @@ export async function readBrowserPairingStatus(pairing: CreatedPairing): Promise
         throw new PairingApiError("invalid_relay_response", "The relay returned an unknown pairing status.");
     }
     return new ConnectedBrowserPairingStatus(
-        decodeChannelConnection(value, pairing.channelId, {
-            hostToken: pairing.hostToken,
-            projectId: pairing.projectId,
-            tenantId: pairing.tenantId,
-        }),
+        decodeChannelConnection(
+            value,
+            pairing.channelId,
+            new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId, pairing.tenantId),
+        ),
     );
 }
 
@@ -1106,11 +1145,119 @@ function publicServiceClient(credential: BrowserChannelCredential): MobiusClient
     });
 }
 
+function projectCredential(channelId: string, projectId: string): BrowserChannelCredential {
+    const credential = readChannelCredential(channelId);
+    if (credential.projectId !== projectId) {
+        throw new PairingApiError(
+            "project_access_mismatch",
+            "The saved channel credential belongs to another Project.",
+        );
+    }
+    return credential;
+}
+
 function throwPublicApiFailure(error: unknown): never {
     if (error instanceof MobiusError) {
         throw new PairingApiError(error.code, error.message, { cause: error });
     }
     throw error;
+}
+
+export async function readRuntimeManagementAccess(
+    channelId: string,
+    projectId: string,
+    cancellationSignal: AbortSignal,
+): Promise<RuntimeManagementAccess> {
+    const credential = projectCredential(channelId, projectId);
+    if (credential instanceof OwnerBrowserChannelCredential) {
+        return new OwnerRuntimeManagementAccess();
+    }
+    if (credential instanceof LinkedBrowserChannelCredential) {
+        return new ReadOnlyRuntimeManagementAccess();
+    }
+    try {
+        await readLinkedChannelDevices(channelId, cancellationSignal);
+        saveBrowserChannelCredential(
+            channelId,
+            new OwnerBrowserChannelCredential(credential.hostToken, credential.projectId, credential.tenantId),
+        );
+        return new OwnerRuntimeManagementAccess();
+    } catch (error) {
+        if (error instanceof PairingApiError && error.code === "owner_access_required") {
+            saveBrowserChannelCredential(
+                channelId,
+                new LinkedBrowserChannelCredential(credential.hostToken, credential.projectId, credential.tenantId),
+            );
+            return new ReadOnlyRuntimeManagementAccess();
+        }
+        throw error;
+    }
+}
+
+export async function createProjectRuntimePairing(
+    channelId: string,
+    projectId: string,
+    idempotencyKey: string,
+    cancellationSignal: AbortSignal,
+): Promise<MobiusRuntimePairing> {
+    const client = publicServiceClient(projectCredential(channelId, projectId));
+    try {
+        return await client.runtimePairings.create(
+            new MobiusRuntimePairingRequest(idempotencyKey),
+            requestSignal(cancellationSignal),
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
+}
+
+export async function readProjectRuntimePairing(
+    channelId: string,
+    projectId: string,
+    pairingId: string,
+    cancellationSignal: AbortSignal,
+): Promise<MobiusRuntimePairingStatus> {
+    const client = publicServiceClient(projectCredential(channelId, projectId));
+    try {
+        return await client.runtimePairings.read(pairingId, requestSignal(cancellationSignal));
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
+}
+
+export async function readProjectRuntimes(
+    channelId: string,
+    projectId: string,
+    cancellationSignal: AbortSignal,
+): Promise<readonly MobiusRuntimeDescriptor[]> {
+    const client = publicServiceClient(projectCredential(channelId, projectId));
+    try {
+        return await client.runtimes.list(requestSignal(cancellationSignal));
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
+}
+
+export async function revokeProjectRuntime(
+    channelId: string,
+    projectId: string,
+    runtimeId: string,
+    cancellationSignal: AbortSignal,
+): Promise<void> {
+    const client = publicServiceClient(projectCredential(channelId, projectId));
+    try {
+        await client.runtimes.revoke(runtimeId, requestSignal(cancellationSignal));
+    } catch (error) {
+        throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
 }
 
 async function readChannelHistoryWithSignal(channelId: string, signal: AbortSignal): Promise<ChannelHistory> {

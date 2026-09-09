@@ -188,15 +188,11 @@ export class D1BotAuthorization {
         signal.throwIfAborted();
         const row = await this.#database
             .prepare(
-                `SELECT channels.tenant_id, channels.project_id, credentials.credential_id
-                   FROM pairing_channels AS channels
-                   INNER JOIN channel_host_credentials AS credentials
-                     ON credentials.channel_id = channels.channel_id
-                  WHERE channels.project_id = ?
-                    AND channels.status = 'paired'
-                    AND credentials.authority = 'owner'
-                    AND credentials.revoked_at IS NULL
-                    AND credentials.token_hash = ?`,
+                `SELECT tenant_id, project_id, credential_id
+                   FROM project_owner_credentials
+                  WHERE project_id = ?
+                    AND revoked_at IS NULL
+                    AND token_hash = ?`,
             )
             .bind(normalizedProjectId, tokenDigest)
             .first<ProjectOwnerRow>();
@@ -216,13 +212,9 @@ export class D1BotAuthorization {
             .prepare(
                 `SELECT bots.bot_id, bots.tenant_id, bots.project_id, credentials.credential_id
                    FROM bots
-                   INNER JOIN pairing_channels AS channels
-                     ON channels.tenant_id = bots.tenant_id AND channels.project_id = bots.project_id
-                   INNER JOIN channel_host_credentials AS credentials
-                     ON credentials.channel_id = channels.channel_id
+                   INNER JOIN project_owner_credentials AS credentials
+                     ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
                   WHERE bots.bot_id = ?
-                    AND channels.status = 'paired'
-                    AND credentials.authority = 'owner'
                     AND credentials.revoked_at IS NULL
                     AND credentials.token_hash = ?`,
             )

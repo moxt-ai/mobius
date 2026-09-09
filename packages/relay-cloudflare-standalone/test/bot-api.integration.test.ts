@@ -129,6 +129,10 @@ class SocketMessages {
     };
 }
 
+function waitForSocketClose(socket: WebSocket): Promise<CloseEvent> {
+    return new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+}
+
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
         throw new Error("Expected a response object");
@@ -221,6 +225,39 @@ async function pairRuntime(): Promise<CreatedPairing> {
         hostToken: stringField(created, "hostToken"),
         pairingCode: stringField(created, "pairingCode"),
         projectId: stringField(created, "projectId"),
+        runtimeId: stringField(created, "runtimeId"),
+    };
+}
+
+async function pairAdditionalRuntime(owner: CreatedPairing, label: string): Promise<CreatedPairing> {
+    const created = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${owner.projectId}/runtime-pairings`, {
+            body: JSON.stringify({ idempotencyKey: `runtime-${label}` }),
+            headers: ownerHeaders(owner),
+            method: "POST",
+        }),
+        201,
+    );
+    const claim = await json(
+        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            body: JSON.stringify({
+                agents: readyAgents,
+                installableAgents: [],
+                machineName: `Bot Runtime ${label}`,
+                pairingCode: stringField(created, "pairingCode"),
+                workspaceName: `mobius-${label}`,
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        }),
+        200,
+    );
+    return {
+        channelId: stringField(created, "channelId"),
+        daemonToken: stringField(claim, "daemonToken"),
+        hostToken: owner.hostToken,
+        pairingCode: stringField(created, "pairingCode"),
+        projectId: owner.projectId,
         runtimeId: stringField(created, "runtimeId"),
     };
 }
@@ -1008,6 +1045,161 @@ describe.sequential("Provider-neutral Bot API", () => {
             201,
         );
         expect(secondaryTarget["lifecycle"]).toBe("active");
+    });
+
+    it("Given two Bots are bound to different Runtimes in one Project, When both execute and one Runtime is revoked, Then delivery remains pinned and the other Bot stays executable", async () => {
+        const runtimeA = await pairRuntime();
+        const runtimeB = await pairAdditionalRuntime(runtimeA, "secondary");
+        const daemonA = await openDaemon(runtimeA);
+        const daemonB = await openDaemon(runtimeB);
+        try {
+            const botA = await createBot(runtimeA, "Runtime A Bot");
+            const botB = await createBot(runtimeA, "Runtime B Bot");
+            const behaviorA = await createBehavior(runtimeA, botA, "Runtime A Bot");
+            const behaviorB = await createBehavior(runtimeA, botB, "Runtime B Bot");
+            const connectionA = await connectBot(runtimeA, botA, "runtime-a");
+            const connectionB = await connectBot(runtimeA, botB, "runtime-b");
+            const targetA = await createTarget(runtimeA, botA, connectionA, "runtime-a-target");
+            const targetB = await createTarget(runtimeA, botB, connectionB, "runtime-b-target");
+            const bindingA = await approveBinding(runtimeA, daemonA, botA, behaviorA, targetA);
+            const bindingB = await approveBinding(runtimeB, daemonB, botB, behaviorB, targetB);
+            const conversationA = await createConversation(runtimeA, botA, "runtime-a-conversation");
+            const conversationB = await createConversation(runtimeA, botB, "runtime-b-conversation");
+
+            const [acceptedA, acceptedB] = await Promise.all([
+                submitMessage(runtimeA, botA, conversationA, "runtime-a-message"),
+                submitMessage(runtimeA, botB, conversationB, "runtime-b-message"),
+            ]);
+            const commandA = decodeBotSessionPromptCommand(await daemonA.messages.next());
+            const commandB = decodeBotSessionPromptCommand(await daemonB.messages.next());
+            expect(commandA).toMatchObject({
+                bindingId: bindingA.bindingId,
+                bindingRevision: bindingA.bindingRevision,
+                botId: botA.botId,
+                conversationId: conversationA.conversationId,
+                executionId: acceptedA.executionId,
+                localGrantId: `grant_${botA.botId}`,
+            });
+            expect(commandB).toMatchObject({
+                bindingId: bindingB.bindingId,
+                bindingRevision: bindingB.bindingRevision,
+                botId: botB.botId,
+                conversationId: conversationB.conversationId,
+                executionId: acceptedB.executionId,
+                localGrantId: `grant_${botB.botId}`,
+            });
+            expect(commandA.executionCapabilitySecret).not.toBe(commandB.executionCapabilitySecret);
+            expect(commandA.localGrantId).not.toBe(commandB.localGrantId);
+
+            for (const execution of [
+                { accepted: acceptedA, command: commandA, daemon: daemonA },
+                { accepted: acceptedB, command: commandB, daemon: daemonB },
+            ]) {
+                const attemptId = `attempt_${execution.command.commandId}`;
+                await commitAttemptEvent(
+                    execution.daemon,
+                    attemptEnvelope(
+                        execution.command.sessionId,
+                        execution.command.commandId,
+                        `event_${execution.command.commandId}_started`,
+                        SESSION_STARTED_KIND,
+                        attemptId,
+                        1,
+                    ),
+                );
+                await commitAttemptEvent(
+                    execution.daemon,
+                    attemptEnvelope(
+                        execution.command.sessionId,
+                        execution.command.commandId,
+                        `event_${execution.command.commandId}_completed`,
+                        SESSION_COMPLETED_KIND,
+                        attemptId,
+                        2,
+                    ),
+                );
+                expect(execution.accepted.turnId).toBe(execution.command.turnId);
+            }
+            await expectConversationEvents(runtimeA, botA, conversationA, acceptedA, behaviorA);
+            await expectConversationEvents(runtimeA, botB, conversationB, acceptedB, behaviorB);
+
+            const crossRuntimeClose = waitForSocketClose(daemonA.socket);
+            daemonA.socket.send(
+                encodeSessionEventEnvelope(
+                    attemptEnvelope(
+                        commandB.sessionId,
+                        commandB.commandId,
+                        "event_runtime_a_cross_commit",
+                        SESSION_COMPLETED_KIND,
+                        `attempt_${commandB.commandId}`,
+                        3,
+                    ),
+                ),
+            );
+            await expect(crossRuntimeClose).resolves.toMatchObject({ code: 1008, reason: "session_access_denied" });
+
+            const revoked = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${runtimeA.projectId}/runtimes/${runtimeA.runtimeId}`,
+                { headers: ownerHeaders(runtimeA), method: "DELETE" },
+            );
+            expect(revoked.status).toBe(204);
+            const unavailable = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${botA.botId}/conversations/${conversationA.conversationId}/messages`,
+                {
+                    body: JSON.stringify({
+                        actorRef: "project-owner",
+                        clientMessageId: "runtime-a-after-revoke",
+                        resourceRefs: [],
+                        text: "Do not fail over",
+                    }),
+                    headers: ownerHeaders(runtimeA),
+                    method: "POST",
+                },
+            );
+            await expectApiError(unavailable, 409, "binding_incompatible");
+
+            const surviving = await submitMessage(runtimeA, botB, conversationB, "runtime-b-after-revoke");
+            expect(decodeBotSessionPromptCommand(await daemonB.messages.next())).toMatchObject({
+                botId: botB.botId,
+                executionId: surviving.executionId,
+                localGrantId: commandB.localGrantId,
+            });
+            expect(daemonB.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            daemonA.socket.close(1000, "Test complete");
+            daemonB.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a Runtime belongs to another Project, When a Bot owner requests a binding to it, Then the request is rejected before a binding or local approval is created", async () => {
+        const owner = await pairRuntime();
+        const foreign = await pairRuntime();
+        const bot = await createBot(owner, "Project-isolated Bot");
+        const behavior = await createBehavior(owner, bot, "Project-isolated Bot");
+        const response = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+            {
+                body: JSON.stringify({
+                    agentConfigRevision: 1,
+                    agentRef: "codex",
+                    allowedDeliveryTargetIds: [],
+                    behaviorRevisionId: behavior.behaviorRevisionId,
+                    completionPolicy: { kind: "none" },
+                    expectedRevision: bot.lifecycleRevision,
+                    runtimeId: foreign.runtimeId,
+                    workspaceRef: "default",
+                }),
+                headers: ownerHeaders(owner),
+                method: "POST",
+            },
+        );
+        await expectApiError(response, 409, "binding_incompatible");
+        const bindings = await env.DIRECTORY_DATABASE.prepare(
+            `SELECT COUNT(*) AS binding_count FROM bot_execution_bindings WHERE bot_id = ?`,
+        )
+            .bind(bot.botId)
+            .first<{ readonly binding_count: number }>();
+        expect(bindings?.binding_count).toBe(0);
     });
 
     it("Given two Bots share one Runtime and Agent, When both execute and send outbound messages, Then their pinned identities and targets remain isolated", async () => {

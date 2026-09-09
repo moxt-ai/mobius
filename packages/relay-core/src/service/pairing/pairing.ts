@@ -4,6 +4,7 @@ export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
 export const MAX_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 60 * 1_000;
+export const MAX_RUNTIMES_PER_PROJECT = 8;
 
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
@@ -71,6 +72,34 @@ export interface CreatedPairing {
     readonly projectId: string;
     readonly runtimeId: string;
     readonly tenantId: string;
+}
+
+export class CreatedRuntimePairing {
+    readonly channelId: string;
+    readonly expiresAt: string;
+    readonly pairingCode: string;
+    readonly pairingId: string;
+    readonly pollToken: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+
+    constructor(
+        channelId: string,
+        expiresAt: string,
+        pairingCode: string,
+        pairingId: string,
+        pollToken: string,
+        projectId: string,
+        runtimeId: string,
+    ) {
+        this.channelId = channelId;
+        this.expiresAt = expiresAt;
+        this.pairingCode = pairingCode;
+        this.pairingId = pairingId;
+        this.pollToken = pollToken;
+        this.projectId = projectId;
+        this.runtimeId = runtimeId;
+    }
 }
 
 export interface ClaimedPairing {
@@ -174,13 +203,20 @@ export class CreatedBrowserCredential {
     }
 }
 
+export const PairingLifecycle = Object.freeze({
+    Expired: "expired",
+    Paired: "paired",
+    Pending: "pending",
+    Revoked: "revoked",
+});
+
 export abstract class PairingStatus {
     abstract readonly status: string;
 }
 
 export class PendingPairingStatus extends PairingStatus {
     readonly expiresAt: string;
-    readonly status = "pending";
+    readonly status = PairingLifecycle.Pending;
 
     constructor(expiresAt: string) {
         super();
@@ -189,7 +225,7 @@ export class PendingPairingStatus extends PairingStatus {
 }
 
 export class ExpiredPairingStatus extends PairingStatus {
-    readonly status = "expired";
+    readonly status = PairingLifecycle.Expired;
 }
 
 export class PairedPairingStatus extends PairingStatus {
@@ -199,7 +235,7 @@ export class PairedPairingStatus extends PairingStatus {
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly status = "paired";
+    readonly status = PairingLifecycle.Paired;
     readonly tenantId: string;
     readonly workspaceName: string;
 
@@ -225,6 +261,16 @@ export class PairedPairingStatus extends PairingStatus {
     }
 }
 
+export class RevokedPairingStatus extends PairingStatus {
+    readonly revokedAt: string;
+    readonly status = PairingLifecycle.Revoked;
+
+    constructor(revokedAt: string) {
+        super();
+        this.revokedAt = revokedAt;
+    }
+}
+
 export class PairingDirectoryError extends Error {
     readonly code: string;
 
@@ -242,6 +288,25 @@ export class ProjectScopeAccess {
     constructor(tenantId: string, projectId: string) {
         this.projectId = projectId;
         this.tenantId = tenantId;
+    }
+}
+
+export class ProjectOwnerAccess extends ProjectScopeAccess {
+    readonly credentialId: string;
+
+    constructor(tenantId: string, projectId: string, credentialId: string) {
+        super(tenantId, projectId);
+        this.credentialId = credentialId;
+    }
+}
+
+export class RevokedProjectRuntime {
+    readonly access: VerifiedChannelAccess;
+    readonly revokedAt: string;
+
+    constructor(access: VerifiedChannelAccess, revokedAt: string) {
+        this.access = access;
+        this.revokedAt = revokedAt;
     }
 }
 

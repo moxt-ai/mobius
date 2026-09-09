@@ -46,6 +46,11 @@ interface ProvisioningOutboxRow extends ConversationRow {
     readonly payload: string;
 }
 
+interface ConversationExecutionStateRow {
+    readonly binding_lifecycle: string;
+    readonly runtime_status: unknown;
+}
+
 export class BotConversationPlan {
     readonly provisioning: BotSessionProvisioning;
     readonly response: object;
@@ -57,6 +62,8 @@ export class BotConversationPlan {
 }
 
 export class AuthorizedBotConversation {
+    readonly bindingId: string;
+    readonly bindingRevision: number;
     readonly botId: string;
     readonly connectionId: string;
     readonly conversationId: string;
@@ -64,6 +71,8 @@ export class AuthorizedBotConversation {
     readonly sessionId: string;
 
     constructor(row: ConversationRow) {
+        this.bindingId = row.binding_id;
+        this.bindingRevision = row.binding_revision;
         this.botId = row.bot_id;
         this.conversationId = row.conversation_id;
         this.sessionId = row.session_id;
@@ -396,6 +405,36 @@ export class D1BotConversations {
         }
         if (bot?.lifecycle !== "active") {
             throw new BotApiError("bot_not_active", "The Bot is not active", 409);
+        }
+        const executionState = await this.#database
+            .prepare(
+                `SELECT bindings.lifecycle AS binding_lifecycle,
+                        channels.status AS runtime_status
+                   FROM bot_execution_bindings AS bindings
+                   INNER JOIN bots ON bots.bot_id = bindings.bot_id
+                   LEFT JOIN pairing_channels AS channels
+                     ON channels.runtime_id = bindings.runtime_id
+                    AND channels.tenant_id = bots.tenant_id
+                    AND channels.project_id = bots.project_id
+                  WHERE bindings.binding_id = ? AND bindings.bot_id = ?
+                    AND bindings.binding_revision = ?
+                    AND bots.tenant_id = ? AND bots.project_id = ?`,
+            )
+            .bind(
+                conversation.bindingId,
+                principal.botId,
+                conversation.bindingRevision,
+                principal.scope.tenantId,
+                principal.scope.projectId,
+            )
+            .first<ConversationExecutionStateRow>();
+        signal.throwIfAborted();
+        if (
+            executionState === null ||
+            executionState.binding_lifecycle !== "approved" ||
+            executionState.runtime_status !== "paired"
+        ) {
+            throw new BotApiError("binding_incompatible", "The conversation Runtime is unavailable", 409);
         }
         return conversation;
     };

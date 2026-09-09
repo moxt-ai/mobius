@@ -250,6 +250,10 @@ export class RuntimeRelay {
             this.disconnectHostCredential(access, credentialId);
             return new Response(null, { status: 204 });
         }
+        if (request.method === "DELETE" && pathname.endsWith("/runtime/revoke")) {
+            await this.disconnectRuntime(access, request.signal);
+            return new Response(null, { status: 204 });
+        }
         if (request.method === "POST" && pathname.endsWith("/pending-daemon-deliveries")) {
             await this.actor(access.runtimeId, access.scope).dispatchPending(request.signal);
             await this.dispatchPendingBotControl(access.runtimeId, access.scope, request.signal);
@@ -547,6 +551,52 @@ export class RuntimeRelay {
             ) {
                 socket.close(1008, "Channel access revoked");
             }
+        }
+    };
+
+    private readonly disconnectRuntime = async (
+        access: ReturnType<typeof accessFromRequest>,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        signal.throwIfAborted();
+        const daemonSockets = this.#state.getWebSockets(DAEMON_TAG).filter((socket) => {
+            const attachment = readAttachment(socket.deserializeAttachment());
+            return (
+                attachment.role === "daemon" &&
+                attachment.runtimeId === access.runtimeId &&
+                attachment.tenantId === access.scope.tenantId &&
+                attachment.projectId === access.scope.projectId
+            );
+        });
+        for (const socket of daemonSockets) {
+            socket.close(1008, "Runtime revoked");
+        }
+        for (const socket of this.#state.getWebSockets(HOST_TAG)) {
+            const attachment = readAttachment(socket.deserializeAttachment());
+            if (
+                attachment.role === "host" &&
+                attachment.channelId === access.channelId &&
+                attachment.runtimeId === access.runtimeId &&
+                attachment.tenantId === access.scope.tenantId &&
+                attachment.projectId === access.scope.projectId
+            ) {
+                socket.close(1008, "Runtime revoked");
+            }
+        }
+        const current = this.currentConnection();
+        if (current?.runtimeId === access.runtimeId) {
+            this.#state.storage.sql.exec(
+                `UPDATE runtime_connection_state
+                    SET state = 'offline', disconnected_at = ?
+                  WHERE singleton = 1 AND runtime_id = ?`,
+                Date.now(),
+                access.runtimeId,
+            );
+        }
+        const daemon = daemonSockets[0];
+        if (daemon !== undefined) {
+            await this.#daemonMessageTail;
+            await this.actor(access.runtimeId, access.scope).detachDaemon(new CloudflareChannelSocket(daemon), signal);
         }
     };
 

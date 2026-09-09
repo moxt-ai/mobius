@@ -34,13 +34,17 @@ function identityStatement(database: D1Database, credential: PairingIdentityCred
                 .bind(validateIdentifier(credential.channelId, "channel_id"), credential.tokenHash);
         case "project":
             return database
-                .prepare(`SELECT DISTINCT channels.tenant_id, NULL AS expires_at, NULL AS revoked_at FROM pairing_channels AS channels
+                .prepare(`SELECT tenant_id, NULL AS expires_at, revoked_at FROM project_owner_credentials
+                WHERE project_id = ? AND token_hash = ?
+                UNION SELECT DISTINCT channels.tenant_id, NULL AS expires_at, NULL AS revoked_at FROM pairing_channels AS channels
                 INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
                 WHERE channels.project_id = ? AND credentials.token_hash = ?
                 AND credentials.revoked_at IS NULL AND channels.status = 'paired'
                 UNION SELECT tenant_id, expires_at, revoked_at FROM project_browser_credentials WHERE project_id = ? AND token_hash = ?`)
                 .bind(
                     validateIdentifier(credential.projectId, "project_id"),
+                    credential.tokenHash,
+                    credential.projectId,
                     credential.tokenHash,
                     credential.projectId,
                     credential.tokenHash,
@@ -51,10 +55,8 @@ function identityStatement(database: D1Database, credential: PairingIdentityCred
                 .bind(validateIdentifier(credential.pairingId, "pairing_id"), credential.tokenHash);
         case "pairing-code":
             return database
-                .prepare(
-                    "SELECT tenant_id FROM pairing_channels WHERE pairing_code_hash = ? AND status = 'pending' AND expires_at > ?",
-                )
-                .bind(credential.codeHash, Date.now());
+                .prepare("SELECT tenant_id FROM pairing_channels WHERE pairing_code_hash = ?")
+                .bind(credential.codeHash);
         case "grant":
             return database
                 .prepare(`SELECT channels.tenant_id FROM channel_access_grants AS grants

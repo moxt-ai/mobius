@@ -87,7 +87,7 @@ function setHappyDomUrl(url: URL): void {
     Reflect.apply(setURL, api, [url.href]);
 }
 
-class StatefulDaemon {
+export class StatefulDaemon {
     readonly #attemptIdsBySession = new Map<string, string>();
     readonly #closed: Promise<void>;
     readonly #messages: string[] = [];
@@ -304,6 +304,7 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
     window.localStorage.setItem(
         `mobius:channel-credential:${channelId}`,
         JSON.stringify({
+            authority: "owner",
             hostToken: credential.hostToken,
             projectId: credential.projectId,
             tenantId: credential.tenantId,

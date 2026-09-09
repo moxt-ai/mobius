@@ -20,6 +20,7 @@ import { ChatHeader } from "@/components/chat-header";
 import { ChatMessageList } from "@/components/chat-message-list";
 import { ConversationSidebar } from "@/components/conversation-sidebar";
 import { PairingPage } from "@/components/pairing-page";
+import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
 import { isIdentifier, PairingApiError } from "@/domain/channel";
@@ -47,6 +48,7 @@ export interface ChatProps {
     readonly desktopSidebarCollapsed: boolean;
     readonly onCreateConversation: () => void;
     readonly onToggleDesktopSidebar: () => void;
+    readonly projectId: string;
 }
 
 function initialSidebarLayout(): DesktopSidebarLayoutState {
@@ -128,10 +130,11 @@ function ChannelWorkspace({
     const mainContentRef = useRef<HTMLElement>(null);
     const channelIndexMatch = useMatch("/channels/:channelId");
     const accessOpen = useMatch("/channels/:channelId/access") !== null;
+    const runtimesOpen = useMatch("/channels/:channelId/runtimes") !== null;
     const legacySettingsMatch = useMatch("/channels/:channelId/settings");
     const sessionSettingsMatch = useMatch("/channels/:channelId/sessions/:sessionId/settings");
     const settingsOpen = legacySettingsMatch !== null || sessionSettingsMatch !== null;
-    const managementPageOpen = accessOpen || settingsOpen;
+    const managementPageOpen = accessOpen || runtimesOpen || settingsOpen;
     const [sidebarLayout, setSidebarLayout] = useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
     useEffect(() => {
@@ -213,6 +216,7 @@ function ChannelWorkspace({
         onToggleDesktopSidebar: () => {
             setSidebarLayout((current) => toggleSidebar(current));
         },
+        projectId: connection.projectId,
     };
 
     return (
@@ -221,11 +225,13 @@ function ChannelWorkspace({
                 className="fixed top-3 left-3 z-50 -translate-y-[180%] rounded-lg bg-[#2fb872] px-[13px] py-[9px] text-[13px] font-semibold text-[#062f1c] no-underline transition-transform duration-150 motion-reduce:transition-none focus:translate-y-0"
                 href="#main-content"
             >
-                {accessOpen
-                    ? "Skip to device access"
-                    : settingsOpen
-                      ? "Skip to Agent settings"
-                      : "Skip to conversation"}
+                {runtimesOpen
+                    ? "Skip to local machines"
+                    : accessOpen
+                      ? "Skip to device access"
+                      : settingsOpen
+                        ? "Skip to Agent settings"
+                        : "Skip to conversation"}
             </a>
             <div className="flex h-dvh w-full bg-background">
                 <ConversationSidebar
@@ -440,6 +446,18 @@ function ChannelAccessRoutePage() {
     );
 }
 
+function RuntimeManagementRoutePage() {
+    const context = useOutletContext<ChatProps>();
+    return (
+        <RuntimeManagementPage
+            channelId={context.channelId}
+            desktopSidebarCollapsed={context.desktopSidebarCollapsed}
+            onToggleDesktopSidebar={context.onToggleDesktopSidebar}
+            projectId={context.projectId}
+        />
+    );
+}
+
 function ChannelRouteNotFound() {
     return (
         <ChannelContentError
@@ -456,6 +474,7 @@ function AppRoutes() {
             <Route element={<ChannelRoute />} path="/channels/:channelId">
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<ChannelAccessRoutePage />} path="access" />
+                <Route element={<RuntimeManagementRoutePage />} path="runtimes" />
                 <Route element={<LegacyAgentSettingsRoute />} path="settings" />
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />

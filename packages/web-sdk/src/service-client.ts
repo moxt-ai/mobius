@@ -32,6 +32,8 @@ import {
     decodeMobiusInteractionList,
     decodeMobiusMessagePage,
     decodeMobiusRuntimeList,
+    decodeMobiusRuntimePairing,
+    decodeMobiusRuntimePairingStatus,
     decodeMobiusServiceCapabilities,
     decodeMobiusSession,
     decodeMobiusSessionEvent,
@@ -52,6 +54,9 @@ import {
     type MobiusMessagePage,
     type MobiusPageRequest,
     type MobiusRuntimeDescriptor,
+    type MobiusRuntimePairing,
+    type MobiusRuntimePairingRequest,
+    type MobiusRuntimePairingStatus,
     type MobiusServiceCapabilities,
     type MobiusSession,
     type MobiusSessionEvent,
@@ -744,6 +749,46 @@ export class MobiusRuntimeResources {
 
     readonly list = async (signal: AbortSignal): Promise<readonly MobiusRuntimeDescriptor[]> =>
         decodeMobiusRuntimeList(await this.#executor.get(projectPath(this.#projectId, "runtimes"), signal));
+
+    readonly revoke = async (runtimeId: string, signal: AbortSignal): Promise<void> => {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runtimeId)) {
+            throw new MobiusValidationError("The Runtime identifier is invalid");
+        }
+        await this.#executor.deleteEmpty(
+            projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}`),
+            signal,
+        );
+    };
+}
+
+export class MobiusRuntimePairingResources {
+    readonly #executor: MobiusRequestExecutor;
+    readonly #projectId: string;
+
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#executor = executor;
+        this.#projectId = projectId;
+    }
+
+    readonly create = async (
+        request: MobiusRuntimePairingRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusRuntimePairing> =>
+        decodeMobiusRuntimePairing(
+            await this.#executor.post(projectPath(this.#projectId, "runtime-pairings"), request, signal),
+        );
+
+    readonly read = async (pairingId: string, signal: AbortSignal): Promise<MobiusRuntimePairingStatus> => {
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(pairingId)) {
+            throw new MobiusValidationError("The Runtime pairing identifier is invalid");
+        }
+        return decodeMobiusRuntimePairingStatus(
+            await this.#executor.get(
+                projectPath(this.#projectId, `runtime-pairings/${encodeURIComponent(pairingId)}`),
+                signal,
+            ),
+        );
+    };
 }
 
 export class MobiusSessionResources {
@@ -1314,6 +1359,7 @@ export class MobiusClient {
     readonly credentials: MobiusCredentialResources;
     readonly events: MobiusEventResources;
     readonly interactions: MobiusInteractionResources;
+    readonly runtimePairings: MobiusRuntimePairingResources;
     readonly runtimes: MobiusRuntimeResources;
     readonly sessions: MobiusSessionResources;
     readonly turns: MobiusTurnResources;
@@ -1331,6 +1377,7 @@ export class MobiusClient {
         this.credentials = new MobiusCredentialResources(executor, options.projectId);
         this.events = new MobiusEventResources(executor, options.projectId, reconnectAttempts);
         this.interactions = new MobiusInteractionResources(executor, options.projectId);
+        this.runtimePairings = new MobiusRuntimePairingResources(executor, options.projectId);
         this.runtimes = new MobiusRuntimeResources(executor, options.projectId);
         this.sessions = new MobiusSessionResources(executor, options.projectId);
         this.turns = new MobiusTurnResources(executor, options.projectId);

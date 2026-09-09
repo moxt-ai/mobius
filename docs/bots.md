@@ -113,6 +113,16 @@ delivery targets. This identity isolation is not operating-system isolation.
 Use separate workspaces plus an enforced sandbox, container, virtual machine,
 or operating-system principal when process and filesystem isolation is needed.
 
+One Project may also have several independently paired Runtimes. Different Bots
+can bind to different Runtimes, but each Bot still has exactly one active
+execution binding and each conversation remains pinned to its recorded Runtime,
+behavior revision, binding revision, and daemon-local `LocalBotGrant`. Revoking
+one Runtime changes only bindings that name that Runtime to `unavailable`, closes
+that daemon connection, and rejects new turns on its existing conversations with
+`binding_incompatible`. It does not copy grants or route work to another Runtime;
+Bots bound to other Runtimes remain executable. See [Project Runtime
+pairing](runtime-pairing.md).
+
 ## Durable inbound and outbound work
 
 Creating a Bot conversation pins the current approved behavior and binding.
@@ -127,6 +137,10 @@ replays return the original turn; a changed request under the same key returns
 a temporarily offline approved Runtime can execute the same pinned work once it
 reconnects. Runtime lease fencing prevents two daemon owners from committing
 the same output.
+
+A temporary disconnect preserves accepted pinned work for reconnection. Runtime
+revocation is terminal: new work for that binding reports explicit
+unavailability and is never treated as a failover opportunity.
 
 Outbound requests are keyed by `executionId` and `idempotencyKey`. The Session
 runtime first records `AcceptedOutboundMessage`, then idempotently forwards the

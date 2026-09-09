@@ -50,6 +50,7 @@ export function createHealthRoutes() {
                     interactions: true,
                     messages: true,
                     portability: true,
+                    runtimePairings: true,
                     runtimes: true,
                     sessions: true,
                     toolCalls: true,

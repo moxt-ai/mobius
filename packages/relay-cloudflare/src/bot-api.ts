@@ -691,6 +691,7 @@ export class CloudflareBotApi {
             request.signal,
         );
         const binding = await this.#control.readApprovedBinding(botId, request.signal);
+        await this.#control.readRuntimeAccess(principal.scope, binding.runtimeId, request.signal);
         let plan: BotConversationPlan;
         if (principal instanceof InboundBotOwnerPrincipal && decoded instanceof CreateOwnerBotConversationRequest) {
             plan = await this.#conversations.createOwnerConversation(

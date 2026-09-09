@@ -6,6 +6,10 @@ export function channelAccessRoutePath(channelId: string): string {
     return `${channelRoutePath(channelId)}/access`;
 }
 
+export function channelRuntimesRoutePath(channelId: string): string {
+    return `${channelRoutePath(channelId)}/runtimes`;
+}
+
 export function channelSettingsRoutePath(channelId: string): string {
     return `${channelRoutePath(channelId)}/settings`;
 }

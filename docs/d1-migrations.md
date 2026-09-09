@@ -53,6 +53,12 @@ in this repository and let Wrangler apply only files absent from
 `mobius_migrations`; do not rewrite an initial migration after it has been
 applied to a shared shard. Stop a rollout if any target fails.
 
+`0004_project_runtime_pairings.sql` is a forward migration. It rebuilds
+`pairing_channels` while copying every existing row, assigns a deterministic
+per-Project Runtime slot, backfills explicit Project-owner credentials, and
+adds Runtime-pairing idempotency and audit indexes. Do not replace it with an
+edited initial schema or reset a populated shard.
+
 ## Rollout boundary
 
 These commands target the new Cloud inventory, independently of the existing

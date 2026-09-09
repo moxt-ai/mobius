@@ -1,7 +1,7 @@
 # Mobius TypeScript SDK
 
 Unified public Relay client for modern browsers and Node.js 20.19 or later. It
-exposes resource-oriented Runtime, Session, Turn, Attempt, Event, Interaction,
+exposes resource-oriented Runtime pairing, Runtime, Session, Turn, Attempt, Event, Interaction,
 history, Artifact, credential, portability, and provider-neutral Bot connector
 operations without exposing Relay storage or deployment details.
 

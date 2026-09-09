@@ -6,7 +6,7 @@ switching between a self-hosted Relay and the managed service changes the
 endpoint and credential provider, not the Session workflow.
 
 The package root exposes Session, Turn, Attempt, Event, Interaction, Artifact,
-Runtime, credential, and portability resources. It has no React or Zustand
+Runtime pairing, Runtime, credential, and portability resources. It has no React or Zustand
 dependency. The built-in Web application's Channel control transport remains
 available from `@moxt-ai/mobius-sdk/channel`, but Channel is an execution
 connection and routing resource, not the identity of stored history.
@@ -75,6 +75,49 @@ the detected Agent path and version. The descriptor never exposes launch
 arguments or provider credentials. A public client can select an accessible
 Runtime, but the Relay reauthorizes it and the local daemon remains the final
 authority for executable, workspace, and side-effect access.
+
+## Pair and revoke Project Runtimes
+
+Only a client backed by a Project owner credential can use Runtime pairing
+resources. Keep that credential in an authenticated server application; a
+browser credential and a Runtime daemon credential are intentionally rejected.
+
+```ts
+import {
+  MobiusPairedRuntimePairingStatus,
+  MobiusRuntimePairingRequest,
+} from "@moxt-ai/mobius-sdk";
+
+const request = new MobiusRuntimePairingRequest(crypto.randomUUID());
+const pairing = await ownerClient.runtimePairings.create(request, signal);
+
+// Give pairing.pairingCode to exactly one local daemon claim flow.
+// Reusing request returns this same pairing instead of allocating another.
+const status = await ownerClient.runtimePairings.read(
+  pairing.pairingId,
+  signal,
+);
+
+if (status instanceof MobiusPairedRuntimePairingStatus) {
+  console.log(status.runtimeId, status.machineName, status.agents);
+}
+
+await ownerClient.runtimes.revoke(pairing.runtimeId, signal);
+```
+
+`MobiusRuntimePairingLifecycle` publishes the `pending`, `paired`, `expired`,
+and `revoked` lifecycle values. The SDK decodes them into
+`MobiusPendingRuntimePairingStatus`, `MobiusPairedRuntimePairingStatus`,
+`MobiusExpiredRuntimePairingStatus`, and
+`MobiusRevokedRuntimePairingStatus`, so callers do not need an optional-field
+state bag.
+
+The Relay caps one Project at eight active pending or paired Runtimes. A retry
+after an ambiguous create response must reuse the same idempotency key.
+Revocation closes only the selected Runtime and does not fail over Sessions or
+Bot conversations. Capability discovery reports this resource as
+`capabilities.resources.runtimePairings`. The full HTTP and authority contract
+is in [Project Runtime pairing](runtime-pairing.md).
 
 ## Credentials
 

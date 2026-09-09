@@ -16,6 +16,13 @@ credential and requires a unique tenant/database match. The pairing gateway then
 resolves that tenant's placement and verifies the selected database matches the
 authenticated record before executing the operation.
 
+The bootstrap owner credential is also stored in
+`project_owner_credentials`. Project-scoped Runtime pairing and revocation
+resolve this explicit credential rather than depending on a particular paired
+Channel remaining online or active. New Runtime pairings retain the already
+authorized tenant and Project and create no new owner credential. Pairing-code,
+daemon, Runtime, and Channel authority remain independent per machine.
+
 An authenticated embedding host creates a workspace pairing with
 `D1PairingGateway.createPairing(tenantId, signal)`. The tenant ID must come
 from the host's verified identity context. Standalone deployment uses the upstream

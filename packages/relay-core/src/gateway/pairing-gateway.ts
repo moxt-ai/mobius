@@ -6,11 +6,13 @@ import type {
     CreatedBrowserCredential,
     CreatedChannelAccessGrant,
     CreatedPairing,
+    CreatedRuntimePairing,
     InstallableAgentDescriptor,
     LinkedChannelDevice,
     PairingStatus,
     ProjectScopeAccess,
     RedeemedChannelAccessGrant,
+    RevokedProjectRuntime,
     VerifiedChannelAccess,
 } from "../service/pairing/pairing.ts";
 export interface PairingGateway {
@@ -43,6 +45,12 @@ export interface PairingGateway {
         signal: AbortSignal,
     ) => Promise<CreatedBrowserCredential>;
     readonly createPairing: (tenantId: string, signal: AbortSignal) => Promise<CreatedPairing>;
+    readonly createProjectRuntimePairing: (
+        projectId: string,
+        token: string,
+        idempotencyKey: string,
+        signal: AbortSignal,
+    ) => Promise<CreatedRuntimePairing>;
     readonly listLinkedChannelDevices: (
         channelId: string,
         token: string,
@@ -55,6 +63,12 @@ export interface PairingGateway {
     ) => Promise<readonly ChannelDescriptor[]>;
     readonly readChannel: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelDescriptor>;
     readonly readPairingStatus: (pairingId: string, pollToken: string, signal: AbortSignal) => Promise<PairingStatus>;
+    readonly readProjectRuntimePairing: (
+        projectId: string,
+        pairingId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<PairingStatus>;
     readonly redeemChannelAccessGrant: (
         channelId: string,
         grantId: string,
@@ -73,6 +87,12 @@ export interface PairingGateway {
         token: string,
         signal: AbortSignal,
     ) => Promise<void>;
+    readonly revokeProjectRuntime: (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        signal: AbortSignal,
+    ) => Promise<RevokedProjectRuntime>;
     readonly updateAgentCatalog: (
         channelId: string,
         token: string,

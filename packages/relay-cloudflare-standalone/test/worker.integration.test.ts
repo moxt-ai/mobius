@@ -46,7 +46,16 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-import { MobiusArtifactUploadRequest, MobiusClient, MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
+import {
+    MobiusArtifactUploadRequest,
+    MobiusClient,
+    MobiusExpiredRuntimePairingStatus,
+    MobiusPairedRuntimePairingStatus,
+    MobiusPendingRuntimePairingStatus,
+    MobiusRecordingPolicy,
+    MobiusRevokedRuntimePairingStatus,
+    MobiusRuntimePairingRequest,
+} from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/worker.ts";
 
@@ -79,6 +88,15 @@ const installableAgents = [
         status: "agent_not_installed",
     },
 ];
+const buildAgents = [
+    {
+        agentPath: "/opt/mobius/bin/build-agent",
+        agentVersion: "build-agent 2.0.0",
+        capabilities: verifiedAgentCapabilities,
+        id: "build-agent",
+        label: "Build Agent",
+    },
+];
 const attemptIdsBySession = new Map<string, string>();
 const sourceSequences = new Map<string, number>();
 
@@ -97,6 +115,16 @@ interface CreatedPairingResponse {
 interface ClaimedPairingResponse {
     readonly channelId: string;
     readonly daemonToken: string;
+    readonly runtimeId: string;
+}
+
+interface CreatedRuntimePairingResponse {
+    readonly channelId: string;
+    readonly expiresAt: string;
+    readonly pairingCode: string;
+    readonly pairingId: string;
+    readonly pollToken: string;
+    readonly projectId: string;
     readonly runtimeId: string;
 }
 
@@ -179,6 +207,21 @@ function decodeClaimedPairing(value: unknown): ClaimedPairingResponse {
     return {
         channelId: requiredString(value, "channelId"),
         daemonToken: requiredString(value, "daemonToken"),
+        runtimeId: requiredString(value, "runtimeId"),
+    };
+}
+
+function decodeCreatedRuntimePairing(value: unknown): CreatedRuntimePairingResponse {
+    if (!isRecord(value)) {
+        throw new Error("Expected a Runtime pairing response object");
+    }
+    return {
+        channelId: requiredString(value, "channelId"),
+        expiresAt: requiredString(value, "expiresAt"),
+        pairingCode: requiredString(value, "pairingCode"),
+        pairingId: requiredString(value, "pairingId"),
+        pollToken: requiredString(value, "pollToken"),
+        projectId: requiredString(value, "projectId"),
         runtimeId: requiredString(value, "runtimeId"),
     };
 }
@@ -288,6 +331,51 @@ async function claimPairing(created: CreatedPairingResponse): Promise<ClaimedPai
 async function pairChannel(): Promise<PairedChannel> {
     const created = await createPairing();
     return { claimed: await claimPairing(created), created };
+}
+
+async function createProjectRuntimePairing(
+    project: CreatedPairingResponse,
+    idempotencyKey: string,
+): Promise<CreatedRuntimePairingResponse> {
+    const response = await exports.default.fetch(
+        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.projectId}/runtime-pairings`,
+        {
+            body: JSON.stringify({ idempotencyKey }),
+            headers: {
+                ...authorization(project),
+                "content-type": "application/json",
+            },
+            method: "POST",
+        },
+    );
+    expect(response.status).toBe(201);
+    return decodeCreatedRuntimePairing(await response.json());
+}
+
+async function claimProjectRuntimePairing(
+    created: CreatedRuntimePairingResponse,
+    machineName: string,
+    workspaceName: string,
+    agents: readonly Readonly<Record<string, unknown>>[],
+    availableInstallableAgents: readonly Readonly<Record<string, unknown>>[],
+): Promise<ClaimedPairingResponse> {
+    const response = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+        body: JSON.stringify({
+            agents,
+            installableAgents: availableInstallableAgents,
+            machineName,
+            pairingCode: created.pairingCode,
+            workspaceName,
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+    });
+    expect(response.status).toBe(200);
+    return decodeClaimedPairing(await response.json());
+}
+
+function waitForSocketClose(socket: WebSocket): Promise<CloseEvent> {
+    return new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
 }
 
 function requireWebSocket(response: Response): WebSocket {
@@ -513,6 +601,374 @@ afterEach(() => {
 });
 
 describe.sequential("Cloudflare session deployment", () => {
+    it("Given an existing Project owner, When a second Runtime is paired, used, and revoked through the SDK, Then retries are idempotent and only that Runtime becomes unavailable", async () => {
+        const bootstrap = await pairChannel();
+        const signal = new AbortController().signal;
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (credentialSignal) => {
+                    credentialSignal.throwIfAborted();
+                    return bootstrap.created.hostToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: bootstrap.created.projectId,
+            transport: { fetch: async (request) => await exports.default.fetch(request) },
+        });
+        const request = new MobiusRuntimePairingRequest("second-runtime-request");
+        expect((await client.capabilities.read(signal)).resources.runtimePairings).toBe(true);
+        const additional = await client.runtimePairings.create(request, signal);
+        const retried = await client.runtimePairings.create(request, signal);
+        expect(retried).toEqual(additional);
+        expect(await client.runtimePairings.read(additional.pairingId, signal)).toEqual(
+            new MobiusPendingRuntimePairingStatus(additional.expiresAt),
+        );
+        const claimed = await claimProjectRuntimePairing(additional, "Build Mac", "mobius-build", buildAgents, []);
+        const replay = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            body: JSON.stringify({
+                agents: buildAgents,
+                installableAgents: [],
+                machineName: "Replay Mac",
+                pairingCode: additional.pairingCode,
+                workspaceName: "replay",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+        expect(replay.status).toBe(400);
+        await expect(replay.json()).resolves.toMatchObject({ error: { code: "invalid_pairing_code" } });
+        const runtimeCannotPair = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${bootstrap.created.projectId}/runtime-pairings`,
+            {
+                body: JSON.stringify({ idempotencyKey: "runtime-authority-escalation" }),
+                headers: {
+                    authorization: `Bearer ${claimed.daemonToken}`,
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(runtimeCannotPair.status).toBe(401);
+        await expect(runtimeCannotPair.json()).resolves.toMatchObject({ error: { code: "unauthorized" } });
+        const ownerCredentials = await env.DIRECTORY_DATABASE.prepare(
+            `SELECT COUNT(*) AS credential_count FROM project_owner_credentials WHERE project_id = ?`,
+        )
+            .bind(bootstrap.created.projectId)
+            .first<{ readonly credential_count: number }>();
+        const additionalHostCredentials = await env.DIRECTORY_DATABASE.prepare(
+            `SELECT COUNT(*) AS credential_count FROM channel_host_credentials WHERE channel_id = ?`,
+        )
+            .bind(additional.channelId)
+            .first<{ readonly credential_count: number }>();
+        expect(ownerCredentials?.credential_count).toBe(1);
+        expect(additionalHostCredentials?.credential_count).toBe(0);
+
+        const bootstrapDaemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${bootstrap.created.channelId}/daemon?token=${bootstrap.claimed.daemonToken}`,
+        );
+        const additionalDaemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${additional.channelId}/daemon?token=${claimed.daemonToken}`,
+        );
+        try {
+            expect(additional.projectId).toBe(bootstrap.created.projectId);
+            expect(additional.runtimeId).not.toBe(bootstrap.created.runtimeId);
+            expect(additional.channelId).not.toBe(bootstrap.created.channelId);
+            expect(claimed.daemonToken).not.toBe(bootstrap.claimed.daemonToken);
+            expect(await client.runtimePairings.read(additional.pairingId, signal)).toBeInstanceOf(
+                MobiusPairedRuntimePairingStatus,
+            );
+
+            await expect(client.runtimes.list(signal)).resolves.toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        agents: readyAgents,
+                        channelId: bootstrap.created.channelId,
+                        installableAgents,
+                        machineName: "Developer Mac",
+                        online: true,
+                        runtimeId: bootstrap.created.runtimeId,
+                    }),
+                    expect.objectContaining({
+                        agents: buildAgents,
+                        channelId: additional.channelId,
+                        installableAgents: [],
+                        machineName: "Build Mac",
+                        online: true,
+                        runtimeId: additional.runtimeId,
+                    }),
+                ]),
+            );
+
+            const policy = new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000);
+            const [bootstrapSession, additionalSession] = await Promise.all([
+                client.sessions.create(
+                    {
+                        agentId: "codex",
+                        bindingId: "bootstrap-workspace",
+                        directoryId: "root",
+                        policy,
+                        runtimeId: bootstrap.created.runtimeId,
+                        sessionId: "bootstrap-runtime-session",
+                        title: "Bootstrap Runtime",
+                    },
+                    signal,
+                ),
+                client.sessions.create(
+                    {
+                        agentId: "build-agent",
+                        bindingId: "build-workspace",
+                        directoryId: "root",
+                        policy,
+                        runtimeId: additional.runtimeId,
+                        sessionId: "additional-runtime-session",
+                        title: "Additional Runtime",
+                    },
+                    signal,
+                ),
+            ]);
+            await Promise.all([
+                client.turns.submit(
+                    bootstrapSession.sessionId,
+                    {
+                        additionalDirectoryIds: [],
+                        artifactIds: [],
+                        content: "Run on bootstrap",
+                        idempotencyKey: "bootstrap-turn",
+                        images: [],
+                        resources: [],
+                    },
+                    signal,
+                ),
+                client.turns.submit(
+                    additionalSession.sessionId,
+                    {
+                        additionalDirectoryIds: [],
+                        artifactIds: [],
+                        content: "Run on build",
+                        idempotencyKey: "build-turn",
+                        images: [],
+                        resources: [],
+                    },
+                    signal,
+                ),
+            ]);
+            const bootstrapCommand = decodeSessionPromptCommand(await bootstrapDaemon.messages.next());
+            expect(bootstrapCommand).toMatchObject({
+                agentId: "codex",
+                sessionId: bootstrapSession.sessionId,
+            });
+            expect(decodeSessionPromptCommand(await additionalDaemon.messages.next())).toMatchObject({
+                agentId: "build-agent",
+                sessionId: additionalSession.sessionId,
+            });
+            const started = envelope(bootstrapSession.sessionId, "bootstrap-turn-started", {
+                attemptId: "bootstrap-turn-attempt",
+                commandId: bootstrapCommand.commandId,
+                kind: SESSION_STARTED_KIND,
+                sessionId: bootstrapSession.sessionId,
+            });
+            bootstrapDaemon.socket.send(encodeSessionEventEnvelope(started));
+            expect(decodeSessionEventAcknowledgement(await bootstrapDaemon.messages.next())).toMatchObject({
+                eventId: started.eventId,
+            });
+            const completed = envelope(bootstrapSession.sessionId, "bootstrap-turn-completed", {
+                commandId: bootstrapCommand.commandId,
+                kind: SESSION_COMPLETED_KIND,
+                sessionId: bootstrapSession.sessionId,
+                stopReason: "end_turn",
+            });
+            bootstrapDaemon.socket.send(encodeSessionEventEnvelope(completed));
+            expect(decodeSessionEventAcknowledgement(await bootstrapDaemon.messages.next())).toMatchObject({
+                eventId: completed.eventId,
+            });
+
+            const closed = waitForSocketClose(additionalDaemon.socket);
+            await client.runtimes.revoke(additional.runtimeId, signal);
+            await expect(closed).resolves.toMatchObject({ code: 1008, reason: "Runtime revoked" });
+            await client.runtimes.revoke(additional.runtimeId, signal);
+            expect(bootstrapDaemon.socket.readyState).toBe(WebSocket.OPEN);
+            expect(await client.runtimePairings.read(additional.pairingId, signal)).toBeInstanceOf(
+                MobiusRevokedRuntimePairingStatus,
+            );
+            await expect(client.runtimes.list(signal)).resolves.toEqual([
+                expect.objectContaining({
+                    online: true,
+                    runtimeId: bootstrap.created.runtimeId,
+                }),
+            ]);
+            await expect(
+                client.turns.submit(
+                    additionalSession.sessionId,
+                    {
+                        additionalDirectoryIds: [],
+                        artifactIds: [],
+                        content: "Do not fail over",
+                        idempotencyKey: "revoked-runtime-turn",
+                        images: [],
+                        resources: [],
+                    },
+                    signal,
+                ),
+            ).rejects.toMatchObject({ code: "runtime_unavailable", status: 409 });
+            await client.turns.submit(
+                bootstrapSession.sessionId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Bootstrap remains executable",
+                    idempotencyKey: "bootstrap-after-revoke",
+                    images: [],
+                    resources: [],
+                },
+                signal,
+            );
+            expect(decodeSessionPromptCommand(await bootstrapDaemon.messages.next())).toMatchObject({
+                commandId: "bootstrap-after-revoke",
+                sessionId: bootstrapSession.sessionId,
+            });
+            const deniedReconnect = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${additional.channelId}/daemon?token=${claimed.daemonToken}`,
+                { headers: { Upgrade: "websocket" } },
+            );
+            expect(deniedReconnect.status).toBe(401);
+            await expect(
+                client.runtimePairings.create(new MobiusRuntimePairingRequest("replacement"), signal),
+            ).resolves.toMatchObject({ projectId: bootstrap.created.projectId });
+
+            const audit = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT action FROM runtime_pairing_audit_events WHERE pairing_id = ? ORDER BY recorded_at, action`,
+            )
+                .bind(additional.pairingId)
+                .all<{ readonly action: string }>();
+            expect(audit.results.map((row) => row.action)).toEqual(
+                expect.arrayContaining([
+                    "runtime_pairing.claimed",
+                    "runtime_pairing.rejected",
+                    "runtime_pairing.requested",
+                    "runtime_pairing.revoked",
+                ]),
+            );
+        } finally {
+            client.close();
+            bootstrapDaemon.socket.close(1000, "Test complete");
+            additionalDaemon.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given the Project Runtime quota and an expiring pairing, When an owner exceeds the quota and later retries after expiry, Then the request is rejected, audited, and the expired slot is reusable", async () => {
+        const project = await pairChannel();
+        const pending: CreatedRuntimePairingResponse[] = [];
+        for (let index = 1; index < 8; index += 1) {
+            pending.push(await createProjectRuntimePairing(project.created, `quota-runtime-${index.toString()}`));
+        }
+        const quotaResponse = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/runtime-pairings`,
+            {
+                body: JSON.stringify({ idempotencyKey: "quota-runtime-overflow" }),
+                headers: {
+                    ...authorization(project.created),
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(quotaResponse.status).toBe(429);
+        await expect(quotaResponse.json()).resolves.toMatchObject({
+            error: { code: "runtime_quota_exceeded" },
+        });
+
+        const browserCredentialResponse = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/browser-credentials`,
+            {
+                body: JSON.stringify({ expiresInSeconds: 120 }),
+                headers: {
+                    ...authorization(project.created),
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(browserCredentialResponse.status).toBe(201);
+        const browserCredential = await browserCredentialResponse.json();
+        if (!isRecord(browserCredential)) {
+            throw new Error("Expected a browser credential");
+        }
+        const browserDenied = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/runtime-pairings`,
+            {
+                body: JSON.stringify({ idempotencyKey: "browser-cannot-pair" }),
+                headers: {
+                    authorization: `Bearer ${requiredString(browserCredential, "token")}`,
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(browserDenied.status).toBe(403);
+        await expect(browserDenied.json()).resolves.toMatchObject({ error: { code: "owner_access_required" } });
+
+        vi.setSystemTime(Date.now() + 600_001);
+        const expiring = pending.at(0);
+        if (expiring === undefined) {
+            throw new Error("Expected an expiring Runtime pairing");
+        }
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (signal) => {
+                    signal.throwIfAborted();
+                    return project.created.hostToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: project.created.projectId,
+            transport: { fetch: async (request) => await exports.default.fetch(request) },
+        });
+        const signal = new AbortController().signal;
+        try {
+            expect(await client.runtimePairings.read(expiring.pairingId, signal)).toBeInstanceOf(
+                MobiusExpiredRuntimePairingStatus,
+            );
+            const expiredClaim = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+                body: JSON.stringify({
+                    agents: buildAgents,
+                    installableAgents: [],
+                    machineName: "Expired Runtime",
+                    pairingCode: expiring.pairingCode,
+                    workspaceName: "expired",
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            });
+            expect(expiredClaim.status).toBe(400);
+            await expect(expiredClaim.json()).resolves.toMatchObject({ error: { code: "invalid_pairing_code" } });
+            await expect(
+                client.runtimePairings.create(new MobiusRuntimePairingRequest("quota-runtime-replacement"), signal),
+            ).resolves.toMatchObject({ projectId: project.created.projectId });
+
+            const lifecycleAudit = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT action FROM runtime_pairing_audit_events WHERE pairing_id = ? ORDER BY recorded_at, action`,
+            )
+                .bind(expiring.pairingId)
+                .all<{ readonly action: string }>();
+            expect(lifecycleAudit.results.map((row) => row.action)).toEqual([
+                "runtime_pairing.requested",
+                "runtime_pairing.expired",
+                "runtime_pairing.rejected",
+            ]);
+            const rejectedQuota = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT details_json FROM runtime_pairing_audit_events
+                  WHERE tenant_id = ? AND project_id = ? AND action = 'runtime_pairing.rejected'`,
+            )
+                .bind(project.created.tenantId, project.created.projectId)
+                .all<{ readonly details_json: string }>();
+            expect(rejectedQuota.results.map((row) => row.details_json)).toContain(
+                JSON.stringify({ code: "runtime_quota_exceeded" }),
+            );
+        } finally {
+            client.close();
+        }
+    });
+
     it("Given a deployment assigned to an existing tenant, When two machines pair and create sessions, Then both use that tenant while their project credentials remain isolated", async () => {
         const first = await pairChannel();
         const second = await pairChannel();
@@ -525,6 +981,35 @@ describe.sequential("Cloudflare session deployment", () => {
         const secondSession = await createSession(second.created, "existing-tenant-second-session");
         expect(secondSession.status).toBe(201);
         await expect(secondSession.json()).resolves.toMatchObject({ tenantId: "standalone" });
+        const crossProjectRuntime = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions`,
+            {
+                body: JSON.stringify({
+                    agentId: "codex",
+                    bindingId: "foreign-runtime",
+                    directoryId: "root",
+                    policy: {
+                        contentLimitBytes: 2_000_000,
+                        hotEventLimit: 100,
+                        idempotencyRetentionMilliseconds: 86_400_000,
+                        level: "full",
+                        retentionMilliseconds: 86_400_000,
+                    },
+                    runtimeId: second.created.runtimeId,
+                    sessionId: "cross-project-runtime-session",
+                    title: "Cross-project Runtime",
+                }),
+                headers: {
+                    ...authorization(first.created),
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(crossProjectRuntime.status).toBe(403);
+        await expect(crossProjectRuntime.json()).resolves.toMatchObject({
+            error: { code: "runtime_access_denied" },
+        });
         const denied = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions/existing-tenant-session`,
             { headers: authorization(second.created) },
@@ -555,6 +1040,15 @@ describe.sequential("Cloudflare session deployment", () => {
             expiresAt: created.expiresAt,
             status: "pending",
         });
+        const ownerPending = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/runtime-pairings/${created.pairingId}`,
+            { headers: authorization(created) },
+        );
+        expect(ownerPending.status).toBe(200);
+        await expect(ownerPending.json()).resolves.toEqual({
+            expiresAt: created.expiresAt,
+            status: "pending",
+        });
 
         const claimed = await claimPairing(created);
         expect(claimed.channelId).toBe(created.channelId);
@@ -569,6 +1063,16 @@ describe.sequential("Cloudflare session deployment", () => {
             runtimeId: created.runtimeId,
             status: "paired",
             tenantId: created.tenantId,
+        });
+        const ownerPaired = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/runtime-pairings/${created.pairingId}`,
+            { headers: authorization(created) },
+        );
+        expect(ownerPaired.status).toBe(200);
+        await expect(ownerPaired.json()).resolves.toMatchObject({
+            channelId: created.channelId,
+            runtimeId: created.runtimeId,
+            status: "paired",
         });
 
         const channel = await exports.default.fetch(

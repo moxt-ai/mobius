@@ -185,6 +185,14 @@ The owner can list and revoke linked devices without rotating its own credential
 revocation also closes an active linked-device WebSocket. These links are bearer
 capabilities for trusted device transfer, not user or team identity.
 
+An embedding application that holds the Project owner credential can add more
+independent machines to the same Project through the Project-scoped Runtime
+pairing API. Each new Runtime has a separate Channel, daemon credential, online
+state, and Agent catalog. Sessions and Bots select one authorized Runtime; an
+owner can revoke one without disconnecting the others, and pinned work never
+silently fails over. See [Project Runtime pairing](docs/runtime-pairing.md) for
+the HTTP contract, SDK workflow, quota, audit, and revocation semantics.
+
 Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
 restart a previously paired daemon, use the channel identifier shown in its URL:
 
@@ -445,9 +453,9 @@ credential; each authorized browser retains its own host credential locally.
 Mobius itself has no account system. A future identity service can own user and
 team policy while issuing or revoking the same scoped capabilities.
 
-This revision replaces the original single browser credential column with
-credential and access-grant tables in the initial D1 schema. Existing D1
-instances from an earlier revision must be reset once before deployment.
+Forward D1 migrations preserve existing pairings while separating explicit
+Project-owner credentials from Runtime Channels and adding Project-scoped
+Runtime pairing, lifecycle, quota, and audit records.
 
 Cloudflare may apply an abuse-prevention challenge to an unclaimed temporary
 preview. If that blocks the non-browser daemon, claim the deployment using the

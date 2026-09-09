@@ -179,6 +179,7 @@ export class MobiusResourceCapabilities {
     readonly interactions: boolean;
     readonly messages: boolean;
     readonly portability: boolean;
+    readonly runtimePairings: boolean;
     readonly runtimes: boolean;
     readonly sessions: boolean;
     readonly toolCalls: boolean;
@@ -192,6 +193,7 @@ export class MobiusResourceCapabilities {
         this.interactions = booleanField(resources, "interactions");
         this.messages = booleanField(resources, "messages");
         this.portability = booleanField(resources, "portability");
+        this.runtimePairings = booleanField(resources, "runtimePairings");
         this.runtimes = booleanField(resources, "runtimes");
         this.sessions = booleanField(resources, "sessions");
         this.toolCalls = booleanField(resources, "toolCalls");
@@ -391,6 +393,17 @@ export class MobiusBrowserCredentialRequest {
             throw new MobiusValidationError("The browser credential lifetime is invalid");
         }
         this.expiresInSeconds = expiresInSeconds;
+    }
+}
+
+export class MobiusRuntimePairingRequest {
+    readonly idempotencyKey: string;
+
+    constructor(idempotencyKey: string) {
+        if (!IDENTIFIER_PATTERN.test(idempotencyKey)) {
+            throw new MobiusValidationError("The Runtime pairing idempotency key is invalid");
+        }
+        this.idempotencyKey = idempotencyKey;
     }
 }
 
@@ -824,6 +837,154 @@ function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {
 export function decodeMobiusRuntimeList(value: unknown): readonly MobiusRuntimeDescriptor[] {
     const response = record(value, "Runtime list");
     return arrayField(response, "runtimes", 100).map(decodeRuntimeDescriptor);
+}
+
+export class MobiusRuntimePairing {
+    readonly channelId: string;
+    readonly expiresAt: string;
+    readonly pairingCode: string;
+    readonly pairingId: string;
+    readonly pollToken: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+
+    constructor(
+        channelId: string,
+        expiresAt: string,
+        pairingCode: string,
+        pairingId: string,
+        pollToken: string,
+        projectId: string,
+        runtimeId: string,
+    ) {
+        this.channelId = channelId;
+        this.expiresAt = expiresAt;
+        this.pairingCode = pairingCode;
+        this.pairingId = pairingId;
+        this.pollToken = pollToken;
+        this.projectId = projectId;
+        this.runtimeId = runtimeId;
+    }
+}
+
+export function decodeMobiusRuntimePairing(value: unknown): MobiusRuntimePairing {
+    const pairing = record(value, "Runtime pairing");
+    const pairingCode = stringField(pairing, "pairingCode", 24);
+    const pollToken = stringField(pairing, "pollToken", 256);
+    if (
+        !/^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/.test(pairingCode) ||
+        !/^[a-zA-Z0-9_-]{32,256}$/.test(pollToken)
+    ) {
+        throw invalidResponse("The service returned invalid Runtime pairing credentials");
+    }
+    return new MobiusRuntimePairing(
+        identifierField(pairing, "channelId"),
+        validateTimestamp(stringField(pairing, "expiresAt", 128), "expiresAt"),
+        pairingCode,
+        identifierField(pairing, "pairingId"),
+        pollToken,
+        identifierField(pairing, "projectId"),
+        identifierField(pairing, "runtimeId"),
+    );
+}
+
+export const MobiusRuntimePairingLifecycle = Object.freeze({
+    Expired: "expired",
+    Paired: "paired",
+    Pending: "pending",
+    Revoked: "revoked",
+});
+
+export abstract class MobiusRuntimePairingStatus {
+    abstract readonly status: string;
+}
+
+export class MobiusPendingRuntimePairingStatus extends MobiusRuntimePairingStatus {
+    readonly expiresAt: string;
+    readonly status = MobiusRuntimePairingLifecycle.Pending;
+
+    constructor(expiresAt: string) {
+        super();
+        this.expiresAt = expiresAt;
+    }
+}
+
+export class MobiusExpiredRuntimePairingStatus extends MobiusRuntimePairingStatus {
+    readonly status = MobiusRuntimePairingLifecycle.Expired;
+}
+
+export class MobiusPairedRuntimePairingStatus extends MobiusRuntimePairingStatus {
+    readonly agents: readonly MobiusAgentDescriptor[];
+    readonly channelId: string;
+    readonly installableAgents: readonly MobiusInstallableAgentDescriptor[];
+    readonly machineName: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly status = MobiusRuntimePairingLifecycle.Paired;
+    readonly tenantId: string;
+    readonly workspaceName: string;
+
+    constructor(
+        agents: readonly MobiusAgentDescriptor[],
+        channelId: string,
+        installableAgents: readonly MobiusInstallableAgentDescriptor[],
+        machineName: string,
+        projectId: string,
+        runtimeId: string,
+        tenantId: string,
+        workspaceName: string,
+    ) {
+        super();
+        this.agents = agents;
+        this.channelId = channelId;
+        this.installableAgents = installableAgents;
+        this.machineName = machineName;
+        this.projectId = projectId;
+        this.runtimeId = runtimeId;
+        this.tenantId = tenantId;
+        this.workspaceName = workspaceName;
+    }
+}
+
+export class MobiusRevokedRuntimePairingStatus extends MobiusRuntimePairingStatus {
+    readonly revokedAt: string;
+    readonly status = MobiusRuntimePairingLifecycle.Revoked;
+
+    constructor(revokedAt: string) {
+        super();
+        this.revokedAt = revokedAt;
+    }
+}
+
+export function decodeMobiusRuntimePairingStatus(value: unknown): MobiusRuntimePairingStatus {
+    const status = record(value, "Runtime pairing status");
+    const lifecycle = stringField(status, "status", 32);
+    if (lifecycle === MobiusRuntimePairingLifecycle.Pending) {
+        return new MobiusPendingRuntimePairingStatus(
+            validateTimestamp(stringField(status, "expiresAt", 128), "expiresAt"),
+        );
+    }
+    if (lifecycle === MobiusRuntimePairingLifecycle.Expired) {
+        return new MobiusExpiredRuntimePairingStatus();
+    }
+    if (lifecycle === MobiusRuntimePairingLifecycle.Revoked) {
+        return new MobiusRevokedRuntimePairingStatus(
+            validateTimestamp(stringField(status, "revokedAt", 128), "revokedAt"),
+        );
+    }
+    if (lifecycle === MobiusRuntimePairingLifecycle.Paired) {
+        return new MobiusPairedRuntimePairingStatus(
+            arrayField(status, "agents", 100).map(decodeAgentDescriptor),
+            identifierField(status, "channelId"),
+            arrayField(status, "installableAgents", 100).map(decodeInstallableAgentDescriptor),
+            stringField(status, "machineName", 255),
+            identifierField(status, "projectId"),
+            identifierField(status, "runtimeId"),
+            identifierField(status, "tenantId"),
+            stringField(status, "workspaceName", 255),
+        );
+    }
+    throw invalidResponse("The service returned an unsupported Runtime pairing status");
 }
 
 export abstract class MobiusInteractionResponseRequest {

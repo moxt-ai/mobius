@@ -32,7 +32,9 @@ API prefix. `createMobiusDependencies()` accepts caller-created gateways and bui
 a plain readonly context. Constructors declare only their required `services`,
 `storages`, `gateways`, or `config` subset; HTTP routes read the request's context.
 `createSessionDependencies()` constructs schema-backed storages and session services
-in dependency order. Pairing routes use the pairing gateway directly. There is no
+in dependency order. Bootstrap pairing routes use the pairing gateway, while
+Project-scoped create/read/revoke operations use `PairingService` to compose D1
+lifecycle changes with targeted Runtime disconnection. There is no
 container, registration metadata, or application subclass. Core imports no
 Cloudflare API. The actor validates protocol
 messages, selects the one active daemon, routes commands, and commits reliable
@@ -57,6 +59,15 @@ deployment; request handlers do not create infrastructure tables.
 The Worker creates its application once at module scope and constructs dependencies
 from the current bindings for each request. Durable Objects retain their owned
 session resources for their instance lifetime.
+
+One Project can contain up to eight active Runtime pairing records. Each record
+owns one Runtime, one Channel, one daemon credential, and one independently
+addressed Runtime Durable Object. `project_owner_credentials` keeps Project
+administration independent of those Channel lifecycles, including after the
+bootstrap Runtime is revoked. Idempotent Project-scoped pairing allocates the
+first free bounded Runtime slot; `runtime_pairing_audit_events` records requested,
+claimed, expired, revoked, and rejected outcomes. Revocation changes only the
+selected record and asks only its Durable Object to close matching sockets.
 
 For Cloudflare deployment, the Web build is uploaded as Worker Static Assets in
 the same deployment as the Relay. API and WebSocket requests continue into the
@@ -85,8 +96,8 @@ an address and does not grant access. Mobius deliberately has no user identity
 system; user and team policy belongs in a separate identity service layered over
 these capabilities.
 
-The credential tables are part of the rebuilt initial D1 schema. A D1 instance
-created by an earlier revision must be reset once when adopting this design.
+Forward D1 migrations preserve existing pairing rows, backfill explicit owner
+credentials and Runtime slots, and add indexed Project/Runtime lookup.
 
 Session identity and durable history are independent of connection channels.
 Turns and Attempts have explicit queued, running, waiting, terminal, or

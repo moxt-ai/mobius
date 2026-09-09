@@ -56,6 +56,27 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         }
     };
 
+    readonly disconnectRuntime = async (access: VerifiedChannelAccess, signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted();
+        const headers = new Headers();
+        headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
+        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
+        headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
+        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
+        const objectId = this.#namespace.idFromName(access.channelId);
+        const response = await this.#namespace.get(objectId).fetch(
+            new Request("https://runtime.internal/runtime/revoke", {
+                headers,
+                method: "DELETE",
+                signal,
+            }),
+        );
+        signal.throwIfAborted();
+        if (response.status !== 204) {
+            throw new Error("The Runtime connection could not be revoked");
+        }
+    };
+
     readonly dispatchPending = async (access: VerifiedChannelAccess, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
         const headers = new Headers();

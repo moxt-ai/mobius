@@ -119,6 +119,7 @@ export function directoryError(error: unknown): Response {
     if (error instanceof PairingDirectoryError) {
         const status =
             error.code === "pairing_not_found" ||
+            error.code === "runtime_not_found" ||
             error.code === "channel_not_found" ||
             error.code === "access_grant_invalid" ||
             error.code === "linked_device_not_found" ||
@@ -130,17 +131,25 @@ export function directoryError(error: unknown): Response {
                   ? 401
                   : error.code === "owner_access_required"
                     ? 403
-                    : error.code === "access_grant_expired"
-                      ? 410
-                      : error.code === "access_grant_redeemed"
-                        ? 409
-                        : error.code === "pairing_timeout" || error.code === "directory_timeout"
-                          ? 504
-                          : error.code === "pairing_tenant_unavailable" || error.code === "directory_unavailable"
-                            ? 503
-                            : error.code === "workspace_required"
-                              ? 403
-                              : 400;
+                    : error.code === "runtime_access_denied"
+                      ? 403
+                      : error.code === "access_grant_expired"
+                        ? 410
+                        : error.code === "access_grant_redeemed"
+                          ? 409
+                          : error.code === "pairing_timeout" || error.code === "directory_timeout"
+                            ? 504
+                            : error.code === "runtime_unavailable" || error.code === "idempotency_conflict"
+                              ? 409
+                              : error.code === "runtime_quota_exceeded"
+                                ? 429
+                                : error.code === "pairing_tenant_unavailable" ||
+                                    error.code === "directory_unavailable" ||
+                                    error.code === "runtime_disconnect_failed"
+                                  ? 503
+                                  : error.code === "workspace_required"
+                                    ? 403
+                                    : 400;
         return Response.json({ error: { code: error.code, message: error.message } }, { status });
     }
     reportUnexpectedError(error);

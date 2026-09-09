@@ -9,6 +9,7 @@ import type {
     SessionTransferGateway,
 } from "./gateway/index.ts";
 import { ChannelService } from "./service/channel/channel-service.ts";
+import { PairingService } from "./service/pairing/pairing-service.ts";
 import type { PairingTenantResolver } from "./service/pairing/pairing-tenant-resolver.ts";
 import { SessionService } from "./service/session/session-service.ts";
 
@@ -43,6 +44,7 @@ export function createMobiusDependencies(infrastructure: RelayInfrastructure) {
         ...cx,
         services: Object.freeze({
             channels: new ChannelService(cx),
+            pairings: new PairingService(cx),
             sessions: new SessionService(cx),
         }),
     });
