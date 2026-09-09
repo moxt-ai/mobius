@@ -89,7 +89,7 @@ export async function startLocalRelay(): Promise<LocalRelay> {
         root: repositoryRoot,
         workers: [
             {
-                configPath: "packages/relay-cloudflare/wrangler.jsonc",
+                configPath: "packages/relay-cloudflare-standalone/wrangler.jsonc",
             },
             {
                 config: {

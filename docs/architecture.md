@@ -41,7 +41,8 @@ session events before acknowledging them.
 monotonic event sequencing, paginated query projections, retention, deletion,
 and recoverable archive work.
 
-`packages/relay-cloudflare` is the active composition root. D1 implements the
+`packages/relay-cloudflare-standalone` is the standalone composition root, using
+the shared adapters in `packages/relay-cloudflare`. D1 implements the
 pairing gateway and stores the daemon token hash, machine metadata, and locally
 advertised agent catalog. Ready Agent entries include output-only executable
 path and version metadata together with capability booleans normalized from a
@@ -232,9 +233,10 @@ events use bounded stages and sanitized stable codes.
 
 - `packages/relay-core` owns the portable Relay routes, services,
   gateways, channel behavior, domain contracts, and runtime/storage ports.
-- `packages/relay-cloudflare` owns the Worker entry point, D1 implementation,
-  Runtime and Session Durable Objects, R2 adapter, Cloudflare migrations, and
-  Worker Assets composition.
+- `packages/relay-cloudflare` owns the D1 implementation, Runtime and Session
+  Durable Objects, R2 adapter, and Cloudflare migrations.
+- `packages/relay-cloudflare-standalone` owns the standalone Worker entry point,
+  single-binding resolvers, Wrangler deployment profiles, and Worker Assets composition.
 - `packages/relay-node` is an empty placeholder for a future single-instance
   Node profile; it does not provide a server or storage implementation.
 - `packages/cli` is the publishable `@moxt-ai/mobius` CLI and owns its local daemon,

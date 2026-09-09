@@ -5,6 +5,8 @@ import {
     type ImmutableContent,
     type ImmutableContentStore,
 } from "@moxt-ai/mobius-relay-core";
+import type { BucketResolver } from "./bucket-resolver.ts";
+import type { TenantShardingDirectory } from "./tenant-sharding-directory.ts";
 
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
 
@@ -50,16 +52,23 @@ function metadata(object: R2Object): {
 }
 
 export class R2ContentStore implements ImmutableContentStore {
-    readonly #bucket: R2Bucket;
+    readonly #buckets: BucketResolver;
+    readonly #tenants: TenantShardingDirectory;
 
-    constructor(bucket: R2Bucket) {
-        this.#bucket = bucket;
+    private readonly keyPrefix: string;
+    constructor(buckets: BucketResolver, tenants: TenantShardingDirectory, keyPrefix = "") {
+        this.#buckets = buckets;
+        this.#tenants = tenants;
+        this.keyPrefix = keyPrefix;
     }
 
     readonly delete = async (target: ContentTarget, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
         try {
-            await this.#bucket.delete(objectKey(target));
+            const key = this.keyPrefix + objectKey(target);
+            const tenant = await this.#tenants.resolve(target.tenantId, signal);
+            const bucket = this.#buckets.resolve(tenant.tenantSharding);
+            await bucket.delete(key);
             signal.throwIfAborted();
         } catch (error) {
             if (signal.aborted) {
@@ -72,7 +81,10 @@ export class R2ContentStore implements ImmutableContentStore {
     readonly inspect = async (target: ContentTarget, signal: AbortSignal): Promise<ContentInspection> => {
         signal.throwIfAborted();
         try {
-            const object = await this.#bucket.head(objectKey(target));
+            const key = this.keyPrefix + objectKey(target);
+            const tenant = await this.#tenants.resolve(target.tenantId, signal);
+            const bucket = this.#buckets.resolve(tenant.tenantSharding);
+            const object = await bucket.head(key);
             signal.throwIfAborted();
             if (object === null) {
                 return { kind: "missing" };
@@ -96,7 +108,10 @@ export class R2ContentStore implements ImmutableContentStore {
     readonly read = async (target: ContentTarget, signal: AbortSignal): Promise<ImmutableContent> => {
         signal.throwIfAborted();
         try {
-            const object = await this.#bucket.get(objectKey(target));
+            const key = this.keyPrefix + objectKey(target);
+            const tenant = await this.#tenants.resolve(target.tenantId, signal);
+            const bucket = this.#buckets.resolve(tenant.tenantSharding);
+            const object = await bucket.get(key);
             if (object === null) {
                 throw new ContentStorageError("content_not_found", "The R2 content does not exist");
             }
@@ -124,8 +139,10 @@ export class R2ContentStore implements ImmutableContentStore {
             if ((await digest(content.bytes)) !== content.sha256) {
                 throw new ContentStorageError("content_conflict", "The supplied content digest is invalid");
             }
-            const key = objectKey(target);
-            const written = await this.#bucket.put(key, Uint8Array.from(content.bytes).buffer, {
+            const key = this.keyPrefix + objectKey(target);
+            const tenant = await this.#tenants.resolve(target.tenantId, signal);
+            const bucket = this.#buckets.resolve(tenant.tenantSharding);
+            const written = await bucket.put(key, Uint8Array.from(content.bytes).buffer, {
                 customMetadata: {
                     contentEncoding: content.contentEncoding,
                     mediaType: content.mediaType,
@@ -137,7 +154,7 @@ export class R2ContentStore implements ImmutableContentStore {
             if (written !== null) {
                 return;
             }
-            const existing = await this.#bucket.head(key);
+            const existing = await bucket.head(key);
             if (existing === null) {
                 throw new ContentStorageError(
                     "content_storage_unavailable",

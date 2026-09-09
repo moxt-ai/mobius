@@ -134,9 +134,9 @@ export function directoryError(error: unknown): Response {
                       ? 410
                       : error.code === "access_grant_redeemed"
                         ? 409
-                        : error.code === "pairing_timeout"
+                        : error.code === "pairing_timeout" || error.code === "directory_timeout"
                           ? 504
-                          : error.code === "pairing_tenant_unavailable"
+                          : error.code === "pairing_tenant_unavailable" || error.code === "directory_unavailable"
                             ? 503
                             : error.code === "workspace_required"
                               ? 403

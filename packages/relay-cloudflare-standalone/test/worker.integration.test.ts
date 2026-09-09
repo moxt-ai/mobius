@@ -1487,7 +1487,7 @@ describe.sequential("Cloudflare session deployment", () => {
             await expect(deniedReconciliation.json()).resolves.toEqual({
                 error: {
                     code: "unauthorized",
-                    message: "A valid channel token is required",
+                    message: "A valid pairing or channel credential is required",
                 },
             });
 

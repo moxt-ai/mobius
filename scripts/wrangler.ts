@@ -5,7 +5,7 @@ import { readWorktreeEnvironment } from "./worktree/environment.ts";
 const OUTPUT_LIMIT = 256_000;
 const TEMPORARY_DEPLOYMENT_PROFILE = "mobius_temporary_preview";
 const DIRECTORY_DATABASE_BINDING = "DIRECTORY_DATABASE";
-const CLOUDFLARE_RELAY_PACKAGE = "@moxt-ai/mobius-relay-cloudflare";
+const CLOUDFLARE_RELAY_PACKAGE = "@moxt-ai/mobius-relay-cloudflare-standalone";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const worktreeEnvironment = readWorktreeEnvironment();

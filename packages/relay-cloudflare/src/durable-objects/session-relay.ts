@@ -32,33 +32,14 @@ import {
     UploadingArtifactDescriptor,
 } from "@moxt-ai/mobius-relay-core";
 import { BotApiError } from "../bot-api-error.ts";
-import { CloudflareBotConnectionRuntime } from "../cloudflare-bot-connection-runtime.ts";
+import type { CloudflareBotConnectionRuntime } from "../cloudflare-bot-connection-runtime.ts";
 import { D1BotConnections } from "../d1-bot-connections.ts";
-import { DurableObjectContentStore } from "../durable-object-content-store.ts";
+import type { DatabaseResolver } from "../database-resolver.ts";
 import { DurableObjectSqlDatabase } from "../durable-object-sql-database.ts";
-import { R2ContentStore } from "../r2-content-store.ts";
-import {
-    type LiteSessionConfigurationEnvironment,
-    type SessionConfigurationEnvironment,
-    sessionArchiveByteLimitFromEnvironment,
-    sessionQuotaFromEnvironment,
-} from "../session-configuration.ts";
+import { type SessionConfigurationEnvironment, sessionQuotaFromEnvironment } from "../session-configuration.ts";
+import type { TenantShardingDirectory } from "../tenant-sharding-directory.ts";
 
 const MAX_INTERNAL_BODY_LENGTH = 96 * 1024 * 1024;
-
-interface BotSessionRelayEnvironment extends SessionConfigurationEnvironment {
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly DIRECTORY_DATABASE: D1Database;
-}
-
-interface LiteBotSessionRelayEnvironment extends LiteSessionConfigurationEnvironment {
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly DIRECTORY_DATABASE: D1Database;
-}
-
-export interface SessionRelayEnvironment extends BotSessionRelayEnvironment {
-    readonly SESSION_ARCHIVES: R2Bucket;
-}
 
 class InternalRequestError extends Error {
     readonly code: string;
@@ -396,21 +377,30 @@ function errorResponse(error: SessionRuntimeError | InternalRequestError): Respo
 
 class SessionRelayController {
     readonly #bots: SqliteBotSessionRuntime;
-    readonly #botConnections: D1BotConnections;
+    readonly #databases: DatabaseResolver;
+    readonly #tenants: TenantShardingDirectory;
     readonly #connectionRuntime: CloudflareBotConnectionRuntime;
     readonly #database: DurableObjectSqlDatabase;
     readonly #runtime: SqliteSessionRuntime;
     readonly #state: DurableObjectState;
 
-    constructor(state: DurableObjectState, environment: BotSessionRelayEnvironment, content: ImmutableContentStore) {
+    constructor(
+        state: DurableObjectState,
+        environment: SessionConfigurationEnvironment,
+        content: ImmutableContentStore,
+        databases: DatabaseResolver,
+        tenants: TenantShardingDirectory,
+        connectionRuntime: CloudflareBotConnectionRuntime,
+    ) {
         this.#database = new DurableObjectSqlDatabase(state.storage);
         this.#runtime = new SqliteSessionRuntime({
             gateways: { database: this.#database, content },
             config: { quota: sessionQuotaFromEnvironment(environment) },
         });
         this.#bots = new SqliteBotSessionRuntime(this.#database, this.#runtime);
-        this.#botConnections = new D1BotConnections(environment.DIRECTORY_DATABASE);
-        this.#connectionRuntime = new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS);
+        this.#databases = databases;
+        this.#tenants = tenants;
+        this.#connectionRuntime = connectionRuntime;
         this.#state = state;
     }
 
@@ -1034,7 +1024,9 @@ class SessionRelayController {
                         "The Bot outbound execution is unavailable",
                     );
                 }
-                const route = await this.#botConnections.authorizeOutboundTarget(
+                const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+                const connections = new D1BotConnections(this.#databases.resolve(tenant.tenantSharding));
+                const route = await connections.authorizeOutboundTarget(
                     message.botId,
                     this.rowString(execution, "binding_id"),
                     message.deliveryTargetId,
@@ -1083,34 +1075,24 @@ class SessionRelayController {
     };
 }
 
-export class LiteSessionRelay {
-    readonly #controller: SessionRelayController;
-
-    constructor(state: DurableObjectState, environment: LiteBotSessionRelayEnvironment) {
-        this.#controller = new SessionRelayController(
-            state,
-            environment,
-            new DurableObjectContentStore(state.storage, sessionArchiveByteLimitFromEnvironment(environment)),
-        );
-    }
-
-    async fetch(request: Request): Promise<Response> {
-        return await this.#controller.fetch(request);
-    }
-
-    async alarm(): Promise<void> {
-        await this.#controller.alarm();
-    }
-}
-
 export class SessionRelay {
     readonly #controller: SessionRelayController;
 
-    constructor(state: DurableObjectState, environment: SessionRelayEnvironment) {
+    constructor(
+        state: DurableObjectState,
+        environment: SessionConfigurationEnvironment,
+        content: ImmutableContentStore,
+        databases: DatabaseResolver,
+        tenants: TenantShardingDirectory,
+        connectionRuntime: CloudflareBotConnectionRuntime,
+    ) {
         this.#controller = new SessionRelayController(
             state,
             environment,
-            new R2ContentStore(environment.SESSION_ARCHIVES),
+            content,
+            databases,
+            tenants,
+            connectionRuntime,
         );
     }
 

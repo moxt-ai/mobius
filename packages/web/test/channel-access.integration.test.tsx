@@ -119,7 +119,9 @@ describe.sequential("Channel access boundaries", () => {
             window.history.replaceState(null, "", accessPath);
             render(<App />);
 
-            expect(await screen.findByText("unauthorized: A valid channel token is required")).toBeTruthy();
+            expect(
+                await screen.findByText("unauthorized: A valid pairing or channel credential is required"),
+            ).toBeTruthy();
 
             cleanup();
             await closeMobiusTransport();

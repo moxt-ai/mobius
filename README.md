@@ -406,7 +406,7 @@ pnpm wrangler deploy
 ```
 
 Lite limits immutable archive chunks to 256 MiB per session by default. Change
-`SESSION_ARCHIVE_BYTES_PER_SESSION` in `packages/relay-cloudflare/wrangler.jsonc`
+`SESSION_ARCHIVE_BYTES_PER_SESSION` in `packages/relay-cloudflare-standalone/wrangler.jsonc`
 to choose a different positive byte limit. The limit is enforced atomically by
 the Session Durable Object; exceeding it returns the stable
 `session_quota_exceeded` error and preserves the hot copy for recovery.
@@ -473,7 +473,8 @@ selected agent advertises that capability.
 ```text
 packages/
   relay-core/        Portable Relay API, channel actor, state contracts, and ports
-  relay-cloudflare/  Worker, Durable Objects, D1, and Worker Assets composition
+  relay-cloudflare/  Reusable Cloudflare Durable Objects, D1, and R2 adapters
+  relay-cloudflare-standalone/  Standalone Worker entry point and deployment composition
   relay-node/        Reserved for a future single-instance Node profile
   cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
   protocol/          Shared Mobius commands, events, capabilities, and codecs

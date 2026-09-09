@@ -73,7 +73,7 @@ Run the relay's Worker-boundary suite from the repository root:
 pnpm test:integration:worker
 ```
 
-The dedicated configuration at `packages/relay-cloudflare/vitest.config.ts`
+The dedicated configuration at `packages/relay-cloudflare-standalone/vitest.config.ts`
 loads the package's `wrangler.jsonc`, starts a local Workers runtime, and applies
 every migration in `packages/relay-cloudflare/migrations/d1` before the test
 file runs. The suite uses isolated local D1 and Durable Object bindings; it
@@ -81,7 +81,7 @@ does not require Cloudflare credentials and never connects to production
 resources.
 
 Worker integration scenarios belong in
-`packages/relay-cloudflare/test/**/*.integration.test.ts`. Keep the
+`packages/relay-cloudflare-standalone/test/**/*.integration.test.ts`. Keep the
 `--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
 integration currently requires shared, serialized storage for Durable Object
 WebSocket tests. The repository's `pnpm check` command runs this suite in CI

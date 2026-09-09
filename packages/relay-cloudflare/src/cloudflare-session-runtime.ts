@@ -59,6 +59,10 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 
 const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
+
+import type { DatabaseResolver } from "./database-resolver.ts";
+import type { TenantShardingDirectory } from "./tenant-sharding-directory.ts";
+
 const MAX_INTERNAL_RESPONSE_LENGTH = 96 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
@@ -689,15 +693,21 @@ export class CloudflareSessionRuntime
         SessionArtifactGateway,
         SessionEventStreamGateway
 {
-    readonly #database: D1Database;
+    readonly #databases: DatabaseResolver;
+    readonly #tenants: TenantShardingDirectory;
     readonly #namespace: DurableObjectNamespace;
     readonly #quota: SessionQuotaPolicy;
 
     constructor(cx: {
-        readonly gateways: { readonly sessionRelay: DurableObjectNamespace; readonly directoryDatabase: D1Database };
+        readonly gateways: {
+            readonly sessionRelay: DurableObjectNamespace;
+            readonly databaseResolver: DatabaseResolver;
+            readonly tenantShardingDirectory: TenantShardingDirectory;
+        };
         readonly config: { readonly quota: SessionQuotaPolicy };
     }) {
-        this.#database = cx.gateways.directoryDatabase;
+        this.#databases = cx.gateways.databaseResolver;
+        this.#tenants = cx.gateways.tenantShardingDirectory;
         this.#namespace = cx.gateways.sessionRelay;
         this.#quota = cx.config.quota;
     }
@@ -711,7 +721,7 @@ export class CloudflareSessionRuntime
         validateCreateSessionRequest(request);
         await this.reserveSession(scope, request.sessionId, now, signal);
         const summary = decodeSummary(await this.request(scope, request.sessionId, "create", { now, request }, signal));
-        await this.updateDirectory(summary);
+        await this.updateDirectory(summary, signal);
         return summary;
     };
 
@@ -904,7 +914,7 @@ export class CloudflareSessionRuntime
             throw new SessionRuntimeError("session_storage_unavailable", "The committed event result is invalid");
         }
         const committed = decodeCommittedSessionEvent(JSON.stringify(value["committed"]));
-        await this.updateDirectory(decodeSummary(value["summary"]));
+        await this.updateDirectory(decodeSummary(value["summary"]), signal);
         return { committed, duplicate: value["duplicate"] };
     };
 
@@ -918,7 +928,7 @@ export class CloudflareSessionRuntime
         const summary = decodeSummary(
             await this.request(scope, sessionId, "set-binding", { binding, now, sessionId }, signal),
         );
-        await this.updateDirectory(summary);
+        await this.updateDirectory(summary, signal);
         return summary;
     };
 
@@ -965,7 +975,7 @@ export class CloudflareSessionRuntime
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
         const summary = decodeSummary(await this.request(scope, sessionId, "read", { sessionId }, signal));
-        await this.updateDirectory(summary);
+        await this.updateDirectory(summary, signal);
         return summary;
     };
 
@@ -1031,7 +1041,7 @@ export class CloudflareSessionRuntime
                 signal,
             ),
         );
-        await this.updateDirectory(summary);
+        await this.updateDirectory(summary, signal);
         return summary;
     };
 
@@ -1119,7 +1129,9 @@ export class CloudflareSessionRuntime
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
-        const rows = await this.#database
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const database = this.#databases.resolve(tenant.tenantSharding);
+        const rows = await database
             .prepare(
                 `SELECT session_id FROM session_directory
          WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'ready'
@@ -1209,9 +1221,11 @@ export class CloudflareSessionRuntime
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
         const decoded = cursor === null ? null : decodeDirectoryCursor(cursor, scope);
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const database = this.#databases.resolve(tenant.tenantSharding);
         const statement =
             decoded === null
-                ? this.#database
+                ? database
                       .prepare(
                           `SELECT session_id, summary_json, updated_at
              FROM session_directory
@@ -1219,7 +1233,7 @@ export class CloudflareSessionRuntime
              ORDER BY updated_at DESC, session_id DESC LIMIT ?`,
                       )
                       .bind(scope.tenantId, scope.projectId, limit + 1)
-                : this.#database
+                : database
                       .prepare(
                           `SELECT session_id, summary_json, updated_at
              FROM session_directory
@@ -1323,7 +1337,7 @@ export class CloudflareSessionRuntime
             }
             throw error;
         }
-        await this.updateDirectory(summary);
+        await this.updateDirectory(summary, signal);
         return summary;
     };
 
@@ -1341,11 +1355,14 @@ export class CloudflareSessionRuntime
         if (lifecycle.kind === "deleted") {
             await this.releaseSession(scope, sessionId, signal);
         }
-        await this.updateDirectory({
-            ...previous,
-            lifecycle,
-            updatedAt: new Date(now).toISOString(),
-        });
+        await this.updateDirectory(
+            {
+                ...previous,
+                lifecycle,
+                updatedAt: new Date(now).toISOString(),
+            },
+            signal,
+        );
         return lifecycle;
     };
 
@@ -1356,7 +1373,9 @@ export class CloudflareSessionRuntime
         signal: AbortSignal,
     ): Promise<readonly ReturnType<typeof decodeCommittedSessionEvent>[]> => {
         signal.throwIfAborted();
-        const rows = await this.#database
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const database = this.#databases.resolve(tenant.tenantSharding);
+        const rows = await database
             .prepare(
                 `SELECT session_id FROM session_directory
          WHERE tenant_id = ? AND project_id = ? AND runtime_id = ?
@@ -1384,14 +1403,12 @@ export class CloudflareSessionRuntime
         const id = this.#namespace.idFromName(`${scope.tenantId}:${scope.projectId}:${sessionId}`);
         let response: Response;
         try {
-            response = await this.#namespace.get(id).fetch(
-                new Request(`https://session.internal/internal/sessions/${operation}`, {
-                    body: JSON.stringify({ ...body, scope }),
-                    headers: { "content-type": "application/json" },
-                    method: "POST",
-                    signal: operationSignal,
-                }),
-            );
+            response = await this.#namespace.get(id).fetch(`https://session.internal/internal/sessions/${operation}`, {
+                body: JSON.stringify({ ...body, scope }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+                signal: operationSignal,
+            });
         } catch (cause) {
             if (signal.aborted) {
                 throw cause;
@@ -1416,7 +1433,9 @@ export class CloudflareSessionRuntime
     ): Promise<SessionReservation> => {
         signal.throwIfAborted();
         try {
-            const result = await this.#database
+            const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+            const database = this.#databases.resolve(tenant.tenantSharding);
+            const result = await database
                 .prepare(
                     `INSERT INTO session_quota_reservations (
              tenant_id, project_id, session_id, reserved_at
@@ -1445,7 +1464,7 @@ export class CloudflareSessionRuntime
                 )
                 .run();
             signal.throwIfAborted();
-            const reservation = await this.#database
+            const reservation = await database
                 .prepare(
                     `SELECT session_id FROM session_quota_reservations
            WHERE tenant_id = ? AND project_id = ? AND session_id = ?`,
@@ -1477,7 +1496,9 @@ export class CloudflareSessionRuntime
     ): Promise<void> => {
         signal.throwIfAborted();
         try {
-            await this.#database
+            const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+            const database = this.#databases.resolve(tenant.tenantSharding);
+            await database
                 .prepare(
                     `DELETE FROM session_quota_reservations
            WHERE tenant_id = ? AND project_id = ? AND session_id = ?`,
@@ -1501,7 +1522,9 @@ export class CloudflareSessionRuntime
         signal: AbortSignal,
     ): Promise<SessionSummary | null> => {
         signal.throwIfAborted();
-        const row = await this.#database
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const database = this.#databases.resolve(tenant.tenantSharding);
+        const row = await database
             .prepare(
                 `SELECT summary_json FROM session_directory
          WHERE tenant_id = ? AND project_id = ? AND session_id = ?`,
@@ -1528,7 +1551,7 @@ export class CloudflareSessionRuntime
     ): Promise<void> => {
         try {
             const value = await this.request(scope, sessionId, "read", { sessionId }, signal);
-            await this.updateDirectory(decodeSummary(value));
+            await this.updateDirectory(decodeSummary(value), signal);
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -1537,9 +1560,11 @@ export class CloudflareSessionRuntime
         }
     };
 
-    private readonly updateDirectory = async (summary: SessionSummary): Promise<void> => {
+    private readonly updateDirectory = async (summary: SessionSummary, signal: AbortSignal): Promise<void> => {
         try {
-            await this.#database
+            const tenant = await this.#tenants.resolve(summary.tenantId, signal);
+            const database = this.#databases.resolve(tenant.tenantSharding);
+            await database
                 .prepare(
                     `INSERT INTO session_directory (
              tenant_id, project_id, session_id, runtime_id, lifecycle,
@@ -1562,6 +1587,7 @@ export class CloudflareSessionRuntime
                 )
                 .run();
         } catch (cause) {
+            signal.throwIfAborted();
             throw new SessionRuntimeError(
                 "session_storage_unavailable",
                 "The D1 session directory could not be updated",

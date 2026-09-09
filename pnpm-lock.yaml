@@ -83,6 +83,22 @@ importers:
         specifier: workspace:*
         version: link:../relay-core
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20260905.1
+        version: 5.20260905.1
+
+  packages/relay-cloudflare-standalone:
+    dependencies:
+      '@moxt-ai/mobius-protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      '@moxt-ai/mobius-relay-cloudflare':
+        specifier: workspace:*
+        version: link:../relay-cloudflare
+      '@moxt-ai/mobius-relay-core':
+        specifier: workspace:*
+        version: link:../relay-core
+    devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.1.4
         version: 1.1.4(@cloudflare/workers-types@5.20260905.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11)

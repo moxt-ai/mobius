@@ -29,13 +29,14 @@ import {
 import { CloudflareSessionRuntime } from "../cloudflare-session-runtime.ts";
 import { D1BotControl } from "../d1-bot-control.ts";
 import { D1BotConversations } from "../d1-bot-conversations.ts";
+import type { DatabaseResolver } from "../database-resolver.ts";
 import { type SessionConfigurationEnvironment, sessionQuotaFromEnvironment } from "../session-configuration.ts";
+import type { TenantShardingDirectory } from "../tenant-sharding-directory.ts";
 
 const DAEMON_TAG = "daemon";
 const HOST_TAG = "host";
 
 interface RuntimeRelayEnvironment extends SessionConfigurationEnvironment {
-    readonly DIRECTORY_DATABASE: D1Database;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }
 
@@ -177,16 +178,20 @@ class CloudflareChannelPeers implements ChannelPeers {
 }
 
 export class RuntimeRelay {
-    readonly #botConversations: D1BotConversations;
     readonly #botSessions: CloudflareBotSessionRuntime;
-    readonly #bots: D1BotControl;
     #daemonMessageTail: Promise<void> = Promise.resolve();
-    readonly #database: D1Database;
+    readonly #databases: DatabaseResolver;
+    readonly #tenants: TenantShardingDirectory;
     readonly #peers: CloudflareChannelPeers;
     readonly #sessions: CloudflareSessionRuntime;
     readonly #state: DurableObjectState;
 
-    constructor(state: DurableObjectState, environment: RuntimeRelayEnvironment) {
+    constructor(
+        state: DurableObjectState,
+        environment: RuntimeRelayEnvironment,
+        databases: DatabaseResolver,
+        tenants: TenantShardingDirectory,
+    ) {
         state.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS runtime_connection_state (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -199,13 +204,16 @@ export class RuntimeRelay {
       ) STRICT;
     `);
         this.#peers = new CloudflareChannelPeers(state);
-        this.#database = environment.DIRECTORY_DATABASE;
-        this.#bots = new D1BotControl(environment.DIRECTORY_DATABASE);
+        this.#databases = databases;
+        this.#tenants = tenants;
         this.#sessions = new CloudflareSessionRuntime({
-            gateways: { sessionRelay: environment.SESSION_RELAY, directoryDatabase: environment.DIRECTORY_DATABASE },
+            gateways: {
+                sessionRelay: environment.SESSION_RELAY,
+                databaseResolver: databases,
+                tenantShardingDirectory: tenants,
+            },
             config: { quota: sessionQuotaFromEnvironment(environment) },
         });
-        this.#botConversations = new D1BotConversations(environment.DIRECTORY_DATABASE);
         this.#botSessions = new CloudflareBotSessionRuntime(environment.SESSION_RELAY, this.#sessions);
         this.#state = state;
     }
@@ -371,13 +379,17 @@ export class RuntimeRelay {
                     const kind = decodeMessageKind(message);
                     if (kind === BOT_BINDING_APPROVED_KIND) {
                         const event = decodeBotExecutionBindingApprovedEvent(message);
-                        await this.#bots.approveBinding(scope, attachment.runtimeId, event, Date.now(), signal);
+                        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+                        const bots = new D1BotControl(this.#databases.resolve(tenant.tenantSharding));
+                        await bots.approveBinding(scope, attachment.runtimeId, event, Date.now(), signal);
                         channelSocket.send(message);
                         return;
                     }
                     if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
                         const event = decodeBotExecutionBindingUnavailableEvent(message);
-                        await this.#bots.rejectBinding(scope, attachment.runtimeId, event, Date.now(), signal);
+                        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+                        const bots = new D1BotControl(this.#databases.resolve(tenant.tenantSharding));
+                        await bots.rejectBinding(scope, attachment.runtimeId, event, Date.now(), signal);
                         channelSocket.send(message);
                         return;
                     }
@@ -549,7 +561,9 @@ export class RuntimeRelay {
         signal: AbortSignal,
     ): Promise<boolean> => {
         signal.throwIfAborted();
-        const row = await this.#database
+        const tenant = await this.#tenants.resolve(attachment.tenantId, signal);
+        const database = this.#databases.resolve(tenant.tenantSharding);
+        const row = await database
             .prepare(
                 `SELECT 1 AS active
          FROM channel_host_credentials AS credentials
@@ -629,7 +643,9 @@ export class RuntimeRelay {
         scope: ProjectScope,
         signal: AbortSignal,
     ): Promise<void> => {
-        const messages = await this.#bots.listPendingControl(scope, runtimeId, 100, signal);
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const bots = new D1BotControl(this.#databases.resolve(tenant.tenantSharding));
+        const messages = await bots.listPendingControl(scope, runtimeId, 100, signal);
         const daemon = this.#peers.daemons().find((socket) => socket.isOpen());
         if (daemon === undefined) {
             return;
@@ -645,25 +661,22 @@ export class RuntimeRelay {
         scope: ProjectScope,
         signal: AbortSignal,
     ): Promise<void> => {
-        const plans = await this.#botConversations.listPendingProvisioning(scope, runtimeId, 100, signal);
+        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const conversations = new D1BotConversations(this.#databases.resolve(tenant.tenantSharding));
+        const plans = await conversations.listPendingProvisioning(scope, runtimeId, 100, signal);
         let retryPending = plans.length === 100;
         for (const plan of plans) {
             signal.throwIfAborted();
             try {
                 await this.#botSessions.provisionConversation(scope, plan.provisioning, Date.now(), signal);
-                await this.#botConversations.activateConversation(
-                    scope,
-                    plan.provisioning.conversationId,
-                    Date.now(),
-                    signal,
-                );
+                await conversations.activateConversation(scope, plan.provisioning.conversationId, Date.now(), signal);
             } catch (error) {
                 signal.throwIfAborted();
                 if (
                     error instanceof BotSessionRuntimeError &&
                     (error.code === "conversation_access_denied" || error.code === "session_conflict")
                 ) {
-                    await this.#botConversations.failConversationProvisioning(
+                    await conversations.failConversationProvisioning(
                         scope,
                         plan.provisioning.conversationId,
                         error.code,

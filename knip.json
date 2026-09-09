@@ -17,7 +17,7 @@
                 "zustand"
             ]
         },
-        "packages/relay-cloudflare": {
+        "packages/relay-cloudflare-standalone": {
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/web-sdk": {

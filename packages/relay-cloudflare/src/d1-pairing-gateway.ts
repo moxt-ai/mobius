@@ -30,6 +30,9 @@ import {
     validateIdentifier,
     validateToken,
 } from "@moxt-ai/mobius-relay-core";
+import type { DatabaseResolver } from "./database-resolver.ts";
+import type { PairingIdentityCredential, PairingIdentityDirectory } from "./pairing-identity-directory.ts";
+import type { TenantShardingDirectory } from "./tenant-sharding-directory.ts";
 
 interface PairingChannelRow {
     readonly agents_json: string;
@@ -97,11 +100,34 @@ interface BrowserCredentialRow {
 }
 
 export class D1PairingGateway implements PairingGateway {
-    private readonly database: D1Database;
+    private readonly databases: DatabaseResolver;
+    private readonly tenants: TenantShardingDirectory;
+    private readonly identities: PairingIdentityDirectory;
 
-    constructor(cx: { readonly gateways: { readonly directoryDatabase: D1Database } }) {
-        this.database = cx.gateways.directoryDatabase;
+    constructor(cx: {
+        readonly gateways: {
+            readonly databaseResolver: DatabaseResolver;
+            readonly tenantShardingDirectory: TenantShardingDirectory;
+            readonly pairingIdentityDirectory: PairingIdentityDirectory;
+        };
+    }) {
+        this.databases = cx.gateways.databaseResolver;
+        this.tenants = cx.gateways.tenantShardingDirectory;
+        this.identities = cx.gateways.pairingIdentityDirectory;
     }
+
+    private readonly identityDatabase = async (
+        credential: PairingIdentityCredential,
+        signal: AbortSignal,
+    ): Promise<D1Database> => {
+        const identity = await this.identities.authenticate(credential, signal);
+        const tenant = await this.tenants.resolve(identity.tenantId, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        if (database !== identity.database) {
+            throw new PairingDirectoryError("directory_unavailable", "Workspace storage is unavailable");
+        }
+        return database;
+    };
 
     private readonly readAuthorizedHost = async (
         channelId: string,
@@ -111,7 +137,8 @@ export class D1PairingGateway implements PairingGateway {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
         signal.throwIfAborted();
-        const row = await this.database
+        const database = await this.identityDatabase({ kind: "host", channelId, tokenHash }, signal);
+        const row = await database
             .prepare(
                 `SELECT channels.channel_id,
                 channels.runtime_id,
@@ -133,7 +160,7 @@ export class D1PairingGateway implements PairingGateway {
         if (row === null) {
             throw new PairingDirectoryError("unauthorized", "A valid channel token is required");
         }
-        const touched = await this.database
+        const touched = await database
             .prepare(
                 `UPDATE channel_host_credentials
          SET last_used_at = ?
@@ -170,7 +197,8 @@ export class D1PairingGateway implements PairingGateway {
     ): Promise<AuthorizedChannelRow> => {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
-        const row = await this.database
+        const database = await this.identityDatabase({ kind: "project", projectId, tokenHash }, signal);
+        const row = await database
             .prepare(
                 `SELECT channels.channel_id,
                 channels.runtime_id,
@@ -197,11 +225,12 @@ export class D1PairingGateway implements PairingGateway {
     };
 
     private readonly authorizeBrowserProject = async (
+        database: D1Database,
         projectId: string,
         tokenHash: string,
         signal: AbortSignal,
     ): Promise<ProjectScopeAccess> => {
-        const row = await this.database
+        const row = await database
             .prepare(
                 `SELECT credential_id, tenant_id, project_id, expires_at, revoked_at
          FROM project_browser_credentials
@@ -220,7 +249,7 @@ export class D1PairingGateway implements PairingGateway {
         if (row.expires_at <= now) {
             throw new PairingDirectoryError("credential_expired", "The browser credential expired");
         }
-        const touched = await this.database
+        const touched = await database
             .prepare(
                 `UPDATE project_browser_credentials
          SET last_used_at = ?
@@ -243,7 +272,8 @@ export class D1PairingGateway implements PairingGateway {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
         signal.throwIfAborted();
-        const row = await this.database
+        const database = await this.identityDatabase({ kind: "daemon", channelId, tokenHash }, signal);
+        const row = await database
             .prepare(
                 `SELECT channel_id, runtime_id, tenant_id, project_id FROM pairing_channels
          WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`,
@@ -282,7 +312,8 @@ export class D1PairingGateway implements PairingGateway {
     ): Promise<ProjectScopeAccess> => {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
-        const row = await this.database
+        const database = await this.identityDatabase({ kind: "project", projectId, tokenHash }, signal);
+        const row = await database
             .prepare(
                 `SELECT channels.channel_id,
                 channels.runtime_id,
@@ -302,9 +333,9 @@ export class D1PairingGateway implements PairingGateway {
             .first<AuthorizedChannelRow>();
         signal.throwIfAborted();
         if (row === null) {
-            return await this.authorizeBrowserProject(projectId, tokenHash, signal);
+            return await this.authorizeBrowserProject(database, projectId, tokenHash, signal);
         }
-        const touched = await this.database
+        const touched = await database
             .prepare(
                 `UPDATE channel_host_credentials
          SET last_used_at = ?
@@ -327,7 +358,8 @@ export class D1PairingGateway implements PairingGateway {
     ): Promise<VerifiedChannelAccess> => {
         signal.throwIfAborted();
         const tokenHash = await hashSecret(validateToken(token));
-        const row = await this.database
+        const database = await this.identityDatabase({ kind: "project", projectId, tokenHash }, signal);
+        const row = await database
             .prepare(
                 `SELECT channels.channel_id,
                 channels.runtime_id,
@@ -348,8 +380,8 @@ export class D1PairingGateway implements PairingGateway {
             .first<AuthorizedChannelRow>();
         signal.throwIfAborted();
         if (row === null) {
-            const browser = await this.authorizeBrowserProject(projectId, tokenHash, signal);
-            const channel = await this.database
+            const browser = await this.authorizeBrowserProject(database, projectId, tokenHash, signal);
+            const channel = await database
                 .prepare(
                     `SELECT channel_id, runtime_id, tenant_id, project_id
            FROM pairing_channels
@@ -369,7 +401,7 @@ export class D1PairingGateway implements PairingGateway {
                 channel.project_id,
             );
         }
-        const touched = await this.database
+        const touched = await database
             .prepare(
                 `UPDATE channel_host_credentials
          SET last_used_at = ?
@@ -395,7 +427,11 @@ export class D1PairingGateway implements PairingGateway {
         signal.throwIfAborted();
         const daemonToken = createRandomToken(32);
         const now = Date.now();
-        const claimed = await this.database
+        const database = await this.identityDatabase(
+            { kind: "pairing-code", codeHash: await hashSecret(normalizePairingCode(pairingCode)) },
+            signal,
+        );
+        const claimed = await database
             .prepare(
                 `UPDATE pairing_channels
          SET status = 'paired',
@@ -444,7 +480,9 @@ export class D1PairingGateway implements PairingGateway {
         const grantId = `grt_${createRandomToken(18)}`;
         const grantSecret = createRandomToken(32);
         const expiresAt = now + ACCESS_GRANT_LIFETIME_MILLISECONDS;
-        const result = await this.database
+        const tenant = await this.tenants.resolve(owner.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const result = await database
             .prepare(
                 `INSERT INTO channel_access_grants (
            grant_id,
@@ -486,7 +524,9 @@ export class D1PairingGateway implements PairingGateway {
         const expiresAt = now + lifetimeMilliseconds;
         const credentialId = `bcr_${createRandomToken(18)}`;
         const browserToken = createRandomToken(32);
-        const result = await this.database
+        const tenant = await this.tenants.resolve(owner.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const result = await database
             .prepare(
                 `INSERT INTO project_browser_credentials (
            credential_id, tenant_id, project_id, token_hash,
@@ -520,6 +560,8 @@ export class D1PairingGateway implements PairingGateway {
     readonly createPairing = async (tenantId: string, signal: AbortSignal): Promise<CreatedPairing> => {
         signal.throwIfAborted();
         validateIdentifier(tenantId, "tenant_id");
+        const tenant = await this.tenants.resolve(tenantId, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
         const now = Date.now();
         const pairingId = crypto.randomUUID();
         const pairingCode = createRandomPairingCode();
@@ -531,8 +573,8 @@ export class D1PairingGateway implements PairingGateway {
         const projectId = `prj_${createRandomToken(18)}`;
         const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
 
-        const results = await this.database.batch([
-            this.database
+        const results = await database.batch([
+            database
                 .prepare(
                     `INSERT INTO pairing_channels (
           pairing_id,
@@ -558,7 +600,7 @@ export class D1PairingGateway implements PairingGateway {
                     now,
                     expiresAt,
                 ),
-            this.database
+            database
                 .prepare(
                     `INSERT INTO channel_host_credentials (
              credential_id,
@@ -595,7 +637,9 @@ export class D1PairingGateway implements PairingGateway {
         signal: AbortSignal,
     ): Promise<readonly LinkedChannelDevice[]> => {
         const owner = await this.readAuthorizedOwner(channelId, token, signal);
-        const page = await this.database
+        const tenant = await this.tenants.resolve(owner.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const page = await database
             .prepare(
                 `SELECT credential_id, created_at, last_used_at
          FROM channel_host_credentials
@@ -623,7 +667,9 @@ export class D1PairingGateway implements PairingGateway {
         signal: AbortSignal,
     ): Promise<readonly ChannelDescriptor[]> => {
         const access = await this.authorizeProject(projectId, token, signal);
-        const page = await this.database
+        const tenant = await this.tenants.resolve(access.tenantId, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const page = await database
             .prepare(
                 `SELECT channel_id, runtime_id, machine_name, workspace_name,
                 agents_json, installable_agents_json, tenant_id, project_id
@@ -656,7 +702,9 @@ export class D1PairingGateway implements PairingGateway {
         signal: AbortSignal,
     ): Promise<ChannelDescriptor> => {
         const access = await this.readAuthorizedHost(channelId, token, signal);
-        const row = await this.database
+        const tenant = await this.tenants.resolve(access.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const row = await database
             .prepare(
                 `SELECT channel_id, runtime_id, machine_name, workspace_name, agents_json,
                 installable_agents_json, tenant_id, project_id
@@ -690,7 +738,11 @@ export class D1PairingGateway implements PairingGateway {
         signal: AbortSignal,
     ): Promise<PairingStatus> => {
         signal.throwIfAborted();
-        const row = await this.database
+        const database = await this.identityDatabase(
+            { kind: "pairing", pairingId, tokenHash: await hashSecret(pollToken) },
+            signal,
+        );
+        const row = await database
             .prepare(
                 `SELECT status, channel_id, runtime_id, expires_at, machine_name, workspace_name,
                 agents_json, installable_agents_json, tenant_id, project_id
@@ -739,8 +791,9 @@ export class D1PairingGateway implements PairingGateway {
         const now = Date.now();
         const credentialId = `hcr_${createRandomToken(18)}`;
         const hostToken = createRandomToken(32);
-        const results = await this.database.batch([
-            this.database
+        const database = await this.identityDatabase({ kind: "grant", channelId, grantId, secretHash }, signal);
+        const results = await database.batch([
+            database
                 .prepare(
                     `UPDATE channel_access_grants
            SET redeemed_at = ?, redeemed_credential_id = ?
@@ -751,7 +804,7 @@ export class D1PairingGateway implements PairingGateway {
              AND expires_at > ?`,
                 )
                 .bind(now, credentialId, normalizedGrantId, normalizedChannelId, secretHash, now),
-            this.database
+            database
                 .prepare(
                     `INSERT INTO channel_host_credentials (
              credential_id,
@@ -783,7 +836,7 @@ export class D1PairingGateway implements PairingGateway {
         signal.throwIfAborted();
 
         if (results[0]?.meta.changes !== 1 || results[1]?.meta.changes !== 1) {
-            const state = await this.database
+            const state = await database
                 .prepare(
                     `SELECT expires_at,
                   CASE WHEN redeemed_at IS NULL THEN 0 ELSE 1 END AS is_redeemed
@@ -805,7 +858,7 @@ export class D1PairingGateway implements PairingGateway {
             throw new Error("The access grant could not be redeemed");
         }
 
-        const channel = await this.database
+        const channel = await database
             .prepare(
                 `SELECT tenant_id, project_id
          FROM pairing_channels
@@ -833,7 +886,9 @@ export class D1PairingGateway implements PairingGateway {
     ): Promise<ChannelHostCredential> => {
         const owner = await this.readAuthorizedOwner(channelId, token, signal);
         const normalizedCredentialId = validateIdentifier(credentialId, "credential_id");
-        const result = await this.database
+        const tenant = await this.tenants.resolve(owner.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const result = await database
             .prepare(
                 `UPDATE channel_host_credentials
          SET revoked_at = ?
@@ -846,7 +901,7 @@ export class D1PairingGateway implements PairingGateway {
             .run();
         signal.throwIfAborted();
         if (result.meta.changes !== 1) {
-            const existing = await this.database
+            const existing = await database
                 .prepare(
                     `SELECT credential_id
            FROM channel_host_credentials
@@ -885,7 +940,9 @@ export class D1PairingGateway implements PairingGateway {
     ): Promise<void> => {
         const owner = await this.readAuthorizedProjectOwner(projectId, token, signal);
         const normalizedCredentialId = validateIdentifier(credentialId, "credential_id");
-        const result = await this.database
+        const tenant = await this.tenants.resolve(owner.tenant_id, signal);
+        const database = this.databases.resolve(tenant.tenantSharding);
+        const result = await database
             .prepare(
                 `UPDATE project_browser_credentials
          SET revoked_at = COALESCE(revoked_at, ?)
@@ -907,7 +964,11 @@ export class D1PairingGateway implements PairingGateway {
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        const result = await this.database
+        const database = await this.identityDatabase(
+            { kind: "daemon", channelId, tokenHash: await hashSecret(validateToken(token)) },
+            signal,
+        );
+        const result = await database
             .prepare(
                 `UPDATE pairing_channels
          SET agents_json = ?, installable_agents_json = ?
