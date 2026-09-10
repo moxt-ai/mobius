@@ -5,7 +5,7 @@ import type {
     PromptImage,
     PromptResource,
 } from "@moxt-ai/mobius-protocol";
-
+import type { ExecutionPermit } from "../authentication/project-authentication.ts";
 import { type ProjectScope, SessionRuntimeError } from "../do/session.ts";
 
 export const BOT_EXECUTION_LIFETIME_MILLISECONDS = 30 * 60 * 1_000;
@@ -316,7 +316,7 @@ export interface BotSessionRuntime {
         capabilitySecret: string,
         now: number,
         signal: AbortSignal,
-    ) => Promise<void>;
+    ) => Promise<ExecutionPermit>;
     readonly acceptOutbound: (
         scope: ProjectScope,
         sessionId: string,

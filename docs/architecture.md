@@ -131,9 +131,21 @@ a distinct linked-device credential; the grant secret and host credentials are
 stored only as hashes. Linked devices cannot delegate access. The owner can list
 and revoke each one independently, and revocation closes matching live sockets as
 well as rejecting later HTTP and WebSocket authorization. The channel ID is only
-an address and does not grant access. Mobius deliberately has no user identity
-system; user and team policy belongs in a separate identity service layered over
-these capabilities.
+an address and does not grant access. Mobius does not implement sign-up or
+user/team policy. A deployment may register provider-neutral OIDC
+authentication, but external issuer/subject verification becomes Project
+authority only through an explicit server-owned grant; organization and role
+claims never select a Tenant or Project by themselves.
+
+Project-facing owner, browser, exchanged external, and application credentials
+all produce the same readonly `ProjectAccessContext` with exact scope,
+permissions, lifetime, credential ID, and audit actor. Runtime daemon and Bot
+Connection requests instead produce `RuntimeAccessContext` and
+`BotConnectionAccessContext`. A Bot outbound action additionally requires an
+`ExecutionPermit` derived from the authenticated Runtime and the matching
+server-backed execution capability. See [Project authentication and credential
+operations](project-authentication.md) for the complete trust-plane and threat
+model.
 
 Forward D1 migrations preserve existing pairing rows, backfill explicit owner
 credentials and Runtime slots, and add indexed Project/Runtime lookup.

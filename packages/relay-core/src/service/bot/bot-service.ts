@@ -7,16 +7,18 @@ import {
     DraftBot,
     RequiredBotCompletionDeliveryPolicy,
 } from "@moxt-ai/mobius-protocol";
+import { type ExecutionPermit, ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import {
-    InboundBotConnectorPrincipal,
-    InboundBotOwnerPrincipal,
-    type InboundBotPrincipal,
+    BotConnectionAccess,
+    type BotConversationAuthorization,
+    type BotRuntimeExecutionAccess,
+    ProjectBotAccess,
 } from "../../entity/bot/bot-access.ts";
 import { type ApprovedBindingContext, completionPolicy, stringArray } from "../../entity/bot/bot-binding.ts";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import type { BotBehaviorRevision, BotProfileRevision } from "../../entity/bot/bot-revisions.ts";
 import { BotOutboundSubmission, type BotSessionRuntime, BotTurnSubmission } from "../../entity/bot/bot-session.ts";
-import type { ProjectScope } from "../../entity/do/session.ts";
+import { type ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
 import {
     createRandomToken,
     hashSecret,
@@ -40,6 +42,31 @@ import type { BotTargetService } from "./bot-target-service.ts";
 
 const BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS = 5 * 60 * 1_000;
+
+function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit, now: number): void {
+    if (
+        permit.scope.tenantId !== runtime.scope.tenantId ||
+        permit.scope.projectId !== runtime.scope.projectId ||
+        permit.executionId !== runtime.executionId ||
+        permit.capabilityId !== runtime.capabilityId ||
+        permit.botId !== runtime.botId ||
+        permit.conversationId !== runtime.conversationId ||
+        permit.sessionId !== runtime.sessionId ||
+        permit.turnId !== runtime.turnId ||
+        permit.behaviorRevisionId !== runtime.behaviorRevisionId ||
+        permit.bindingId !== runtime.bindingId ||
+        permit.bindingRevision !== runtime.bindingRevision ||
+        permit.runtimeId !== runtime.runtimeId ||
+        permit.operation !== "outbound-message:create" ||
+        permit.expiresAtEpochMilliseconds <= now ||
+        permit.remainingUses < 1
+    ) {
+        throw new SessionRuntimeError(
+            "execution_context_mismatch",
+            "The execution permit does not match the authenticated Runtime context",
+        );
+    }
+}
 
 import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
 
@@ -111,32 +138,72 @@ export class BotService {
         return bot;
     };
 
-    readonly listOwnedBots = async (projectId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeProjectOwner(projectId, token, signal);
+    readonly listOwnedBots = async (projectId: string, token: string, actorReference: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProject(
+            projectId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return cx.services.management.listBots(access, signal);
     };
 
-    readonly listBehaviorRevisions = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly listBehaviorRevisions = async (
+        botId: string,
+        token: string,
+        actorReference: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return cx.services.management.listBehaviorRevisions(access, signal);
     };
 
-    readonly listExecutionBindings = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly listExecutionBindings = async (
+        botId: string,
+        token: string,
+        actorReference: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return cx.services.management.listExecutionBindings(access, signal);
     };
 
-    readonly listConnections = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly listConnections = async (botId: string, token: string, actorReference: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return cx.services.management.listConnections(access, signal);
     };
 
-    readonly listConversations = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly listConversations = async (botId: string, token: string, actorReference: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.ConversationRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return cx.services.management.listConversations(access, signal);
     };
@@ -156,22 +223,19 @@ export class BotService {
 
     private readonly authorizeConversation = async (
         cx: BotTenantContext,
-        principal: InboundBotPrincipal,
+        access: BotConversationAuthorization,
         conversationId: string,
         signal: AbortSignal,
     ) => {
         const row = await cx.services.conversations.readConversation(conversationId, signal);
-        if (row.bot_id !== principal.botId || row.lifecycle !== "active") {
+        if (row.bot_id !== access.botId || row.lifecycle !== "active") {
             throw new BotApiError(
                 "conversation_access_denied",
                 "The Bot conversation is not accessible",
                 "access-denied",
             );
         }
-        if (
-            principal instanceof InboundBotConnectorPrincipal &&
-            row.connection_id !== principal.connection.connectionId
-        ) {
+        if (access instanceof BotConnectionAccess && row.connection_id !== access.connectionId) {
             throw new BotApiError(
                 "conversation_access_denied",
                 "The Bot conversation belongs to another connection",
@@ -303,13 +367,20 @@ export class BotService {
     readonly createBot = async (
         projectId: string,
         token: string,
+        actorReference: string,
         displayName: string,
         avatarRef: string,
         description: string,
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeProjectOwner(projectId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProject(
+            projectId,
+            token,
+            ProjectPermission.BotProfileWrite,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const profile: BotProfileRevision = {
             botId: `bot_${createRandomToken(18)}`,
@@ -339,13 +410,25 @@ export class BotService {
             profileRevision: 1,
         };
     };
-    readonly readBot = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly readBot = async (botId: string, token: string, actorReference: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         return botResource(await cx.storages.control.readBot(access, signal));
     };
-    readonly readSetup = async (botId: string, token: string, signal: AbortSignal) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+    readonly readSetup = async (botId: string, token: string, actorReference: string, signal: AbortSignal) => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotRead,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const { bot, behavior, binding } = await cx.storages.control.readSetup(access, signal);
         if (bot === null) {
@@ -378,6 +461,7 @@ export class BotService {
     readonly createProfileRevision = async (
         botId: string,
         token: string,
+        actorReference: string,
         revision: number,
         displayName: string,
         avatarRef: string,
@@ -385,7 +469,13 @@ export class BotService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotProfileWrite,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const bot = await this.readLifecycle(cx, access.botId, signal);
         if (bot.lifecycle === "archived") {
@@ -413,6 +503,7 @@ export class BotService {
     readonly createBehaviorRevision = async (
         botId: string,
         token: string,
+        actorReference: string,
         revision: number,
         instructions: string,
         capabilities: readonly string[],
@@ -423,7 +514,13 @@ export class BotService {
         if (capabilities.some((capability) => capability !== "embedded-context")) {
             throw new BotApiError("invalid_request", "The behavior capability is not supported", "invalid-input");
         }
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotBehaviorWrite,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const bot = await this.readLifecycle(cx, access.botId, signal);
         if (bot.lifecycle === "archived") {
@@ -460,6 +557,7 @@ export class BotService {
     readonly createExecutionBinding = async (
         botId: string,
         token: string,
+        actorReference: string,
         revision: number,
         behaviorRevisionId: string,
         runtimeId: string,
@@ -471,7 +569,13 @@ export class BotService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotBindingWrite,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const bot = await this.readLifecycle(cx, access.botId, signal);
         if (bot.lifecycle === "archived") {
@@ -558,12 +662,19 @@ export class BotService {
     readonly transitionBot = async (
         botId: string,
         token: string,
+        actorReference: string,
         revision: number,
         action: string,
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotProfileWrite,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const bot = await this.readLifecycle(cx, access.botId, signal);
         if (bot.revision !== revision) {
@@ -600,6 +711,7 @@ export class BotService {
     readonly createGrant = async (
         botId: string,
         token: string,
+        actorReference: string,
         audience: string,
         label: string,
         scopes: readonly string[],
@@ -607,7 +719,13 @@ export class BotService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotConnectionManage,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         if (!Number.isSafeInteger(expiresInSeconds) || expiresInSeconds < 60 || expiresInSeconds > 3_600) {
             throw new BotApiError("invalid_request", "The connection grant lifetime is invalid", "invalid-input");
@@ -645,15 +763,22 @@ export class BotService {
     readonly revokeConnectionForOwner = async (
         botId: string,
         token: string,
+        actorReference: string,
         connectionId: string,
         expectedRevision: number,
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotConnectionManage,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const normalizedConnectionId = validateIdentifier(connectionId, "connection_id");
-        const connection = await cx.storages.connections.readOwnerConnection(access, normalizedConnectionId, signal);
+        const connection = await cx.storages.connections.readProjectConnection(access, normalizedConnectionId, signal);
         if (connection === null) {
             throw new BotApiError("connection_not_found", "The Bot connection does not exist", "not-found");
         }
@@ -744,12 +869,19 @@ export class BotService {
     readonly approveTarget = async (
         botId: string,
         token: string,
+        actorReference: string,
         targetId: string,
         revision: number,
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.cx.services.authorization.authorizeBotOwner(botId, token, signal);
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotConnectionManage,
+            actorReference,
+            signal,
+        );
         const cx = await this.context(access.scope.tenantId, signal);
         const deliveryTargetId = validateIdentifier(targetId, "delivery_target_id");
         if (
@@ -783,38 +915,41 @@ export class BotService {
     readonly createConversation = async (
         botId: string,
         token: string,
+        actorReference: string,
         request: NewBotConversation,
         now: number,
         signal: AbortSignal,
     ) => {
-        const principal = await this.cx.services.authorization.authorizeInbound(
+        const access = await this.cx.services.authorization.authorizeInbound(
             botId,
             token,
+            ProjectPermission.ConversationCreate,
             "inbound-conversation:create",
+            actorReference,
             signal,
         );
-        const cx = await this.context(principal.scope.tenantId, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
         const binding = await this.readApprovedBinding(cx, botId, signal);
-        await this.readRuntimeAccess(cx, principal.scope, binding.runtimeId, signal);
+        await this.readRuntimeAccess(cx, access.scope, binding.runtimeId, signal);
         const createPlan = async () => {
-            if (principal instanceof InboundBotOwnerPrincipal && request.kind === "owner") {
-                return cx.services.conversations.createOwnerConversation(
-                    principal,
+            if (access instanceof ProjectBotAccess && request.kind === "owner") {
+                return cx.services.conversations.createProjectConversation(
+                    access,
                     binding,
                     request.clientConversationKey,
                     now,
                     signal,
                 );
             }
-            if (principal instanceof InboundBotConnectorPrincipal && request.kind === "connection") {
+            if (access instanceof BotConnectionAccess && request.kind === "connection") {
                 await cx.services.targets.authorizeConversationReplyTarget(
                     botId,
-                    principal.connection.connectionId,
+                    access.connectionId,
                     request.replyDeliveryTargetId,
                     signal,
                 );
                 return cx.services.conversations.createConnectedConversation(
-                    principal,
+                    access,
                     binding,
                     request.clientConversationKey,
                     request.title,
@@ -825,14 +960,14 @@ export class BotService {
             }
             throw new BotApiError(
                 "invalid_request",
-                "The conversation request does not match its principal",
+                "The conversation request does not match its access context",
                 "invalid-input",
             );
         };
         const plan = await createPlan();
-        await this.cx.gateways.botSessions.provisionConversation(principal.scope, plan.provisioning, now, signal);
+        await this.cx.gateways.botSessions.provisionConversation(access.scope, plan.provisioning, now, signal);
         return cx.services.conversations.activateConversation(
-            principal.scope,
+            access.scope,
             plan.provisioning.conversationId,
             now,
             signal,
@@ -841,20 +976,23 @@ export class BotService {
     readonly submitMessage = async (
         botId: string,
         token: string,
+        actorReference: string,
         conversationId: string,
         request: NewBotMessage,
         now: number,
         signal: AbortSignal,
     ) => {
-        const principal = await this.cx.services.authorization.authorizeInbound(
+        const access = await this.cx.services.authorization.authorizeInbound(
             botId,
             token,
+            ProjectPermission.ConversationTurnCreate,
             "inbound-message:create",
+            actorReference,
             signal,
         );
-        const cx = await this.context(principal.scope.tenantId, signal);
-        const conversation = await this.authorizeConversation(cx, principal, conversationId, signal);
-        const bot = await cx.storages.conversations.readBotLifecycle(principal, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const conversation = await this.authorizeConversation(cx, access, conversationId, signal);
+        const bot = await cx.storages.conversations.readBotLifecycle(access, signal);
         if (bot?.lifecycle === "suspended") {
             throw new BotApiError("bot_suspended", "The Bot is suspended", "conflict");
         }
@@ -862,7 +1000,7 @@ export class BotService {
             throw new BotApiError("bot_not_active", "The Bot is not active", "conflict");
         }
         const executionState = await cx.storages.conversations.readExecutionState(
-            principal,
+            access,
             conversation.bindingId,
             conversation.bindingRevision,
             signal,
@@ -875,7 +1013,7 @@ export class BotService {
             throw new BotApiError("binding_incompatible", "The conversation Runtime is unavailable", "conflict");
         }
         let submission: BotTurnSubmission;
-        if (principal instanceof InboundBotOwnerPrincipal && request.kind === "owner") {
+        if (access instanceof ProjectBotAccess && request.kind === "owner") {
             submission = new BotTurnSubmission(
                 request.clientMessageId,
                 request.actorRef,
@@ -883,13 +1021,13 @@ export class BotService {
                 [],
                 [],
                 await this.cx.gateways.sessions.resolveArtifactResources(
-                    principal.scope,
+                    access.scope,
                     conversation.sessionId,
                     request.artifactIds,
                     signal,
                 ),
             );
-        } else if (principal instanceof InboundBotConnectorPrincipal && request.kind === "connection") {
+        } else if (access instanceof BotConnectionAccess && request.kind === "connection") {
             submission = new BotTurnSubmission(
                 request.clientMessageId,
                 request.actorRef,
@@ -905,19 +1043,23 @@ export class BotService {
                 })),
             );
         } else {
-            throw new BotApiError("invalid_request", "The Bot message does not match its principal", "invalid-input");
+            throw new BotApiError(
+                "invalid_request",
+                "The Bot message does not match its access context",
+                "invalid-input",
+            );
         }
         const accepted = await this.cx.gateways.botSessions.acceptTurn(
-            principal.scope,
+            access.scope,
             conversation.sessionId,
             submission,
             now,
             signal,
         );
         await cx.services.conversations.registerExecution(
-            principal.scope,
+            access.scope,
             accepted.execution,
-            principal instanceof InboundBotOwnerPrincipal
+            access instanceof ProjectBotAccess
                 ? {
                       kind: "owner",
                       title: conversationTitleFromText(
@@ -930,8 +1072,8 @@ export class BotService {
             now,
             signal,
         );
-        const access = await this.readRuntimeAccess(cx, principal.scope, accepted.execution.runtimeId, signal);
-        await this.cx.gateways.channels.dispatchPending(access, signal);
+        const runtimeAccess = await this.readRuntimeAccess(cx, access.scope, accepted.execution.runtimeId, signal);
+        await this.cx.gateways.channels.dispatchPending(runtimeAccess, signal);
         return {
             duplicate: accepted.duplicate,
             eventCursor: "0",
@@ -942,55 +1084,66 @@ export class BotService {
     readonly readConversationEvents = async (
         botId: string,
         token: string,
+        actorReference: string,
         conversationId: string,
         after: string,
         signal: AbortSignal,
     ) => {
-        const principal = await this.cx.services.authorization.authorizeInbound(
+        const access = await this.cx.services.authorization.authorizeInbound(
             botId,
             token,
+            ProjectPermission.ConversationRead,
             "conversation-events:read",
+            actorReference,
             signal,
         );
-        const cx = await this.context(principal.scope.tenantId, signal);
-        const conversation = await this.authorizeConversation(cx, principal, conversationId, signal);
+        const cx = await this.context(access.scope.tenantId, signal);
+        const conversation = await this.authorizeConversation(cx, access, conversationId, signal);
         const page = await this.cx.gateways.botSessions.readConversationEvents(
-            principal.scope,
+            access.scope,
             conversation.sessionId,
             after,
             100,
             signal,
         );
-        return principal instanceof InboundBotConnectorPrincipal ? connectorEventPage(page) : page;
+        return access instanceof BotConnectionAccess ? connectorEventPage(page) : page;
     };
     readonly cancelTurn = async (
         botId: string,
         token: string,
+        actorReference: string,
         turnId: string,
         idempotencyKey: string,
         now: number,
         signal: AbortSignal,
     ) => {
-        const principal = await this.cx.services.authorization.authorizeInbound(botId, token, "turn:cancel", signal);
-        const cx = await this.context(principal.scope.tenantId, signal);
+        const authorization = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            ProjectPermission.ConversationTurnCancel,
+            "turn:cancel",
+            actorReference,
+            signal,
+        );
+        const cx = await this.context(authorization.scope.tenantId, signal);
         const turn = await cx.storages.conversations.readTurnConversation(
-            principal.botId,
+            authorization.botId,
             validateIdentifier(turnId, "turn_id"),
             signal,
         );
         if (turn === null) {
             throw new BotApiError("conversation_access_denied", "The Bot turn is not accessible", "access-denied");
         }
-        const conversation = await this.authorizeConversation(cx, principal, turn.conversation_id, signal);
+        const conversation = await this.authorizeConversation(cx, authorization, turn.conversation_id, signal);
         const runtimeId = await this.cx.gateways.sessions.readTurnRuntime(
-            principal.scope,
+            authorization.scope,
             conversation.sessionId,
             turnId,
             signal,
         );
-        const access = await this.readRuntimeAccess(cx, principal.scope, runtimeId, signal);
+        const runtimeAccess = await this.readRuntimeAccess(cx, authorization.scope, runtimeId, signal);
         const accepted = await this.cx.gateways.sessions.acceptTurnCancellation(
-            principal.scope,
+            authorization.scope,
             runtimeId,
             conversation.sessionId,
             turnId,
@@ -998,7 +1151,7 @@ export class BotService {
             now,
             signal,
         );
-        await this.cx.gateways.channels.dispatchPending(access, signal);
+        await this.cx.gateways.channels.dispatchPending(runtimeAccess, signal);
         return { duplicate: accepted.duplicate, turnId: accepted.turn.turnId };
     };
 
@@ -1181,7 +1334,7 @@ export class BotService {
     ) => {
         const runtime = await this.cx.services.authorization.authorizeRuntimeExecution(executionId, token, signal);
         const cx = await this.context(runtime.scope.tenantId, signal);
-        await this.cx.gateways.botSessions.authorizeExecutionCapability(
+        const permit = await this.cx.gateways.botSessions.authorizeExecutionCapability(
             runtime.scope,
             runtime.sessionId,
             runtime.executionId,
@@ -1189,6 +1342,7 @@ export class BotService {
             now,
             signal,
         );
+        assertPinnedExecutionPermit(runtime, permit, now);
         const resolveTarget = async () => {
             if (target.kind === "target") {
                 return target.id;
@@ -1203,10 +1357,18 @@ export class BotService {
             }
             return reply.deliveryTargetId;
         };
+        const deliveryTargetId = await resolveTarget();
+        if (!permit.allowedTargetIds.has(deliveryTargetId)) {
+            throw new BotApiError(
+                "delivery_target_not_allowed",
+                "The delivery target is not allowed for this Bot execution",
+                "access-denied",
+            );
+        }
         const route = await cx.services.targets.authorizeOutboundTarget(
             runtime.botId,
             runtime.bindingId,
-            await resolveTarget(),
+            deliveryTargetId,
             signal,
         );
         const accepted = await this.cx.gateways.botSessions.acceptOutbound(

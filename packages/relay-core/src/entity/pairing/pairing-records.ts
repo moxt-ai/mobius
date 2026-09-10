@@ -42,7 +42,7 @@ export interface RuntimePairingAudit {
     readonly projectId: string;
     readonly pairingId: string;
     readonly runtimeId: string;
-    readonly actorKind: "system" | "owner" | "bootstrap" | "runtime" | "pairing_code";
+    readonly actorKind: string;
     readonly actorId: string;
     readonly action:
         | "runtime_pairing.requested"

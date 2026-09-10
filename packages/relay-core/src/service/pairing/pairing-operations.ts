@@ -1,4 +1,9 @@
 import type {
+    ProjectAccessContext,
+    ProjectPermission,
+    RuntimeAccessContext,
+} from "../../entity/authentication/project-authentication.ts";
+import type {
     AgentDescriptor,
     ChannelDescriptor,
     ChannelHostCredential,
@@ -10,19 +15,24 @@ import type {
     InstallableAgentDescriptor,
     LinkedChannelDevice,
     PairingStatus,
-    ProjectScopeAccess,
     RedeemedChannelAccessGrant,
     RevokedProjectRuntime,
     VerifiedChannelAccess,
 } from "../../entity/pairing/pairing.ts";
 export interface PairingOperations {
-    readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<VerifiedChannelAccess>;
+    readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeHost: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelHostCredential>;
-    readonly authorizeProject: (projectId: string, token: string, signal: AbortSignal) => Promise<ProjectScopeAccess>;
+    readonly authorizeProject: (
+        projectId: string,
+        token: string,
+        permission: ProjectPermission,
+        signal: AbortSignal,
+    ) => Promise<ProjectAccessContext>;
     readonly authorizeProjectRuntime: (
         projectId: string,
         runtimeId: string,
         token: string,
+        permission: ProjectPermission,
         signal: AbortSignal,
     ) => Promise<VerifiedChannelAccess>;
     readonly claimPairing: (

@@ -30,11 +30,13 @@ pairing creation, to resolve the request's tenant:
 Standalone uses `MOBIUS_TENANT_ID` and accepts these reads without a login token.
 Authenticated hosts supply their existing tenant resolver and enforce their own
 authentication. Client-supplied tenant IDs never determine access.
-Listing does not grant mutation rights.
-Creating a Bot still uses the project's owner credential at
-`POST /mobius/api/v1/projects/:projectId/bots`.
+Listing does not grant mutation rights. An authenticated read requires
+`bot:read`; creating a Bot requires `bot:profile:write` at
+`POST /mobius/api/v1/projects/:projectId/bots`. Either permission may come from
+an accountless owner or a least-privilege Project application or exchanged
+external credential.
 
-Owners can read `GET /mobius/api/v1/bots/:botId/setup` to inspect lifecycle and
+Callers with `bot:read` can read `GET /mobius/api/v1/bots/:botId/setup` to inspect lifecycle and
 behavior revisions plus the latest execution-binding state and configuration.
 Consumers use those revisions with the existing behavior-revision and
 execution-binding endpoints. A requested binding becomes approved only after
@@ -42,16 +44,16 @@ the runtime validates the local agent and working directory. Project bot lists
 include `setupStatus` so clients can distinguish initial setup from pending or
 failed local approval.
 
-### Bot operation principals
+### Bot operation trust planes
 
-Four principals meet at separate authorization boundaries:
+Four trusted inputs meet at separate authorization boundaries:
 
-| Principal | Authentication | Authority |
+| Trust plane | Authentication | Authority |
 | --- | --- | --- |
-| Project owner | Owner application credential | Manage Bots, revisions, bindings, grants, target approval, and owner conversations |
-| Connector | `BotConnectionCredential` | Use only the scopes and Bot assigned to one connection |
-| Runtime | Daemon credential and active Runtime lease | Receive pinned work for that Runtime |
-| Bot execution | Runtime credential plus `BotExecutionCapability` | Invoke allowed outbound actions for one active execution |
+| Project access | Accountless, exchanged external, application, or browser credential normalized to `ProjectAccessContext` | Use only the Project permissions held by that access context |
+| Connector | Credential normalized to `BotConnectionAccessContext` | Use only the scopes and Bot assigned to one connection |
+| Runtime | Daemon credential normalized to `RuntimeAccessContext` with the active lease/fence | Receive pinned work for that Runtime |
+| Bot execution | Runtime access plus a matching `ExecutionPermit` | Invoke allowed outbound actions for one active execution |
 
 An external `actorRef` is audit context, not an authorization claim. A
 connector cannot select or change `agentId`, `runtimeId`, `workspaceRef`, a
@@ -64,6 +66,10 @@ execution, and immediately invalid once that execution ends. It pins the Bot,
 conversation, turn, behavior revision, binding revision, Runtime, allowed
 targets, operation, and use limit. The Runtime credential proves which daemon
 is calling; the execution capability proves which Bot execution is acting.
+
+Project applications and OIDC exchange are documented in [Project
+authentication and credential operations](project-authentication.md). Project
+credentials never authenticate on Connector or execution-action routes.
 
 ## Lifecycle and revision pinning
 

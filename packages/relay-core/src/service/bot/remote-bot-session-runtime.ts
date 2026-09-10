@@ -1,3 +1,4 @@
+import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
     BotConversationEvent,
     BotConversationEventPage,
@@ -11,11 +12,29 @@ import {
     type BotTurnSubmission,
     PendingBotOutbound,
 } from "../../entity/bot/bot-session.ts";
-import type { ProjectScope } from "../../entity/do/session.ts";
+import { ProjectScope } from "../../entity/do/session.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 8 * 1024 * 1024;
+const EXECUTION_PERMIT_FIELDS = Object.freeze([
+    "allowedTargetIds",
+    "behaviorRevisionId",
+    "bindingId",
+    "bindingRevision",
+    "botId",
+    "capabilityId",
+    "conversationId",
+    "executionId",
+    "expiresAtEpochMilliseconds",
+    "operation",
+    "projectId",
+    "remainingUses",
+    "runtimeId",
+    "sessionId",
+    "tenantId",
+    "turnId",
+]);
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,6 +62,50 @@ function boolean(value: Readonly<Record<string, unknown>>, key: string): boolean
         throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot Session returned invalid data");
     }
     return field;
+}
+
+function stringList(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
+    const field = value[key];
+    if (
+        !Array.isArray(field) ||
+        field.length > 64 ||
+        field.some((candidate) => typeof candidate !== "string" || candidate.length === 0)
+    ) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot Session returned invalid data");
+    }
+    return field.filter((candidate) => typeof candidate === "string");
+}
+
+function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): ExecutionPermit {
+    if (!isRecord(value)) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit is invalid");
+    }
+    const keys = Object.keys(value);
+    if (keys.length !== EXECUTION_PERMIT_FIELDS.length || keys.some((key) => !EXECUTION_PERMIT_FIELDS.includes(key))) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit is invalid");
+    }
+    const tenantId = text(value, "tenantId");
+    const projectId = text(value, "projectId");
+    if (tenantId !== expectedScope.tenantId || projectId !== expectedScope.projectId) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit scope is invalid");
+    }
+    return new ExecutionPermit(
+        new ProjectScope(tenantId, projectId),
+        text(value, "capabilityId"),
+        text(value, "executionId"),
+        text(value, "botId"),
+        text(value, "conversationId"),
+        text(value, "sessionId"),
+        text(value, "turnId"),
+        text(value, "behaviorRevisionId"),
+        text(value, "bindingId"),
+        integer(value, "bindingRevision"),
+        text(value, "runtimeId"),
+        text(value, "operation"),
+        new Set(stringList(value, "allowedTargetIds")),
+        integer(value, "expiresAtEpochMilliseconds"),
+        integer(value, "remainingUses"),
+    );
 }
 
 function record(value: Readonly<Record<string, unknown>>, key: string): Readonly<Record<string, unknown>> {
@@ -162,15 +225,17 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         capabilitySecret: string,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
-        await this.request(
+    ): Promise<ExecutionPermit> =>
+        decodeExecutionPermit(
+            await this.request(
+                scope,
+                sessionId,
+                "bot-execution-authorize",
+                { capabilitySecret, executionId, now, sessionId },
+                signal,
+            ),
             scope,
-            sessionId,
-            "bot-execution-authorize",
-            { capabilitySecret, executionId, now, sessionId },
-            signal,
         );
-    };
 
     readonly provisionConversation = async (
         scope: ProjectScope,

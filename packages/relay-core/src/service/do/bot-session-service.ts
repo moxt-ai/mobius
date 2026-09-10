@@ -16,7 +16,7 @@ import {
     SESSION_PROMPT_KIND,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-
+import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
     BOT_EXECUTION_LIFETIME_MILLISECONDS,
     BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
@@ -334,7 +334,7 @@ export class BotSessionService {
         capabilitySecret: string,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<ExecutionPermit> => {
         signal.throwIfAborted();
         validateTimestamp(now);
         validateDomainIdentifier(sessionId, "session");
@@ -355,6 +355,28 @@ export class BotSessionService {
                 "The Bot execution capability has expired",
             );
         }
+        const usageLimit = rowInteger(execution, "usage_limit");
+        const usageCount = rowInteger(execution, "usage_count");
+        if (usageCount >= usageLimit) {
+            throw new BotSessionRuntimeError("queue_full", "The Bot execution outbound limit was reached");
+        }
+        return new ExecutionPermit(
+            scope,
+            rowText(execution, "capability_id"),
+            rowText(execution, "execution_id"),
+            rowText(execution, "bot_id"),
+            rowText(execution, "conversation_id"),
+            rowText(execution, "session_id"),
+            rowText(execution, "turn_id"),
+            rowText(execution, "behavior_revision_id"),
+            rowText(execution, "binding_id"),
+            rowInteger(execution, "binding_revision"),
+            rowText(execution, "runtime_id"),
+            rowText(execution, "operation"),
+            new Set(decodeIdentifierArray(rowText(execution, "allowed_delivery_target_ids_json"))),
+            rowInteger(execution, "expires_at"),
+            usageLimit - usageCount,
+        );
     };
 
     readonly provisionConversation = async (

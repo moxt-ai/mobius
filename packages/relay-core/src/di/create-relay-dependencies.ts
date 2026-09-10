@@ -1,4 +1,8 @@
 import { parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
+import type {
+    ExternalIdentityAuthenticator,
+    ProjectAccessAuthorizer,
+} from "../entity/authentication/project-authentication.ts";
 import type { SessionQuotaPolicy } from "../entity/do/session.ts";
 import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
@@ -6,6 +10,7 @@ import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import type { TenantShardingDirectory } from "../infra/tenant-sharding-directory.ts";
+import type { ProjectAuthenticationService } from "../service/authentication/project-authentication-service.ts";
 import { BotAuthorization } from "../service/bot/bot-authorization.ts";
 import { BotConversationService } from "../service/bot/bot-conversation-service.ts";
 import { BotManagementService } from "../service/bot/bot-management-service.ts";
@@ -17,6 +22,7 @@ import { RemoteSessionRuntime } from "../service/do/remote-session-runtime.ts";
 import { SessionService } from "../service/do/session-service.ts";
 import { PairingDirectoryService } from "../service/pairing/pairing-directory-service.ts";
 import { PairingIdentityService } from "../service/pairing/pairing-identity-service.ts";
+import type { PublicProjectBootstrapAuthorizer } from "../service/pairing/pairing-request-service.ts";
 import { PairingRequestService } from "../service/pairing/pairing-request-service.ts";
 import { PairingService } from "../service/pairing/pairing-service.ts";
 import type { PairingTenantResolver } from "../service/pairing/pairing-tenant-resolver.ts";
@@ -29,18 +35,24 @@ import { PairingStorage } from "../storage/pairing-storage.ts";
 import { SessionDirectoryStorage } from "../storage/session-directory-storage.ts";
 
 interface PairingInfrastructure {
+    readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly databases: DatabaseResolver;
     readonly tenants: TenantShardingDirectory;
     readonly identityDatabases: readonly SqlDatabase[];
 }
 
 export interface RelayInfrastructure extends PairingInfrastructure {
+    readonly authentication: {
+        readonly externalIdentities: ExternalIdentityAuthenticator;
+        readonly projects: ProjectAuthenticationService;
+    };
     readonly bots: {
         readonly connections: BotConnectionGateway;
     } | null;
     readonly gateways: {
         readonly channelGateway: ChannelGateway;
         readonly pairingTenantResolver: PairingTenantResolver;
+        readonly publicProjectBootstrap: PublicProjectBootstrapAuthorizer;
         readonly sessionTransport: SessionTransport;
         readonly nowEpochMilliseconds: () => number;
     };
@@ -59,7 +71,7 @@ function createPairings(cx: PairingInfrastructure) {
         storages: {
             forTenant: (tenant) => new PairingStorage(tenant, cx.databases),
         },
-        services: { identities },
+        services: { identities, projectAuthentication: cx.authentication.projects },
         gateways: {
             tenantShardingDirectory: cx.tenants,
         },
@@ -90,12 +102,18 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
         },
     };
     const bots = infrastructure.bots === null ? null : createBots(infrastructure.bots, infrastructure, sessions);
-    const pairingRequests = new PairingRequestService(pairings, infrastructure.gateways.pairingTenantResolver);
+    const pairingRequests = new PairingRequestService(
+        pairings,
+        infrastructure.gateways.pairingTenantResolver,
+        infrastructure.gateways.publicProjectBootstrap,
+    );
     return Object.freeze({
         ...cx,
         services: Object.freeze({
             bots,
+            externalIdentityAuthenticator: infrastructure.authentication.externalIdentities,
             pairings,
+            projectAuthentication: infrastructure.authentication.projects,
             createPairing: pairingRequests.createPairing,
             runtimePairings: new PairingService(cx),
             channels: new ChannelService(cx),
@@ -132,6 +150,7 @@ function createBots(
         services: {
             authorization: new BotAuthorization(
                 [...new Set(cx.identityDatabases)].map((database) => new BotCredentialStorage(database)),
+                cx.authentication.projects,
             ),
         },
         gateways: {

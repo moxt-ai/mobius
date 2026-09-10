@@ -1,5 +1,5 @@
 import { BotConnectionReplyRoute } from "@moxt-ai/mobius-protocol";
-import type { BotOwnerAccess, InboundBotPrincipal } from "../entity/bot/bot-access.ts";
+import type { BotConversationAuthorization, ProjectBotAccess } from "../entity/bot/bot-access.ts";
 import type {
     BotConversationRecord as ConversationRow,
     BotProvisioningOutboxRecord as ProvisioningOutboxRow,
@@ -19,7 +19,7 @@ export class BotConversationStorage {
         this.#database = databases.resolve(tenant.tenantSharding);
     }
 
-    readonly listForOwner = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly listForProject = async (access: ProjectBotAccess, signal: AbortSignal) => {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(`SELECT conversations.* FROM bot_conversations AS conversations
@@ -165,7 +165,7 @@ export class BotConversationStorage {
     };
 
     readonly readExecutionState = async (
-        principal: InboundBotPrincipal,
+        access: BotConversationAuthorization,
         bindingId: string,
         bindingRevision: number,
         signal: AbortSignal,
@@ -180,16 +180,16 @@ export class BotConversationStorage {
              WHERE bindings.binding_id = ? AND bindings.bot_id = ? AND bindings.binding_revision = ?
                AND bots.tenant_id = ? AND bots.project_id = ?`,
             )
-            .bind(bindingId, principal.botId, bindingRevision, principal.scope.tenantId, principal.scope.projectId)
+            .bind(bindingId, access.botId, bindingRevision, access.scope.tenantId, access.scope.projectId)
             .first<{ readonly binding_lifecycle: string; readonly runtime_status: string | null }>(signal);
         signal.throwIfAborted();
         return row;
     };
 
-    readonly readBotLifecycle = async (principal: InboundBotPrincipal, signal: AbortSignal) => {
+    readonly readBotLifecycle = async (access: BotConversationAuthorization, signal: AbortSignal) => {
         const bot = await this.#database
             .prepare(`SELECT lifecycle FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?`)
-            .bind(principal.botId, principal.scope.tenantId, principal.scope.projectId)
+            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
             .first<{ readonly lifecycle: string }>(signal);
         signal.throwIfAborted();
         return bot;

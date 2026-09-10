@@ -104,6 +104,14 @@ one running Bot to use only its approved outbound targets. See [Bots and
 external connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and
 security model.
 
+The same deployment may authorize accountless owners, short-lived browser
+access, external OIDC identities, and least-privilege server applications. All
+Project-facing credentials normalize into one permission-bearing access
+context, while Runtime, Connector, execution-capability, and local-grant trust
+planes remain independent. See [Project authentication and credential
+operations](docs/project-authentication.md) for OIDC host construction, the Moxt
+server pattern, recovery guidance, route permissions, and the rotation runbook.
+
 ### Agent harness integrations
 
 Implemented local integrations:

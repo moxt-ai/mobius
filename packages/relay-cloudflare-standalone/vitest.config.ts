@@ -16,6 +16,8 @@ export default defineConfig(async () => {
                 wrangler: { configPath: wranglerConfigPath },
                 miniflare: {
                     bindings: {
+                        PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100000",
+                        PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT: "100000",
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
                         SESSION_ACTIVE_SESSIONS_PER_TENANT: "1000",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",

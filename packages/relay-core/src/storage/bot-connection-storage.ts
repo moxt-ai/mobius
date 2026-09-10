@@ -1,4 +1,4 @@
-import type { BotConnectorAccess, BotOwnerAccess } from "../entity/bot/bot-access.ts";
+import type { BotConnectionAccess, ProjectBotAccess } from "../entity/bot/bot-access.ts";
 import type { BotGrantCredential } from "../entity/bot/bot-grant.ts";
 import { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
@@ -45,7 +45,7 @@ export class BotConnectionStorage {
         this.#database = databases.resolve(tenant.tenantSharding);
     }
 
-    readonly listForOwner = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly listForProject = async (access: ProjectBotAccess, signal: AbortSignal) => {
         signal.throwIfAborted();
         const [connections, targets] = await Promise.all([
             this.#database
@@ -70,7 +70,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeGrant = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         grant: {
             readonly grantId: string;
             readonly secretDigest: string;
@@ -100,8 +100,8 @@ export class BotConnectionStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.connection_grant.created",
                     grantId,
                     { audience, label },
@@ -114,7 +114,7 @@ export class BotConnectionStorage {
         return results.every((result) => result.meta.changes === 1);
     };
 
-    readonly readOwnerConnection = async (access: BotOwnerAccess, connectionId: string, signal: AbortSignal) => {
+    readonly readProjectConnection = async (access: ProjectBotAccess, connectionId: string, signal: AbortSignal) => {
         const row = await this.#database
             .prepare(
                 `SELECT connections.lifecycle, connections.lifecycle_revision
@@ -129,7 +129,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeOwnerRevocation = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         connectionId: string,
         expectedRevision: number,
         now: number,
@@ -146,8 +146,8 @@ export class BotConnectionStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.connection.revoked",
                     connectionId,
                     {},
@@ -250,7 +250,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeCredentialRotation = async (
-        access: BotConnectorAccess,
+        access: BotConnectionAccess,
         rotation: {
             readonly credentialId: string;
             readonly credentialDigest: string;
@@ -329,7 +329,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeConnectionRevocation = async (
-        access: BotConnectorAccess,
+        access: BotConnectionAccess,
         now: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
@@ -376,7 +376,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeTarget = async (
-        access: BotConnectorAccess,
+        access: BotConnectionAccess,
         deliveryTargetId: string,
         alias: string,
         now: number,
@@ -412,7 +412,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeTargetApproval = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         deliveryTargetId: string,
         expectedPolicyRevision: number,
         nextRevision: number,
@@ -433,8 +433,8 @@ export class BotConnectionStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.delivery_target.approved",
                     deliveryTargetId,
                     { policyRevision: nextRevision.toString() },
@@ -448,7 +448,7 @@ export class BotConnectionStorage {
     };
 
     readonly writeTargetDisabling = async (
-        access: BotConnectorAccess,
+        access: BotConnectionAccess,
         deliveryTargetId: string,
         now: number,
         signal: AbortSignal,

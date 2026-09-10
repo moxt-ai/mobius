@@ -61,6 +61,7 @@ export interface MobiusBotConnectorClientOptions extends MobiusBotApiOptions {
 }
 
 export interface MobiusBotOwnerClientOptions extends MobiusBotApiOptions {
+    readonly actorReference?: string;
     readonly credentialProvider: MobiusCredentialProvider;
     readonly projectId: string;
 }
@@ -160,6 +161,26 @@ function identifier(value: unknown, name: string): string {
 function boundedText(value: unknown, name: string, maximum: number, allowEmpty = false): string {
     if (typeof value !== "string" || value.length > maximum || (!allowEmpty && value.trim().length === 0)) {
         throw new MobiusValidationError(`The ${name} is invalid`);
+    }
+    return value;
+}
+
+function hasControlCharacters(value: string): boolean {
+    for (const character of value) {
+        const codePoint = character.codePointAt(0) ?? 0;
+        if (codePoint <= 31 || codePoint === 127) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function auditActorReference(value: unknown): string {
+    if (value === undefined) {
+        return "";
+    }
+    if (typeof value !== "string" || value.length > 200 || hasControlCharacters(value)) {
+        throw new MobiusValidationError("The Mobius actor reference is invalid");
     }
     return value;
 }
@@ -300,12 +321,14 @@ class BotRequestDeadline {
 }
 
 class BotRequestExecutor {
+    readonly #actorReference: string;
     readonly #authentication: BotRequestAuthentication;
     readonly #endpoint: URL;
     readonly #operationTimeoutMilliseconds: number;
     readonly #transport: MobiusHttpTransport;
 
-    constructor(options: MobiusBotApiOptions, authentication: BotRequestAuthentication) {
+    constructor(options: MobiusBotApiOptions, authentication: BotRequestAuthentication, actorReference: string) {
+        this.#actorReference = actorReference;
         this.#authentication = authentication;
         this.#endpoint = normalizeEndpoint(options.endpoint);
         this.#operationTimeoutMilliseconds = boundedInteger(
@@ -340,6 +363,9 @@ class BotRequestExecutor {
             const headers = new Headers({ accept: "application/json" });
             if (includesBody) {
                 headers.set("content-type", "application/json");
+            }
+            if (this.#actorReference.length > 0) {
+                headers.set("x-mobius-actor-ref", this.#actorReference);
             }
             await this.#authentication.apply(headers, deadline.signal);
             const url = new URL(path, this.#endpoint);
@@ -407,6 +433,7 @@ export class MobiusBotOwnerClient {
         this.#executor = new BotRequestExecutor(
             options,
             new CredentialBotRequestAuthentication(options.credentialProvider),
+            auditActorReference(options.actorReference),
         );
     }
 
@@ -971,6 +998,7 @@ export class MobiusBotConnectorClient {
         const executor = new BotRequestExecutor(
             options,
             new CredentialBotRequestAuthentication(options.credentialProvider),
+            "",
         );
         this.connection = new MobiusBotConnectionResources(executor, connectionId);
         this.conversations = new MobiusBotConversationResources(executor);
@@ -993,7 +1021,7 @@ export async function redeemMobiusBotConnectionGrant(
         ["audience", "connectorPrincipalId", "grantId", "grantSecret"],
         "Bot connection grant redemption",
     );
-    const executor = new BotRequestExecutor(options, new AnonymousBotRequestAuthentication());
+    const executor = new BotRequestExecutor(options, new AnonymousBotRequestAuthentication(), "");
     return new MobiusBotConnectionCredential(
         await executor.post(
             `${MOBIUS_BOT_API_VERSION}/bot-connection-grants/redeem`,

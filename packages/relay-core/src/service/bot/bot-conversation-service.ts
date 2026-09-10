@@ -1,5 +1,5 @@
 import { BotConnectionReplyRoute, type BotReplyRoute, OwnerBotReplyRoute } from "@moxt-ai/mobius-protocol";
-import type { InboundBotConnectorPrincipal, InboundBotOwnerPrincipal } from "../../entity/bot/bot-access.ts";
+import type { BotConnectionAccess, ProjectBotAccess } from "../../entity/bot/bot-access.ts";
 import type { ApprovedBindingContext } from "../../entity/bot/bot-binding.ts";
 import {
     assertProvisioningMatches,
@@ -68,26 +68,26 @@ export class BotConversationService {
         }
     };
 
-    readonly createOwnerConversation = async (
-        principal: InboundBotOwnerPrincipal,
+    readonly createProjectConversation = async (
+        access: ProjectBotAccess,
         binding: ApprovedBindingContext,
         key: string,
         now: number,
         signal: AbortSignal,
     ) => {
-        const duplicate = await this.#storage.readDuplicateConversation(principal.botId, "owner", key, signal);
+        const duplicate = await this.#storage.readDuplicateConversation(access.botId, "owner", key, signal);
         if (duplicate !== null) {
             return this.planFromOutbox(duplicate);
         }
-        const draft = await this.#storage.readOwnerDraft(principal.botId, signal);
+        const draft = await this.#storage.readOwnerDraft(access.botId, signal);
         if (draft !== null) {
             return this.planFromOutbox(draft);
         }
         return this.createConversation(
-            principal.scope,
-            principal.botId,
-            principal.kind,
-            principal.principalId,
+            access.scope,
+            access.botId,
+            access.conversationActorKind,
+            access.actor.actorId,
             "owner",
             key,
             "New chat",
@@ -99,7 +99,7 @@ export class BotConversationService {
     };
 
     readonly createConnectedConversation = (
-        principal: InboundBotConnectorPrincipal,
+        access: BotConnectionAccess,
         binding: ApprovedBindingContext,
         key: string,
         title: string,
@@ -108,14 +108,14 @@ export class BotConversationService {
         signal: AbortSignal,
     ) =>
         this.createConversation(
-            principal.scope,
-            principal.botId,
-            principal.kind,
-            principal.principalId,
-            principal.connection.connectionId,
+            access.scope,
+            access.botId,
+            access.conversationActorKind,
+            access.actor.actorId,
+            access.connectionId,
             key,
             title,
-            new BotConnectionReplyRoute(principal.connection.connectionId, targetId),
+            new BotConnectionReplyRoute(access.connectionId, targetId),
             binding,
             now,
             signal,

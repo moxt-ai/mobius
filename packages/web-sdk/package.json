@@ -8,6 +8,7 @@
         ".": "./src/index.ts",
         "./channel": "./src/channel.ts",
         "./examples/browser": "./examples/browser.ts",
+        "./examples/moxt-server": "./examples/moxt-server.ts",
         "./examples/node": "./examples/node.ts",
         "./examples/workflow": "./examples/workflow.ts"
     },
@@ -33,6 +34,10 @@
             "./examples/browser": {
                 "types": "./dist/examples/browser.d.ts",
                 "import": "./dist/examples/browser.js"
+            },
+            "./examples/moxt-server": {
+                "types": "./dist/examples/moxt-server.d.ts",
+                "import": "./dist/examples/moxt-server.js"
             },
             "./examples/node": {
                 "types": "./dist/examples/node.d.ts",

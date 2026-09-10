@@ -4,7 +4,8 @@ import {
     type BotExecutionBindingUnavailableEvent,
     encodeBotExecutionBindingApprovalRequest,
 } from "@moxt-ai/mobius-protocol";
-import type { BotOwnerAccess, ProjectOwnerAccess } from "../entity/bot/bot-access.ts";
+import type { ProjectAccessContext } from "../entity/authentication/project-authentication.ts";
+import type { ProjectBotAccess } from "../entity/bot/bot-access.ts";
 import type { BotBehaviorRevision, BotProfileRevision } from "../entity/bot/bot-revisions.ts";
 import type { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
@@ -101,7 +102,7 @@ export class BotControlStorage {
         this.#database = databases.resolve(tenant.tenantSharding);
     }
 
-    readonly listBots = async (access: ProjectOwnerAccess, signal: AbortSignal) => {
+    readonly listBots = async (access: ProjectAccessContext, signal: AbortSignal) => {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(`SELECT bots.*, profiles.display_name, profiles.avatar_ref,
@@ -116,7 +117,7 @@ export class BotControlStorage {
         return rows.results;
     };
 
-    readonly listBehaviorRevisions = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly listBehaviorRevisions = async (access: ProjectBotAccess, signal: AbortSignal) => {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(`SELECT behaviors.* FROM bot_behavior_revisions AS behaviors
@@ -129,7 +130,7 @@ export class BotControlStorage {
         return rows.results;
     };
 
-    readonly listExecutionBindings = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly listExecutionBindings = async (access: ProjectBotAccess, signal: AbortSignal) => {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(`SELECT bindings.* FROM bot_execution_bindings AS bindings
@@ -189,7 +190,7 @@ export class BotControlStorage {
     };
 
     readonly writeBot = async (
-        access: ProjectOwnerAccess,
+        access: ProjectAccessContext,
         profile: BotProfileRevision,
         now: number,
         signal: AbortSignal,
@@ -214,7 +215,16 @@ export class BotControlStorage {
                      ) VALUES (?, ?, ?, ?, 'draft', 1, ?, ?)`,
                     )
                     .bind(botId, access.scope.tenantId, access.scope.projectId, profileRevisionId, now, now),
-                this.audit(access.scope, botId, "owner", access.credentialId, "bot.created", botId, {}, now),
+                this.audit(
+                    access.scope,
+                    botId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
+                    "bot.created",
+                    botId,
+                    {},
+                    now,
+                ),
             ],
             signal,
         );
@@ -232,7 +242,7 @@ export class BotControlStorage {
     };
 
     readonly writeProfileRevision = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         expectedRevision: number,
         profile: BotProfileRevision,
         now: number,
@@ -266,8 +276,8 @@ export class BotControlStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.profile.revised",
                     profileRevisionId,
                     { revision: revision.toString() },
@@ -292,7 +302,7 @@ export class BotControlStorage {
     };
 
     readonly writeBehaviorRevision = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         behavior: BotBehaviorRevision,
         now: number,
         signal: AbortSignal,
@@ -331,8 +341,8 @@ export class BotControlStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.behavior.proposed",
                     behaviorRevisionId,
                     { revision: revisionNumber.toString() },
@@ -379,7 +389,7 @@ export class BotControlStorage {
     };
 
     readonly writeBinding = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         request: BotExecutionBindingApprovalRequest,
         allowedDeliveryTargetIds: readonly string[],
         outboxId: string,
@@ -445,8 +455,8 @@ export class BotControlStorage {
                 this.audit(
                     access.scope,
                     access.botId,
-                    "owner",
-                    access.credentialId,
+                    access.actor.kind.value,
+                    access.actor.actorId,
                     "bot.binding.requested",
                     bindingId,
                     { bindingRevision: bindingRevision.toString(), runtimeId },
@@ -626,7 +636,7 @@ export class BotControlStorage {
         return results.every((result) => result.meta.changes === 1);
     };
 
-    readonly readBot = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly readBot = async (access: ProjectBotAccess, signal: AbortSignal) => {
         signal.throwIfAborted();
         const row = await this.#database
             .prepare(
@@ -643,7 +653,7 @@ export class BotControlStorage {
         return row;
     };
 
-    readonly readSetup = async (access: BotOwnerAccess, signal: AbortSignal) => {
+    readonly readSetup = async (access: ProjectBotAccess, signal: AbortSignal) => {
         const bot = await this.botRow(access.botId, signal);
         const behavior = await this.#database
             .prepare(
@@ -706,7 +716,7 @@ export class BotControlStorage {
     };
 
     readonly writeLifecycle = async (
-        access: BotOwnerAccess,
+        access: ProjectBotAccess,
         expectedRevision: number,
         lifecycle: "active" | "suspended" | "archived",
         now: number,
@@ -733,7 +743,7 @@ export class BotControlStorage {
                        audit_id, tenant_id, project_id, bot_id, actor_kind,
                        actor_id, action, subject_id, details_json, recorded_at
                      )
-                     SELECT ?, ?, ?, ?, 'owner', ?, ?, ?, ?, ?
+                     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                       WHERE EXISTS (
                         SELECT 1 FROM bots
                          WHERE bot_id = ? AND lifecycle = ? AND lifecycle_revision = ?
@@ -748,7 +758,8 @@ export class BotControlStorage {
                         access.scope.tenantId,
                         access.scope.projectId,
                         access.botId,
-                        access.credentialId,
+                        access.actor.kind.value,
+                        access.actor.actorId,
                         actionName,
                         auditSubjectId,
                         JSON.stringify({ lifecycleRevision: nextRevision.toString() }),

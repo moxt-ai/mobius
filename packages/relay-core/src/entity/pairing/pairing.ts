@@ -281,25 +281,6 @@ export class PairingDirectoryError extends Error {
     }
 }
 
-export class ProjectScopeAccess {
-    readonly projectId: string;
-    readonly tenantId: string;
-
-    constructor(tenantId: string, projectId: string) {
-        this.projectId = projectId;
-        this.tenantId = tenantId;
-    }
-}
-
-export class ProjectOwnerAccess extends ProjectScopeAccess {
-    readonly credentialId: string;
-
-    constructor(tenantId: string, projectId: string, credentialId: string) {
-        super(tenantId, projectId);
-        this.credentialId = credentialId;
-    }
-}
-
 export class RevokedProjectRuntime {
     readonly access: VerifiedChannelAccess;
     readonly revokedAt: string;

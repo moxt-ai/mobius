@@ -16,6 +16,9 @@ interface ChannelScopeRow {
     readonly runtime_id: string;
     readonly tenant_id: string;
 }
+interface DaemonChannelScopeRow extends ChannelScopeRow {
+    readonly pairing_id: string;
+}
 export interface AuthorizedChannelRow extends ChannelScopeRow {
     readonly credential_id: string;
     readonly authority: string;
@@ -48,8 +51,9 @@ export class PairingStorage {
         FROM pairing_channels AS channels INNER JOIN channel_host_credentials AS credentials
             ON credentials.channel_id = channels.channel_id
         WHERE channels.channel_id = ? AND credentials.token_hash = ?
-            AND credentials.revoked_at IS NULL AND channels.status = 'paired'`)
-            .bind(channelId, tokenHash)
+            AND credentials.revoked_at IS NULL AND channels.status = 'paired'
+            AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)`)
+            .bind(channelId, tokenHash, Date.now())
             .first<AuthorizedChannelRow>(signal);
 
     readonly readProjectHost = (projectId: string, tokenHash: string, signal: AbortSignal) =>
@@ -94,8 +98,9 @@ export class PairingStorage {
     readonly touchHost = (credentialId: string, now: number, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        UPDATE channel_host_credentials SET last_used_at = ? WHERE credential_id = ? AND revoked_at IS NULL`)
-            .bind(now, credentialId)
+        UPDATE channel_host_credentials SET last_used_at = ? WHERE credential_id = ? AND revoked_at IS NULL
+            AND (replaced_by_credential_id IS NULL OR overlap_ends_at > ?)`)
+            .bind(now, credentialId, now)
             .run(signal);
 
     readonly readBrowser = (projectId: string, tokenHash: string, signal: AbortSignal) =>
@@ -117,10 +122,10 @@ export class PairingStorage {
     readonly readDaemon = (channelId: string, tokenHash: string, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        SELECT channel_id, runtime_id, tenant_id, project_id FROM pairing_channels
+        SELECT channel_id, pairing_id, runtime_id, tenant_id, project_id FROM pairing_channels
         WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`)
             .bind(channelId, tokenHash)
-            .first<ChannelScopeRow>(signal);
+            .first<DaemonChannelScopeRow>(signal);
 
     readonly readRuntime = (tenantId: string, projectId: string, runtimeId: string, signal: AbortSignal) =>
         this.#database
@@ -270,6 +275,7 @@ export class PairingStorage {
             readonly expiresAt: number;
             readonly idempotencyKey: string;
             readonly ownerId: string;
+            readonly actorKind: string;
             readonly maximumRuntimes: number;
             readonly auditId: string;
         },
@@ -306,10 +312,11 @@ export class PairingStorage {
                 this.#database
                     .prepare(`INSERT OR IGNORE INTO runtime_pairing_audit_events
             (audit_id, tenant_id, project_id, pairing_id, runtime_id, actor_kind, actor_id, action, details_json, recorded_at)
-            SELECT ?, tenant_id, project_id, pairing_id, runtime_id, 'owner', ?, 'runtime_pairing.requested', ?, ?
+            SELECT ?, tenant_id, project_id, pairing_id, runtime_id, ?, ?, 'runtime_pairing.requested', ?, ?
             FROM pairing_channels WHERE pairing_id = ?`)
                     .bind(
                         value.auditId,
+                        value.actorKind,
                         value.ownerId,
                         JSON.stringify({ idempotencyKey: value.idempotencyKey }),
                         value.now,

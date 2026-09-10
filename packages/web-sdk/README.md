@@ -20,3 +20,12 @@ browser and shared workflow modules are also exported as
 guide](https://github.com/moxt-ai/mobius/blob/main/docs/bots.md) documents grant
 redemption, scoped credentials, connected conversations, cursor recovery,
 outbound acknowledgement, and connection revocation.
+
+Project application registration, OIDC exchange, accountless recovery, and
+credential rotation are documented in the [Project authentication
+guide](https://github.com/moxt-ai/mobius/blob/main/docs/project-authentication.md).
+The server-only
+[`moxt-server`](https://github.com/moxt-ai/mobius/blob/main/packages/web-sdk/examples/moxt-server.ts)
+example provisions separate least-privilege application credentials for Runtime
+and Bot management, conversation work, and event projection without creating a
+Bot Connection.

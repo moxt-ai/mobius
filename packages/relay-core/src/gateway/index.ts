@@ -1,11 +1,8 @@
 export {
-    BotConnectorAccess,
-    BotOwnerAccess,
+    BotConnectionAccess,
+    type BotConversationAuthorization,
     BotRuntimeExecutionAccess,
-    InboundBotConnectorPrincipal,
-    InboundBotOwnerPrincipal,
-    InboundBotPrincipal,
-    ProjectOwnerAccess,
+    ProjectBotAccess,
 } from "../entity/bot/bot-access.ts";
 export type { ChannelGateway } from "./channel-gateway.ts";
 export type { SessionArtifactGateway } from "./session-artifact-gateway.ts";

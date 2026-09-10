@@ -16,8 +16,9 @@ function identityStatement(database: SqlDatabase, credential: PairingIdentityCre
                 .prepare(`SELECT DISTINCT channels.tenant_id FROM pairing_channels AS channels
                 INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
                 WHERE channels.channel_id = ? AND credentials.token_hash = ?
-                AND credentials.revoked_at IS NULL AND channels.status = 'paired'`)
-                .bind(validateIdentifier(credential.channelId, "channel_id"), credential.tokenHash);
+                AND credentials.revoked_at IS NULL AND channels.status = 'paired'
+                AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)`)
+                .bind(validateIdentifier(credential.channelId, "channel_id"), credential.tokenHash, Date.now());
         case "daemon":
             return database
                 .prepare(`SELECT tenant_id FROM pairing_channels

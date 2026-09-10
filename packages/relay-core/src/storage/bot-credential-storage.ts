@@ -1,6 +1,6 @@
 import type { BotGrantCredential } from "../entity/bot/bot-grant.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
-import type { BotCredentialRecords } from "./bot-credential-records.ts";
+import type { BotCredentialRecords, InboundCredentialPlaneRecord } from "./bot-credential-records.ts";
 
 export class BotCredentialStorage implements BotCredentialRecords {
     readonly #database: SqlDatabase;
@@ -28,32 +28,20 @@ export class BotCredentialStorage implements BotCredentialRecords {
         return row;
     };
 
-    readonly readProjectOwner: BotCredentialRecords["readProjectOwner"] = (projectId, digest, signal) =>
-        this.#database
-            .prepare(
-                `SELECT credentials.tenant_id, credentials.project_id, credentials.credential_id
-             FROM project_owner_credentials AS credentials
-             WHERE credentials.project_id = ? AND credentials.revoked_at IS NULL
-               AND credentials.token_hash = ?`,
-            )
-            .bind(projectId, digest)
-            .first(signal);
-
-    readonly readBotOwner: BotCredentialRecords["readBotOwner"] = (botId, digest, signal) =>
-        this.#database
-            .prepare(
-                `SELECT bots.bot_id, bots.tenant_id, bots.project_id, credentials.credential_id
-             FROM bots JOIN project_owner_credentials AS credentials
-               ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
-             WHERE bots.bot_id = ? AND credentials.revoked_at IS NULL
-               AND credentials.token_hash = ?`,
-            )
-            .bind(botId, digest)
-            .first(signal);
-
     readonly botExists: BotCredentialRecords["botExists"] = async (botId, signal) =>
         (await this.#database.prepare("SELECT 1 AS present FROM bots WHERE bot_id = ?").bind(botId).first(signal)) !==
         null;
+
+    readonly botExistsInProject: BotCredentialRecords["botExistsInProject"] = async (
+        botId,
+        tenantId,
+        projectId,
+        signal,
+    ) =>
+        (await this.#database
+            .prepare("SELECT 1 AS present FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?")
+            .bind(botId, tenantId, projectId)
+            .first(signal)) !== null;
 
     readonly readConnector: BotCredentialRecords["readConnector"] = (connectionId, digest, now, signal) =>
         this.#database
@@ -106,17 +94,46 @@ export class BotCredentialStorage implements BotCredentialRecords {
         return results.every((result) => result.meta.changes === 1);
     };
 
-    readonly findInboundConnection: BotCredentialRecords["findInboundConnection"] = async (botId, digest, signal) => {
-        const row = await this.#database
+    readonly readInboundCredentialPlanes: BotCredentialRecords["readInboundCredentialPlanes"] = async (
+        botId,
+        digest,
+        now,
+        signal,
+    ) => {
+        const rows = await this.#database
             .prepare(
-                `SELECT connections.connection_id FROM bot_connections AS connections
-             JOIN bot_connection_credentials AS credentials ON credentials.connection_id = connections.connection_id
-             WHERE connections.bot_id = ? AND credentials.secret_digest = ?
-             ORDER BY credentials.issued_at DESC LIMIT 1`,
+                `SELECT 'project' AS plane, NULL AS connection_id
+                   FROM bots
+                   INNER JOIN project_owner_credentials AS credentials
+                     ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
+                  WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.revoked_at IS NULL
+                    AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)
+                 UNION ALL
+                 SELECT 'project' AS plane, NULL AS connection_id
+                   FROM bots
+                   INNER JOIN project_browser_credentials AS credentials
+                     ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
+                  WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.revoked_at IS NULL
+                    AND credentials.expires_at > ?
+                 UNION ALL
+                 SELECT 'project' AS plane, NULL AS connection_id
+                   FROM bots
+                   INNER JOIN pairing_channels AS channels
+                     ON channels.tenant_id = bots.tenant_id AND channels.project_id = bots.project_id
+                   INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
+                  WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.authority = 'linked'
+                    AND credentials.revoked_at IS NULL AND channels.status = 'paired'
+                    AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)
+                 UNION ALL
+                 SELECT 'connector' AS plane, connections.connection_id
+                   FROM bot_connections AS connections
+                   INNER JOIN bot_connection_credentials AS credentials
+                     ON credentials.connection_id = connections.connection_id
+                  WHERE connections.bot_id = ? AND credentials.secret_digest = ?`,
             )
-            .bind(botId, digest)
-            .first<{ readonly connection_id: string }>(signal);
-        return row?.connection_id ?? null;
+            .bind(botId, digest, now, botId, digest, now, botId, digest, now, botId, digest)
+            .all<InboundCredentialPlaneRecord>(signal);
+        return rows.results;
     };
 
     readonly readRuntimeExecution: BotCredentialRecords["readRuntimeExecution"] = (executionId, digest, signal) =>
@@ -125,7 +142,8 @@ export class BotCredentialStorage implements BotCredentialRecords {
                 `SELECT executions.execution_id, executions.bot_id, executions.conversation_id, executions.turn_id,
                     executions.session_id, executions.behavior_revision_id, executions.binding_id,
                     executions.binding_revision, executions.runtime_id, executions.capability_id,
-                    bots.tenant_id, bots.project_id, bots.lifecycle AS bot_lifecycle, bindings.local_grant_id
+                    bots.tenant_id, bots.project_id, bots.lifecycle AS bot_lifecycle,
+                    channels.channel_id, channels.pairing_id, bindings.local_grant_id
              FROM bot_execution_directory AS executions
              JOIN bots ON bots.bot_id = executions.bot_id
              JOIN bot_execution_bindings AS bindings

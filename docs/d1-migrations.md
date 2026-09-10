@@ -59,6 +59,14 @@ per-Project Runtime slot, backfills explicit Project-owner credentials, and
 adds Runtime-pairing idempotency and audit indexes. Do not replace it with an
 edited initial schema or reset a populated shard.
 
+`0006_project_authentication.sql` is also forward-only. It preserves the
+accountless owner rows, adds bounded-rotation fields to owner and Channel-host
+credentials, and creates Project applications, external identity mappings,
+short-lived Mobius access credentials, authentication audit events, and public
+bootstrap-limit storage. Apply it before deploying a Worker that serves the
+Project authentication routes described in
+[Project authentication and credential operations](project-authentication.md).
+
 Keep migration files on LF line endings and parenthesize `CASE` expressions
 inside SQLite trigger bodies. Cloudflare's remote D1 migration path parses
 compound statements differently from the local emulator. The repository

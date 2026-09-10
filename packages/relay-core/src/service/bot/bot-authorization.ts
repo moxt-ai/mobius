@@ -1,15 +1,20 @@
 import {
-    BotConnectorAccess,
-    BotOwnerAccess,
+    decodeProjectCredential,
+    type ProjectAccessAuthorizer,
+    type ProjectAccessContext,
+    ProjectCredentialScheme,
+    type ProjectPermission,
+} from "../../entity/authentication/project-authentication.ts";
+import {
+    BotConnectionAccess,
+    type BotConversationAuthorization,
     BotRuntimeExecutionAccess,
-    InboundBotConnectorPrincipal,
-    InboundBotOwnerPrincipal,
-    type InboundBotPrincipal,
-    ProjectOwnerAccess,
+    ProjectBotAccess,
 } from "../../entity/bot/bot-access.ts";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { hashSecret, validateIdentifier, validateToken } from "../../entity/pairing/pairing.ts";
+import type { InboundCredentialPlaneRecord } from "../../storage/bot-credential-records.ts";
 import type { BotCredentialStorage } from "../../storage/bot-credential-storage.ts";
 
 function decodeScopes(encoded: string): readonly string[] {
@@ -29,9 +34,11 @@ function decodeScopes(encoded: string): readonly string[] {
 
 export class BotAuthorization {
     readonly #credentials: readonly BotCredentialStorage[];
+    readonly #projectAuthentication: ProjectAccessAuthorizer;
 
-    constructor(credentials: readonly BotCredentialStorage[]) {
+    constructor(credentials: readonly BotCredentialStorage[], projectAuthentication: ProjectAccessAuthorizer) {
         this.#credentials = credentials;
+        this.#projectAuthentication = projectAuthentication;
     }
 
     private readonly findCredential = async <Value>(
@@ -75,49 +82,40 @@ export class BotAuthorization {
         return match.record;
     };
 
-    readonly authorizeProjectOwner = async (
+    readonly authorizeProject = async (
         projectId: string,
         token: string,
+        permission: ProjectPermission,
+        actorReference: string,
         signal: AbortSignal,
-    ): Promise<ProjectOwnerAccess> => {
-        signal.throwIfAborted();
-        const normalizedProjectId = validateIdentifier(projectId, "project_id");
-        const tokenDigest = await hashSecret(validateToken(token));
-        signal.throwIfAborted();
-        const match = await this.findCredential(
-            (storage) => storage.readProjectOwner(normalizedProjectId, tokenDigest, signal),
-            signal,
-        );
-        const row = match?.record ?? null;
-        signal.throwIfAborted();
-        if (row === null) {
-            throw new BotApiError("owner_access_required", "An owner credential is required", "access-denied");
-        }
-        return new ProjectOwnerAccess(new ProjectScope(row.tenant_id, row.project_id), row.credential_id);
-    };
+    ): Promise<ProjectAccessContext> =>
+        await this.#projectAuthentication.authorizeProject(projectId, token, permission, actorReference, signal);
 
-    readonly authorizeBotOwner = async (botId: string, token: string, signal: AbortSignal): Promise<BotOwnerAccess> => {
-        signal.throwIfAborted();
+    readonly authorizeProjectBot = async (
+        botId: string,
+        token: string,
+        permission: ProjectPermission,
+        actorReference: string,
+        signal: AbortSignal,
+    ): Promise<ProjectBotAccess> => {
         const normalizedBotId = validateIdentifier(botId, "bot_id");
-        const tokenDigest = await hashSecret(validateToken(token));
-        signal.throwIfAborted();
-        const match = await this.findCredential(
-            (storage) => storage.readBotOwner(normalizedBotId, tokenDigest, signal),
+        const access = await this.#projectAuthentication.authorize(
+            decodeProjectCredential(token),
+            permission,
+            actorReference,
             signal,
         );
-        const row = match?.record ?? null;
         signal.throwIfAborted();
-        if (row === null) {
-            const exists = (
-                await Promise.all(this.#credentials.map((storage) => storage.botExists(normalizedBotId, signal)))
-            ).some(Boolean);
-            signal.throwIfAborted();
-            if (!exists) {
-                throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
-            }
-            throw new BotApiError("owner_access_required", "An owner credential is required", "access-denied");
+        const matches = await Promise.all(
+            this.#credentials.map((storage) =>
+                storage.botExistsInProject(normalizedBotId, access.scope.tenantId, access.scope.projectId, signal),
+            ),
+        );
+        signal.throwIfAborted();
+        if (!matches.some(Boolean)) {
+            throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
         }
-        return new BotOwnerAccess(new ProjectScope(row.tenant_id, row.project_id), row.credential_id, row.bot_id);
+        return new ProjectBotAccess(access, normalizedBotId);
     };
 
     readonly authorizeConnector = async (
@@ -125,9 +123,9 @@ export class BotAuthorization {
         token: string,
         requiredScope: string,
         signal: AbortSignal,
-    ): Promise<BotConnectorAccess> => {
+    ): Promise<BotConnectionAccess> => {
         const access = await this.authorizeConnectorCredential(connectionId, token, signal);
-        if (!access.scopes.includes(requiredScope)) {
+        if (!access.scopes.has(requiredScope)) {
             throw new BotApiError("scope_denied", "The Bot connection scope is not granted", "access-denied");
         }
         return access;
@@ -137,13 +135,13 @@ export class BotAuthorization {
         connectionId: string,
         token: string,
         signal: AbortSignal,
-    ): Promise<BotConnectorAccess> => await this.authorizeConnectorCredential(connectionId, token, signal);
+    ): Promise<BotConnectionAccess> => await this.authorizeConnectorCredential(connectionId, token, signal);
 
     private readonly authorizeConnectorCredential = async (
         connectionId: string,
         token: string,
         signal: AbortSignal,
-    ): Promise<BotConnectorAccess> => {
+    ): Promise<BotConnectionAccess> => {
         signal.throwIfAborted();
         const normalizedConnectionId = validateIdentifier(connectionId, "connection_id");
         const tokenDigest = await hashSecret(validateToken(token));
@@ -171,7 +169,7 @@ export class BotAuthorization {
         if (!touched) {
             throw new BotApiError("credential_invalid", "The Bot connection credential is invalid", "unauthenticated");
         }
-        return new BotConnectorAccess(
+        return new BotConnectionAccess(
             new ProjectScope(row.tenant_id, row.project_id),
             row.bot_id,
             row.connection_id,
@@ -182,38 +180,60 @@ export class BotAuthorization {
         );
     };
 
+    private readonly inboundCredentialPlanes = async (
+        botId: string,
+        tokenDigest: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<readonly InboundCredentialPlaneRecord[]> => {
+        const pages = await Promise.all(
+            this.#credentials.map((storage) => storage.readInboundCredentialPlanes(botId, tokenDigest, now, signal)),
+        );
+        signal.throwIfAborted();
+        return pages.flat();
+    };
+
     readonly authorizeInbound = async (
         botId: string,
         token: string,
+        requiredProjectPermission: ProjectPermission,
         requiredConnectorScope: string,
+        actorReference: string,
         signal: AbortSignal,
-    ): Promise<InboundBotPrincipal> => {
-        try {
-            return new InboundBotOwnerPrincipal(await this.authorizeBotOwner(botId, token, signal));
-        } catch (error) {
-            signal.throwIfAborted();
-            if (!(error instanceof BotApiError) || error.code === "bot_not_found") {
-                throw error;
-            }
+    ): Promise<BotConversationAuthorization> => {
+        const projectCredential = decodeProjectCredential(token);
+        if (projectCredential.scheme !== ProjectCredentialScheme.Capability) {
+            return await this.authorizeProjectBot(botId, token, requiredProjectPermission, actorReference, signal);
         }
+        const normalizedBotId = validateIdentifier(botId, "bot_id");
         const tokenDigest = await hashSecret(validateToken(token));
         signal.throwIfAborted();
-        const match = await this.findCredential(
-            (storage) => storage.findInboundConnection(validateIdentifier(botId, "bot_id"), tokenDigest, signal),
-            signal,
-        );
-        const connectionId = match?.record ?? null;
-        signal.throwIfAborted();
-        if (connectionId === null) {
+        const planes = await this.inboundCredentialPlanes(normalizedBotId, tokenDigest, Date.now(), signal);
+        const plane = planes[0];
+        if (planes.length !== 1 || plane === undefined) {
             throw new BotApiError(
                 "conversation_access_denied",
                 "The Bot conversation is not accessible",
                 "access-denied",
             );
         }
-        return new InboundBotConnectorPrincipal(
-            await this.authorizeConnector(connectionId, token, requiredConnectorScope, signal),
-        );
+        if (plane.plane === "project") {
+            return await this.authorizeProjectBot(
+                normalizedBotId,
+                token,
+                requiredProjectPermission,
+                actorReference,
+                signal,
+            );
+        }
+        if (plane.plane !== "connector" || typeof plane.connection_id !== "string") {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "The Bot conversation is not accessible",
+                "access-denied",
+            );
+        }
+        return await this.authorizeConnector(plane.connection_id, token, requiredConnectorScope, signal);
     };
 
     readonly authorizeRuntimeExecution = async (

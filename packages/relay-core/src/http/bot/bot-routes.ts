@@ -1,14 +1,25 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
+import {
+    decodeProjectCredential,
+    decodeProjectPermissions,
+    type ExternalIdentityAuthenticator,
+    ExternalIdentityCredential,
+    ProjectPermission,
+} from "../../entity/authentication/project-authentication.ts";
+import type { ProjectAuthenticationService } from "../../service/authentication/project-authentication-service.ts";
 import type { BotService } from "../../service/bot/bot-service.ts";
 import { botErrorResponse } from "./bot-error-response.ts";
 import {
+    actorReference,
     bearer,
+    boolean,
     completionPolicy,
     connectorScopes,
     conversationRequest,
     cursor,
     executionCapability,
+    externalCredential,
     identifier,
     identifiers,
     integer,
@@ -22,7 +33,13 @@ import {
 } from "./bot-input.ts";
 
 interface BotHttpEnvironment {
-    readonly Bindings: { readonly services: { readonly bots: BotService } };
+    readonly Bindings: {
+        readonly services: {
+            readonly bots: BotService;
+            readonly externalIdentityAuthenticator: ExternalIdentityAuthenticator;
+            readonly projectAuthentication: ProjectAuthenticationService;
+        };
+    };
     readonly Variables: { readonly signal: AbortSignal };
 }
 
@@ -37,6 +54,247 @@ export function createBotApplication() {
             c.req.raw.signal.throwIfAborted();
             return botErrorResponse(error);
         })
+        .post("/auth/exchanges/:providerId", async (c) => {
+            const value = await requestBody(c.req.raw, ["expiresInSeconds", "projectId"]);
+            const issued = await c.env.services.projectAuthentication.exchangeExternalIdentity(
+                pathIdentifier(c.req.param("providerId")),
+                externalCredential(c.req.raw),
+                identifier(value, "projectId"),
+                positiveInteger(value, "expiresInSeconds") * 1_000,
+                c.env.services.externalIdentityAuthenticator,
+                c.var.signal,
+            );
+            return c.json(
+                {
+                    credential: issued.credential,
+                    credentialId: issued.credentialId,
+                    expiresAt: new Date(issued.expiresAtEpochMilliseconds).toISOString(),
+                    permissions: [...issued.permissions].map((permission) => permission.value),
+                    projectId: issued.scope.projectId,
+                    tenantId: issued.scope.tenantId,
+                },
+                201,
+            );
+        })
+        .get("/projects/:projectId/applications", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            return c.json(await c.env.services.projectAuthentication.listApplications(access, c.var.signal));
+        })
+        .post("/projects/:projectId/applications", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            const value = await requestBody(c.req.raw, ["name", "permissions"]);
+            return c.json(
+                await c.env.services.projectAuthentication.createApplication(
+                    access,
+                    string(value, "name", 120),
+                    decodeProjectPermissions(value["permissions"]),
+                    c.var.signal,
+                ),
+                201,
+            );
+        })
+        .post("/project-applications/:applicationId/credentials", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            const value = await requestBody(c.req.raw, ["expiresInSeconds"]);
+            return c.json(
+                await c.env.services.projectAuthentication.issueApplicationCredential(
+                    access,
+                    pathIdentifier(c.req.param("applicationId")),
+                    positiveInteger(value, "expiresInSeconds") * 1_000,
+                    c.var.signal,
+                ),
+                201,
+            );
+        })
+        .post("/project-applications/:applicationId/revoke", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            await requestBody(c.req.raw, []);
+            return c.json(
+                await c.env.services.projectAuthentication.revokeApplication(
+                    access,
+                    pathIdentifier(c.req.param("applicationId")),
+                    c.var.signal,
+                ),
+            );
+        })
+        .post("/project-application-credentials/:credentialId/rotate", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            const value = await requestBody(c.req.raw, ["expiresInSeconds", "overlapSeconds"]);
+            return c.json(
+                await c.env.services.projectAuthentication.rotateApplicationCredential(
+                    access,
+                    pathIdentifier(c.req.param("credentialId")),
+                    positiveInteger(value, "expiresInSeconds") * 1_000,
+                    integer(value, "overlapSeconds") * 1_000,
+                    c.var.signal,
+                ),
+                201,
+            );
+        })
+        .post("/project-application-credentials/:credentialId/revoke", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.ApplicationsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            await requestBody(c.req.raw, []);
+            return c.json(
+                await c.env.services.projectAuthentication.revokeApplicationCredential(
+                    access,
+                    pathIdentifier(c.req.param("credentialId")),
+                    c.var.signal,
+                ),
+            );
+        })
+        .get("/projects/:projectId/external-identity-bindings", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.IdentityBindingsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            return c.json(
+                await c.env.services.projectAuthentication.listExternalIdentityBindings(access, c.var.signal),
+            );
+        })
+        .post("/projects/:projectId/external-identity-bindings", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.IdentityBindingsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            const value = await requestBody(c.req.raw, [
+                "externalCredential",
+                "permissions",
+                "providerId",
+                "revokeOwnerCredential",
+            ]);
+            const revokeOwnerCredential = boolean(value, "revokeOwnerCredential");
+            const identity = await c.env.services.externalIdentityAuthenticator.authenticate(
+                new ExternalIdentityCredential(
+                    identifier(value, "providerId"),
+                    string(value, "externalCredential", 16 * 1_024),
+                ),
+                c.var.signal,
+            );
+            return c.json(
+                await c.env.services.projectAuthentication.attachExternalIdentity(
+                    access,
+                    identity,
+                    decodeProjectPermissions(value["permissions"]),
+                    revokeOwnerCredential,
+                    c.var.signal,
+                ),
+                201,
+            );
+        })
+        .delete("/projects/:projectId/external-identity-bindings/:bindingId", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.IdentityBindingsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            return c.json(
+                await c.env.services.projectAuthentication.revokeExternalIdentityBinding(
+                    access,
+                    pathIdentifier(c.req.param("bindingId")),
+                    c.var.signal,
+                ),
+            );
+        })
+        .get("/projects/:projectId/owner-credentials", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.OwnerCredentialsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            return c.json(await c.env.services.projectAuthentication.listOwnerCredentials(access, c.var.signal));
+        })
+        .post("/project-owner-credentials/:credentialId/rotate", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.OwnerCredentialsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            const value = await requestBody(c.req.raw, ["overlapSeconds"]);
+            return c.json(
+                await c.env.services.projectAuthentication.rotateOwnerCredential(
+                    access,
+                    pathIdentifier(c.req.param("credentialId")),
+                    integer(value, "overlapSeconds") * 1_000,
+                    c.var.signal,
+                ),
+                201,
+            );
+        })
+        .post("/project-owner-credentials/:credentialId/revoke", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorize(
+                decodeProjectCredential(bearer(c.req.raw)),
+                ProjectPermission.OwnerCredentialsManage,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            await requestBody(c.req.raw, []);
+            return c.json(
+                await c.env.services.projectAuthentication.revokeOwnerCredential(
+                    access,
+                    pathIdentifier(c.req.param("credentialId")),
+                    c.var.signal,
+                ),
+            );
+        })
+        .get("/projects/:projectId/authentication-audit-events", async (c) => {
+            const access = await c.env.services.projectAuthentication.authorizeProject(
+                pathIdentifier(c.req.param("projectId")),
+                bearer(c.req.raw),
+                ProjectPermission.ProjectRead,
+                actorReference(c.req.raw),
+                c.var.signal,
+            );
+            return c.json(
+                await c.env.services.projectAuthentication.listAuditEvents(
+                    access,
+                    pageLimit(new URL(c.req.raw.url)),
+                    c.var.signal,
+                ),
+            );
+        })
         .get("/projects", async (c) => {
             const tenant = await c.env.services.bots.resolveTenant(c.req.raw, c.var.signal);
             return c.json({ projects: await c.env.services.bots.listProjects(tenant, c.var.signal) });
@@ -47,6 +305,7 @@ export function createBotApplication() {
                     await c.env.services.bots.listOwnedBots(
                         pathIdentifier(c.req.param("projectId")),
                         bearer(c.req.raw),
+                        actorReference(c.req.raw),
                         c.var.signal,
                     ),
                 );
@@ -76,6 +335,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createBot(
                     pathIdentifier(c.req.param("projectId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     string(value, "displayName", 80),
                     string(value, "avatarRef", 4096, true),
                     string(value, "description", 2000, true),
@@ -90,6 +350,7 @@ export function createBotApplication() {
                 await c.env.services.bots.readBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -99,6 +360,7 @@ export function createBotApplication() {
                 await c.env.services.bots.listBehaviorRevisions(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -108,6 +370,7 @@ export function createBotApplication() {
                 await c.env.services.bots.listExecutionBindings(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -117,6 +380,7 @@ export function createBotApplication() {
                 await c.env.services.bots.listConnections(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -126,6 +390,7 @@ export function createBotApplication() {
                 await c.env.services.bots.listConversations(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -135,6 +400,7 @@ export function createBotApplication() {
                 await c.env.services.bots.readSetup(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
             ),
@@ -145,6 +411,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createProfileRevision(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     string(value, "displayName", 80),
                     string(value, "avatarRef", 4096, true),
@@ -166,6 +433,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createBehaviorRevision(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     string(value, "instructions", 100_000, true),
                     identifiers(value, "requiredCapabilities", 32),
@@ -191,6 +459,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createExecutionBinding(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     identifier(value, "behaviorRevisionId"),
                     identifier(value, "runtimeId"),
@@ -211,6 +480,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createGrant(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     identifier(value, "audience"),
                     string(value, "label", 200),
                     connectorScopes(value),
@@ -227,6 +497,7 @@ export function createBotApplication() {
                 await c.env.services.bots.approveTarget(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     pathIdentifier(c.req.param("targetId")),
                     integer(value, "expectedPolicyRevision"),
                     Date.now(),
@@ -240,6 +511,7 @@ export function createBotApplication() {
                 await c.env.services.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     "suspend",
                     Date.now(),
@@ -253,6 +525,7 @@ export function createBotApplication() {
                 await c.env.services.bots.revokeConnectionForOwner(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     pathIdentifier(c.req.param("connectionId")),
                     integer(value, "expectedRevision"),
                     Date.now(),
@@ -266,6 +539,7 @@ export function createBotApplication() {
                 await c.env.services.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     "archive",
                     Date.now(),
@@ -279,6 +553,7 @@ export function createBotApplication() {
                 await c.env.services.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     integer(value, "expectedRevision"),
                     "resume",
                     Date.now(),
@@ -291,6 +566,7 @@ export function createBotApplication() {
                 await c.env.services.bots.createConversation(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     conversationRequest(await requestBody(c.req.raw)),
                     Date.now(),
                     c.var.signal,
@@ -304,6 +580,7 @@ export function createBotApplication() {
                 await c.env.services.bots.submitMessage(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     pathIdentifier(c.req.param("conversationId")),
                     submission,
                     Date.now(),
@@ -317,6 +594,7 @@ export function createBotApplication() {
                 await c.env.services.bots.readConversationEvents(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     pathIdentifier(c.req.param("conversationId")),
                     c.req.query("after") ?? "",
                     c.var.signal,
@@ -329,6 +607,7 @@ export function createBotApplication() {
                 await c.env.services.bots.cancelTurn(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     pathIdentifier(c.req.param("turnId")),
                     identifier(value, "idempotencyKey"),
                     Date.now(),

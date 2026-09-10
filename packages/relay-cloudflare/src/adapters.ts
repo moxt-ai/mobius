@@ -4,11 +4,17 @@ export { CloudflareChannelPeers } from "./cloudflare-channel-peers.ts";
 export { CloudflareChannelRuntime } from "./cloudflare-channel-runtime.ts";
 export { CloudflareSessionTransport } from "./cloudflare-session-transport.ts";
 export { D1DatabaseAdapter } from "./d1-database.ts";
+export { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 export type { DatabaseResolver } from "./database-resolver.ts";
 export { DurableObjectSqlDatabase } from "./durable-object-sql-database.ts";
 export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
 export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 export { SessionRelay } from "./durable-objects/session-relay.ts";
+export {
+    type PublicProjectBootstrapEnvironment,
+    PublicProjectBootstrapPolicy,
+    publicProjectBootstrapPolicyFromEnvironment,
+} from "./public-project-bootstrap-policy.ts";
 export { R2ContentStore } from "./r2-content-store.ts";
 export {
     type LiteSessionConfigurationEnvironment,

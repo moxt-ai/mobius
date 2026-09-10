@@ -157,7 +157,7 @@ export function bindingResource(row: Awaited<ReturnType<BotControlStorage["listE
 }
 
 export function connectionResource(
-    row: Awaited<ReturnType<BotConnectionStorage["listForOwner"]>>["connections"][number],
+    row: Awaited<ReturnType<BotConnectionStorage["listForProject"]>>["connections"][number],
 ): object {
     const resource = {
         audience: row.audience,
@@ -180,7 +180,7 @@ export function connectionResource(
 }
 
 export function targetResource(
-    row: Awaited<ReturnType<BotConnectionStorage["listForOwner"]>>["deliveryTargets"][number],
+    row: Awaited<ReturnType<BotConnectionStorage["listForProject"]>>["deliveryTargets"][number],
 ): object {
     const resource = {
         alias: row.alias,

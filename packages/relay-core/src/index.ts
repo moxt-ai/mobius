@@ -9,6 +9,7 @@ export {
     type RelayContext,
     type RelayInfrastructure,
 } from "./di/create-relay-dependencies.ts";
+export * from "./entity/authentication/project-authentication.ts";
 export { BotApiError, type BotErrorCode, type BotFailureKind } from "./entity/bot/bot-error.ts";
 export {
     BOT_EXECUTION_LIFETIME_MILLISECONDS,
@@ -94,8 +95,6 @@ export {
     PairingLifecycle,
     PairingStatus,
     PendingPairingStatus,
-    ProjectOwnerAccess,
-    ProjectScopeAccess,
     parseAgents,
     parseInstallableAgents,
     type RedeemedChannelAccessGrant,
@@ -142,6 +141,8 @@ export type {
     TenantShardingDirectory,
     TenantShardResolution,
 } from "./infra/tenant-sharding-directory.ts";
+export * from "./service/authentication/oidc-authentication.ts";
+export type { ProjectAuthenticationService } from "./service/authentication/project-authentication-service.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {
     type ChannelPeers,

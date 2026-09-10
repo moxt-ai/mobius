@@ -404,7 +404,7 @@ class DoRoutes {
             }
             if (operation === "bot-execution-authorize") {
                 assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId"]);
-                await this.#bots.authorizeExecutionCapability(
+                const permit = await this.#bots.authorizeExecutionCapability(
                     scope,
                     readString(body, "sessionId"),
                     readString(body, "executionId"),
@@ -412,7 +412,24 @@ class DoRoutes {
                     readInteger(body, "now"),
                     request.signal,
                 );
-                return Response.json({ authorized: true });
+                return Response.json({
+                    allowedTargetIds: [...permit.allowedTargetIds],
+                    behaviorRevisionId: permit.behaviorRevisionId,
+                    bindingId: permit.bindingId,
+                    bindingRevision: permit.bindingRevision,
+                    botId: permit.botId,
+                    capabilityId: permit.capabilityId,
+                    conversationId: permit.conversationId,
+                    executionId: permit.executionId,
+                    expiresAtEpochMilliseconds: permit.expiresAtEpochMilliseconds,
+                    operation: permit.operation,
+                    projectId: permit.scope.projectId,
+                    remainingUses: permit.remainingUses,
+                    runtimeId: permit.runtimeId,
+                    sessionId: permit.sessionId,
+                    tenantId: permit.scope.tenantId,
+                    turnId: permit.turnId,
+                });
             }
             if (operation === "bot-outbound-accept") {
                 assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId", "submission"]);

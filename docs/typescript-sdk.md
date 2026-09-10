@@ -149,6 +149,16 @@ a browser bundle or browser example. A browser provider should cache the
 short-lived credential, refresh it before `expiresAt`, and honor its supplied
 abort signal.
 
+`MobiusProjectAuthenticationClient` exposes application registration and
+credential lifecycle, external identity binding and exchange, accountless owner
+rotation/revocation, and authentication audit events. Use
+`RotatingMobiusCredentialProvider` to swap an application or owner secret after
+rotation and `ExchangingMobiusCredentialProvider` to cache and refresh
+short-lived Mobius access credentials from a host-supplied OIDC token provider.
+See [Project authentication and credential operations](project-authentication.md)
+for the full permission matrix, Clerk-compatible construction example, Moxt
+server example, and recovery/rotation runbook.
+
 The SDK does not loop on authentication failures. `credential_expired` and
 `credential_revoked` are returned immediately. After obtaining a replacement,
 an application may retry a read or reconnect a subscription. A Turn may be

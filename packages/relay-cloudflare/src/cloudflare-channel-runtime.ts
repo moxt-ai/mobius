@@ -1,6 +1,7 @@
 import {
     type ChannelGateway,
     type ChannelHostCredential,
+    type RuntimeAccessContext,
     RuntimeStatus,
     type VerifiedChannelAccess,
 } from "@moxt-ai/mobius-relay-core";
@@ -19,7 +20,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
     }
 
     readonly acceptDaemon = async (
-        access: VerifiedChannelAccess,
+        access: RuntimeAccessContext,
         request: Request,
         signal: AbortSignal,
     ): Promise<Response> => await this.forward(access, request, signal);

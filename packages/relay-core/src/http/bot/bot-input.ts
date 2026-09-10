@@ -59,6 +59,13 @@ export function integer(value: Readonly<Record<string, unknown>>, key: string): 
     }
     return field;
 }
+export function boolean(value: Readonly<Record<string, unknown>>, key: string): boolean {
+    const field = value[key];
+    if (typeof field !== "boolean") {
+        throw new BotApiError("invalid_request", `The ${key} field is invalid`, "invalid-input");
+    }
+    return field;
+}
 export function positiveInteger(value: Readonly<Record<string, unknown>>, key: string): number {
     const field = integer(value, key);
     if (field < 1) {
@@ -196,6 +203,30 @@ export function bearer(request: Request): string {
         throw new BotApiError("credential_invalid", "The bearer credential is invalid", "unauthenticated");
     }
     return token;
+}
+export function externalCredential(request: Request): string {
+    const header = request.headers.get("authorization") ?? "";
+    if (!header.startsWith("Bearer ")) {
+        throw new BotApiError("credential_invalid", "An external identity credential is required", "unauthenticated");
+    }
+    const credential = header.slice(7);
+    if (credential.length === 0 || credential.length > 16 * 1024) {
+        throw new BotApiError("credential_invalid", "The external identity credential is invalid", "unauthenticated");
+    }
+    for (const character of credential) {
+        const codePoint = character.codePointAt(0) ?? 0;
+        if (codePoint <= 31 || codePoint === 127) {
+            throw new BotApiError(
+                "credential_invalid",
+                "The external identity credential is invalid",
+                "unauthenticated",
+            );
+        }
+    }
+    return credential;
+}
+export function actorReference(request: Request): string {
+    return request.headers.get("x-mobius-actor-ref") ?? "";
 }
 export function executionCapability(request: Request): string {
     const token = request.headers.get("x-mobius-bot-execution-capability") ?? "";

@@ -116,7 +116,9 @@ export class BotSessionStorage {
         readonly executionId: string;
     }) =>
         this.#database.query(
-            `SELECT e.state, c.secret_digest, c.expires_at, c.revoked_at
+            `SELECT e.*, c.capability_id, c.secret_digest, c.operation,
+                    c.allowed_delivery_target_ids_json, c.usage_limit,
+                    c.usage_count, c.expires_at, c.revoked_at
                FROM bot_executions AS e
                INNER JOIN bot_execution_capabilities AS c
                  ON c.scope_key = e.scope_key AND c.session_id = e.session_id

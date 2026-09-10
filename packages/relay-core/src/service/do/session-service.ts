@@ -9,6 +9,7 @@ import {
     type SessionElicitationRespondCommand,
     type SessionPermissionRespondCommand,
 } from "@moxt-ai/mobius-protocol";
+import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import {
     type ArtifactUploadLease,
     type AttemptReconciliationOutcome,
@@ -69,7 +70,13 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeProjectRuntime(projectId, request.runtimeId, token, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            request.runtimeId,
+            token,
+            ProjectPermission.ConversationCreate,
+            signal,
+        );
         return await this.#sessionCommands.createSession(
             new ProjectScope(access.tenantId, access.projectId),
             request,
@@ -119,7 +126,13 @@ export class SessionService {
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
-    ) => this.#sessionQueries.listSessions(await this.projectScope(projectId, token, signal), cursor, limit, signal);
+    ) =>
+        this.#sessionQueries.listSessions(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            cursor,
+            limit,
+            signal,
+        );
 
     readonly importSession = async (
         projectId: string,
@@ -129,7 +142,13 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeProjectRuntime(projectId, targetBinding.runtimeId, token, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            targetBinding.runtimeId,
+            token,
+            ProjectPermission.SessionWrite,
+            signal,
+        );
         return await this.#sessionTransfers.importSession(
             new ProjectScope(access.tenantId, access.projectId),
             exported,
@@ -140,7 +159,11 @@ export class SessionService {
     };
 
     readonly readSession = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
-        this.#sessionQueries.readSession(await this.projectScope(projectId, token, signal), sessionId, signal);
+        this.#sessionQueries.readSession(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            sessionId,
+            signal,
+        );
 
     readonly setDefaultBinding = async (
         projectId: string,
@@ -150,7 +173,13 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeProjectRuntime(projectId, binding.runtimeId, token, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            binding.runtimeId,
+            token,
+            ProjectPermission.SessionWrite,
+            signal,
+        );
         return await this.#sessionCommands.setDefaultBinding(
             new ProjectScope(access.tenantId, access.projectId),
             sessionId,
@@ -173,12 +202,13 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const scope = await this.projectScope(projectId, token, signal);
+        const scope = await this.projectScope(projectId, token, ProjectPermission.ConversationTurnCreate, signal);
         const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
         const access = await this.#pairings.authorizeProjectRuntime(
             projectId,
             session.defaultBinding.runtimeId,
             token,
+            ProjectPermission.ConversationTurnCreate,
             signal,
         );
         const artifactResources = await this.#sessionArtifacts.resolveArtifactResources(
@@ -218,7 +248,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         await this.#sessionArtifacts.createArtifactUpload(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
             sessionId,
             request,
             now,
@@ -235,7 +265,7 @@ export class SessionService {
         signal: AbortSignal,
     ): Promise<ArtifactUploadLease> =>
         await this.#sessionArtifacts.authorizeArtifactUpload(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
             sessionId,
             artifactId,
             uploadToken,
@@ -252,7 +282,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         await this.#sessionArtifacts.completeArtifactUpload(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ArtifactWrite, signal),
             lease,
             bytes,
             now,
@@ -268,7 +298,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         await this.#sessionArtifacts.readArtifact(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ArtifactRead, signal),
             sessionId,
             artifactId,
             now,
@@ -283,7 +313,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         await this.#sessionArtifacts.readArtifactContent(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ArtifactRead, signal),
             sessionId,
             artifactId,
             signal,
@@ -297,7 +327,7 @@ export class SessionService {
         signal: AbortSignal,
     ): Promise<Response> =>
         await this.#sessionEventStreams.openEventStream(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
             sessionId,
             cursor,
             signal,
@@ -309,7 +339,13 @@ export class SessionService {
         sessionId: string,
         turnId: string,
         signal: AbortSignal,
-    ) => this.#sessionQueries.readTurn(await this.projectScope(projectId, token, signal), sessionId, turnId, signal);
+    ) =>
+        this.#sessionQueries.readTurn(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            sessionId,
+            turnId,
+            signal,
+        );
 
     readonly cancelTurn = async (
         projectId: string,
@@ -320,9 +356,15 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const scope = await this.projectScope(projectId, token, signal);
+        const scope = await this.projectScope(projectId, token, ProjectPermission.ConversationTurnCancel, signal);
         const runtimeId = await this.#sessionQueries.readTurnRuntime(scope, sessionId, turnId, signal);
-        const access = await this.#pairings.authorizeProjectRuntime(projectId, runtimeId, token, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.ConversationTurnCancel,
+            signal,
+        );
         const acceptance = await this.#sessionCommands.acceptTurnCancellation(
             scope,
             access.runtimeId,
@@ -346,7 +388,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readAttempt(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             attemptId,
             signal,
@@ -380,7 +422,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readPendingInteractions(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             signal,
         );
@@ -393,7 +435,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readInteraction(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             interactionId,
             signal,
@@ -460,7 +502,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readMessages(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             cursor,
             limit,
@@ -476,7 +518,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readEvents(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
             sessionId,
             cursor,
             limit,
@@ -492,7 +534,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionQueries.readToolCallDetail(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             attemptId,
             toolCallId,
@@ -500,7 +542,11 @@ export class SessionService {
         );
 
     readonly readNativeHistory = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
-        this.#sessionQueries.readNativeHistory(await this.projectScope(projectId, token, signal), sessionId, signal);
+        this.#sessionQueries.readNativeHistory(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            sessionId,
+            signal,
+        );
 
     readonly recordNativeHistory = async (
         projectId: string,
@@ -513,7 +559,7 @@ export class SessionService {
         signal: AbortSignal,
     ) =>
         this.#sessionCommands.recordNativeHistory(
-            await this.projectScope(projectId, token, signal),
+            await this.projectScope(projectId, token, ProjectPermission.SessionWrite, signal),
             runtimeId,
             sessionId,
             title,
@@ -523,7 +569,11 @@ export class SessionService {
         );
 
     readonly exportSession = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
-        this.#sessionTransfers.exportSession(await this.projectScope(projectId, token, signal), sessionId, signal);
+        this.#sessionTransfers.exportSession(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            sessionId,
+            signal,
+        );
 
     readonly deleteSession = async (
         projectId: string,
@@ -531,7 +581,13 @@ export class SessionService {
         sessionId: string,
         now: number,
         signal: AbortSignal,
-    ) => this.#sessionCommands.deleteSession(await this.projectScope(projectId, token, signal), sessionId, now, signal);
+    ) =>
+        this.#sessionCommands.deleteSession(
+            await this.projectScope(projectId, token, ProjectPermission.SessionDelete, signal),
+            sessionId,
+            now,
+            signal,
+        );
 
     private readonly respondToInteraction = async (
         projectId: string,
@@ -544,9 +600,15 @@ export class SessionService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const scope = await this.projectScope(projectId, token, signal);
+        const scope = await this.projectScope(projectId, token, ProjectPermission.InteractionRespond, signal);
         const runtimeId = await this.#sessionQueries.readInteractionRuntime(scope, sessionId, interactionId, signal);
-        const access = await this.#pairings.authorizeProjectRuntime(projectId, runtimeId, token, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.InteractionRespond,
+            signal,
+        );
         const acceptance = await this.#sessionCommands.acceptInteractionResponse(
             scope,
             sessionId,
@@ -566,9 +628,10 @@ export class SessionService {
     private readonly projectScope = async (
         projectId: string,
         token: string,
+        permission: ProjectPermission,
         signal: AbortSignal,
     ): Promise<ProjectScope> => {
-        const access = await this.#pairings.authorizeProject(projectId, token, signal);
+        const access = await this.#pairings.authorizeProject(projectId, token, permission, signal);
         return new ProjectScope(access.tenantId, access.projectId);
     };
 }

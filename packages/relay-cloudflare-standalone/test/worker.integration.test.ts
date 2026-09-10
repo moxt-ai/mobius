@@ -907,7 +907,7 @@ describe.sequential("Cloudflare session deployment", () => {
             },
         );
         expect(browserDenied.status).toBe(403);
-        await expect(browserDenied.json()).resolves.toMatchObject({ error: { code: "owner_access_required" } });
+        await expect(browserDenied.json()).resolves.toMatchObject({ error: { code: "project_permission_denied" } });
 
         vi.setSystemTime(Date.now() + 600_001);
         const expiring = pending.at(0);

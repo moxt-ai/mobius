@@ -1,22 +1,18 @@
-import type {
-    BotConnectorCredential,
-    BotOwnerCredential,
-    BotRuntimeCredential,
-    ProjectOwnerCredential,
-} from "../entity/bot/bot-access.ts";
+import type { BotConnectorCredential, BotRuntimeCredential } from "../entity/bot/bot-access.ts";
+
+export interface InboundCredentialPlaneRecord {
+    readonly connection_id: unknown;
+    readonly plane: string;
+}
 
 export interface BotCredentialRecords {
-    readonly readProjectOwner: (
-        projectId: string,
-        tokenDigest: string,
-        signal: AbortSignal,
-    ) => Promise<ProjectOwnerCredential | null>;
-    readonly readBotOwner: (
-        botId: string,
-        tokenDigest: string,
-        signal: AbortSignal,
-    ) => Promise<BotOwnerCredential | null>;
     readonly botExists: (botId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly botExistsInProject: (
+        botId: string,
+        tenantId: string,
+        projectId: string,
+        signal: AbortSignal,
+    ) => Promise<boolean>;
     readonly readConnector: (
         connectionId: string,
         tokenDigest: string,
@@ -30,7 +26,12 @@ export interface BotCredentialRecords {
         now: number,
         signal: AbortSignal,
     ) => Promise<boolean>;
-    readonly findInboundConnection: (botId: string, tokenDigest: string, signal: AbortSignal) => Promise<string | null>;
+    readonly readInboundCredentialPlanes: (
+        botId: string,
+        tokenDigest: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<readonly InboundCredentialPlaneRecord[]>;
     readonly readRuntimeExecution: (
         executionId: string,
         tokenDigest: string,

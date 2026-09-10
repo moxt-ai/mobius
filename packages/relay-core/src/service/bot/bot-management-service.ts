@@ -1,4 +1,5 @@
-import type { BotOwnerAccess, ProjectOwnerAccess } from "../../entity/bot/bot-access.ts";
+import type { ProjectAccessContext } from "../../entity/authentication/project-authentication.ts";
+import type { ProjectBotAccess } from "../../entity/bot/bot-access.ts";
 import { conversationResponse } from "../../entity/bot/bot-conversation.ts";
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
@@ -16,27 +17,27 @@ export class BotManagementService {
         this.#conversations = conversations;
     }
 
-    readonly listBots = async (access: ProjectOwnerAccess, signal: AbortSignal) => ({
+    readonly listBots = async (access: ProjectAccessContext, signal: AbortSignal) => ({
         bots: (await this.#control.listBots(access, signal)).map(botResource),
     });
 
-    readonly listBehaviorRevisions = async (access: BotOwnerAccess, signal: AbortSignal) => ({
+    readonly listBehaviorRevisions = async (access: ProjectBotAccess, signal: AbortSignal) => ({
         behaviorRevisions: (await this.#control.listBehaviorRevisions(access, signal)).map(behaviorResource),
     });
 
-    readonly listExecutionBindings = async (access: BotOwnerAccess, signal: AbortSignal) => ({
+    readonly listExecutionBindings = async (access: ProjectBotAccess, signal: AbortSignal) => ({
         executionBindings: (await this.#control.listExecutionBindings(access, signal)).map(bindingResource),
     });
 
-    readonly listConnections = async (access: BotOwnerAccess, signal: AbortSignal) => {
-        const rows = await this.#connections.listForOwner(access, signal);
+    readonly listConnections = async (access: ProjectBotAccess, signal: AbortSignal) => {
+        const rows = await this.#connections.listForProject(access, signal);
         return {
             connections: rows.connections.map(connectionResource),
             deliveryTargets: rows.deliveryTargets.map(targetResource),
         };
     };
 
-    readonly listConversations = async (access: BotOwnerAccess, signal: AbortSignal) => ({
-        conversations: (await this.#conversations.listForOwner(access, signal)).map(conversationResponse),
+    readonly listConversations = async (access: ProjectBotAccess, signal: AbortSignal) => ({
+        conversations: (await this.#conversations.listForProject(access, signal)).map(conversationResponse),
     });
 }

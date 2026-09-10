@@ -1,7 +1,7 @@
 # Project Runtime pairing
 
 Mobius supports two pairing flows. `POST /pairings` bootstraps a new Project and
-its first Runtime. An authenticated Project owner can then add independent
+its first Runtime. An authenticated Project caller with `runtime:pair` can then add independent
 Runtimes to that same Project without creating another Project or owner
 credential.
 
@@ -13,9 +13,11 @@ Project
 
 Each Runtime has its own generated Runtime ID, Channel ID, one-time pairing
 code, daemon credential, connection lease, machine metadata, and Agent catalog.
-The Project owner credential is a separate authority. A Runtime daemon
-credential, linked-device credential, or browser credential cannot create,
-inspect, or revoke Runtime pairings.
+Project credentials are a separate authority. Accountless owner and scoped
+application credentials may pair Runtimes when their server-owned permissions
+include `runtime:pair`; browser, linked-device, Runtime daemon, and Bot
+Connection credentials cannot do so. Reading and revoking use `runtime:read`
+and `runtime:revoke` independently.
 
 ## Web workflow
 
