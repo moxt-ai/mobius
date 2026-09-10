@@ -89,6 +89,44 @@ function setHappyDomUrl(url: URL): void {
     Reflect.apply(setURL, api, [url.href]);
 }
 
+export async function waitForDocumentState(predicate: () => boolean, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    if (predicate()) {
+        return;
+    }
+    await new Promise<void>((resolve, reject) => {
+        const observer = new MutationObserver(() => evaluate());
+        const cleanup = (): void => {
+            observer.disconnect();
+            signal.removeEventListener("abort", abort);
+        };
+        const abort = (): void => {
+            cleanup();
+            reject(signal.reason);
+        };
+        const evaluate = (): void => {
+            try {
+                if (!predicate()) {
+                    return;
+                }
+                cleanup();
+                resolve();
+            } catch (error) {
+                cleanup();
+                reject(error);
+            }
+        };
+        observer.observe(document.body, {
+            attributes: true,
+            characterData: true,
+            childList: true,
+            subtree: true,
+        });
+        signal.addEventListener("abort", abort, { once: true });
+        evaluate();
+    });
+}
+
 export class StatefulDaemon {
     readonly #attemptIdsByCommand = new Map<string, string>();
     readonly #closed: Promise<void>;

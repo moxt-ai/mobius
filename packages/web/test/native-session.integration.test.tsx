@@ -18,12 +18,15 @@ import {
     saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
+    waitForDocumentState,
 } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
 describe.sequential("Native Session boundaries", () => {
-    it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async () => {
+    it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -118,14 +121,14 @@ describe.sequential("Native Session boundaries", () => {
                 }),
             );
 
-            await waitFor(() => {
-                expect(screen.queryByRole("button", { name: "Forking conversation" })).toBeNull();
-            });
+            await waitForDocumentState(
+                () => screen.queryByRole("region", { name: "Previous conversation history" }) !== null,
+                signal,
+            );
+            expect(screen.queryByRole("button", { name: "Forking conversation" })).toBeNull();
             expect(screen.queryByRole("alert")?.textContent ?? "").toBe("");
-            await waitFor(() => {
-                expect(window.location.pathname).toContain(`/sessions/${encodeURIComponent(fork.targetSessionId)}`);
-            });
-            expect(await screen.findByText("The implementation plan is established.")).toBeTruthy();
+            expect(window.location.pathname).toContain(`/sessions/${encodeURIComponent(fork.targetSessionId)}`);
+            expect(screen.getByText("The implementation plan is established.")).toBeTruthy();
             expect(screen.queryByText("The second-stage changes are applied.")).toBeNull();
         } finally {
             cleanup();

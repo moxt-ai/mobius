@@ -319,6 +319,7 @@ class ConnectedTransport extends TransportConnection {
     readonly #connection: ChannelConnection;
     readonly #preparingRequestIds = new Set<string>();
     readonly #promptControllers = new Set<AbortController>();
+    readonly #promptSubmissionTails = new Map<string, Promise<void>>();
     readonly #publicCommandIds = new Set<string>();
     readonly #serviceClients: Promise<BrowserServiceClients>;
     readonly #turnIds = new Map<string, Promise<MobiusTurn>>();
@@ -592,16 +593,31 @@ class ConnectedTransport extends TransportConnection {
         const sessionId = request.sessionId ?? crypto.randomUUID();
         const commandId = request.commandId ?? crypto.randomUUID();
         const submission = Promise.withResolvers<MobiusTurn>();
+        const previousSubmission = this.#promptSubmissionTails.get(sessionId) ?? Promise.resolve();
+        const currentSubmission = Promise.withResolvers<void>();
+        this.#promptSubmissionTails.set(sessionId, currentSubmission.promise);
         void submission.promise.catch(() => undefined);
         const turnKey = this.turnKey(sessionId, commandId);
         this.#turnIds.set(turnKey, submission.promise);
         this.#promptControllers.add(controller);
         try {
-            return await this.runPrompt(request, sessionId, commandId, submission, controller.signal);
+            return await this.runPrompt(
+                request,
+                sessionId,
+                commandId,
+                submission,
+                previousSubmission,
+                currentSubmission,
+                controller.signal,
+            );
         } catch (error) {
             submission.reject(error);
             throw error;
         } finally {
+            currentSubmission.resolve();
+            if (this.#promptSubmissionTails.get(sessionId) === currentSubmission.promise) {
+                this.#promptSubmissionTails.delete(sessionId);
+            }
             this.#promptControllers.delete(controller);
             this.#turnIds.delete(turnKey);
         }
@@ -612,6 +628,8 @@ class ConnectedTransport extends TransportConnection {
         sessionId: string,
         commandId: string,
         submission: PromiseWithResolvers<MobiusTurn>,
+        previousSubmission: Promise<void>,
+        currentSubmission: PromiseWithResolvers<void>,
         signal: AbortSignal,
     ): Promise<PromptResult> => {
         const clients = await this.#serviceClients;
@@ -684,20 +702,24 @@ class ConnectedTransport extends TransportConnection {
         );
         this.#publicCommandIds.add(commandId);
         try {
-            const accepted = await clients.scoped.turns.submit(
-                sessionId,
-                {
-                    additionalDirectoryIds: request.additionalDirectoryIds ?? [],
-                    artifactIds: attachments.artifactIds,
-                    content: request.prompt,
-                    disposition: request.disposition ?? SessionPromptDisposition.Reject,
-                    idempotencyKey: commandId,
-                    images: [],
-                    resources: attachments.resources ?? [],
-                    targetCommandId: request.targetCommandId ?? "",
-                },
-                signal,
-            );
+            await previousSubmission;
+            signal.throwIfAborted();
+            const accepted = await clients.scoped.turns
+                .submit(
+                    sessionId,
+                    {
+                        additionalDirectoryIds: request.additionalDirectoryIds ?? [],
+                        artifactIds: attachments.artifactIds,
+                        content: request.prompt,
+                        disposition: request.disposition ?? SessionPromptDisposition.Reject,
+                        idempotencyKey: commandId,
+                        images: [],
+                        resources: attachments.resources ?? [],
+                        targetCommandId: request.targetCommandId ?? "",
+                    },
+                    signal,
+                )
+                .finally(() => currentSubmission.resolve());
             submission.resolve(accepted);
             try {
                 await subscription.completed;

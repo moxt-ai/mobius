@@ -19,12 +19,14 @@ import { describe, expect, it, vi } from "vitest";
 
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
+import { useChatStore } from "@/store/chat-store";
 import {
     completeRenderedPrompt,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
+    waitForDocumentState,
 } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
@@ -374,7 +376,9 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given an Agent lacks native prompt queueing, When follow-ups are sent during a running Turn, Then Mobius runs them in order after the current Turn", async () => {
+    it("Given an Agent lacks native prompt queueing, When follow-ups are sent during a running Turn, Then Mobius runs them in order after the current Turn", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -415,7 +419,17 @@ describe.sequential("Agent interaction boundaries", () => {
                 }),
             );
 
-            const followUps = ["Run the second task", "Run the third task"];
+            const secondFollowUp = "Run the second task";
+            const thirdFollowUp = "Run the third task";
+            const followUps = [secondFollowUp, thirdFollowUp];
+            useChatStore.getState().addDraftResource({
+                mimeType: "text/plain",
+                name: "second-task-context.txt",
+                text: "Context that must stay attached to the second task.",
+                type: "embedded",
+                uri: "attachment:///second-task-context.txt",
+            });
+            await screen.findByText("second-task-context.txt");
             for (const followUp of followUps) {
                 const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
                 fireEvent.change(followUpInput, { target: { value: followUp } });
@@ -449,9 +463,10 @@ describe.sequential("Agent interaction boundaries", () => {
             const secondPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
             expect(secondPrompt).toMatchObject({
                 disposition: "queue",
-                prompt: followUps[0],
+                prompt: secondFollowUp,
                 targetCommandId: runningPrompt.commandId,
             });
+            expect(secondPrompt.resources).toHaveLength(1);
             await paired.daemon.sendSessionEvent(
                 secondPrompt.sessionId,
                 encodeSessionStartedEvent({
@@ -484,7 +499,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const thirdPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
             expect(thirdPrompt).toMatchObject({
                 disposition: "queue",
-                prompt: followUps[1],
+                prompt: thirdFollowUp,
                 targetCommandId: runningPrompt.commandId,
             });
             await paired.daemon.sendSessionEvent(
@@ -516,19 +531,30 @@ describe.sequential("Agent interaction boundaries", () => {
                 }),
             );
 
-            await waitFor(() => {
-                const transcript = screen
+            const readTranscript = (): string[] =>
+                screen
                     .getAllByLabelText(/Message from/)
-                    .map((message) => message.textContent?.replaceAll(/\s+/g, " ").trim());
-                expect(transcript).toEqual([
-                    initialPrompt,
-                    expect.stringContaining("FIRST_COMPLETE"),
-                    followUps[0],
-                    expect.stringContaining("SECOND_COMPLETE"),
-                    followUps[1],
-                    expect.stringContaining("THIRD_COMPLETE"),
-                ]);
-            });
+                    .map((message) => message.textContent?.replaceAll(/\s+/g, " ").trim() ?? "");
+            await waitForDocumentState(() => {
+                const transcript = readTranscript();
+                return (
+                    transcript.length === 6 &&
+                    transcript[0] === initialPrompt &&
+                    transcript[1]?.includes("FIRST_COMPLETE") === true &&
+                    transcript[2]?.includes(secondFollowUp) === true &&
+                    transcript[3]?.includes("SECOND_COMPLETE") === true &&
+                    transcript[4] === thirdFollowUp &&
+                    transcript[5]?.includes("THIRD_COMPLETE") === true
+                );
+            }, signal);
+            expect(readTranscript()).toEqual([
+                initialPrompt,
+                expect.stringContaining("FIRST_COMPLETE"),
+                expect.stringContaining(secondFollowUp),
+                expect.stringContaining("SECOND_COMPLETE"),
+                thirdFollowUp,
+                expect.stringContaining("THIRD_COMPLETE"),
+            ]);
             expect(screen.queryByText("The agent completed without returning text.")).toBeNull();
         } finally {
             cleanup();
