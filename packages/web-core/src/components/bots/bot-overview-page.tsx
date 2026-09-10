@@ -14,8 +14,8 @@ import { Link, useOutletContext } from "react-router";
 import { BOT_FIELD_CLASS, BOT_TEXTAREA_CLASS, BotInlineError } from "@/components/bots/bot-page-header";
 import type { BotDetailContext } from "@/components/bots/bot-workspace";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import { cn } from "@/lib/utils";
-import { botConnectionsRoutePath } from "@/services/app-routes";
 
 const BOT_ACTIVATION_REFRESH_MILLISECONDS = 250;
 
@@ -99,6 +99,7 @@ function bindingStatusLabel(binding: MobiusBotExecutionBinding): string {
 }
 
 export function BotOverviewPage() {
+    const routes = useWorkspaceRoutes();
     const { bot, client, connection, refreshBot, signal } = useOutletContext<BotDetailContext>();
     const errorSummaryRef = useRef<HTMLDivElement>(null);
     const behaviorDefaultsRef = useRef("");
@@ -710,7 +711,7 @@ export function BotOverviewPage() {
                                             opaque target in{` `}
                                             <Link
                                                 className="font-medium text-foreground underline underline-offset-2 focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
-                                                to={botConnectionsRoutePath(connection.channelId, bot.botId)}
+                                                to={routes.botConnectionsPath(bot.botId)}
                                             >
                                                 Connections
                                             </Link>

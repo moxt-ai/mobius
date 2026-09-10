@@ -26,6 +26,17 @@ export class PairingService {
     readonly readProjectRuntimePairing = (projectId: string, pairingId: string, token: string, signal: AbortSignal) =>
         this.#pairings.readProjectRuntimePairing(projectId, pairingId, token, signal);
 
+    readonly acceptProjectOwnerRuntimeHost = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        request: Request,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        const access = await this.#pairings.authorizeProjectOwnerRuntimeHost(projectId, runtimeId, token, signal);
+        return await this.#channels.acceptHost(access, request, signal);
+    };
+
     readonly revokeProjectRuntime = async (
         projectId: string,
         runtimeId: string,

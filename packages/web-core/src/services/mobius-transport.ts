@@ -55,16 +55,21 @@ import {
     LegacyChannelCredentialAuthority,
     LinkedChannelCredentialAuthority,
     OwnerChannelCredentialAuthority,
+    ProjectOwnerRuntimeCredentialAuthority,
     RecordedActivity,
     RequestedAgentInstallationState,
 } from "@/domain/channel";
 import { DeletedSessionState, OfflineRuntimeState, OnlineRuntimeState, UnavailableRuntimeState } from "@/domain/chat";
-import { readChannelConnection } from "@/services/pairing-api";
+import { readChannelConnection, readProjectRuntimeConnection } from "@/services/pairing-api";
 import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
-    const relayUrl = mobiusApiUrl(window.location.origin, `/channels/${encodeURIComponent(connection.channelId)}/host`);
+    const path: `/${string}` =
+        connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
+            ? `/projects/${encodeURIComponent(connection.projectId)}/runtimes/${encodeURIComponent(connection.runtimeId)}/host`
+            : `/channels/${encodeURIComponent(connection.channelId)}/host`;
+    const relayUrl = mobiusApiUrl(window.location.origin, path);
     relayUrl.searchParams.set("token", connection.hostToken);
     relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     return relayUrl.toString();
@@ -209,7 +214,8 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
     }
     if (
         !(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) &&
-        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority)
+        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority) &&
+        !(connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority)
     ) {
         issuer.close();
         throw new MobiusChannelError("channel_credential_invalid", "The channel credential authority is invalid");
@@ -811,7 +817,10 @@ class ConnectedTransport extends TransportConnection {
 
     readonly #refreshAgentCatalog = async (): Promise<void> => {
         try {
-            const connection = await readChannelConnection(this.#channelId);
+            const connection =
+                this.#connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
+                    ? await readProjectRuntimeConnection(this.#connection.projectId, this.#connection.runtimeId)
+                    : await readChannelConnection(this.#channelId);
             useChatStore.getState().refreshChannelConnection(connection);
         } catch (error) {
             useChatStore.getState().setErrorMessage(failureMessage(error));

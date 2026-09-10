@@ -71,6 +71,21 @@ export function createProjectRuntimePairingRoutes() {
                 return directoryError(error);
             }
         })
+        .get("/projects/:projectId/runtimes/:runtimeId/host", async (context) => {
+            const request = context.req.raw;
+            try {
+                return await context.env.services.runtimePairings.acceptProjectOwnerRuntimeHost(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    context.req.query("token") ?? "",
+                    request,
+                    request.signal,
+                );
+            } catch (error) {
+                preserveCancellation(request.signal, error);
+                return directoryError(error);
+            }
+        })
         .delete("/projects/:projectId/runtimes/:runtimeId", async (context) => {
             const request = context.req.raw;
             const signal = AbortSignal.any([

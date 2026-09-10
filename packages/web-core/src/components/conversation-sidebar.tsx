@@ -7,15 +7,8 @@ import { NativeSessionBrowser } from "@/components/native-session-browser";
 import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import { cn } from "@/lib/utils";
-import {
-    botDirectoryRoutePath,
-    channelAccessRoutePath,
-    channelRuntimesRoutePath,
-    channelSettingsRoutePath,
-    sessionRoutePath,
-    sessionSettingsRoutePath,
-} from "@/services/app-routes";
 import {
     type DesktopSidebarLayoutState,
     finishSidebarResize,
@@ -64,7 +57,6 @@ function MobiusMark() {
 }
 
 interface ConversationSidebarProps {
-    readonly channelId: string;
     readonly layout: DesktopSidebarLayoutState;
     readonly managementPageOpen: boolean;
     readonly onCreateConversation: () => void;
@@ -72,12 +64,12 @@ interface ConversationSidebarProps {
 }
 
 export function ConversationSidebar({
-    channelId,
     layout,
     managementPageOpen,
     onCreateConversation,
     onLayoutChange,
 }: ConversationSidebarProps) {
+    const routes = useWorkspaceRoutes();
     const conversations = useChatStore((state) => state.conversations);
     const activeConversationId = useChatStore((state) => state.activeConversationId);
     const agents = useChatStore((state) => state.agents);
@@ -90,14 +82,12 @@ export function ConversationSidebar({
     const runningConversations = conversations.filter((conversation) => conversation.isRunning);
     const recentConversations = conversations.filter((conversation) => !conversation.isRunning);
     const displayWidth = sidebarDisplayWidth(layout);
-    const accessPath = channelAccessRoutePath(channelId);
-    const runtimesPath = channelRuntimesRoutePath(channelId);
-    const botsPath = botDirectoryRoutePath(channelId);
+    const accessPath = routes.accessPath;
+    const runtimesPath = routes.runtimesPath;
+    const botsPath = routes.botDirectoryPath;
     const activeSessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
     const settingsPath =
-        activeSessionId === undefined
-            ? channelSettingsRoutePath(channelId)
-            : sessionSettingsRoutePath(channelId, activeSessionId);
+        activeSessionId === undefined ? routes.settingsPath : routes.sessionSettingsPath(activeSessionId);
 
     const closeSidebar = useCallback((): void => {
         if (!sidebarOpen) {
@@ -178,7 +168,7 @@ export function ConversationSidebar({
                 end
                 key={conversation.id}
                 onClick={closeSidebar}
-                to={sessionRoutePath(channelId, conversation.sessionId)}
+                to={routes.sessionPath(conversation.sessionId)}
             >
                 <span
                     className={cn(

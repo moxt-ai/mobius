@@ -310,6 +310,15 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
             tenantId: credential.tenantId,
         }),
     );
+    window.localStorage.setItem(
+        `mobius:project-owner-credential:${credential.projectId}`,
+        JSON.stringify({
+            hostToken: credential.hostToken,
+            ownerChannelId: channelId,
+            projectId: credential.projectId,
+            tenantId: credential.tenantId,
+        }),
+    );
 }
 
 export async function sendReadySession(

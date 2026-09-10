@@ -19,13 +19,13 @@ import {
     X,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate } from "react-router";
 import { AgentProductIcon } from "@/components/agent-product-icon";
 import { NativeSessionHistoryView } from "@/components/chat-message-list";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { AgentOption } from "@/domain/channel";
 import { cn } from "@/lib/utils";
-import { sessionRoutePath } from "@/services/app-routes";
 import { manageNativeSession, type NativeSessionScope } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
 
@@ -183,8 +183,7 @@ function NativeSessionList({
     readonly scope: NativeSessionScope;
     readonly onClose: () => void;
 }) {
-    const params = useParams<"channelId">();
-    const channelId = params.channelId ?? "";
+    const routes = useWorkspaceRoutes();
     const navigate = useNavigate();
     const requestRef = useRef<AbortController | null>(null);
     const cancelRef = useRef<HTMLButtonElement>(null);
@@ -270,7 +269,7 @@ function NativeSessionList({
             controller.signal.throwIfAborted();
             if (result.action === "import" || result.action === "fork") {
                 useChatStore.getState().openNativeConversation(result);
-                await navigate(sessionRoutePath(channelId, result.ready.sessionId));
+                await navigate(routes.sessionPath(result.ready.sessionId));
                 onClose();
             } else if (result.action === "preview") {
                 setState({

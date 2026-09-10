@@ -1,4 +1,5 @@
 import {
+    AuditActorKind,
     type ProjectAccessAuthorizer,
     type ProjectAccessContext,
     ProjectPermission,
@@ -128,6 +129,30 @@ export class PairingDirectoryService implements PairingOperations {
 
     readonly authorizeProject: PairingOperations["authorizeProject"] = async (projectId, token, permission, signal) =>
         await this.#cx.services.projectAuthentication.authorizeProject(projectId, token, permission, "", signal);
+
+    readonly authorizeProjectOwnerRuntimeHost: PairingOperations["authorizeProjectOwnerRuntimeHost"] = async (
+        projectId,
+        runtimeId,
+        token,
+        signal,
+    ) => {
+        const owner = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
+        if (owner.actor.kind !== AuditActorKind.AccountlessOwner) {
+            throw new PairingDirectoryError(
+                "owner_access_required",
+                "An accountless owner credential is required to open a Runtime host connection",
+            );
+        }
+        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const runtime = await this.readProjectRuntime(storage, owner, runtimeId, signal);
+        return new ChannelHostCredential(
+            runtime.channelId,
+            runtime.runtimeId,
+            runtime.tenantId,
+            runtime.projectId,
+            owner.credentialId,
+        );
+    };
 
     readonly authorizeProjectRuntime: PairingOperations["authorizeProjectRuntime"] = async (
         projectId,

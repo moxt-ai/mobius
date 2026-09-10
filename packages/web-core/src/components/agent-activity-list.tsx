@@ -18,7 +18,7 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
-import type { RecordedActivity } from "@/domain/channel";
+import type { ChannelConnection, RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
 import { describeAgentActivities } from "@/services/activity-presentation";
 import { type ActivityDetailResult, readToolCallDetail } from "@/services/pairing-api";
@@ -252,12 +252,12 @@ function DetailAvailability({
 
 function ActivityLine({
     activity,
-    channelId,
+    connection,
     sessionId,
     streaming,
 }: {
     readonly activity: RecordedActivity;
-    readonly channelId: string;
+    readonly connection: ChannelConnection;
     readonly sessionId: string;
     readonly streaming: boolean;
 }) {
@@ -280,7 +280,7 @@ function ActivityLine({
         detailController.current = controller;
         detailLoadKind.current = "loading";
         setDetailLoad({ kind: "loading" });
-        void readToolCallDetail(channelId, sessionId, activity.attemptId, activity.activityId, controller.signal).then(
+        void readToolCallDetail(connection, sessionId, activity.attemptId, activity.activityId, controller.signal).then(
             (detail) => {
                 if (controller.signal.aborted) {
                     return;
@@ -299,7 +299,7 @@ function ActivityLine({
                 });
             },
         );
-    }, [activity.activityId, activity.attemptId, activity.detailAvailability, channelId, sessionId]);
+    }, [activity.activityId, activity.attemptId, activity.detailAvailability, connection, sessionId]);
     useEffect(() => {
         return () => detailController.current?.abort();
     }, []);
@@ -414,12 +414,12 @@ function ProgressUpdates({
 
 export function AgentActivityList({
     activities,
-    channelId,
+    connection,
     sessionId,
     streaming,
 }: {
     readonly activities: readonly RecordedActivity[];
-    readonly channelId: string;
+    readonly connection: ChannelConnection;
     readonly sessionId: string;
     readonly streaming: boolean;
 }) {
@@ -469,7 +469,7 @@ export function AgentActivityList({
                         {workActivities.map((activity) => (
                             <ActivityLine
                                 activity={activity}
-                                channelId={channelId}
+                                connection={connection}
                                 key={`${sessionId}:${activity.activityId}`}
                                 sessionId={sessionId}
                                 streaming={streaming}

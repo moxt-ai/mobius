@@ -13,6 +13,7 @@ import { ChatComposer } from "@/components/chat-composer";
 import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
 import { UserPromptMessage } from "@/components/user-prompt-message";
+import type { ChannelConnection } from "@/domain/channel";
 import { AgentChatMessage, type ChatMessage, NativeHistoryChatMessage, UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import { sendPrompt } from "@/services/mobius-transport";
@@ -92,12 +93,12 @@ function ThinkingIndicator() {
 
 function AgentMessage({
     agentLabel,
-    channelId,
+    connection,
     message,
     sessionId,
 }: {
     readonly agentLabel: string;
-    readonly channelId: string;
+    readonly connection: ChannelConnection;
     readonly message: AgentChatMessage;
     readonly sessionId: string;
 }) {
@@ -109,7 +110,7 @@ function AgentMessage({
             <div className="min-w-0">
                 <AgentActivityList
                     activities={message.activities}
-                    channelId={channelId}
+                    connection={connection}
                     sessionId={sessionId}
                     streaming={message.state.isStreaming}
                 />
@@ -216,12 +217,12 @@ export function NativeSessionHistoryView({
 
 function Message({
     agentLabel,
-    channelId,
+    connection,
     message,
     sessionId,
 }: {
     readonly agentLabel: string;
-    readonly channelId: string;
+    readonly connection: ChannelConnection;
     readonly message: ChatMessage;
     readonly sessionId: string;
 }) {
@@ -232,12 +233,12 @@ function Message({
         return <UserPromptMessage images={message.images} resources={message.resources} text={message.text} />;
     }
     if (message instanceof AgentChatMessage) {
-        return <AgentMessage agentLabel={agentLabel} channelId={channelId} message={message} sessionId={sessionId} />;
+        return <AgentMessage agentLabel={agentLabel} connection={connection} message={message} sessionId={sessionId} />;
     }
     return null;
 }
 
-export function ChatMessageList({ channelId }: { readonly channelId: string }) {
+export function ChatMessageList({ connection }: { readonly connection: ChannelConnection }) {
     const conversation = useChatStore(selectActiveConversation);
     const viewportRef = useRef<HTMLDivElement>(null);
     const followLatestRef = useRef(true);
@@ -289,7 +290,7 @@ export function ChatMessageList({ channelId }: { readonly channelId: string }) {
                         {conversation.messages.map((message) => (
                             <Message
                                 agentLabel={conversation.agentLabel}
-                                channelId={channelId}
+                                connection={connection}
                                 key={message.id}
                                 message={message}
                                 sessionId={conversation.sessionId}

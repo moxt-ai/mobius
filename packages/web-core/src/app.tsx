@@ -7,7 +7,6 @@ import {
     Route,
     Routes,
     useLocation,
-    useMatch,
     useNavigate,
     useOutletContext,
     useParams,
@@ -28,20 +27,21 @@ import { ConversationTargetProvider } from "@/components/conversation-target-pro
 import { PairingPage } from "@/components/pairing-page";
 import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
+import { WorkspaceRouteProvider } from "@/components/workspace-route-provider";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
-import { isIdentifier, PairingApiError } from "@/domain/channel";
+import { isIdentifier, PairingApiError, ProjectOwnerRuntimeCredentialAuthority } from "@/domain/channel";
 import {
-    botConversationRoutePath,
-    channelRoutePath,
-    sessionRoutePath,
-    sessionSettingsRoutePath,
+    ChannelWorkspaceRoutePaths,
+    ProjectRuntimeWorkspaceRoutePaths,
+    type WorkspaceRoutePaths,
 } from "@/services/app-routes";
 import { ChannelHistorySynchronizer } from "@/services/channel-history-synchronizer";
 import { closeMobiusTransport, initializeMobiusTransport } from "@/services/mobius-transport";
 import {
     readChannelConnection,
-    readChannelHistory,
     readChannelHistoryForSynchronization,
+    readConnectionHistory,
+    readProjectRuntimeConnection,
     redeemChannelAccessGrantFromLocation,
 } from "@/services/pairing-api";
 import {
@@ -61,6 +61,7 @@ export interface ChatProps {
     readonly onCreateConversation: () => void;
     readonly onToggleDesktopSidebar: () => void;
     readonly projectId: string;
+    readonly routes: WorkspaceRoutePaths;
 }
 
 function initialSidebarLayout(): DesktopSidebarLayoutState {
@@ -90,7 +91,7 @@ function ChannelErrorPage({ message, title }: { readonly message: string; readon
 }
 
 function ChannelContentError({ message, title }: { readonly message: string; readonly title: string }) {
-    const { channelId } = useOutletContext<ChatProps>();
+    const { routes } = useOutletContext<ChatProps>();
     const navigate = useNavigate();
     return (
         <section className="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -100,8 +101,8 @@ function ChannelContentError({ message, title }: { readonly message: string; rea
                 </span>
                 <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">{title}</h1>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">{message}</p>
-                <Button className="mt-6" onClick={() => navigate(channelRoutePath(channelId), { replace: true })}>
-                    Return to channel
+                <Button className="mt-6" onClick={() => navigate(routes.rootPath, { replace: true })}>
+                    Return to chat
                 </Button>
             </div>
         </section>
@@ -113,9 +114,9 @@ function ChannelLoadingPage() {
         <main aria-busy="true" aria-live="polite" className="flex h-dvh items-center justify-center bg-background p-6">
             <section className="pairing-card w-full max-w-[520px] rounded-2xl bg-white px-8 py-10 text-center">
                 <LoaderCircle className="mx-auto size-6 animate-spin text-[#279a60]" />
-                <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Opening channel</h1>
+                <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Opening workspace</h1>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    Loading the paired local machine from the relay.
+                    Loading the selected local machine from the relay.
                 </p>
             </section>
         </main>
@@ -125,9 +126,11 @@ function ChannelLoadingPage() {
 function ChannelWorkspace({
     connection,
     history,
+    routes,
 }: {
     readonly connection: ChannelConnection;
     readonly history: ChannelHistory;
+    readonly routes: WorkspaceRoutePaths;
 }) {
     const params = useParams<"sessionId">();
     const [initialSessionId] = useState(() => params.sessionId ?? "");
@@ -140,15 +143,11 @@ function ChannelWorkspace({
     const location = useLocation();
     const navigate = useNavigate();
     const mainContentRef = useRef<HTMLElement>(null);
-    const channelIndexMatch = useMatch("/channels/:channelId");
-    const accessOpen = useMatch("/channels/:channelId/access") !== null;
-    const runtimesOpen = useMatch("/channels/:channelId/runtimes") !== null;
-    const legacySettingsMatch = useMatch("/channels/:channelId/settings");
-    const sessionSettingsMatch = useMatch("/channels/:channelId/sessions/:sessionId/settings");
-    const settingsOpen = legacySettingsMatch !== null || sessionSettingsMatch !== null;
-    const botDirectoryOpen = useMatch("/channels/:channelId/bots") !== null;
-    const botDetailOpen = useMatch("/channels/:channelId/bots/*") !== null;
-    const botsOpen = botDirectoryOpen || botDetailOpen;
+    const channelIndexOpen = location.pathname === routes.rootPath;
+    const accessOpen = location.pathname === routes.accessPath;
+    const runtimesOpen = location.pathname === routes.runtimesPath;
+    const settingsOpen = location.pathname === routes.settingsPath || routes.isSessionSettingsPath(location.pathname);
+    const botsOpen = routes.isBotsPath(location.pathname);
     const managementPageOpen = accessOpen || runtimesOpen || settingsOpen || botsOpen;
     const [sidebarLayout, setSidebarLayout] = useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
@@ -166,7 +165,7 @@ function ChannelWorkspace({
                 useChatStore.getState().reconcileHistory(latestHistory);
             },
             hasActiveTurns: () => useChatStore.getState().conversations.some((conversation) => conversation.isRunning),
-            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection.channelId, signal),
+            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection, signal),
             reportFailure: (error) => {
                 const message =
                     error instanceof PairingApiError
@@ -188,11 +187,11 @@ function ChannelWorkspace({
         const store = useChatStore.getState();
         for (const conversation of store.conversations) {
             if (conversation.id === store.activeConversationId) {
-                void navigate(sessionRoutePath(connection.channelId, conversation.sessionId));
+                void navigate(routes.sessionPath(conversation.sessionId));
                 return;
             }
         }
-    }, [connection.channelId, createConversation, navigate]);
+    }, [createConversation, navigate, routes]);
 
     useEffect(() => {
         const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
@@ -220,8 +219,8 @@ function ChannelWorkspace({
     if (!workspaceReady || !channelConfigured) {
         return <ChannelLoadingPage />;
     }
-    if (agents.length === 0 && channelIndexMatch !== null) {
-        return <AgentInstallationPage channelId={connection.channelId} />;
+    if (agents.length === 0 && channelIndexOpen) {
+        return <AgentInstallationPage />;
     }
 
     const context: ChatProps = {
@@ -233,6 +232,7 @@ function ChannelWorkspace({
             setSidebarLayout((current) => toggleSidebar(current));
         },
         projectId: connection.projectId,
+        routes,
     };
 
     return (
@@ -253,7 +253,6 @@ function ChannelWorkspace({
             </a>
             <div className="flex h-dvh w-full bg-background">
                 <ConversationSidebar
-                    channelId={connection.channelId}
                     layout={sidebarLayout}
                     managementPageOpen={managementPageOpen}
                     onCreateConversation={createAndOpenConversation}
@@ -320,8 +319,8 @@ function ChannelRoute() {
                 await redeemChannelAccessGrantFromLocation(channelId, controller.signal);
                 // Validate the channel-scoped credential before using it for broader
                 // project history reads so revoked access reports the channel boundary.
-                const connection = await readChannelConnection(channelId);
-                const history = await readChannelHistory(channelId);
+                const connection = await readChannelConnection(channelId, controller.signal);
+                const history = await readConnectionHistory(connection, controller.signal);
                 if (active) {
                     setState(new ReadyChannelRouteState(connection, history));
                 }
@@ -347,8 +346,16 @@ function ChannelRoute() {
         return <ChannelErrorPage message="The channel route is malformed." title="Invalid channel" />;
     }
     if (state instanceof ReadyChannelRouteState && state.connection.channelId === channelId) {
+        const routes = new ChannelWorkspaceRoutePaths(channelId);
         return (
-            <ChannelWorkspace connection={state.connection} history={state.history} key={state.connection.channelId} />
+            <WorkspaceRouteProvider routes={routes}>
+                <ChannelWorkspace
+                    connection={state.connection}
+                    history={state.history}
+                    key={state.connection.channelId}
+                    routes={routes}
+                />
+            </WorkspaceRouteProvider>
         );
     }
     if (state instanceof FailedChannelRouteState) {
@@ -357,8 +364,77 @@ function ChannelRoute() {
     return <ChannelLoadingPage />;
 }
 
+function ProjectRuntimeRoute() {
+    const params = useParams();
+    const projectId = params["projectId"] ?? "";
+    const runtimeId = params["runtimeId"] ?? "";
+    const [state, setState] = useState<ChannelRouteState>(new LoadingChannelRouteState());
+
+    useEffect(() => {
+        if (!isIdentifier(projectId) || !isIdentifier(runtimeId)) {
+            return;
+        }
+        let active = true;
+        const controller = new AbortController();
+        setState(new LoadingChannelRouteState());
+        const load = async (): Promise<void> => {
+            try {
+                const connection = await readProjectRuntimeConnection(projectId, runtimeId, controller.signal);
+                const history = await readConnectionHistory(connection, controller.signal);
+                if (active) {
+                    setState(new ReadyChannelRouteState(connection, history));
+                }
+            } catch (error) {
+                if (!active) {
+                    return;
+                }
+                const message =
+                    error instanceof PairingApiError
+                        ? `${error.code}: ${error.message}`
+                        : "The selected Project Runtime could not be loaded.";
+                setState(new FailedChannelRouteState(message));
+            }
+        };
+        void load();
+        return () => {
+            active = false;
+            controller.abort();
+        };
+    }, [projectId, runtimeId]);
+
+    if (!isIdentifier(projectId) || !isIdentifier(runtimeId)) {
+        return <ChannelErrorPage message="The Project Runtime route is malformed." title="Invalid Runtime" />;
+    }
+    if (
+        state instanceof ReadyChannelRouteState &&
+        state.connection.projectId === projectId &&
+        state.connection.runtimeId === runtimeId &&
+        state.connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
+    ) {
+        const routes = new ProjectRuntimeWorkspaceRoutePaths(
+            projectId,
+            runtimeId,
+            state.connection.credentialAuthority.ownerChannelId,
+        );
+        return (
+            <WorkspaceRouteProvider routes={routes}>
+                <ChannelWorkspace
+                    connection={state.connection}
+                    history={state.history}
+                    key={`${projectId}:${runtimeId}`}
+                    routes={routes}
+                />
+            </WorkspaceRouteProvider>
+        );
+    }
+    if (state instanceof FailedChannelRouteState) {
+        return <ChannelErrorPage message={state.message} title="Runtime unavailable" />;
+    }
+    return <ChannelLoadingPage />;
+}
+
 function ChannelIndexRoute() {
-    const { channelId } = useOutletContext<ChatProps>();
+    const { routes } = useOutletContext<ChatProps>();
     const activeConversationId = useChatStore((state) => state.activeConversationId);
     const conversations = useChatStore((state) => state.conversations);
     const sessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
@@ -367,7 +443,7 @@ function ChannelIndexRoute() {
             <ChannelContentError message="This channel does not have a Session to open." title="Session unavailable" />
         );
     }
-    return <Navigate replace to={sessionRoutePath(channelId, sessionId)} />;
+    return <Navigate replace to={routes.sessionPath(sessionId)} />;
 }
 
 function LegacyAgentSettingsRoute() {
@@ -376,7 +452,7 @@ function LegacyAgentSettingsRoute() {
     const conversations = useChatStore((state) => state.conversations);
     const sessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
     if (sessionId !== undefined) {
-        return <Navigate replace to={sessionSettingsRoutePath(context.channelId, sessionId)} />;
+        return <Navigate replace to={context.routes.sessionSettingsPath(sessionId)} />;
     }
     return <AgentSettingsRoutePage />;
 }
@@ -413,7 +489,7 @@ function SessionRoute() {
     return <Outlet context={context} />;
 }
 
-export function Chat({ channelId, desktopSidebarCollapsed, onCreateConversation, onToggleDesktopSidebar }: ChatProps) {
+export function Chat({ connection, desktopSidebarCollapsed, onCreateConversation, onToggleDesktopSidebar }: ChatProps) {
     const announcement = useChatStore((state) => state.announcement);
     const activeConversationMessageCount = useChatStore((state) => {
         const conversation = state.conversations.find((candidate) => candidate.id === state.activeConversationId);
@@ -427,7 +503,7 @@ export function Chat({ channelId, desktopSidebarCollapsed, onCreateConversation,
                 onToggleDesktopSidebar={onToggleDesktopSidebar}
             />
             <section aria-label="Agent conversation" className="flex min-h-0 flex-1 flex-col">
-                <ChatMessageList channelId={channelId} />
+                <ChatMessageList connection={connection} />
                 {activeConversationMessageCount > 0 && <ChatComposer placement="active" />}
                 <p aria-live="polite" className="sr-only">
                     {announcement}
@@ -442,9 +518,9 @@ function ConversationRoutePage() {
     const navigate = useNavigate();
     const openBotConversation = useCallback(
         (botId: string, conversationId: string): void => {
-            void navigate(botConversationRoutePath(context.channelId, botId, conversationId));
+            void navigate(context.routes.botConversationPath(botId, conversationId));
         },
-        [context.channelId, navigate],
+        [context.routes, navigate],
     );
     return (
         <ConversationTargetProvider connection={context.connection} onOpenBotConversation={openBotConversation}>
@@ -529,6 +605,23 @@ function AppRoutes() {
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<ChannelAccessRoutePage />} path="access" />
                 <Route element={<RuntimeManagementRoutePage />} path="runtimes" />
+                <Route element={<BotDirectoryRoutePage />} path="bots" />
+                <Route element={<BotWorkspaceRoutePage />} path="bots/:botId">
+                    <Route element={<BotOverviewPage />} index />
+                    <Route element={<BotConversationsPage />} path="conversations" />
+                    <Route element={<BotConversationPage />} path="conversations/:conversationId" />
+                    <Route element={<BotConnectionsPage />} path="connections" />
+                </Route>
+                <Route element={<LegacyAgentSettingsRoute />} path="settings" />
+                <Route element={<SessionRoute />} path="sessions/:sessionId">
+                    <Route element={<ConversationRoutePage />} index />
+                    <Route element={<AgentSettingsRoutePage />} path="settings" />
+                </Route>
+                <Route element={<ChannelRouteNotFound />} path="*" />
+            </Route>
+            <Route element={<ProjectRuntimeRoute />} path="/projects/:projectId/runtimes/:runtimeId">
+                <Route element={<ChannelIndexRoute />} index />
+                <Route element={<RuntimeManagementRoutePage />} path="machines" />
                 <Route element={<BotDirectoryRoutePage />} path="bots" />
                 <Route element={<BotWorkspaceRoutePage />} path="bots/:botId">
                     <Route element={<BotOverviewPage />} index />

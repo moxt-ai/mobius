@@ -294,6 +294,15 @@ export class LinkedChannelCredentialAuthority extends ChannelCredentialAuthority
 
 export class LegacyChannelCredentialAuthority extends ChannelCredentialAuthority {}
 
+export class ProjectOwnerRuntimeCredentialAuthority extends ChannelCredentialAuthority {
+    readonly ownerChannelId: string;
+
+    constructor(ownerChannelId: string) {
+        super();
+        this.ownerChannelId = ownerChannelId;
+    }
+}
+
 export class ChannelConnection {
     readonly agents: readonly AgentOption[];
     readonly channelId: string;

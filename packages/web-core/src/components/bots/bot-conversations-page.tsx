@@ -36,7 +36,7 @@ import { SessionConfigControlsView } from "@/components/session-config-controls"
 import { Button } from "@/components/ui/button";
 import { UserPromptMessage } from "@/components/user-prompt-message";
 import { WorkspacePickerControl } from "@/components/workspace-picker";
-import { botConversationRoutePath, botConversationsRoutePath } from "@/services/app-routes";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import {
     AttachmentReadError,
     ReadPromptImage,
@@ -286,7 +286,8 @@ function mergeConversationMessages(
 }
 
 export function BotConversationsPage() {
-    const { bot, client, connection, signal } = useOutletContext<BotDetailContext>();
+    const { bot, client, signal } = useOutletContext<BotDetailContext>();
+    const routes = useWorkspaceRoutes();
     const navigate = useNavigate();
     const errorSummaryRef = useRef<HTMLDivElement>(null);
     const [state, setState] = useState<ConversationDirectoryState>(new LoadingConversationDirectoryState());
@@ -318,7 +319,7 @@ export function BotConversationsPage() {
                 { clientConversationKey: `web_${crypto.randomUUID()}` },
                 signal,
             );
-            await navigate(botConversationRoutePath(connection.channelId, bot.botId, conversation.conversationId));
+            await navigate(routes.botConversationPath(bot.botId, conversation.conversationId));
         } catch (error) {
             if (!signal.aborted) {
                 setFormError(failureMessage(error));
@@ -435,11 +436,7 @@ export function BotConversationsPage() {
                             <li key={conversation.conversationId}>
                                 <Link
                                     className="flex min-h-20 items-center gap-3 rounded-xl border-[0.5px] border-black/10 bg-white px-4 py-3 text-foreground no-underline shadow-[0_1px_3px_rgba(0,0,0,0.03)] transition-colors hover:border-black/16 hover:bg-black/[0.012] focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
-                                    to={botConversationRoutePath(
-                                        connection.channelId,
-                                        bot.botId,
-                                        conversation.conversationId,
-                                    )}
+                                    to={routes.botConversationPath(bot.botId, conversation.conversationId)}
                                 >
                                     <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-[10px] bg-[#eefaf3] text-[#218854]">
                                         <MessageSquare aria-hidden="true" className="size-4" />
@@ -511,6 +508,7 @@ function ConversationMessage({ botName, message }: { readonly botName: string; r
 
 export function BotConversationPage() {
     const { bot, client, connection, signal } = useOutletContext<BotDetailContext>();
+    const routes = useWorkspaceRoutes();
     const params = useParams<"conversationId">();
     const conversationId = params.conversationId ?? "";
     const [state, setState] = useState<ConversationViewState>(new LoadingConversationViewState());
@@ -953,7 +951,7 @@ export function BotConversationPage() {
             <div className="mx-auto w-full max-w-[760px] px-5 py-8 sm:px-8">
                 <Link
                     className="inline-flex min-h-11 items-center gap-2 rounded-lg px-2 text-xs font-medium text-muted-foreground no-underline hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
-                    to={botConversationsRoutePath(connection.channelId, bot.botId)}
+                    to={routes.botConversationsPath(bot.botId)}
                 >
                     <ArrowLeft aria-hidden="true" className="size-4" /> Conversations
                 </Link>
@@ -1014,7 +1012,7 @@ export function BotConversationPage() {
                         <Link
                             aria-label="Back to conversations"
                             className="inline-flex size-11 shrink-0 items-center justify-center rounded-full text-muted-foreground no-underline hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
-                            to={botConversationsRoutePath(connection.channelId, bot.botId)}
+                            to={routes.botConversationsPath(bot.botId)}
                         >
                             <ArrowLeft aria-hidden="true" className="size-4" />
                         </Link>

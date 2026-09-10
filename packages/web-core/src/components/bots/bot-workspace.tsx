@@ -5,15 +5,10 @@ import { NavLink, Outlet, useParams } from "react-router";
 
 import { BotAvatar, BotInlineError, BotPageHeader, BotStatusBadge } from "@/components/bots/bot-page-header";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { ChannelConnection } from "@/domain/channel";
 import { isIdentifier } from "@/domain/channel";
 import { cn } from "@/lib/utils";
-import {
-    botConnectionsRoutePath,
-    botConversationsRoutePath,
-    botDirectoryRoutePath,
-    botRoutePath,
-} from "@/services/app-routes";
 import { createBotOwnerClient } from "@/services/bot-api";
 
 abstract class BotWorkspaceState {}
@@ -52,7 +47,8 @@ function failureMessage(error: unknown): string {
     return error instanceof MobiusApiError ? `${error.code}: ${error.message}` : "The Bot could not be loaded.";
 }
 
-function BotTabs({ bot, channelId }: { readonly bot: MobiusBot; readonly channelId: string }) {
+function BotTabs({ bot }: { readonly bot: MobiusBot }) {
+    const routes = useWorkspaceRoutes();
     const linkClass = ({ isActive }: { readonly isActive: boolean }): string =>
         cn(
             "inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none",
@@ -60,13 +56,13 @@ function BotTabs({ bot, channelId }: { readonly bot: MobiusBot; readonly channel
         );
     return (
         <nav aria-label="Bot sections" className="flex gap-1 overflow-x-auto px-5 pb-3 sm:px-8">
-            <NavLink className={linkClass} end to={botRoutePath(channelId, bot.botId)}>
+            <NavLink className={linkClass} end to={routes.botPath(bot.botId)}>
                 <SlidersHorizontal aria-hidden="true" className="size-3.5" /> Overview
             </NavLink>
-            <NavLink className={linkClass} to={botConversationsRoutePath(channelId, bot.botId)}>
+            <NavLink className={linkClass} to={routes.botConversationsPath(bot.botId)}>
                 <MessageSquare aria-hidden="true" className="size-3.5" /> Conversations
             </NavLink>
-            <NavLink className={linkClass} to={botConnectionsRoutePath(channelId, bot.botId)}>
+            <NavLink className={linkClass} to={routes.botConnectionsPath(bot.botId)}>
                 <Plug aria-hidden="true" className="size-3.5" /> Connections
             </NavLink>
         </nav>
@@ -82,6 +78,7 @@ export function BotWorkspace({
     readonly desktopSidebarCollapsed: boolean;
     readonly onToggleDesktopSidebar: () => void;
 }) {
+    const routes = useWorkspaceRoutes();
     const params = useParams<"botId">();
     const botId = params.botId ?? "";
     const [client] = useState(() => createBotOwnerClient(connection));
@@ -125,7 +122,7 @@ export function BotWorkspace({
             <>
                 <BotPageHeader
                     backLabel="All Bots"
-                    backTo={botDirectoryRoutePath(connection.channelId)}
+                    backTo={routes.botDirectoryPath}
                     desktopSidebarCollapsed={desktopSidebarCollapsed}
                     onToggleDesktopSidebar={onToggleDesktopSidebar}
                     title="Opening Bot"
@@ -146,7 +143,7 @@ export function BotWorkspace({
             <>
                 <BotPageHeader
                     backLabel="All Bots"
-                    backTo={botDirectoryRoutePath(connection.channelId)}
+                    backTo={routes.botDirectoryPath}
                     desktopSidebarCollapsed={desktopSidebarCollapsed}
                     onToggleDesktopSidebar={onToggleDesktopSidebar}
                     title="Bot management"
@@ -167,7 +164,7 @@ export function BotWorkspace({
             <>
                 <BotPageHeader
                     backLabel="All Bots"
-                    backTo={botDirectoryRoutePath(connection.channelId)}
+                    backTo={routes.botDirectoryPath}
                     desktopSidebarCollapsed={desktopSidebarCollapsed}
                     onToggleDesktopSidebar={onToggleDesktopSidebar}
                     title="Bot unavailable"
@@ -201,7 +198,7 @@ export function BotWorkspace({
         <>
             <BotPageHeader
                 backLabel="All Bots"
-                backTo={botDirectoryRoutePath(connection.channelId)}
+                backTo={routes.botDirectoryPath}
                 desktopSidebarCollapsed={desktopSidebarCollapsed}
                 leading={<BotAvatar bot={state.bot} className="size-8 rounded-[9px] text-[11px]" />}
                 onToggleDesktopSidebar={onToggleDesktopSidebar}
@@ -227,7 +224,7 @@ export function BotWorkspace({
                             Refresh Bot
                         </Button>
                     </div>
-                    <BotTabs bot={state.bot} channelId={connection.channelId} />
+                    <BotTabs bot={state.bot} />
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto">
                     <Outlet context={context} />

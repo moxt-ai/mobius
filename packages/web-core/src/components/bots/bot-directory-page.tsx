@@ -12,8 +12,8 @@ import {
     BotStatusBadge,
 } from "@/components/bots/bot-page-header";
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { ChannelConnection } from "@/domain/channel";
-import { botRoutePath } from "@/services/app-routes";
 import { createBotOwnerClient } from "@/services/bot-api";
 
 abstract class BotDirectoryState {}
@@ -49,18 +49,17 @@ function formatUpdatedAt(value: string): string {
 }
 
 function BotDirectoryContent({
-    channelId,
     client,
     directory,
     onReload,
     signal,
 }: {
-    readonly channelId: string;
     readonly client: MobiusBotOwnerClient;
     readonly directory: ReadyBotDirectoryState;
     readonly onReload: () => Promise<void>;
     readonly signal: AbortSignal;
 }) {
+    const routes = useWorkspaceRoutes();
     const navigate = useNavigate();
     const errorSummaryRef = useRef<HTMLDivElement>(null);
     const [createOpen, setCreateOpen] = useState(false);
@@ -84,7 +83,7 @@ function BotDirectoryContent({
                 { avatarRef: avatarRef.trim(), description: description.trim(), displayName: normalizedName },
                 signal,
             );
-            await navigate(botRoutePath(channelId, bot.botId));
+            await navigate(routes.botPath(bot.botId));
         } catch (error) {
             if (!signal.aborted) {
                 setFormError(errorMessage(error));
@@ -262,7 +261,7 @@ function BotDirectoryContent({
                             <li key={bot.botId}>
                                 <Link
                                     className="group flex min-h-32 items-start gap-3 rounded-2xl border-[0.5px] border-black/10 bg-white p-4 text-foreground no-underline shadow-[0_1px_4px_rgba(0,0,0,0.035)] transition-[border-color,box-shadow,transform] duration-150 motion-reduce:transition-none motion-safe:hover:-translate-y-px hover:border-black/16 hover:shadow-[0_6px_18px_rgba(0,0,0,0.06)] focus-visible:ring-2 focus-visible:ring-ring/60 focus-visible:outline-none"
-                                    to={botRoutePath(channelId, bot.botId)}
+                                    to={routes.botPath(bot.botId)}
                                 >
                                     <BotAvatar bot={bot} />
                                     <span className="min-w-0 flex-1">
@@ -365,7 +364,6 @@ export function BotDirectoryPage({
                 )}
                 {directory instanceof ReadyBotDirectoryState && (
                     <BotDirectoryContent
-                        channelId={connection.channelId}
                         client={client}
                         directory={directory}
                         onReload={loadBots}

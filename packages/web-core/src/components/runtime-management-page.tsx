@@ -8,12 +8,14 @@ import {
 } from "@moxt-ai/mobius-sdk";
 import {
     ArrowLeft,
+    Bot,
     Check,
     CircleCheck,
     Copy,
     Laptop,
     LoaderCircle,
     Menu,
+    MessageSquarePlus,
     PanelLeftClose,
     PanelLeftOpen,
     Plus,
@@ -24,10 +26,11 @@ import {
     WifiOff,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { PairingApiError } from "@/domain/channel";
+import { projectRuntimeRoutePath } from "@/services/app-routes";
 import {
     createProjectRuntimePairing,
     OwnerRuntimeManagementAccess,
@@ -320,6 +323,7 @@ function RuntimeList({
     directory,
     onCancelRevocation,
     onConfirmRevocation,
+    onOpenRuntime,
     onRequestRevocation,
     revocation,
 }: {
@@ -327,6 +331,7 @@ function RuntimeList({
     readonly directory: ReadyRuntimeDirectoryState;
     readonly onCancelRevocation: (runtimeId: string) => void;
     readonly onConfirmRevocation: (runtime: MobiusRuntimeDescriptor) => void;
+    readonly onOpenRuntime: (runtime: MobiusRuntimeDescriptor) => void;
     readonly onRequestRevocation: (runtimeId: string) => void;
     readonly revocation: RuntimeRevocationState;
 }) {
@@ -415,25 +420,45 @@ function RuntimeList({
                                     </div>
                                 </div>
                                 {canManage && !confirming && (
-                                    <Button
-                                        aria-busy={revoking}
-                                        aria-label={`Revoke ${name}`}
-                                        className="min-h-11 shrink-0 text-destructive hover:text-destructive"
-                                        disabled={revocation instanceof RevokingRuntimeState}
-                                        id={`revoke-runtime-${runtime.runtimeId}`}
-                                        onClick={() => onRequestRevocation(runtime.runtimeId)}
-                                        variant="outline"
-                                    >
-                                        {revoking ? (
-                                            <LoaderCircle
-                                                aria-hidden="true"
-                                                className="size-4 animate-spin motion-reduce:animate-none"
-                                            />
-                                        ) : (
-                                            <Trash2 aria-hidden="true" className="size-4" />
+                                    <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
+                                        {runtime.online && (
+                                            <Button
+                                                aria-label={
+                                                    runtime.agents.length > 0
+                                                        ? `Open chat on ${name}`
+                                                        : `Set up an Agent on ${name}`
+                                                }
+                                                className="min-h-11 shrink-0"
+                                                onClick={() => onOpenRuntime(runtime)}
+                                            >
+                                                {runtime.agents.length > 0 ? (
+                                                    <MessageSquarePlus aria-hidden="true" className="size-4" />
+                                                ) : (
+                                                    <Bot aria-hidden="true" className="size-4" />
+                                                )}
+                                                {runtime.agents.length > 0 ? "Open chat" : "Set up Agent"}
+                                            </Button>
                                         )}
-                                        Revoke
-                                    </Button>
+                                        <Button
+                                            aria-busy={revoking}
+                                            aria-label={`Revoke ${name}`}
+                                            className="min-h-11 shrink-0 text-destructive hover:text-destructive"
+                                            disabled={revocation instanceof RevokingRuntimeState}
+                                            id={`revoke-runtime-${runtime.runtimeId}`}
+                                            onClick={() => onRequestRevocation(runtime.runtimeId)}
+                                            variant="outline"
+                                        >
+                                            {revoking ? (
+                                                <LoaderCircle
+                                                    aria-hidden="true"
+                                                    className="size-4 animate-spin motion-reduce:animate-none"
+                                                />
+                                            ) : (
+                                                <Trash2 aria-hidden="true" className="size-4" />
+                                            )}
+                                            Revoke
+                                        </Button>
+                                    </div>
                                 )}
                             </div>
 
@@ -484,6 +509,7 @@ function RuntimeList({
 }
 
 function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: string; readonly projectId: string }) {
+    const navigate = useNavigate();
     const [controller] = useState(() => new AbortController());
     const [directory, setDirectory] = useState<RuntimeDirectoryState>(new LoadingRuntimeDirectoryState());
     const [pairing, setPairing] = useState<RuntimePairingCreationState>(new IdleRuntimePairingCreationState());
@@ -786,6 +812,7 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
                     directory={readyDirectory}
                     onCancelRevocation={cancelRevocation}
                     onConfirmRevocation={(runtime) => void revokeRuntime(runtime)}
+                    onOpenRuntime={(runtime) => void navigate(projectRuntimeRoutePath(projectId, runtime.runtimeId))}
                     onRequestRevocation={(runtimeId) => setRevocation(new ConfirmingRuntimeRevocationState(runtimeId))}
                     revocation={revocation}
                 />

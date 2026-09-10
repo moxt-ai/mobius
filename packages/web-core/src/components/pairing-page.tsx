@@ -20,7 +20,7 @@ import {
     ExpiredBrowserPairingStatus,
     PairingApiError,
 } from "@/domain/channel";
-import { channelRoutePath } from "@/services/app-routes";
+import { projectRuntimeRoutePath } from "@/services/app-routes";
 import { createBrowserPairing, pairingCommand, readBrowserPairingStatus } from "@/services/pairing-api";
 
 const POLL_INTERVAL_MILLISECONDS = 1_200;
@@ -397,7 +397,7 @@ export function PairingPage() {
                 <Pair
                     getPairingToken={getStandalonePairingToken}
                     onConnected={(connection) => {
-                        void navigate(channelRoutePath(connection.channelId));
+                        void navigate(projectRuntimeRoutePath(connection.projectId, connection.runtimeId));
                     }}
                 />
             </main>

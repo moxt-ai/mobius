@@ -54,7 +54,7 @@ function ConnectedMobiusChat({
                 useChatStore.getState().reconcileHistory(latestHistory);
             },
             hasActiveTurns: () => useChatStore.getState().conversations.some((conversation) => conversation.isRunning),
-            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection.channelId, signal),
+            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection, signal),
             reportFailure: (error) => {
                 const message =
                     error instanceof PairingApiError
@@ -121,7 +121,7 @@ function ConnectedMobiusChat({
                 <header className="flex min-h-14 items-center border-b border-black/6 px-4">
                     <h2 className="truncate text-sm font-semibold">{activeConversation.title}</h2>
                 </header>
-                <ChatMessageList channelId={connection.channelId} />
+                <ChatMessageList connection={connection} />
                 {activeConversation.messages.length > 0 && <ChatComposer placement="active" />}
             </section>
         </div>
@@ -134,7 +134,7 @@ export function MobiusChat({ connection }: { readonly connection: ChannelConnect
     useEffect(() => {
         const controller = new AbortController();
         setState({ kind: "loading" });
-        void readChannelHistoryForSynchronization(connection.channelId, controller.signal)
+        void readChannelHistoryForSynchronization(connection, controller.signal)
             .then((history) => {
                 if (!controller.signal.aborted) {
                     setState({ kind: "ready", history });

@@ -2,6 +2,7 @@ import { Bot, Cable, CheckCircle2, CircleAlert, LoaderCircle, Settings, X } from
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import {
     type AgentInstallationViewState,
     AgentIntegrationOption,
@@ -11,7 +12,6 @@ import {
     MissingAgentOption,
     SucceededAgentInstallationState,
 } from "@/domain/channel";
-import { channelSettingsRoutePath } from "@/services/app-routes";
 import { cancelLocalAgentInstallation, installLocalAgent } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
 
@@ -166,9 +166,10 @@ export function AgentInstallationSidebarPanel() {
     );
 }
 
-export function AgentInstallationPage({ channelId }: { readonly channelId: string }) {
+export function AgentInstallationPage() {
     const machineName = useChatStore((state) => state.machineName);
     const runtime = useChatStore((state) => state.runtime);
+    const routes = useWorkspaceRoutes();
     return (
         <main className="flex min-h-dvh overflow-y-auto bg-background p-4 sm:p-6">
             <section className="pairing-card mx-auto my-auto w-full max-w-[720px] rounded-2xl bg-white px-5 py-7 text-center sm:px-10 sm:py-9">
@@ -192,7 +193,7 @@ export function AgentInstallationPage({ channelId }: { readonly channelId: strin
                 </p>
                 <Link
                     className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                    to={channelSettingsRoutePath(channelId)}
+                    to={routes.settingsPath}
                 >
                     <Settings aria-hidden="true" className="size-3.5" />
                     Open Agent settings
