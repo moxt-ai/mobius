@@ -25,6 +25,7 @@ import {
     AgentOption,
     type BrowserPairingStatus,
     ChannelConnection,
+    type ChannelCredentialAuthority,
     ChannelHistory,
     CompletedRecordedTurn,
     ConnectedBrowserPairingStatus,
@@ -36,8 +37,11 @@ import {
     isIdentifier,
     isPairingCode,
     isToken,
+    LegacyChannelCredentialAuthority,
+    LinkedChannelCredentialAuthority,
     LinkedChannelDevice,
     MissingAgentOption,
+    OwnerChannelCredentialAuthority,
     PairingApiError,
     PendingRecordedTurn,
     RecordedActivity,
@@ -559,6 +563,19 @@ class LegacyBrowserChannelCredential extends BrowserChannelCredential {
     readonly authority = "legacy";
 }
 
+function channelCredentialAuthority(credential: BrowserChannelCredential): ChannelCredentialAuthority {
+    if (credential instanceof OwnerBrowserChannelCredential) {
+        return new OwnerChannelCredentialAuthority();
+    }
+    if (credential instanceof LinkedBrowserChannelCredential) {
+        return new LinkedChannelCredentialAuthority();
+    }
+    if (credential instanceof LegacyBrowserChannelCredential) {
+        return new LegacyChannelCredentialAuthority();
+    }
+    throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
+}
+
 export abstract class RuntimeManagementAccess {}
 
 export class OwnerRuntimeManagementAccess extends RuntimeManagementAccess {}
@@ -791,6 +808,7 @@ function decodeChannelConnection(
     return new ChannelConnection(
         agents,
         channelId,
+        channelCredentialAuthority(credential),
         readString(value["machineName"], "machine name", 120),
         readString(value["workspaceName"], "workspace name", 120),
         credential.hostToken,

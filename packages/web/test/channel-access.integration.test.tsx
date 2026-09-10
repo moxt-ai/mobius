@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
+    completeRenderedPrompt,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -155,6 +156,58 @@ describe.sequential("Channel access boundaries", () => {
             expect(window.localStorage.getItem(`mobius:channel-credential:${paired.channelId}`)).not.toBe(
                 linkedCredential,
             );
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a one-time access link opens an existing Session, When the linked browser sends a follow-up, Then the local Agent response appears", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const ownerPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, ownerPreparation);
+            await completeRenderedPrompt(
+                paired.daemon,
+                "Remember this conversation before I link another browser",
+                "This conversation is ready on another browser.",
+            );
+
+            fireEvent.click(screen.getByRole("link", { name: "Access from other devices" }));
+            await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
+            fireEvent.click(await screen.findByRole("button", { name: "Create one-time access link" }));
+            const accessLink = (
+                await screen.findByRole("textbox", {
+                    name: "One-time access link",
+                })
+            ).getAttribute("value");
+            if (accessLink === null) {
+                throw new Error("Expected a one-time linked-browser access URL");
+            }
+
+            cleanup();
+            await closeMobiusTransport();
+            window.localStorage.clear();
+            window.history.replaceState(null, "", accessLink);
+            render(<App />);
+
+            const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(linkedPreparation.sessionId).toBe(ownerPreparation.sessionId);
+            await sendReadySession(paired.daemon, linkedPreparation);
+            await screen.findByText("This conversation is ready on another browser.");
+            await completeRenderedPrompt(
+                paired.daemon,
+                "Continue from the linked browser",
+                "The linked browser can continue this Session.",
+            );
+
+            expect(screen.queryByText(/owner_access_required/u)).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();

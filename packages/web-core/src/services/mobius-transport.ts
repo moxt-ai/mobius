@@ -50,7 +50,14 @@ import {
     type SessionPrepareRequest,
     type WorkspaceListRequest,
 } from "@moxt-ai/mobius-sdk/channel";
-import { type ChannelConnection, RecordedActivity, RequestedAgentInstallationState } from "@/domain/channel";
+import {
+    type ChannelConnection,
+    LegacyChannelCredentialAuthority,
+    LinkedChannelCredentialAuthority,
+    OwnerChannelCredentialAuthority,
+    RecordedActivity,
+    RequestedAgentInstallationState,
+} from "@/domain/channel";
 import { DeletedSessionState, OfflineRuntimeState, OnlineRuntimeState, UnavailableRuntimeState } from "@/domain/chat";
 import { readChannelConnection } from "@/services/pairing-api";
 import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
@@ -128,18 +135,37 @@ class RefreshingBrowserCredentialProvider {
     };
 }
 
-class BrowserServiceClients {
-    readonly owner: MobiusClient;
+abstract class BrowserServiceClients {
+    abstract readonly scoped: MobiusClient;
+    abstract readonly close: () => void;
+}
+
+class DirectBrowserServiceClients extends BrowserServiceClients {
     readonly scoped: MobiusClient;
 
-    constructor(owner: MobiusClient, scoped: MobiusClient) {
-        this.owner = owner;
+    constructor(scoped: MobiusClient) {
+        super();
         this.scoped = scoped;
     }
 
     readonly close = (): void => {
         this.scoped.close();
-        this.owner.close();
+    };
+}
+
+class IssuedBrowserServiceClients extends BrowserServiceClients {
+    readonly #issuer: MobiusClient;
+    readonly scoped: MobiusClient;
+
+    constructor(issuer: MobiusClient, scoped: MobiusClient) {
+        super();
+        this.#issuer = issuer;
+        this.scoped = scoped;
+    }
+
+    readonly close = (): void => {
+        this.scoped.close();
+        this.#issuer.close();
     };
 }
 
@@ -173,27 +199,44 @@ async function sha256(bytes: Uint8Array, signal: AbortSignal): Promise<string> {
 }
 
 async function connectBrowserServiceClients(connection: ChannelConnection): Promise<BrowserServiceClients> {
-    const owner = new MobiusClient({
+    const issuer = new MobiusClient({
         credentialProvider: new StaticMobiusCredentialProvider(connection.hostToken),
         endpoint: window.location.origin,
         projectId: connection.projectId,
     });
+    if (connection.credentialAuthority instanceof LinkedChannelCredentialAuthority) {
+        return new DirectBrowserServiceClients(issuer);
+    }
+    if (
+        !(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) &&
+        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority)
+    ) {
+        issuer.close();
+        throw new MobiusChannelError("channel_credential_invalid", "The channel credential authority is invalid");
+    }
     const signal = AbortSignal.timeout(20_000);
     try {
-        const credential = await owner.credentials.issue(
+        const credential = await issuer.credentials.issue(
             new MobiusBrowserCredentialRequest(BROWSER_CREDENTIAL_LIFETIME_SECONDS),
             signal,
         );
-        return new BrowserServiceClients(
-            owner,
+        return new IssuedBrowserServiceClients(
+            issuer,
             new MobiusClient({
-                credentialProvider: new RefreshingBrowserCredentialProvider(owner, credential),
+                credentialProvider: new RefreshingBrowserCredentialProvider(issuer, credential),
                 endpoint: window.location.origin,
                 projectId: connection.projectId,
             }),
         );
     } catch (error) {
-        owner.close();
+        if (
+            connection.credentialAuthority instanceof LegacyChannelCredentialAuthority &&
+            error instanceof MobiusApiError &&
+            error.code === "owner_access_required"
+        ) {
+            return new DirectBrowserServiceClients(issuer);
+        }
+        issuer.close();
         throw error;
     }
 }

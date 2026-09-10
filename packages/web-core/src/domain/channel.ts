@@ -286,9 +286,18 @@ export class RecordedSession {
     }
 }
 
+export abstract class ChannelCredentialAuthority {}
+
+export class OwnerChannelCredentialAuthority extends ChannelCredentialAuthority {}
+
+export class LinkedChannelCredentialAuthority extends ChannelCredentialAuthority {}
+
+export class LegacyChannelCredentialAuthority extends ChannelCredentialAuthority {}
+
 export class ChannelConnection {
     readonly agents: readonly AgentOption[];
     readonly channelId: string;
+    readonly credentialAuthority: ChannelCredentialAuthority;
     readonly installableAgents: readonly InstallableAgentOption[];
     readonly machineName: string;
     readonly hostToken: string;
@@ -300,6 +309,7 @@ export class ChannelConnection {
     constructor(
         agents: readonly AgentOption[],
         channelId: string,
+        credentialAuthority: ChannelCredentialAuthority,
         machineName: string,
         workspaceName: string,
         hostToken: string,
@@ -310,6 +320,7 @@ export class ChannelConnection {
     ) {
         this.agents = agents;
         this.channelId = channelId;
+        this.credentialAuthority = credentialAuthority;
         this.installableAgents = installableAgents;
         this.machineName = machineName;
         this.hostToken = hostToken;
