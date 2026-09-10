@@ -53,7 +53,7 @@ export class BotConnectionStorage {
                     INNER JOIN bots ON bots.bot_id = connections.bot_id
                     WHERE connections.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
                     ORDER BY connections.created_at DESC, connections.connection_id DESC`)
-                .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+                .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
                 .all<ConnectionListRow>(signal),
             this.#database
                 .prepare(`SELECT targets.*, connections.lifecycle AS connection_lifecycle
@@ -62,7 +62,7 @@ export class BotConnectionStorage {
                     INNER JOIN bots ON bots.bot_id = targets.bot_id
                     WHERE targets.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
                     ORDER BY targets.created_at DESC, targets.delivery_target_id DESC`)
-                .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+                .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
                 .all<TargetListRow>(signal),
         ]);
         signal.throwIfAborted();
@@ -122,7 +122,12 @@ export class BotConnectionStorage {
              WHERE connections.connection_id = ? AND connections.bot_id = ?
                AND bots.tenant_id = ? AND bots.project_id = ?`,
             )
-            .bind(connectionId, access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(
+                connectionId,
+                access.botId,
+                access.scope.storageLocator.resolveHostingPlacement(),
+                access.scope.projectId,
+            )
             .first<{ readonly lifecycle: string; readonly lifecycle_revision: number }>(signal);
         signal.throwIfAborted();
         return row;
@@ -555,7 +560,7 @@ export class BotConnectionStorage {
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

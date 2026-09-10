@@ -11,14 +11,17 @@ import {
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeSessionBinding,
+    decodeSessionConfigUpdatedEvent,
     decodeSessionPromptCommand,
     decodeTurn,
+    encodeSessionConfigureCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     type Interaction,
     type InteractionResponse,
     type NativeSessionHistory,
     type PendingWork,
+    type SessionConfigureCommand,
     type SessionEventEnvelope,
     type SessionPromptCommand,
     type Turn,
@@ -39,13 +42,15 @@ import {
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     type ProjectScope,
+    SessionConfigurationAcceptance,
+    SessionConfigurationSnapshot,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionExport,
     type SessionLifecycle,
     type SessionMessage,
     type SessionMessagePage,
-    type SessionQuotaPolicy,
+    type SessionQuotaPolicyProvider,
     SessionRuntimeError,
     type SessionSummary,
     type TurnAcceptance,
@@ -189,6 +194,34 @@ function decodeSummary(value: unknown): SessionSummary {
         title: readString(value, "title", true),
         updatedAt: readString(value, "updatedAt"),
     };
+}
+
+function decodeConfiguration(value: unknown): SessionConfigurationSnapshot {
+    if (!isRecord(value) || !Array.isArray(value["options"])) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The Session configuration is invalid");
+    }
+    try {
+        const event = decodeSessionConfigUpdatedEvent(
+            JSON.stringify({
+                configOptions: value["options"],
+                kind: "session.config.updated",
+                requestId: "remote-configuration",
+                sessionId: "remote-session",
+            }),
+        );
+        return new SessionConfigurationSnapshot(
+            event.configOptions,
+            readNumber(value, "revision"),
+            readString(value, "updatedAt"),
+        );
+    } catch (cause) {
+        if (cause instanceof SessionRuntimeError) {
+            throw cause;
+        }
+        throw new SessionRuntimeError("session_storage_unavailable", "The Session configuration is invalid", {
+            cause,
+        });
+    }
 }
 
 function decodeAttempt(value: unknown): SessionMessage["attempt"] {
@@ -647,13 +680,20 @@ function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId
         JSON.stringify({
             projectId: scope.projectId,
             sessionId,
-            tenantId: scope.tenantId,
+            tenantId: scope.storageLocator.resolveHostingPlacement(),
             updatedAt,
         }),
     )
         .replaceAll("+", "-")
         .replaceAll("/", "_")
         .replace(/=+$/, "");
+}
+
+function infrastructureScope(scope: ProjectScope): Readonly<Record<string, string>> {
+    return {
+        projectId: scope.projectId,
+        tenantId: scope.storageLocator.resolveHostingPlacement(),
+    };
 }
 
 function decodeDirectoryCursor(
@@ -670,7 +710,7 @@ function decodeDirectoryCursor(
         if (
             !isRecord(value) ||
             !hasExactKeys(value, ["projectId", "sessionId", "tenantId", "updatedAt"]) ||
-            value["tenantId"] !== scope["tenantId"] ||
+            value["tenantId"] !== scope.storageLocator.resolveHostingPlacement() ||
             value["projectId"] !== scope["projectId"] ||
             typeof value["sessionId"] !== "string" ||
             typeof value["updatedAt"] !== "number" ||
@@ -697,7 +737,7 @@ export class RemoteSessionRuntime
     readonly #directory: SessionDirectoryStorage;
     readonly #tenants: TenantShardingDirectory;
     readonly #transport: SessionTransport;
-    readonly #quota: SessionQuotaPolicy;
+    readonly #quotaPolicy: SessionQuotaPolicyProvider;
 
     constructor(cx: {
         readonly storages: { readonly directory: SessionDirectoryStorage };
@@ -706,12 +746,12 @@ export class RemoteSessionRuntime
             readonly databaseResolver: DatabaseResolver;
             readonly tenantShardingDirectory: TenantShardingDirectory;
         };
-        readonly config: { readonly quota: SessionQuotaPolicy };
+        readonly config: { readonly quotaPolicy: SessionQuotaPolicyProvider };
     }) {
         this.#directory = cx.storages.directory;
         this.#tenants = cx.gateways.tenantShardingDirectory;
         this.#transport = cx.gateways.transport;
-        this.#quota = cx.config.quota;
+        this.#quotaPolicy = cx.config.quotaPolicy;
     }
 
     readonly createSession = async (
@@ -771,6 +811,33 @@ export class RemoteSessionRuntime
             state,
             turn: decodeTurn(value["turn"]),
         };
+    };
+
+    readonly acceptConfiguration = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: SessionConfigureCommand,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<SessionConfigurationAcceptance> => {
+        const value = await this.request(
+            scope,
+            command.sessionId,
+            "configure",
+            { command: encodeSessionConfigureCommand(command), now, runtimeId },
+            signal,
+        );
+        if (!isRecord(value) || value["status"] !== "accepted") {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The Session configuration acceptance is invalid",
+            );
+        }
+        return new SessionConfigurationAcceptance(
+            readString(value, "requestId"),
+            readBoolean(value, "duplicate"),
+            decodePendingWork(value["pendingWork"]),
+        );
     };
 
     readonly acceptTurnCancellation = async (
@@ -999,6 +1066,13 @@ export class RemoteSessionRuntime
         return summary;
     };
 
+    readonly readConfiguration = async (
+        scope: ProjectScope,
+        sessionId: string,
+        signal: AbortSignal,
+    ): Promise<SessionConfigurationSnapshot> =>
+        decodeConfiguration(await this.request(scope, sessionId, "configuration", { sessionId }, signal));
+
     readonly openEventStream = async (
         scope: ProjectScope,
         sessionId: string,
@@ -1011,7 +1085,7 @@ export class RemoteSessionRuntime
                 scope,
                 sessionId,
                 new Request("https://session.internal/internal/sessions/event-stream", {
-                    body: JSON.stringify({ cursor, scope, sessionId }),
+                    body: JSON.stringify({ cursor, scope: infrastructureScope(scope), sessionId }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                     signal,
@@ -1150,7 +1224,7 @@ export class RemoteSessionRuntime
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
-        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
         const rows = await this.#directory.listReady(tenant, scope, signal);
         const deliveries: PendingDaemonDelivery[] = [];
         for (const row of rows) {
@@ -1233,7 +1307,7 @@ export class RemoteSessionRuntime
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
         const decoded = cursor === null ? null : decodeDirectoryCursor(cursor, scope);
-        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
         const rows = await this.#directory.list(tenant, scope, decoded, limit + 1, signal);
         signal.throwIfAborted();
         const pageRows = rows.slice(0, limit);
@@ -1370,7 +1444,7 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<readonly string[]> => {
         signal.throwIfAborted();
-        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
         const rows = await this.#directory.listRuntime(tenant, scope, runtimeId, signal);
         return rows.map((row) => row.session_id);
     };
@@ -1412,7 +1486,7 @@ export class RemoteSessionRuntime
                 scope,
                 sessionId,
                 new Request(`https://session.internal/internal/sessions/${operation}`, {
-                    body: JSON.stringify({ ...body, scope }),
+                    body: JSON.stringify({ ...body, scope: infrastructureScope(scope) }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                     signal: operationSignal,
@@ -1442,17 +1516,19 @@ export class RemoteSessionRuntime
     ): Promise<SessionReservation> => {
         signal.throwIfAborted();
         try {
-            const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+            const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
+            const quota = await this.#quotaPolicy.resolveSessionQuota(scope, signal);
             const { changes, reservation } = await this.#directory.reserve(
                 tenant,
                 scope,
                 sessionId,
                 now,
-                this.#quota,
+                quota,
                 signal,
             );
             signal.throwIfAborted();
             if (reservation === null) {
+                await this.#quotaPolicy.recordSessionQuotaDenial(scope, sessionId, quota, signal);
                 throw new SessionRuntimeError(
                     "session_quota_exceeded",
                     "The tenant or project active session quota is exhausted",
@@ -1476,7 +1552,7 @@ export class RemoteSessionRuntime
     ): Promise<void> => {
         signal.throwIfAborted();
         try {
-            const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+            const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
             await this.#directory.release(tenant, scope, sessionId, signal);
             signal.throwIfAborted();
         } catch (cause) {
@@ -1495,7 +1571,7 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<SessionSummary | null> => {
         signal.throwIfAborted();
-        const tenant = await this.#tenants.resolve(scope.tenantId, signal);
+        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
         const row = await this.#directory.read(tenant, scope, sessionId, signal);
         signal.throwIfAborted();
         if (row === null) {

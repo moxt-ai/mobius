@@ -32,7 +32,7 @@ export class BotConversationStorage {
                         WHERE drafts.bot_id = conversations.bot_id
                           AND drafts.conversation_id = conversations.conversation_id))
                 ORDER BY conversations.created_at DESC, conversations.conversation_id DESC`)
-            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .all<ConversationRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -113,7 +113,12 @@ export class BotConversationStorage {
                     AND conversations.lifecycle = 'provisioning'
                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT ?`,
             )
-            .bind(scope.tenantId, scope.projectId, validateIdentifier(runtimeId, "runtime_id"), limit)
+            .bind(
+                scope.storageLocator.resolveHostingPlacement(),
+                scope.projectId,
+                validateIdentifier(runtimeId, "runtime_id"),
+                limit,
+            )
             .all<ProvisioningOutboxRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -180,7 +185,13 @@ export class BotConversationStorage {
              WHERE bindings.binding_id = ? AND bindings.bot_id = ? AND bindings.binding_revision = ?
                AND bots.tenant_id = ? AND bots.project_id = ?`,
             )
-            .bind(bindingId, access.botId, bindingRevision, access.scope.tenantId, access.scope.projectId)
+            .bind(
+                bindingId,
+                access.botId,
+                bindingRevision,
+                access.scope.storageLocator.resolveHostingPlacement(),
+                access.scope.projectId,
+            )
             .first<{ readonly binding_lifecycle: string; readonly runtime_status: string | null }>(signal);
         signal.throwIfAborted();
         return row;
@@ -189,7 +200,7 @@ export class BotConversationStorage {
     readonly readBotLifecycle = async (access: BotConversationAuthorization, signal: AbortSignal) => {
         const bot = await this.#database
             .prepare(`SELECT lifecycle FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?`)
-            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .first<{ readonly lifecycle: string }>(signal);
         signal.throwIfAborted();
         return bot;
@@ -377,8 +388,10 @@ export class BotConversationStorage {
         scope: ProjectScope,
         creatorKey: string,
         clientConversationKey: string,
+        clientReference: string,
         provisioning: BotSessionProvisioning,
         outboxId: string,
+        retainOwnerDraft: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
@@ -395,9 +408,9 @@ export class BotConversationStorage {
                        conversation_id, bot_id, behavior_revision_id, binding_id,
                        binding_revision, session_id, creator_kind,
                        creator_principal_id, creator_key, connection_id,
-                       reply_delivery_target_id, client_conversation_key,
+                       reply_delivery_target_id, client_conversation_key, client_reference,
                        title, lifecycle, created_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?)`,
                     )
                     .bind(
                         conversationId,
@@ -412,10 +425,11 @@ export class BotConversationStorage {
                         connectionId,
                         targetId,
                         clientConversationKey,
+                        clientReference,
                         title,
                         now,
                     ),
-                ...(creatorKind === "owner"
+                ...(creatorKind === "owner" && retainOwnerDraft
                     ? [
                           this.#database
                               .prepare(
@@ -523,7 +537,7 @@ export class BotConversationStorage {
                   WHERE conversations.conversation_id = ?
                     AND bots.tenant_id = ? AND bots.project_id = ?`,
             )
-            .bind(conversationId, scope.tenantId, scope.projectId)
+            .bind(conversationId, scope.storageLocator.resolveHostingPlacement(), scope.projectId)
             .first<ProvisioningOutboxRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -562,7 +576,7 @@ export class BotConversationStorage {
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,
@@ -599,7 +613,7 @@ export class BotConversationStorage {
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

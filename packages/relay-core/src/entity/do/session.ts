@@ -8,6 +8,7 @@ import type {
     PendingWork,
     SessionLifecycle as ResourceSessionLifecycle,
     SessionBinding,
+    SessionConfigOption,
     SessionPromptCommand,
     Turn,
 } from "@moxt-ai/mobius-protocol";
@@ -33,14 +34,74 @@ export class SessionQuotaPolicy {
 
 export const DEFAULT_SESSION_QUOTA_POLICY = new SessionQuotaPolicy(10_000, 1_000);
 
-export class ProjectScope {
-    readonly projectId: string;
-    readonly tenantId: string;
+const PROJECT_STORAGE_LOCATOR_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
 
-    constructor(tenantId: string, projectId: string) {
-        this.projectId = projectId;
-        this.tenantId = tenantId;
+export class ProjectStorageLocator {
+    readonly #placementKey: string;
+
+    private constructor(placementKey: string) {
+        if (!PROJECT_STORAGE_LOCATOR_PATTERN.test(placementKey)) {
+            throw new TypeError("The Project storage locator is invalid");
+        }
+        this.#placementKey = placementKey;
     }
+
+    static readonly fromHostingPlacement = (placementKey: string): ProjectStorageLocator =>
+        new ProjectStorageLocator(placementKey);
+
+    readonly resolveHostingPlacement = (): string => this.#placementKey;
+
+    readonly toJSON = (): string => "[opaque-project-storage-locator]";
+}
+
+export class ProjectScope {
+    readonly #storageLocator: ProjectStorageLocator;
+    readonly projectId: string;
+
+    get storageLocator(): ProjectStorageLocator {
+        return this.#storageLocator;
+    }
+
+    constructor(
+        hostingPlacement: string,
+        projectId: string,
+        storageLocator: ProjectStorageLocator = ProjectStorageLocator.fromHostingPlacement(hostingPlacement),
+    ) {
+        this.projectId = projectId;
+        this.#storageLocator = storageLocator;
+    }
+}
+
+export interface SessionQuotaPolicyProvider {
+    readonly resolveSessionQuota: (scope: ProjectScope, signal: AbortSignal) => Promise<SessionQuotaPolicy>;
+    readonly recordSessionQuotaDenial: (
+        scope: ProjectScope,
+        sessionId: string,
+        policy: SessionQuotaPolicy,
+        signal: AbortSignal,
+    ) => Promise<void>;
+}
+
+export class StaticSessionQuotaPolicyProvider implements SessionQuotaPolicyProvider {
+    readonly #policy: SessionQuotaPolicy;
+
+    constructor(policy: SessionQuotaPolicy) {
+        this.#policy = policy;
+    }
+
+    readonly resolveSessionQuota = async (_scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
+        signal.throwIfAborted();
+        return this.#policy;
+    };
+
+    readonly recordSessionQuotaDenial = async (
+        _scope: ProjectScope,
+        _sessionId: string,
+        _policy: SessionQuotaPolicy,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        signal.throwIfAborted();
+    };
 }
 
 export const ARTIFACT_UPLOAD_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
@@ -427,6 +488,31 @@ export interface TurnCancellationAcceptance {
     readonly duplicate: boolean;
     readonly pendingWork: PendingWork;
     readonly turn: Turn;
+}
+
+export class SessionConfigurationSnapshot {
+    readonly options: readonly SessionConfigOption[];
+    readonly revision: number;
+    readonly updatedAt: string;
+
+    constructor(options: readonly SessionConfigOption[], revision: number, updatedAt: string) {
+        this.options = Object.freeze([...options]);
+        this.revision = revision;
+        this.updatedAt = updatedAt;
+    }
+}
+
+export class SessionConfigurationAcceptance {
+    readonly duplicate: boolean;
+    readonly pendingWork: PendingWork;
+    readonly requestId: string;
+    readonly status = "accepted";
+
+    constructor(requestId: string, duplicate: boolean, pendingWork: PendingWork) {
+        this.duplicate = duplicate;
+        this.pendingWork = pendingWork;
+        this.requestId = requestId;
+    }
 }
 
 export interface SessionUploadedArtifactExport {

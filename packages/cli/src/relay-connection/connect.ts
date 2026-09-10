@@ -18,8 +18,16 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
     signal.throwIfAborted();
 
     return new Promise((resolve, reject) => {
-        const socket = new WebSocket(url, {
+        const endpoint = new URL(url);
+        const headers: Record<string, string> = {};
+        if (endpoint.pathname.endsWith("/v1/runtimes/connect")) {
+            const runtimeCredential = endpoint.searchParams.get("token") ?? "";
+            endpoint.searchParams.delete("token");
+            headers["authorization"] = `Bearer ${runtimeCredential}`;
+        }
+        const socket = new WebSocket(endpoint, {
             dispatcher: environmentProxyDispatcher,
+            headers,
         });
         let finished = false;
         const timeout = setTimeout(onTimeout, CONNECTION_TIMEOUT_MILLISECONDS);

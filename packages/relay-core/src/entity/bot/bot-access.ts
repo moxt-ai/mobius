@@ -1,3 +1,4 @@
+import type { ConversationAccessContext } from "../authentication/conversation-access.ts";
 import {
     AuditActor,
     AuditActorKind,
@@ -49,6 +50,32 @@ export class ProjectBotAccess {
         this.scope = access.scope;
         this.credentialId = access.credentialId;
         this.actor = access.actor;
+        this.botId = botId;
+    }
+}
+
+export class ProjectConversationAccess extends ProjectBotAccess {
+    readonly conversationId: string;
+    readonly sessionId: string;
+
+    constructor(access: ProjectAccessContext, botId: string, conversationId: string, sessionId: string) {
+        super(access, botId);
+        this.conversationId = conversationId;
+        this.sessionId = sessionId;
+    }
+}
+
+export class ConversationBotAccess {
+    readonly actor: AuditActor;
+    readonly botId: string;
+    readonly conversationActorKind = "owner";
+    readonly credentialId: string;
+    readonly scope: ProjectScope;
+
+    constructor(access: ConversationAccessContext, botId: string) {
+        this.scope = access.scope;
+        this.credentialId = access.credentialId;
+        this.actor = new AuditActor(AuditActorKind.BrowserAccess, access.actorReference);
         this.botId = botId;
     }
 }

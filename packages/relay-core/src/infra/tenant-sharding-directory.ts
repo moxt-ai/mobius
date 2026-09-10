@@ -1,3 +1,5 @@
+import type { ProjectStorageLocator } from "../entity/do/session.ts";
+
 export type TenantShardResolution =
     | { readonly hasShard: false }
     | {
@@ -15,5 +17,6 @@ export interface TenantContext {
 }
 
 export interface TenantShardingDirectory {
+    readonly resolveProject: (locator: ProjectStorageLocator, signal: AbortSignal) => Promise<TenantContext>;
     readonly resolve: (tenantId: string, signal: AbortSignal) => Promise<TenantContext>;
 }

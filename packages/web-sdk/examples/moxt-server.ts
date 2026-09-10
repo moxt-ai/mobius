@@ -1,175 +1,110 @@
-import {
-    MobiusBotOwnerClient,
-    MobiusClient,
-    MobiusProjectAuthenticationClient,
-    StaticMobiusCredentialProvider,
-} from "@moxt-ai/mobius-sdk";
+import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
+import { MobiusBotOwnerClient, MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 
-export const MOXT_PROVISIONER_PERMISSIONS = Object.freeze([
-    "bot:behavior:write",
-    "bot:binding:write",
-    "bot:profile:write",
-    "bot:read",
-    "runtime:pair",
-    "runtime:read",
-    "runtime:revoke",
-]);
-
-export const MOXT_CONVERSATION_SERVICE_PERMISSIONS = Object.freeze([
-    "bot:read",
-    "conversation:create",
-    "conversation:read",
-    "conversation:turn:cancel",
-    "conversation:turn:create",
-    "interaction:respond",
-    "session:write",
-]);
-
-export const MOXT_EVENT_PROJECTOR_PERMISSIONS = Object.freeze([
-    "bot:read",
-    "conversation:read",
-    "project:event:read",
-    "project:read",
-    "session:read",
-]);
-
-export interface MoxtApplicationCredentialVault {
-    readonly put: (name: string, credential: string, signal: AbortSignal) => Promise<void>;
+export interface MoxtAppCredentialVault {
+    readonly put: (credential: string, signal: AbortSignal) => Promise<void>;
 }
 
-export class MoxtApplicationProvisioningOptions {
-    readonly credentialLifetimeSeconds: number;
+export class MoxtPlatformProvisioningOptions {
+    readonly appDisplayName: string;
     readonly endpoint: string;
-    readonly ownerCredential: string;
-    readonly projectId: string;
-
-    constructor(endpoint: string, projectId: string, ownerCredential: string, credentialLifetimeSeconds: number) {
-        this.endpoint = endpoint;
-        this.projectId = projectId;
-        this.ownerCredential = ownerCredential;
-        this.credentialLifetimeSeconds = credentialLifetimeSeconds;
-    }
-}
-
-export class MoxtProvisionedApplicationIds {
-    readonly conversationServiceApplicationId: string;
-    readonly eventProjectorApplicationId: string;
-    readonly provisionerApplicationId: string;
+    readonly oidcProviderId: string;
+    readonly oidcToken: string;
+    readonly projectClientReference: string;
+    readonly projectDisplayName: string;
+    readonly projectIdempotencyKey: string;
+    readonly tenantId: string;
 
     constructor(
-        provisionerApplicationId: string,
-        conversationServiceApplicationId: string,
-        eventProjectorApplicationId: string,
+        endpoint: string,
+        oidcProviderId: string,
+        oidcToken: string,
+        tenantId: string,
+        appDisplayName: string,
+        projectDisplayName: string,
+        projectClientReference: string,
+        projectIdempotencyKey: string,
     ) {
-        this.provisionerApplicationId = provisionerApplicationId;
-        this.conversationServiceApplicationId = conversationServiceApplicationId;
-        this.eventProjectorApplicationId = eventProjectorApplicationId;
+        this.endpoint = endpoint;
+        this.oidcProviderId = oidcProviderId;
+        this.oidcToken = oidcToken;
+        this.tenantId = tenantId;
+        this.appDisplayName = appDisplayName;
+        this.projectDisplayName = projectDisplayName;
+        this.projectClientReference = projectClientReference;
+        this.projectIdempotencyKey = projectIdempotencyKey;
     }
 }
 
-async function createAndStoreApplication(
-    authentication: MobiusProjectAuthenticationClient,
-    vault: MoxtApplicationCredentialVault,
-    name: string,
-    permissions: readonly string[],
-    lifetimeSeconds: number,
-    signal: AbortSignal,
-): Promise<string> {
-    const application = await authentication.applications.create({ name, permissions }, signal);
-    const issued = await authentication.applicationCredentials.issue(
-        application.applicationId,
-        { expiresInSeconds: lifetimeSeconds },
-        signal,
-    );
-    await vault.put(name, issued.credential, signal);
-    return application.applicationId;
+export class MoxtProvisionedPlatformProject {
+    readonly appId: string;
+    readonly projectId: string;
+
+    constructor(appId: string, projectId: string) {
+        this.appId = appId;
+        this.projectId = projectId;
+    }
 }
 
 /**
- * Run once from a trusted Moxt provisioning process. The vault is the only
- * consumer of each plaintext credential, which the Relay returns once.
+ * Run once in a trusted Moxt provisioning process. The App's single default
+ * AppCredential is returned by Mobius once and written directly to the vault.
  */
-export async function provisionMoxtApplications(
-    options: MoxtApplicationProvisioningOptions,
-    vault: MoxtApplicationCredentialVault,
+export async function provisionMoxtPlatformProject(
+    options: MoxtPlatformProvisioningOptions,
+    vault: MoxtAppCredentialVault,
     signal: AbortSignal,
-): Promise<MoxtProvisionedApplicationIds> {
-    const authentication = new MobiusProjectAuthenticationClient({
-        credentialProvider: new StaticMobiusCredentialProvider(options.ownerCredential),
+): Promise<MoxtProvisionedPlatformProject> {
+    const platform = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: options.oidcProviderId,
+        credentialProvider: new MobiusOidcCredentialProvider(options.oidcToken),
         endpoint: options.endpoint,
-        projectId: options.projectId,
     });
-    const provisionerApplicationId = await createAndStoreApplication(
-        authentication,
-        vault,
-        "moxt-provisioner",
-        MOXT_PROVISIONER_PERMISSIONS,
-        options.credentialLifetimeSeconds,
+    const app = await platform.createApp(options.tenantId, options.appDisplayName, signal);
+    await vault.put(app.defaultCredential.credential, signal);
+    const project = await platform.createProject(
+        app.appId,
+        {
+            clientReference: options.projectClientReference,
+            displayName: options.projectDisplayName,
+            idempotencyKey: options.projectIdempotencyKey,
+        },
         signal,
     );
-    const conversationServiceApplicationId = await createAndStoreApplication(
-        authentication,
-        vault,
-        "moxt-conversation-service",
-        MOXT_CONVERSATION_SERVICE_PERMISSIONS,
-        options.credentialLifetimeSeconds,
-        signal,
-    );
-    const eventProjectorApplicationId = await createAndStoreApplication(
-        authentication,
-        vault,
-        "moxt-event-projector",
-        MOXT_EVENT_PROJECTOR_PERMISSIONS,
-        options.credentialLifetimeSeconds,
-        signal,
-    );
-    return new MoxtProvisionedApplicationIds(
-        provisionerApplicationId,
-        conversationServiceApplicationId,
-        eventProjectorApplicationId,
-    );
+    return new MoxtProvisionedPlatformProject(app.appId, project.projectId);
 }
 
-export class MoxtServerCredentialSet {
-    readonly conversationService: string;
-    readonly eventProjector: string;
-    readonly provisioner: string;
-
-    constructor(provisioner: string, conversationService: string, eventProjector: string) {
-        this.provisioner = provisioner;
-        this.conversationService = conversationService;
-        this.eventProjector = eventProjector;
-    }
-}
-
-export class MoxtServerClients {
-    readonly #conversationServiceCredential: string;
+/**
+ * Construct all Moxt Server responsibilities from one AppCredential. Split it
+ * only when the responsibilities run in independent deployment or secret
+ * boundaries. No Mobius credential from this object belongs in a browser.
+ */
+export class MoxtPlatformServerClients {
+    readonly #credential: string;
     readonly #endpoint: string;
     readonly #projectId: string;
-    readonly eventProjector: MobiusBotOwnerClient;
-    readonly provisionerBots: MobiusBotOwnerClient;
-    readonly provisionerProject: MobiusClient;
+    readonly project: MobiusClient;
 
-    constructor(endpoint: string, projectId: string, credentials: MoxtServerCredentialSet) {
+    constructor(endpoint: string, projectId: string, appCredential: string) {
+        this.#credential = appCredential;
         this.#endpoint = endpoint;
         this.#projectId = projectId;
-        this.#conversationServiceCredential = credentials.conversationService;
-        const provisioner = new StaticMobiusCredentialProvider(credentials.provisioner);
-        this.provisionerProject = new MobiusClient({ credentialProvider: provisioner, endpoint, projectId });
-        this.provisionerBots = new MobiusBotOwnerClient({ credentialProvider: provisioner, endpoint, projectId });
-        this.eventProjector = new MobiusBotOwnerClient({
-            actorReference: "moxt-event-projector",
-            credentialProvider: new StaticMobiusCredentialProvider(credentials.eventProjector),
+        this.project = new MobiusClient({
+            credentialProvider: new StaticMobiusCredentialProvider(appCredential),
             endpoint,
             projectId,
         });
     }
 
-    readonly conversationService = (actorReference: string): MobiusBotOwnerClient =>
+    readonly botsForActor = (actorReference: string): MobiusBotOwnerClient =>
         new MobiusBotOwnerClient({
             actorReference,
-            credentialProvider: new StaticMobiusCredentialProvider(this.#conversationServiceCredential),
+            credentialProvider: new StaticMobiusCredentialProvider(this.#credential),
             endpoint: this.#endpoint,
             projectId: this.#projectId,
         });
+
+    readonly close = (): void => {
+        this.project.close();
+    };
 }

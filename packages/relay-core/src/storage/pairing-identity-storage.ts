@@ -87,4 +87,20 @@ export class PairingIdentityStorage {
         }
         return matches;
     };
+
+    readonly findRuntime = async (tokenHash: string, signal: AbortSignal) => {
+        const matches: { readonly sourceId: string; readonly row: Readonly<Record<string, unknown>> }[] = [];
+        for (const source of this.#sources) {
+            const rows = await source.database
+                .prepare(`SELECT tenant_id, project_id, runtime_id, channel_id, pairing_id
+                    FROM pairing_channels
+                    WHERE daemon_token_hash = ? AND status = 'paired'`)
+                .bind(tokenHash)
+                .all<Readonly<Record<string, unknown>>>(signal);
+            for (const row of rows.results) {
+                matches.push({ sourceId: source.sourceId, row });
+            }
+        }
+        return matches;
+    };
 }

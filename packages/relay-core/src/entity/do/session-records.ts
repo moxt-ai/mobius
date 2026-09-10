@@ -72,6 +72,12 @@ export const SessionBindingRecordSchema = v.object({
 });
 export type SessionBindingRecord = Readonly<v.InferOutput<typeof SessionBindingRecordSchema>>;
 
+export const SessionConfigurationRecordSchema = v.object({
+    config_options_json: v.string(),
+    config_revision: v.pipe(v.number(), v.safeInteger()),
+    updated_at: v.pipe(v.number(), v.safeInteger()),
+});
+
 export const TurnRecordSchema = v.object({
     scope_key: v.string(),
     session_id: v.string(),
@@ -112,8 +118,7 @@ export const CommandReceiptRecordSchema = v.object({
 });
 export type CommandReceiptRecord = Readonly<v.InferOutput<typeof CommandReceiptRecordSchema>>;
 
-export const CancellationReceiptRecordSchema = v.pick(CommandReceiptRecordSchema, ["request_hash", "result_id"]);
-export type CancellationReceiptRecord = Readonly<v.InferOutput<typeof CancellationReceiptRecordSchema>>;
+export const CommandResultReceiptRecordSchema = v.pick(CommandReceiptRecordSchema, ["request_hash", "result_id"]);
 
 export const AttemptRecordSchema = v.object({
     scope_key: v.string(),

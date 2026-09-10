@@ -147,7 +147,7 @@ export class RuntimeService {
         if (previous.length > 0 && current !== null) {
             this.#cx.services.connections.saveDisconnect({
                 ...current,
-                tenantId: scope.tenantId,
+                tenantId: scope.storageLocator.resolveHostingPlacement(),
                 projectId: scope.projectId,
                 disconnectedAt: Date.now(),
                 progress: { kind: "listing" },
@@ -164,7 +164,7 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept({
             ...prepared.identity,
             role: "daemon",
-            tenantId: scope.tenantId,
+            tenantId: scope.storageLocator.resolveHostingPlacement(),
             projectId: scope.projectId,
         });
         this.#cx.services.connections.connected(prepared.identity, Date.now());
@@ -207,7 +207,7 @@ export class RuntimeService {
                 identity.channelId === channelId &&
                 identity.credentialId === credentialId &&
                 identity.runtimeId === runtimeId &&
-                identity.tenantId === scope.tenantId &&
+                identity.tenantId === scope.storageLocator.resolveHostingPlacement() &&
                 identity.projectId === scope.projectId
             ) {
                 socket.close(1008, "Channel access revoked");
@@ -236,7 +236,8 @@ export class RuntimeService {
         for (const accepting of this.#accepting) {
             if (
                 accepting.runtimeId === runtimeId &&
-                accepting.scope.tenantId === scope.tenantId &&
+                accepting.scope.storageLocator.resolveHostingPlacement() ===
+                    scope.storageLocator.resolveHostingPlacement() &&
                 accepting.scope.projectId === scope.projectId
             ) {
                 accepting.controller.abort(new DOMException("Runtime revoked", "AbortError"));
@@ -246,7 +247,7 @@ export class RuntimeService {
         for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
             if (
                 identity.runtimeId !== runtimeId ||
-                identity.tenantId !== scope.tenantId ||
+                identity.tenantId !== scope.storageLocator.resolveHostingPlacement() ||
                 identity.projectId !== scope.projectId
             ) {
                 continue;
@@ -263,7 +264,7 @@ export class RuntimeService {
             if (daemons.length > 0 && this.#cx.services.connections.pendingDisconnect() === null) {
                 this.#cx.services.connections.saveDisconnect({
                     ...current,
-                    tenantId: scope.tenantId,
+                    tenantId: scope.storageLocator.resolveHostingPlacement(),
                     projectId: scope.projectId,
                     disconnectedAt: Date.now(),
                     progress: { kind: "listing" },

@@ -3,6 +3,7 @@ import {
     decodeNativeSessionHistory,
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigureCommand,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -427,7 +428,7 @@ class DoRoutes {
                     remainingUses: permit.remainingUses,
                     runtimeId: permit.runtimeId,
                     sessionId: permit.sessionId,
-                    tenantId: permit.scope.tenantId,
+                    tenantId: permit.scope.storageLocator.resolveHostingPlacement(),
                     turnId: permit.turnId,
                 });
             }
@@ -531,6 +532,18 @@ class DoRoutes {
                         scope,
                         readString(body, "runtimeId"),
                         decodeSessionPromptCommand(readString(body, "command", 8_000_000)),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "configure") {
+                assertExactKeys(body, ["command", "now", "runtimeId", "scope"]);
+                return Response.json(
+                    await this.#runtime.acceptConfiguration(
+                        scope,
+                        readString(body, "runtimeId"),
+                        decodeSessionConfigureCommand(readString(body, "command", 8_000_000)),
                         readInteger(body, "now"),
                         request.signal,
                     ),
@@ -668,6 +681,12 @@ class DoRoutes {
                 assertExactKeys(body, ["scope", "sessionId"]);
                 return Response.json(
                     await this.#runtime.readSession(scope, readString(body, "sessionId"), request.signal),
+                );
+            }
+            if (operation === "configuration") {
+                assertExactKeys(body, ["scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.readConfiguration(scope, readString(body, "sessionId"), request.signal),
                 );
             }
             if (operation === "native-history") {

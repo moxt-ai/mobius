@@ -2,10 +2,9 @@ import type { SessionEventCommit } from "../../entity/do/session-event-projectio
 import {
     type BindingIdentity,
     BindingIdentitySchema,
-    type CancellationReceiptRecord,
-    CancellationReceiptRecordSchema,
     type CommandIdentity,
     CommandIdentitySchema,
+    CommandResultReceiptRecordSchema,
     type CommittedEventRecord,
     CommittedEventRecordSchema,
     type PendingWorkRecord,
@@ -107,7 +106,7 @@ export class SessionCommandsStorage {
             });
         });
     };
-    readonly insertCancellationWithDispatch = (input: {
+    readonly insertCommandWithDispatch = (input: {
         readonly receipt: Parameters<SessionCommandsStorage["insertCommandReceipt"]>[0];
         readonly dispatch: Parameters<SessionCommandsStorage["insertDispatch"]>[0];
     }): PendingWorkRecord =>
@@ -120,7 +119,7 @@ export class SessionCommandsStorage {
                 input.dispatch.workId,
             );
             if (pendingWork === undefined) {
-                throw new DatabaseError("database_unavailable", "The Turn cancellation was not committed atomically");
+                throw new DatabaseError("database_unavailable", "The Session command was not committed atomically");
             }
             return pendingWork;
         });
@@ -699,14 +698,14 @@ export class SessionCommandsStorage {
                 [input.scopeKey, input.sessionId, input.turnId],
             ),
         )[0];
-    readonly findCancellationReceipt = (input: {
+    readonly findCommandReceiptResult = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
         readonly commandKind: string;
         readonly idempotencyKey: string;
-    }): CancellationReceiptRecord | undefined =>
+    }) =>
         decodeStorageRows(
-            CancellationReceiptRecordSchema,
+            CommandResultReceiptRecordSchema,
             this.#database.query(
                 `SELECT request_hash, result_id FROM command_receipts
          WHERE scope_key = ? AND session_id = ?

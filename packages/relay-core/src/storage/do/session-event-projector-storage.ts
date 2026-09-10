@@ -140,6 +140,12 @@ export class SessionEventProjectorStorage {
                     configRevision: plan.configRevision,
                     bindingCreatedAt: input.now,
                 });
+                this.updateConfigurationSnapshot({
+                    ...scope,
+                    configOptionsJson: JSON.stringify(plan.configOptions),
+                    configRevision: plan.configRevision,
+                    updatedAt: input.now,
+                });
                 return;
             case "title":
                 this.updateSessionTitle({ ...scope, title: plan.title });
@@ -651,6 +657,24 @@ export class SessionEventProjectorStorage {
                 input.scopeKey,
                 input.sessionId,
             ],
+        );
+
+    private readonly updateConfigurationSnapshot = (input: {
+        readonly configOptionsJson: string;
+        readonly configRevision: number;
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly updatedAt: number;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `INSERT INTO session_configuration_snapshots (
+               scope_key, session_id, config_revision, config_options_json, updated_at
+             ) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(scope_key, session_id) DO UPDATE SET
+               config_revision = excluded.config_revision,
+               config_options_json = excluded.config_options_json,
+               updated_at = excluded.updated_at`,
+            [input.scopeKey, input.sessionId, input.configRevision, input.configOptionsJson, input.updatedAt],
         );
 
     private readonly updateSessionTitle = (input: {

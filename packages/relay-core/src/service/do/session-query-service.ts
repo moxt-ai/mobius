@@ -4,6 +4,7 @@ import {
     type CommittedSessionEvent,
     decodeNativeSessionHistory,
     decodeRecordedSessionEvent,
+    decodeSessionConfigUpdatedEvent,
     decodeSessionPromptCommand,
     type Interaction,
     type NativeSessionHistory,
@@ -13,6 +14,7 @@ import {
 import {
     type ActivityDetail,
     type ProjectScope,
+    SessionConfigurationSnapshot,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionMessage,
@@ -62,6 +64,44 @@ export class SessionQueryService {
     ): Promise<SessionSummary> => {
         signal.throwIfAborted();
         return summaryFromRow(this.#store.requireActiveSessionRow(scope, sessionId, Date.now()));
+    };
+
+    readonly readConfiguration = async (
+        scope: ProjectScope,
+        sessionId: string,
+        signal: AbortSignal,
+    ): Promise<SessionConfigurationSnapshot> => {
+        signal.throwIfAborted();
+        const session = this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
+        const snapshot = this.#storage.readConfiguration(scopeKey(scope), sessionId);
+        if (snapshot === undefined) {
+            return new SessionConfigurationSnapshot(
+                [],
+                rowNumber(session, "config_revision"),
+                new Date(rowNumber(session, "updated_at")).toISOString(),
+            );
+        }
+        try {
+            const event = decodeSessionConfigUpdatedEvent(
+                JSON.stringify({
+                    configOptions: JSON.parse(snapshot.config_options_json),
+                    kind: "session.config.updated",
+                    requestId: "stored-configuration",
+                    sessionId,
+                }),
+            );
+            return new SessionConfigurationSnapshot(
+                event.configOptions,
+                snapshot.config_revision,
+                new Date(snapshot.updated_at).toISOString(),
+            );
+        } catch (cause) {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The stored Session configuration is invalid",
+                { cause },
+            );
+        }
     };
 
     readonly readNativeHistory = async (
@@ -233,7 +273,7 @@ export class SessionQueryService {
                     ? encodeCursor({
                           projectId: scope.projectId,
                           sessionId: rowString(last, "session_id"),
-                          tenantId: scope.tenantId,
+                          tenantId: scope.storageLocator.resolveHostingPlacement(),
                           updatedAt: rowNumber(last, "updated_at"),
                       })
                     : null,
@@ -308,7 +348,7 @@ export class SessionQueryService {
                           createdAt: rowNumber(last, "created_at"),
                           projectId: scope.projectId,
                           sessionId,
-                          tenantId: scope.tenantId,
+                          tenantId: scope.storageLocator.resolveHostingPlacement(),
                       })
                     : null,
         };

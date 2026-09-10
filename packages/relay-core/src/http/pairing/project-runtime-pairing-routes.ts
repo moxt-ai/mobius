@@ -1,5 +1,13 @@
 import { Hono } from "hono";
-import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
+import {
+    PairingDirectoryError,
+    validateAgentCatalog,
+    validateAgents,
+    validateDisplayName,
+    validateIdentifier,
+    validateInstallableAgents,
+    validatePairingCode,
+} from "../../entity/pairing/pairing.ts";
 import {
     assertExactKeys,
     bearerToken,
@@ -14,6 +22,53 @@ const PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
 export function createProjectRuntimePairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
+        .post("/runtime-pairings/:pairingId/redeem", async (context) => {
+            const request = context.req.raw;
+            const signal = AbortSignal.any([
+                request.signal,
+                AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
+            ]);
+            try {
+                const body = await parseJsonBody(request);
+                assertExactKeys(body, ["agents", "installableAgents", "machineName", "pairingCode", "workspaceName"]);
+                const agents = validateAgents(body["agents"]);
+                const installableAgents = validateInstallableAgents(body["installableAgents"]);
+                validateAgentCatalog(agents, installableAgents);
+                const redeemed = await context.env.services.runtimePairings.redeemRuntimePairing(
+                    validateIdentifier(context.req.param("pairingId"), "pairing_id"),
+                    validatePairingCode(body["pairingCode"]),
+                    validateDisplayName(body["machineName"], "machine_name"),
+                    validateDisplayName(body["workspaceName"], "workspace_name"),
+                    agents,
+                    installableAgents,
+                    signal,
+                );
+                return context.json({
+                    channelId: redeemed.channelId,
+                    runtimeCredential: redeemed.daemonToken,
+                    runtimeId: redeemed.runtimeId,
+                });
+            } catch (error) {
+                preserveCancellation(request.signal, error);
+                if (signal.aborted) {
+                    return directoryError(
+                        new PairingDirectoryError("pairing_timeout", "Runtime pairing redemption timed out", {
+                            cause: error,
+                        }),
+                    );
+                }
+                return directoryError(error);
+            }
+        })
+        .get("/runtimes/connect", async (context) => {
+            const request = context.req.raw;
+            try {
+                return await context.env.services.channels.acceptRuntime(bearerToken(request), request, request.signal);
+            } catch (error) {
+                preserveCancellation(request.signal, error);
+                return directoryError(error);
+            }
+        })
         .post("/projects/:projectId/runtime-pairings", async (context) => {
             const request = context.req.raw;
             const signal = AbortSignal.any([

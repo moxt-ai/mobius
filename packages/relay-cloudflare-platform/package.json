@@ -1,0 +1,28 @@
+{
+    "name": "@moxt-ai/mobius-relay-cloudflare-platform",
+    "version": "0.0.1",
+    "type": "module",
+    "exports": {
+        ".": "./src/worker.ts"
+    },
+    "scripts": {
+        "build": "wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
+        "db:migrate": "wrangler d1 migrations apply DIRECTORY_DATABASE --remote --config wrangler.jsonc && wrangler d1 migrations apply PLATFORM_DIRECTORY_DATABASE --remote --config wrangler.jsonc",
+        "deploy": "pnpm db:migrate && wrangler deploy --config wrangler.jsonc",
+        "dev": "pnpm --dir ../.. wrangler dev --config packages/relay-cloudflare-platform/wrangler.jsonc",
+        "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
+        "typecheck": "tsc --project tsconfig.json && tsc --project tsconfig.vitest.json && tsc --project test/tsconfig.json"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "@moxt-ai/mobius-relay-core": "workspace:*",
+        "@moxt-ai/mobius-relay-cloudflare": "workspace:*",
+        "hono": "^4.13.5"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-plugin": "^1.1.4",
+        "@cloudflare/workers-types": "^5.20260905.1",
+        "@moxt-ai/mobius-sdk": "workspace:*",
+        "wrangler": "^4.129.0"
+    }
+}

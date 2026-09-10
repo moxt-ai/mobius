@@ -2,6 +2,7 @@ import { env, exports } from "cloudflare:workers";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
     type ExternalIdentityAuthenticator,
+    ExternalIdentityAuthenticatorRegistry,
     type ExternalIdentityCredential,
     ProjectAuthenticationError,
     VerifiedExternalIdentity,
@@ -13,7 +14,12 @@ import {
     RotatingMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStandaloneWorker, type RelayBindings, StandaloneAuthenticationConfiguration } from "../src/worker.ts";
+import {
+    createLegacyStandaloneWorker,
+    createStandaloneWorker,
+    type RelayBindings,
+    StandaloneAuthenticationConfiguration,
+} from "../src/worker.ts";
 
 const relayOrigin = "https://relay.test";
 const readyAgents = [
@@ -116,6 +122,12 @@ class StatefulExternalIdentityAuthenticator implements ExternalIdentityAuthentic
     };
 }
 
+const legacyWorker = createLegacyStandaloneWorker(
+    new StandaloneAuthenticationConfiguration(new ExternalIdentityAuthenticatorRegistry([])),
+);
+const legacyFetch: typeof exports.default.fetch = async (input, init) =>
+    await legacyWorker.fetch(new Request(input, init), env);
+
 beforeEach(async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-09T00:00:00.000Z"));
@@ -127,9 +139,70 @@ afterEach(() => {
 });
 
 describe.sequential("Project authentication", () => {
+    it("Given a Standalone deployment, When Platform application or external-login routes are requested, Then those trust planes are not mounted", async () => {
+        const pairing = await responseRecord(
+            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            201,
+        );
+        const projectId = stringField(pairing, "projectId");
+        const ownerCredential = stringField(pairing, "hostToken");
+        const application = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`,
+            {
+                body: JSON.stringify({ name: "must-not-exist", permissions: ["bot:read"] }),
+                headers: { ...authorization(ownerCredential), "content-type": "application/json" },
+                method: "POST",
+            },
+        );
+        expect(application.status).toBe(404);
+        const exchange = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/auth/exchanges/clerk`, {
+            body: JSON.stringify({ expiresInSeconds: 300, projectId }),
+            headers: { authorization: "Bearer external-proof", "content-type": "application/json" },
+            method: "POST",
+        });
+        expect(exchange.status).toBe(404);
+        const ownerCredentials = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/owner-credentials`,
+            { headers: authorization(ownerCredential) },
+        );
+        expect(ownerCredentials.status).toBe(404);
+        const auditEvents = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/authentication-audit-events`,
+            { headers: authorization(ownerCredential) },
+        );
+        expect(auditEvents.status).toBe(404);
+
+        const legacyApplication = await responseRecord(
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`, {
+                body: JSON.stringify({ name: "legacy-only", permissions: ["bot:read"] }),
+                headers: { ...authorization(ownerCredential), "content-type": "application/json" },
+                method: "POST",
+            }),
+            201,
+        );
+        const legacyCredential = await responseRecord(
+            await legacyFetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/project-applications/${stringField(legacyApplication, "applicationId")}/credentials`,
+                {
+                    body: JSON.stringify({ expiresInSeconds: 3_600 }),
+                    headers: { ...authorization(ownerCredential), "content-type": "application/json" },
+                    method: "POST",
+                },
+            ),
+            201,
+        );
+        const applicationAccess = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`,
+            { headers: authorization(stringField(legacyCredential, "credential")) },
+        );
+        expect(applicationAccess.status).toBe(401);
+        await expect(applicationAccess.json()).resolves.toMatchObject({
+            error: { code: "project_credential_invalid" },
+        });
+    });
+
     it("Given public accountless bootstrap limits and an operator disable switch, When clients create Projects, Then limits are atomic, recover after the window, and disabled deployments reject bootstrap", async () => {
-        const provider = new StatefulExternalIdentityAuthenticator();
-        const limited = createStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
+        const limited = createStandaloneWorker();
         const limitedEnvironment = bootstrapEnvironment(true, 1, 2);
         const bootstrap = async (clientAddress: string): Promise<Response> =>
             await limited.fetch(
@@ -153,7 +226,7 @@ describe.sequential("Project authentication", () => {
         vi.setSystemTime(Date.now() + 60_001);
         expect((await bootstrap("192.0.2.10")).status).toBe(201);
 
-        const defensive = createStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
+        const defensive = createStandaloneWorker();
         const defensiveEnvironment = bootstrapEnvironment(true, 1, 100);
         const invalidAddressBootstrap = async (clientAddress: string): Promise<Response> =>
             await defensive.fetch(
@@ -166,7 +239,7 @@ describe.sequential("Project authentication", () => {
         expect((await invalidAddressBootstrap("forged-client-a")).status).toBe(201);
         expect((await invalidAddressBootstrap("forged-client-b")).status).toBe(429);
 
-        const disabled = createStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
+        const disabled = createStandaloneWorker();
         const disabledResponse = await disabled.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, {
                 headers: { "cf-connecting-ip": "192.0.2.20" },
@@ -182,7 +255,7 @@ describe.sequential("Project authentication", () => {
 
     it("Given accountless and application access in one deployment, When each credential uses its granted Project operations, Then both share Project authorization while application and Runtime authority stay isolated", async () => {
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
@@ -190,7 +263,7 @@ describe.sequential("Project authentication", () => {
         const ownerCredential = stringField(pairing, "hostToken");
 
         const bot = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 body: JSON.stringify({ avatarRef: "", description: "", displayName: "Owner Bot" }),
                 headers: { ...authorization(ownerCredential), "content-type": "application/json" },
                 method: "POST",
@@ -199,7 +272,7 @@ describe.sequential("Project authentication", () => {
         );
 
         const application = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`, {
                 body: JSON.stringify({ name: "moxt-event-projector", permissions: ["bot:read"] }),
                 headers: { ...authorization(ownerCredential), "content-type": "application/json" },
                 method: "POST",
@@ -208,7 +281,7 @@ describe.sequential("Project authentication", () => {
         );
         const applicationId = stringField(application, "applicationId");
         const issued = await responseRecord(
-            await exports.default.fetch(
+            await legacyFetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/project-applications/${applicationId}/credentials`,
                 {
                     body: JSON.stringify({ expiresInSeconds: 3_600 }),
@@ -221,7 +294,7 @@ describe.sequential("Project authentication", () => {
         const applicationCredential = stringField(issued, "credential");
 
         const listed = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 headers: authorization(applicationCredential),
             }),
             200,
@@ -232,48 +305,42 @@ describe.sequential("Project authentication", () => {
             credentialProvider: new RotatingMobiusCredentialProvider(applicationCredential),
             endpoint: relayOrigin,
             projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         expect(await applicationClient.listBots(new AbortController().signal)).toMatchObject({
             bots: [{ botId: stringField(bot, "botId"), displayName: "Owner Bot" }],
         });
 
         const browserCredential = await responseRecord(
-            await exports.default.fetch(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${projectId}/browser-credentials`,
-                {
-                    body: JSON.stringify({ expiresInSeconds: 300 }),
-                    headers: { ...authorization(ownerCredential), "content-type": "application/json" },
-                    method: "POST",
-                },
-            ),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${projectId}/browser-credentials`, {
+                body: JSON.stringify({ expiresInSeconds: 300 }),
+                headers: { ...authorization(ownerCredential), "content-type": "application/json" },
+                method: "POST",
+            }),
             201,
         );
         const browserListed = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 headers: authorization(stringField(browserCredential, "token")),
             }),
             200,
         );
         expect(browserListed).toMatchObject({ bots: [{ botId: stringField(bot, "botId") }] });
 
-        const deniedWrite = await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`,
-            {
-                body: JSON.stringify({ avatarRef: "", description: "", displayName: "Forbidden Bot" }),
-                headers: {
-                    ...authorization(applicationCredential),
-                    "content-type": "application/json",
-                    "x-mobius-actor-ref": "  claimed-owner   from-moxt  ",
-                },
-                method: "POST",
+        const deniedWrite = await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            body: JSON.stringify({ avatarRef: "", description: "", displayName: "Forbidden Bot" }),
+            headers: {
+                ...authorization(applicationCredential),
+                "content-type": "application/json",
+                "x-mobius-actor-ref": "  claimed-owner   from-moxt  ",
             },
-        );
+            method: "POST",
+        });
         expect(deniedWrite.status).toBe(403);
         await expect(deniedWrite.json()).resolves.toMatchObject({ error: { code: "project_permission_denied" } });
 
         const audit = await responseRecord(
-            await exports.default.fetch(
+            await legacyFetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/authentication-audit-events`,
                 { headers: authorization(ownerCredential) },
             ),
@@ -291,7 +358,7 @@ describe.sequential("Project authentication", () => {
             ]),
         });
 
-        const runtimePlane = await exports.default.fetch(
+        const runtimePlane = await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${channelId}/daemon?token=${encodeURIComponent(applicationCredential)}`,
             { headers: { upgrade: "websocket" } },
         );
@@ -300,7 +367,7 @@ describe.sequential("Project authentication", () => {
 
     it("Given two least-privilege applications, When one credential rotates and is revoked, Then overlap is bounded and the other application remains authorized", async () => {
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
@@ -310,7 +377,7 @@ describe.sequential("Project authentication", () => {
             credentialProvider: ownerProvider,
             endpoint: relayOrigin,
             projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         const signal = new AbortController().signal;
         const readerApplication = await client.applications.create(
@@ -341,7 +408,7 @@ describe.sequential("Project authentication", () => {
             signal,
         );
         const rotateConcurrently = async (): Promise<Response> =>
-            await exports.default.fetch(
+            await legacyFetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/project-application-credentials/${concurrentlyRotated.credentialId}/rotate`,
                 {
                     body: JSON.stringify({ expiresInSeconds: 3_600, overlapSeconds: 60 }),
@@ -368,7 +435,7 @@ describe.sequential("Project authentication", () => {
             replacedCredentialId: original.credentialId,
         });
         const listBots = async (credential: string): Promise<Response> =>
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 headers: authorization(credential),
             });
         expect((await listBots(originalCredential)).status).toBe(200);
@@ -387,7 +454,7 @@ describe.sequential("Project authentication", () => {
 
     it("Given an application has expiring credentials, When it is used, expires, and is revoked, Then last-used and lifecycle state stay observable and enforceable", async () => {
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
@@ -396,7 +463,7 @@ describe.sequential("Project authentication", () => {
             credentialProvider: new RotatingMobiusCredentialProvider(ownerCredential),
             endpoint: relayOrigin,
             projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         const signal = new AbortController().signal;
         const application = await client.applications.create(
@@ -418,7 +485,7 @@ describe.sequential("Project authentication", () => {
             signal,
         );
         const listBots = async (credential: string): Promise<Response> =>
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 headers: authorization(credential),
             });
 
@@ -460,11 +527,11 @@ describe.sequential("Project authentication", () => {
 
     it("Given two Projects, When one owner names the other Project's application or owner credential, Then every revocation stays inside its authorized Project", async () => {
         const firstPairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const secondPairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const firstOwnerCredential = stringField(firstPairing, "hostToken");
@@ -474,7 +541,7 @@ describe.sequential("Project authentication", () => {
             credentialProvider: new RotatingMobiusCredentialProvider(secondOwnerCredential),
             endpoint: relayOrigin,
             projectId: secondProjectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         const signal = new AbortController().signal;
         const secondApplication = await secondClient.applications.create(
@@ -492,7 +559,7 @@ describe.sequential("Project authentication", () => {
             throw new Error("Expected the second Project owner credential");
         }
         const crossProjectPost = async (path: string): Promise<Response> =>
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/${path}`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/${path}`, {
                 body: "{}",
                 headers: { ...authorization(firstOwnerCredential), "content-type": "application/json" },
                 method: "POST",
@@ -512,12 +579,12 @@ describe.sequential("Project authentication", () => {
             404,
         );
 
-        const applicationStillAuthorized = await exports.default.fetch(
+        const applicationStillAuthorized = await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${secondProjectId}/bots`,
             { headers: authorization(secondApplicationCredential.credential) },
         );
         expect(applicationStillAuthorized.status, await applicationStillAuthorized.clone().text()).toBe(200);
-        const ownerStillAuthorized = await exports.default.fetch(
+        const ownerStillAuthorized = await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${secondProjectId}/bots`,
             { headers: authorization(secondOwnerCredential) },
         );
@@ -526,14 +593,14 @@ describe.sequential("Project authentication", () => {
 
     it("Given an accountless owner credential, When the SDK rotates and revokes it, Then Project and Host access share the overlap window and recovery risk stays explicit", async () => {
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
         const channelId = stringField(pairing, "channelId");
         const originalCredential = stringField(pairing, "hostToken");
         await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
                 body: JSON.stringify({
                     agents: readyAgents,
                     installableAgents: [],
@@ -551,7 +618,7 @@ describe.sequential("Project authentication", () => {
             credentialProvider: provider,
             endpoint: relayOrigin,
             projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         const signal = new AbortController().signal;
         const directory = await client.ownerCredentials.list(signal);
@@ -564,7 +631,7 @@ describe.sequential("Project authentication", () => {
         const rotated = await client.ownerCredentials.rotate(original.credentialId, { overlapSeconds: 60 }, signal);
         provider.replace(rotated);
         const readChannel = async (credential: string): Promise<Response> =>
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${channelId}`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${channelId}`, {
                 headers: authorization(credential),
             });
         const originalDuringOverlap = await readChannel(originalCredential);
@@ -573,7 +640,7 @@ describe.sequential("Project authentication", () => {
 
         vi.setSystemTime(Date.now() + 60_001);
         expect((await readChannel(originalCredential)).status).toBe(401);
-        const expiredProjectCredential = await exports.default.fetch(
+        const expiredProjectCredential = await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`,
             { headers: authorization(originalCredential) },
         );
@@ -589,13 +656,13 @@ describe.sequential("Project authentication", () => {
 
     it("Given the bootstrap Runtime was revoked, When its accountless owner rotates, Then Project authority remains independently recoverable", async () => {
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
         const runtimeId = stringField(pairing, "runtimeId");
         const originalCredential = stringField(pairing, "hostToken");
-        const runtimeRevocation = await exports.default.fetch(
+        const runtimeRevocation = await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${projectId}/runtimes/${runtimeId}`,
             { headers: authorization(originalCredential), method: "DELETE" },
         );
@@ -606,7 +673,7 @@ describe.sequential("Project authentication", () => {
             credentialProvider: provider,
             endpoint: relayOrigin,
             projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await legacyFetch(request) },
         });
         const signal = new AbortController().signal;
         const directory = await client.ownerCredentials.list(signal);
@@ -617,7 +684,7 @@ describe.sequential("Project authentication", () => {
         const replacement = await client.ownerCredentials.rotate(current.credentialId, { overlapSeconds: 60 }, signal);
         provider.replace(replacement);
         const projectRead = async (credential: string): Promise<Response> =>
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
+            await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/bots`, {
                 headers: authorization(credential),
             });
         expect((await projectRead(originalCredential)).status).toBe(200);
@@ -630,7 +697,7 @@ describe.sequential("Project authentication", () => {
 
     it("Given an accountless Project and a configured external provider, When the owner attaches and then revokes its capability, Then short-lived external access keeps the same resources and provider outages stay isolated", async () => {
         const provider = new StatefulExternalIdentityAuthenticator();
-        const worker = createStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
+        const worker = createLegacyStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
         const fetch = async (path: string, init: RequestInit = {}): Promise<Response> =>
             await worker.fetch(new Request(`${relayOrigin}${path}`, init), env);
         const pairing = await responseRecord(await fetch(`${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }), 201);
@@ -732,7 +799,7 @@ describe.sequential("Project authentication", () => {
 
     it("Given an attached external identity has issued access, When its Project grant is revoked, Then old and new external access fail without affecting the owner", async () => {
         const provider = new StatefulExternalIdentityAuthenticator();
-        const worker = createStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
+        const worker = createLegacyStandaloneWorker(new StandaloneAuthenticationConfiguration(provider));
         const fetch = async (path: string, init: RequestInit = {}): Promise<Response> =>
             await worker.fetch(new Request(`${relayOrigin}${path}`, init), env);
         const pairing = await responseRecord(await fetch(`${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }), 201);

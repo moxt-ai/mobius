@@ -1,6 +1,15 @@
 import type { BotGrantCredential } from "../entity/bot/bot-grant.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
-import type { BotCredentialRecords, InboundCredentialPlaneRecord } from "./bot-credential-records.ts";
+import {
+    type BotConversationScopeRecord,
+    type BotCredentialRecords,
+    type BotProjectScopeRecord,
+    FoundBotConversationScope,
+    FoundBotProjectScope,
+    type InboundCredentialPlaneRecord,
+    MissingBotConversationScope,
+    MissingBotProjectScope,
+} from "./bot-credential-records.ts";
 
 export class BotCredentialStorage implements BotCredentialRecords {
     readonly #database: SqlDatabase;
@@ -42,6 +51,32 @@ export class BotCredentialStorage implements BotCredentialRecords {
             .prepare("SELECT 1 AS present FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?")
             .bind(botId, tenantId, projectId)
             .first(signal)) !== null;
+
+    readonly readBotProjectScope: BotCredentialRecords["readBotProjectScope"] = async (botId, signal) => {
+        const row = await this.#database
+            .prepare("SELECT tenant_id, project_id FROM bots WHERE bot_id = ?")
+            .bind(botId)
+            .first<BotProjectScopeRecord>(signal);
+        return row === null ? new MissingBotProjectScope() : new FoundBotProjectScope(row.tenant_id, row.project_id);
+    };
+
+    readonly readConversationProjectScope: BotCredentialRecords["readConversationProjectScope"] = async (
+        conversationId,
+        signal,
+    ) => {
+        const row = await this.#database
+            .prepare(
+                `SELECT conversations.bot_id, conversations.session_id, bots.tenant_id, bots.project_id
+                   FROM bot_conversations AS conversations
+                   INNER JOIN bots ON bots.bot_id = conversations.bot_id
+                  WHERE conversations.conversation_id = ?`,
+            )
+            .bind(conversationId)
+            .first<BotConversationScopeRecord>(signal);
+        return row === null
+            ? new MissingBotConversationScope()
+            : new FoundBotConversationScope(row.tenant_id, row.project_id, row.bot_id, row.session_id);
+    };
 
     readonly readConnector: BotCredentialRecords["readConnector"] = (connectionId, digest, now, signal) =>
         this.#database

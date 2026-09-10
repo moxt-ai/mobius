@@ -4,6 +4,7 @@ import type {
     InteractionResponse,
     NativeSessionHistory,
     PendingWork,
+    SessionConfigureCommand,
     SessionEventEnvelope,
     SessionPromptCommand,
     Turn,
@@ -16,12 +17,20 @@ import type {
     InteractionResponseAcceptance,
     PendingDaemonDelivery,
     ProjectScope,
+    SessionConfigurationAcceptance,
     SessionLifecycle,
     SessionSummary,
     TurnAcceptance,
     TurnCancellationAcceptance,
 } from "../entity/do/session.ts";
 export interface SessionCommandGateway {
+    readonly acceptConfiguration: (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: SessionConfigureCommand,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<SessionConfigurationAcceptance>;
     readonly acceptInteractionResponse: (
         scope: ProjectScope,
         sessionId: string,

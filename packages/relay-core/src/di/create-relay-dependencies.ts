@@ -1,16 +1,12 @@
 import { parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
-import type {
-    ExternalIdentityAuthenticator,
-    ProjectAccessAuthorizer,
-} from "../entity/authentication/project-authentication.ts";
-import type { SessionQuotaPolicy } from "../entity/do/session.ts";
+import type { ProjectAccessAuthorizer } from "../entity/authentication/project-authentication.ts";
+import type { SessionQuotaPolicyProvider } from "../entity/do/session.ts";
 import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
 import type { TenantShardingDirectory } from "../infra/tenant-sharding-directory.ts";
-import type { ProjectAuthenticationService } from "../service/authentication/project-authentication-service.ts";
 import { BotAuthorization } from "../service/bot/bot-authorization.ts";
 import { BotConversationService } from "../service/bot/bot-conversation-service.ts";
 import { BotManagementService } from "../service/bot/bot-management-service.ts";
@@ -42,10 +38,7 @@ interface PairingInfrastructure {
 }
 
 export interface RelayInfrastructure extends PairingInfrastructure {
-    readonly authentication: {
-        readonly externalIdentities: ExternalIdentityAuthenticator;
-        readonly projects: ProjectAuthenticationService;
-    };
+    readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly bots: {
         readonly connections: BotConnectionGateway;
     } | null;
@@ -56,7 +49,7 @@ export interface RelayInfrastructure extends PairingInfrastructure {
         readonly sessionTransport: SessionTransport;
         readonly nowEpochMilliseconds: () => number;
     };
-    readonly config: { readonly apiPrefix: string; readonly quota: SessionQuotaPolicy };
+    readonly config: { readonly apiPrefix: string; readonly quotaPolicy: SessionQuotaPolicyProvider };
     readonly logger: {
         readonly error: Console["error"];
         readonly info: Console["info"];
@@ -81,7 +74,7 @@ function createPairings(cx: PairingInfrastructure) {
 function createHttpContext(infrastructure: RelayInfrastructure, pairings: PairingDirectoryService) {
     const sessions = new RemoteSessionRuntime({
         storages: { directory: new SessionDirectoryStorage(infrastructure.databases) },
-        config: { quota: infrastructure.config.quota },
+        config: { quotaPolicy: infrastructure.config.quotaPolicy },
         gateways: {
             transport: infrastructure.gateways.sessionTransport,
             databaseResolver: infrastructure.databases,
@@ -111,9 +104,7 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
         ...cx,
         services: Object.freeze({
             bots,
-            externalIdentityAuthenticator: infrastructure.authentication.externalIdentities,
             pairings,
-            projectAuthentication: infrastructure.authentication.projects,
             createPairing: pairingRequests.createPairing,
             runtimePairings: new PairingService(cx),
             channels: new ChannelService(cx),

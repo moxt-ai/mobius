@@ -9,6 +9,7 @@ import {
     InteractionRecordSchema,
     type RuntimeIdentity,
     RuntimeIdentitySchema,
+    SessionConfigurationRecordSchema,
     type SessionRecord,
     SessionRecordSchema,
     type TurnActivityRecord,
@@ -35,6 +36,17 @@ export class SessionQueriesStorage {
                 `SELECT * FROM turns
        WHERE scope_key = ? AND session_id = ? AND turn_id = ?`,
                 [scopeKey, sessionId, turnId],
+            ),
+        )[0];
+
+    readonly readConfiguration = (scopeKey: string, sessionId: string) =>
+        decodeStorageRows(
+            SessionConfigurationRecordSchema,
+            this.#database.query(
+                `SELECT config_options_json, config_revision, updated_at
+                   FROM session_configuration_snapshots
+                  WHERE scope_key = ? AND session_id = ?`,
+                [scopeKey, sessionId],
             ),
         )[0];
 

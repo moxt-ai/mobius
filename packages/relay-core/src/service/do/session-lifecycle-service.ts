@@ -74,7 +74,7 @@ export class SessionLifecycleService {
         const result = this.#storage.createSession(
             {
                 scopeKey: key,
-                tenantId: scope.tenantId,
+                tenantId: scope.storageLocator.resolveHostingPlacement(),
                 projectId: scope.projectId,
                 sessionId: request.sessionId,
                 createdBy: request.createdBy,

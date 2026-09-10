@@ -152,23 +152,24 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     ) {
         throw new SessionRuntimeError("invalid_export", "The session export is invalid");
     }
+    const portableSessionFields = [
+        "agentId",
+        "createdAt",
+        "createdBy",
+        "defaultBinding",
+        "hasNativeHistory",
+        "lastCommittedSeq",
+        "lifecycle",
+        "policy",
+        "projectId",
+        "runtimeId",
+        "sessionId",
+        "title",
+        "updatedAt",
+    ];
     if (
-        !hasExactKeys(sourceSession, [
-            "agentId",
-            "createdAt",
-            "createdBy",
-            "defaultBinding",
-            "hasNativeHistory",
-            "lastCommittedSeq",
-            "lifecycle",
-            "policy",
-            "projectId",
-            "runtimeId",
-            "sessionId",
-            "tenantId",
-            "title",
-            "updatedAt",
-        ])
+        !hasExactKeys(sourceSession, portableSessionFields) &&
+        !hasExactKeys(sourceSession, [...portableSessionFields, "tenantId"])
     ) {
         throw new SessionRuntimeError("invalid_export", "The exported session descriptor is invalid");
     }
@@ -190,7 +191,9 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     } catch (cause) {
         throw new SessionRuntimeError("invalid_export", "The exported default binding is invalid", { cause });
     }
-    const sourceTenantId = importIdentifier(sourceSession, "tenantId");
+    const sourceTenantId = Object.hasOwn(sourceSession, "tenantId")
+        ? importIdentifier(sourceSession, "tenantId")
+        : "portable";
     const sourceProjectId = importIdentifier(sourceSession, "projectId");
     importTimestamp(sourceSession, "createdAt");
     importTimestamp(sourceSession, "updatedAt");
@@ -465,7 +468,9 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     for (const value of commandReceiptValues) {
         let receipt: CommandReceipt;
         try {
-            receipt = decodeCommandReceipt(value);
+            const normalized =
+                isRecord(value) && !Object.hasOwn(value, "tenantId") ? { ...value, tenantId: sourceTenantId } : value;
+            receipt = decodeCommandReceipt(normalized);
         } catch (cause) {
             throw new SessionRuntimeError("invalid_export", "An exported CommandReceipt is invalid", { cause });
         }

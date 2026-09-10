@@ -29,7 +29,6 @@ interface CreatedPairing {
     readonly hostToken: string;
     readonly pairingCode: string;
     readonly projectId: string;
-    readonly tenantId: string;
 }
 
 interface ClaimedPairing {
@@ -54,7 +53,7 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
         typeof value["hostToken"] !== "string" ||
         typeof value["pairingCode"] !== "string" ||
         typeof value["projectId"] !== "string" ||
-        typeof value["tenantId"] !== "string"
+        Object.hasOwn(value, "tenantId")
     ) {
         throw new Error("The relay returned invalid browser pairing credentials");
     }
@@ -63,7 +62,6 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
         hostToken: value["hostToken"],
         pairingCode: value["pairingCode"],
         projectId: value["projectId"],
-        tenantId: value["tenantId"],
     };
 }
 
@@ -357,7 +355,6 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
             authority: "owner",
             hostToken: credential.hostToken,
             projectId: credential.projectId,
-            tenantId: credential.tenantId,
         }),
     );
     window.localStorage.setItem(
@@ -366,7 +363,6 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
             hostToken: credential.hostToken,
             ownerChannelId: channelId,
             projectId: credential.projectId,
-            tenantId: credential.tenantId,
         }),
     );
 }

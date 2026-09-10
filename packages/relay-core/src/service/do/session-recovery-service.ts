@@ -63,7 +63,10 @@ export class SessionRecoveryService {
             signal.throwIfAborted();
             try {
                 const bindingId = this.#cx.runtime.readExecutionBinding(scope, sessionId, message.executionId);
-                const tenant = await this.#cx.tenants.resolve(scope.tenantId, signal);
+                const tenant = await this.#cx.tenants.resolveProject(scope.storageLocator, signal);
+                if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+                    throw new BotApiError("bot_service_unavailable", "The Project placement is invalid", "unavailable");
+                }
                 const targets = this.#cx.services.forTenant(tenant).targets;
                 const route = await targets.authorizeOutboundTarget(
                     message.botId,

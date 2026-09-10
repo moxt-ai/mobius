@@ -682,6 +682,56 @@ export class MobiusBotConversationDirectory {
     }
 }
 
+export class MobiusProjectConversation {
+    readonly behaviorRevisionId: string;
+    readonly bindingId: string;
+    readonly bindingRevision: number;
+    readonly botId: string;
+    readonly clientReference: string;
+    readonly conversationId: string;
+    readonly createdAt: string;
+    readonly idempotencyKey: string;
+    readonly lifecycle: string;
+    readonly projectId: string;
+    readonly sessionId: string;
+    readonly title: string;
+
+    constructor(value: unknown) {
+        const name = "Project conversation";
+        const resource = record(value, name);
+        exact(
+            resource,
+            [
+                "behaviorRevisionId",
+                "bindingId",
+                "bindingRevision",
+                "botId",
+                "clientReference",
+                "conversationId",
+                "createdAt",
+                "idempotencyKey",
+                "lifecycle",
+                "projectId",
+                "sessionId",
+                "title",
+            ],
+            name,
+        );
+        this.behaviorRevisionId = identifier(resource, "behaviorRevisionId", name);
+        this.bindingId = identifier(resource, "bindingId", name);
+        this.bindingRevision = integer(resource, "bindingRevision", name);
+        this.botId = identifier(resource, "botId", name);
+        this.clientReference = identifier(resource, "clientReference", name);
+        this.conversationId = identifier(resource, "conversationId", name);
+        this.createdAt = timestamp(resource, "createdAt", name);
+        this.idempotencyKey = identifier(resource, "idempotencyKey", name);
+        this.lifecycle = text(resource, "lifecycle", name);
+        this.projectId = identifier(resource, "projectId", name);
+        this.sessionId = identifier(resource, "sessionId", name);
+        this.title = text(resource, "title", name, true);
+    }
+}
+
 export abstract class MobiusBotConnectionState {
     abstract readonly kind: string;
 }

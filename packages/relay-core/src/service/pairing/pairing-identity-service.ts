@@ -1,8 +1,18 @@
+import { RuntimeAccessContext } from "../../entity/authentication/project-authentication.ts";
+import { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
 import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
 import type { PairingIdentityStorage } from "../../storage/pairing-identity-storage.ts";
+
+function runtimeIdentityField(row: Readonly<Record<string, unknown>>, name: string): string {
+    const value = row[name];
+    if (typeof value !== "string") {
+        throw new PairingDirectoryError("invalid_directory_record", "The Runtime directory is invalid");
+    }
+    return validateIdentifier(value, name);
+}
 
 export class PairingIdentityService {
     readonly #storage: PairingIdentityStorage;
@@ -23,6 +33,45 @@ export class PairingIdentityService {
             throw new PairingDirectoryError("directory_unavailable", "Workspace storage is unavailable");
         }
         return tenant;
+    };
+
+    readonly authenticateRuntime = async (tokenHash: string, signal: AbortSignal): Promise<RuntimeAccessContext> => {
+        signal.throwIfAborted();
+        try {
+            const matches = await this.#storage.findRuntime(tokenHash, signal);
+            const match = matches[0];
+            if (matches.length !== 1 || match === undefined) {
+                throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
+            }
+            const tenantId = runtimeIdentityField(match.row, "tenant_id");
+            const projectId = runtimeIdentityField(match.row, "project_id");
+            const runtimeId = runtimeIdentityField(match.row, "runtime_id");
+            const channelId = runtimeIdentityField(match.row, "channel_id");
+            const pairingId = runtimeIdentityField(match.row, "pairing_id");
+            const tenant = await this.#tenants.resolve(tenantId, signal);
+            signal.throwIfAborted();
+            if (!this.#storage.matchesPlacement(match.sourceId, tenant)) {
+                throw new PairingDirectoryError("directory_unavailable", "Runtime storage is unavailable");
+            }
+            return new RuntimeAccessContext(
+                new ProjectScope(tenantId, projectId),
+                runtimeId,
+                channelId,
+                `daemon:${channelId}`,
+                pairingId,
+            );
+        } catch (cause) {
+            signal.throwIfAborted();
+            if (cause instanceof PairingDirectoryError) {
+                throw cause;
+            }
+            if (cause instanceof DatabaseError && cause.code === "database_timeout") {
+                throw new PairingDirectoryError("directory_timeout", "The Runtime directory timed out", { cause });
+            }
+            throw new PairingDirectoryError("directory_unavailable", "The Runtime directory is unavailable", {
+                cause,
+            });
+        }
     };
 
     private readonly authenticate = async (credential: PairingIdentityCredential, signal: AbortSignal) => {

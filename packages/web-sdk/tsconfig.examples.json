@@ -6,7 +6,10 @@
         "noEmit": false,
         "outDir": "dist/examples",
         "paths": {
-            "@moxt-ai/mobius-sdk": ["./dist/index.d.ts"]
+            "@moxt-ai/mobius-sdk": ["./dist/index.d.ts"],
+            "@moxt-ai/mobius-sdk/browser": ["./dist/browser.d.ts"],
+            "@moxt-ai/mobius-sdk/platform": ["./dist/platform.d.ts"],
+            "@moxt-ai/mobius-sdk/server": ["./dist/server.d.ts"]
         },
         "rootDir": "examples",
         "sourceMap": true,

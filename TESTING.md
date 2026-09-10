@@ -84,9 +84,25 @@ Worker integration scenarios belong in
 `packages/relay-cloudflare-standalone/test/**/*.integration.test.ts`. Keep the
 `--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
 integration currently requires shared, serialized storage for Durable Object
-WebSocket tests. The repository's `pnpm check` command runs this suite in CI
-after the ordinary V8 coverage run. `pnpm test:integration` runs both the Web
-and Worker integration suites.
+WebSocket tests. Run `pnpm test:integration` in addition to `pnpm check` before
+delivery; it runs the Web, Standalone Worker, and Platform Worker integration
+suites.
+
+## Cloudflare Platform Integration Tests
+
+Run the independent Platform Worker-boundary suite from the repository root:
+
+```bash
+pnpm test:integration:platform
+```
+
+The Platform Vitest configuration mounts the production Platform entry, applies
+both the shared Project D1 migration stream and the independent Platform control
+plane migration stream, and uses real local D1, Durable Object, HTTP, SSE, and
+WebSocket boundaries. Its acceptance scenarios own the separation of Platform
+and Standalone, OIDC developer provisioning, AppCredential scope and rotation,
+multi-Project and multi-Runtime behavior, fixed browser Session routes, exact
+origin handling, cursor recovery, and live credential revocation.
 
 Assert observable contracts, including returned results, emitted events, protocol messages, state transitions, filesystem effects, process exit status, and typed errors.
 

@@ -642,14 +642,12 @@ export class MobiusBrowserCredential {
     readonly credentialId: string;
     readonly expiresAt: string;
     readonly projectId: string;
-    readonly tenantId: string;
     readonly token: string;
 
-    constructor(credentialId: string, expiresAt: string, projectId: string, tenantId: string, token: string) {
+    constructor(credentialId: string, expiresAt: string, projectId: string, token: string) {
         this.credentialId = credentialId;
         this.expiresAt = expiresAt;
         this.projectId = projectId;
-        this.tenantId = tenantId;
         this.token = token;
     }
 }
@@ -660,7 +658,6 @@ export function decodeMobiusBrowserCredential(value: unknown): MobiusBrowserCred
         identifierField(credential, "credentialId"),
         validateTimestamp(stringField(credential, "expiresAt", 128), "expiresAt"),
         identifierField(credential, "projectId"),
-        identifierField(credential, "tenantId"),
         stringField(credential, "token", 256),
     );
 }
@@ -797,7 +794,6 @@ export class MobiusRuntimeDescriptor {
     readonly online: boolean;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(
@@ -808,7 +804,6 @@ export class MobiusRuntimeDescriptor {
         online: boolean,
         projectId: string,
         runtimeId: string,
-        tenantId: string,
         workspaceName: string,
     ) {
         this.agents = agents;
@@ -818,7 +813,6 @@ export class MobiusRuntimeDescriptor {
         this.online = online;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
         this.workspaceName = workspaceName;
     }
 }
@@ -833,7 +827,6 @@ function decodeRuntimeDescriptor(value: unknown): MobiusRuntimeDescriptor {
         booleanField(runtime, "online"),
         identifierField(runtime, "projectId"),
         identifierField(runtime, "runtimeId"),
-        identifierField(runtime, "tenantId"),
         stringField(runtime, "workspaceName", 255),
     );
 }
@@ -868,6 +861,26 @@ export class MobiusRuntimePairing {
         this.pollToken = pollToken;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
+    }
+}
+
+export class MobiusRuntimePairingWaitOptions {
+    readonly pollIntervalMilliseconds: number;
+    readonly timeoutMilliseconds: number;
+
+    constructor(timeoutMilliseconds = 120_000, pollIntervalMilliseconds = 1_000) {
+        if (
+            !Number.isSafeInteger(timeoutMilliseconds) ||
+            timeoutMilliseconds < 1 ||
+            timeoutMilliseconds > 30 * 60 * 1_000 ||
+            !Number.isSafeInteger(pollIntervalMilliseconds) ||
+            pollIntervalMilliseconds < 1 ||
+            pollIntervalMilliseconds > timeoutMilliseconds
+        ) {
+            throw new MobiusValidationError("The Runtime pairing wait bounds are invalid");
+        }
+        this.pollIntervalMilliseconds = pollIntervalMilliseconds;
+        this.timeoutMilliseconds = timeoutMilliseconds;
     }
 }
 
@@ -925,7 +938,6 @@ export class MobiusPairedRuntimePairingStatus extends MobiusRuntimePairingStatus
     readonly projectId: string;
     readonly runtimeId: string;
     readonly status = MobiusRuntimePairingLifecycle.Paired;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(
@@ -935,7 +947,6 @@ export class MobiusPairedRuntimePairingStatus extends MobiusRuntimePairingStatus
         machineName: string,
         projectId: string,
         runtimeId: string,
-        tenantId: string,
         workspaceName: string,
     ) {
         super();
@@ -945,7 +956,6 @@ export class MobiusPairedRuntimePairingStatus extends MobiusRuntimePairingStatus
         this.machineName = machineName;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
         this.workspaceName = workspaceName;
     }
 }
@@ -984,7 +994,6 @@ export function decodeMobiusRuntimePairingStatus(value: unknown): MobiusRuntimeP
             stringField(status, "machineName", 255),
             identifierField(status, "projectId"),
             identifierField(status, "runtimeId"),
-            identifierField(status, "tenantId"),
             stringField(status, "workspaceName", 255),
         );
     }
@@ -1118,7 +1127,6 @@ export class MobiusSession {
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly state: MobiusSessionState;
-    readonly tenantId: string;
     readonly title: string;
     readonly updatedAt: string;
 
@@ -1134,7 +1142,6 @@ export class MobiusSession {
         runtimeId: string,
         sessionId: string,
         state: MobiusSessionState,
-        tenantId: string,
         title: string,
         updatedAt: string,
     ) {
@@ -1149,7 +1156,6 @@ export class MobiusSession {
         this.runtimeId = runtimeId;
         this.sessionId = sessionId;
         this.state = state;
-        this.tenantId = tenantId;
         this.title = title;
         this.updatedAt = updatedAt;
     }
@@ -1212,7 +1218,6 @@ export function decodeMobiusSession(value: unknown): MobiusSession {
         identifierField(session, "runtimeId"),
         identifierField(session, "sessionId"),
         decodeMobiusSessionState(session["lifecycle"]),
-        identifierField(session, "tenantId"),
         stringField(session, "title", 500),
         validateTimestamp(stringField(session, "updatedAt", 128), "updatedAt"),
     );

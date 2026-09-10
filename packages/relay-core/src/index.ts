@@ -1,4 +1,4 @@
-export { createMobiusApplication } from "./app.ts";
+export { createMobiusApplication, createPlatformMobiusApplication } from "./app.ts";
 export {
     createDurableObjectDependencies,
     type DurableObjectContext,
@@ -9,6 +9,7 @@ export {
     type RelayContext,
     type RelayInfrastructure,
 } from "./di/create-relay-dependencies.ts";
+export * from "./entity/authentication/conversation-access.ts";
 export * from "./entity/authentication/project-authentication.ts";
 export { BotApiError, type BotErrorCode, type BotFailureKind } from "./entity/bot/bot-error.ts";
 export {
@@ -52,6 +53,7 @@ export {
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     ProjectScope,
+    ProjectStorageLocator,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionExport,
@@ -59,10 +61,12 @@ export {
     type SessionMessage,
     type SessionMessagePage,
     SessionQuotaPolicy,
+    type SessionQuotaPolicyProvider,
     SessionRecordingPolicy,
     SessionRuntimeError,
     type SessionSummary,
     type SessionUploadedArtifactExport,
+    StaticSessionQuotaPolicyProvider,
     type TurnAcceptance,
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
@@ -119,6 +123,7 @@ export type {
     SessionTransferGateway,
 } from "./gateway/index.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
+export { createLegacyAuthenticationApplication } from "./http/authentication/legacy-authentication-routes.ts";
 export { createBotApplication } from "./http/bot/bot-routes.ts";
 export {
     RequestBodyError,
@@ -143,6 +148,7 @@ export type {
 } from "./infra/tenant-sharding-directory.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export type { ProjectAuthenticationService } from "./service/authentication/project-authentication-service.ts";
+export { BotService } from "./service/bot/bot-service.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {
     type ChannelPeers,

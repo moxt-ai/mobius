@@ -7,8 +7,18 @@ export { BotMessageCommandError, executeBotMessageCommand } from "./bots/bot-mes
 export { BotOutboundIpcServer } from "./bots/bot-outbound-ipc.ts";
 export { loadDaemonConfig } from "./config.ts";
 export {
+    type MobiusRuntimePairingOptions,
+    type PairedDaemon,
     PairingClientError,
     pairLocalMachine,
+    pairMobiusRuntime,
     resumeLocalMachine,
+    resumeMobiusRuntime,
 } from "./pairing/pair-local-machine.ts";
 export { runDaemon } from "./run-daemon.ts";
+export {
+    createMobiusRuntimeEngine,
+    loadMobiusRuntimeConnection,
+    MobiusRuntimeConfigurationError,
+    MobiusRuntimeEngine,
+} from "./runtime.ts";

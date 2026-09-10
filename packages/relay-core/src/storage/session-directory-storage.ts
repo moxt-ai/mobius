@@ -22,7 +22,7 @@ export class SessionDirectoryStorage {
                 .prepare(`SELECT session_id FROM session_directory
             WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'ready'
             ORDER BY updated_at DESC, session_id DESC LIMIT 500`)
-                .bind(scope.tenantId, scope.projectId)
+                .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId)
                 .all<{ readonly session_id: string }>(signal)
         ).results;
     };
@@ -38,7 +38,7 @@ export class SessionDirectoryStorage {
             await database
                 .prepare(`SELECT session_id FROM session_directory
             WHERE tenant_id = ? AND project_id = ? AND runtime_id = ? AND lifecycle = 'ready' LIMIT 500`)
-                .bind(scope.tenantId, scope.projectId, runtimeId)
+                .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, runtimeId)
                 .all<{ readonly session_id: string }>(signal)
         ).results;
     };
@@ -57,14 +57,14 @@ export class SessionDirectoryStorage {
                       .prepare(`SELECT session_id, summary_json, updated_at FROM session_directory
                 WHERE tenant_id = ? AND project_id = ? AND lifecycle <> 'deleted'
                 ORDER BY updated_at DESC, session_id DESC LIMIT ?`)
-                      .bind(scope.tenantId, scope.projectId, limit)
+                      .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, limit)
                 : database
                       .prepare(`SELECT session_id, summary_json, updated_at FROM session_directory
                 WHERE tenant_id = ? AND project_id = ? AND lifecycle <> 'deleted'
                 AND (updated_at < ? OR (updated_at = ? AND session_id < ?))
                 ORDER BY updated_at DESC, session_id DESC LIMIT ?`)
                       .bind(
-                          scope.tenantId,
+                          scope.storageLocator.resolveHostingPlacement(),
                           scope.projectId,
                           cursor.updatedAt,
                           cursor.updatedAt,
@@ -91,13 +91,13 @@ export class SessionDirectoryStorage {
             AND (SELECT COUNT(*) FROM session_quota_reservations WHERE tenant_id = ? AND project_id = ?) < ?
         ON CONFLICT(tenant_id, project_id, session_id) DO NOTHING`)
             .bind(
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 sessionId,
                 now,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 quota.activeSessionsPerTenant,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 quota.activeSessionsPerProject,
             )
@@ -105,7 +105,7 @@ export class SessionDirectoryStorage {
         const reservation = await database
             .prepare(`SELECT session_id FROM session_quota_reservations
             WHERE tenant_id = ? AND project_id = ? AND session_id = ?`)
-            .bind(scope.tenantId, scope.projectId, sessionId)
+            .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, sessionId)
             .first<{ readonly session_id: string }>(signal);
         return { changes: result.meta.changes, reservation };
     };
@@ -115,7 +115,7 @@ export class SessionDirectoryStorage {
         await database
             .prepare(`DELETE FROM session_quota_reservations
             WHERE tenant_id = ? AND project_id = ? AND session_id = ?`)
-            .bind(scope.tenantId, scope.projectId, sessionId)
+            .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, sessionId)
             .run(signal);
     };
 
@@ -124,7 +124,7 @@ export class SessionDirectoryStorage {
         return database
             .prepare(`SELECT summary_json FROM session_directory
             WHERE tenant_id = ? AND project_id = ? AND session_id = ?`)
-            .bind(scope.tenantId, scope.projectId, sessionId)
+            .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, sessionId)
             .first<{ readonly summary_json: string }>(signal);
     };
 

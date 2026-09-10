@@ -23,7 +23,15 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         access: RuntimeAccessContext,
         request: Request,
         signal: AbortSignal,
-    ): Promise<Response> => await this.forward(access, request, signal);
+    ): Promise<Response> => {
+        const endpoint = new URL(request.url);
+        endpoint.pathname = "/daemon";
+        return await this.forward(
+            access,
+            new Request(endpoint, { headers: request.headers, method: request.method, signal }),
+            signal,
+        );
+    };
 
     readonly acceptHost = async (
         access: ChannelHostCredential,

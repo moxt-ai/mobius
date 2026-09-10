@@ -5,11 +5,10 @@ import packageMetadata from "../package.json" with { type: "json" };
 
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
-import { AuditStore } from "./audit/audit-store.ts";
 import { BotMessageCommandError, executeBotMessageCommand } from "./bots/bot-message-command.ts";
 import { type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
-import { runDaemon } from "./run-daemon.ts";
+import { MobiusRuntimeEngine } from "./runtime.ts";
 
 const shutdown = new AbortController();
 process.once("SIGINT", () => shutdown.abort());
@@ -18,7 +17,7 @@ process.once("SIGTERM", () => shutdown.abort());
 const USAGE = `Mobius CLI
 
 Usage:
-  mobius pair --url <relay-url> --code <pairing-code> [--workspace <directory>]
+  mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--workspace <directory>]
   mobius start --channel <channel-id>
   mobius agents [--json]
   mobius bot message send --target <current|alias> --text <message>
@@ -89,12 +88,7 @@ async function main(): Promise<void> {
     process.stdout.write("Starting the local daemon. Keep this terminal open.\n\n");
     process.stdout.write("This paired browser can use the machine with your user account's permissions.\n");
     process.stdout.write(`Default workspace: ${config.defaultWorkspace}\n\n`);
-    const audit = new AuditStore(config.auditDatabasePath);
-    try {
-        await runDaemon(config, audit, shutdown.signal);
-    } finally {
-        audit.close();
-    }
+    await new MobiusRuntimeEngine(config).run(shutdown.signal);
 }
 
 try {

@@ -48,10 +48,12 @@ Paths below are relative to `/mobius/api`.
 | Operation | Required input |
 | --- | --- |
 | `POST /pairings` | Public bootstrap policy; creates a new one-time accountless capability |
-| `POST /projects/{projectId}/runtime-pairings` | Project access with `runtime:pair` |
-| `GET /projects/{projectId}/runtime-pairings/{pairingId}` | Project access with `runtime:read` |
-| `GET /projects/{projectId}/runtimes` | Project access with `runtime:read` |
-| `DELETE /projects/{projectId}/runtimes/{runtimeId}` | Project access with `runtime:revoke` |
+| `POST /v1/projects/{projectId}/runtime-pairings` | Project access with `runtime:pair` |
+| `GET /v1/projects/{projectId}/runtime-pairings/{pairingId}` | Project access with `runtime:read` |
+| `POST /v1/runtime-pairings/{pairingId}/redeem` | Matching one-time pairing ID and code |
+| `GET /v1/runtimes/connect` | Matching Runtime Credential only |
+| `GET /v1/projects/{projectId}/runtimes` | Project access with `runtime:read` |
+| `DELETE /v1/projects/{projectId}/runtimes/{runtimeId}` | Project access with `runtime:revoke` |
 | `POST /v1/auth/exchanges/{providerId}` | External bearer token accepted only by that configured provider |
 | External identity binding routes | Project access with `identity-binding:manage`; attach also requires a fresh external proof |
 | Application and application-credential routes | Project access with `application:manage` |

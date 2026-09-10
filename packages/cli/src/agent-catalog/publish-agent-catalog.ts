@@ -14,14 +14,19 @@ class AgentCatalogPublishError extends Error {
     }
 }
 
-function catalogEndpoint(relayUrl: URL): URL {
-    const endpoint = new URL(relayUrl);
+function catalogEndpoint(config: DaemonConfig): URL {
+    const endpoint = new URL(config.relayUrl);
     endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
-    if (!endpoint.pathname.endsWith("/daemon")) {
-        throw new AgentCatalogPublishError("The Relay URL is invalid");
+    if (endpoint.pathname.endsWith("/daemon")) {
+        endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/catalog`;
+        return endpoint;
     }
-    endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/catalog`;
-    return endpoint;
+    const runtimePath = "/v1/runtimes/connect";
+    if (endpoint.pathname.endsWith(runtimePath)) {
+        endpoint.pathname = `${endpoint.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}/catalog`;
+        return endpoint;
+    }
+    throw new AgentCatalogPublishError("The Relay URL is invalid");
 }
 
 export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSignal): Promise<void> {
@@ -31,7 +36,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
     let response: Awaited<ReturnType<typeof fetch>>;
     const catalog = config.catalog.read();
     try {
-        response = await fetch(catalogEndpoint(config.relayUrl), {
+        response = await fetch(catalogEndpoint(config), {
             body: JSON.stringify({
                 agents: catalog.agents.map((agent) => ({
                     agentPath: agent.agentIdentity.requestedPath,

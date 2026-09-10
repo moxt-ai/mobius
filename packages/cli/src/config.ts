@@ -10,9 +10,9 @@ import { readStateDirectory } from "./storage/state-directory.ts";
 
 export { LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
 
-export function loadDefaultWorkspace(): string {
-    const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = process.env;
-    return configuredWorkspace ?? join(readStateDirectory(), "workspace");
+export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
+    const { MOBIUS_DEFAULT_WORKSPACE: configuredWorkspace } = environment;
+    return configuredWorkspace ?? join(readStateDirectory(environment), "workspace");
 }
 
 export interface DaemonConfig {

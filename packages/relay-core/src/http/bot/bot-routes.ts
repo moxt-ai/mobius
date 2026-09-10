@@ -1,13 +1,5 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import { decodePromptImagesValue, decodePromptResourcesValue, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
-import {
-    decodeProjectCredential,
-    decodeProjectPermissions,
-    type ExternalIdentityAuthenticator,
-    ExternalIdentityCredential,
-    ProjectPermission,
-} from "../../entity/authentication/project-authentication.ts";
-import type { ProjectAuthenticationService } from "../../service/authentication/project-authentication-service.ts";
 import type { BotService } from "../../service/bot/bot-service.ts";
 import { botErrorResponse } from "./bot-error-response.ts";
 import {
@@ -16,10 +8,10 @@ import {
     boolean,
     completionPolicy,
     connectorScopes,
+    conversationConfiguration,
     conversationRequest,
     cursor,
     executionCapability,
-    externalCredential,
     identifier,
     identifiers,
     integer,
@@ -36,8 +28,6 @@ interface BotHttpEnvironment {
     readonly Bindings: {
         readonly services: {
             readonly bots: BotService;
-            readonly externalIdentityAuthenticator: ExternalIdentityAuthenticator;
-            readonly projectAuthentication: ProjectAuthenticationService;
         };
     };
     readonly Variables: { readonly signal: AbortSignal };
@@ -53,247 +43,6 @@ export function createBotApplication() {
         .onError((error, c) => {
             c.req.raw.signal.throwIfAborted();
             return botErrorResponse(error);
-        })
-        .post("/auth/exchanges/:providerId", async (c) => {
-            const value = await requestBody(c.req.raw, ["expiresInSeconds", "projectId"]);
-            const issued = await c.env.services.projectAuthentication.exchangeExternalIdentity(
-                pathIdentifier(c.req.param("providerId")),
-                externalCredential(c.req.raw),
-                identifier(value, "projectId"),
-                positiveInteger(value, "expiresInSeconds") * 1_000,
-                c.env.services.externalIdentityAuthenticator,
-                c.var.signal,
-            );
-            return c.json(
-                {
-                    credential: issued.credential,
-                    credentialId: issued.credentialId,
-                    expiresAt: new Date(issued.expiresAtEpochMilliseconds).toISOString(),
-                    permissions: [...issued.permissions].map((permission) => permission.value),
-                    projectId: issued.scope.projectId,
-                    tenantId: issued.scope.tenantId,
-                },
-                201,
-            );
-        })
-        .get("/projects/:projectId/applications", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            return c.json(await c.env.services.projectAuthentication.listApplications(access, c.var.signal));
-        })
-        .post("/projects/:projectId/applications", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["name", "permissions"]);
-            return c.json(
-                await c.env.services.projectAuthentication.createApplication(
-                    access,
-                    string(value, "name", 120),
-                    decodeProjectPermissions(value["permissions"]),
-                    c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-applications/:applicationId/credentials", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["expiresInSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.issueApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("applicationId")),
-                    positiveInteger(value, "expiresInSeconds") * 1_000,
-                    c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-applications/:applicationId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeApplication(
-                    access,
-                    pathIdentifier(c.req.param("applicationId")),
-                    c.var.signal,
-                ),
-            );
-        })
-        .post("/project-application-credentials/:credentialId/rotate", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["expiresInSeconds", "overlapSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.rotateApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    positiveInteger(value, "expiresInSeconds") * 1_000,
-                    integer(value, "overlapSeconds") * 1_000,
-                    c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-application-credentials/:credentialId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    c.var.signal,
-                ),
-            );
-        })
-        .get("/projects/:projectId/external-identity-bindings", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.IdentityBindingsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            return c.json(
-                await c.env.services.projectAuthentication.listExternalIdentityBindings(access, c.var.signal),
-            );
-        })
-        .post("/projects/:projectId/external-identity-bindings", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.IdentityBindingsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, [
-                "externalCredential",
-                "permissions",
-                "providerId",
-                "revokeOwnerCredential",
-            ]);
-            const revokeOwnerCredential = boolean(value, "revokeOwnerCredential");
-            const identity = await c.env.services.externalIdentityAuthenticator.authenticate(
-                new ExternalIdentityCredential(
-                    identifier(value, "providerId"),
-                    string(value, "externalCredential", 16 * 1_024),
-                ),
-                c.var.signal,
-            );
-            return c.json(
-                await c.env.services.projectAuthentication.attachExternalIdentity(
-                    access,
-                    identity,
-                    decodeProjectPermissions(value["permissions"]),
-                    revokeOwnerCredential,
-                    c.var.signal,
-                ),
-                201,
-            );
-        })
-        .delete("/projects/:projectId/external-identity-bindings/:bindingId", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.IdentityBindingsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            return c.json(
-                await c.env.services.projectAuthentication.revokeExternalIdentityBinding(
-                    access,
-                    pathIdentifier(c.req.param("bindingId")),
-                    c.var.signal,
-                ),
-            );
-        })
-        .get("/projects/:projectId/owner-credentials", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.OwnerCredentialsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            return c.json(await c.env.services.projectAuthentication.listOwnerCredentials(access, c.var.signal));
-        })
-        .post("/project-owner-credentials/:credentialId/rotate", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.OwnerCredentialsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["overlapSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.rotateOwnerCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    integer(value, "overlapSeconds") * 1_000,
-                    c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-owner-credentials/:credentialId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.OwnerCredentialsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeOwnerCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    c.var.signal,
-                ),
-            );
-        })
-        .get("/projects/:projectId/authentication-audit-events", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.ProjectRead,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            return c.json(
-                await c.env.services.projectAuthentication.listAuditEvents(
-                    access,
-                    pageLimit(new URL(c.req.raw.url)),
-                    c.var.signal,
-                ),
-            );
         })
         .get("/projects", async (c) => {
             const tenant = await c.env.services.bots.resolveTenant(c.req.raw, c.var.signal);
@@ -345,6 +94,45 @@ export function createBotApplication() {
                 201,
             );
         })
+        .post("/projects/:projectId/conversations", async (c) => {
+            const value = await requestBody(c.req.raw, [
+                "botId",
+                "clientReference",
+                "configuration",
+                "idempotencyKey",
+                "title",
+            ]);
+            const configuration = conversationConfiguration(value);
+            const conversation = await c.env.services.bots.createProjectConversationResource(
+                pathIdentifier(c.req.param("projectId")),
+                identifier(value, "botId"),
+                bearer(c.req.raw),
+                actorReference(c.req.raw),
+                identifier(value, "clientReference"),
+                identifier(value, "idempotencyKey"),
+                string(value, "title", 500, true),
+                Date.now(),
+                c.var.signal,
+            );
+            const conversationId = Reflect.get(conversation, "conversationId");
+            if (typeof conversationId !== "string") {
+                throw new Error("The created Conversation identifier is unavailable");
+            }
+            await c.env.services.bots.configureProjectConversation(
+                conversationId,
+                bearer(c.req.raw),
+                actorReference(c.req.raw),
+                identifier(value, "idempotencyKey"),
+                configuration.additionalDirectoryIds,
+                configuration.configId,
+                configuration.value,
+                configuration.booleanValue,
+                configuration.valueType,
+                Date.now(),
+                c.var.signal,
+            );
+            return c.json(conversation, 201);
+        })
         .get("/bots/:botId", async (c) =>
             c.json(
                 await c.env.services.bots.readBot(
@@ -355,6 +143,68 @@ export function createBotApplication() {
                 ),
             ),
         )
+        .get("/conversations/:conversationId", async (c) =>
+            c.json(
+                await c.env.services.bots.readProjectConversationResource(
+                    pathIdentifier(c.req.param("conversationId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    c.var.signal,
+                ),
+            ),
+        )
+        .post("/conversations/:conversationId/turns", async (c) => {
+            const value = await requestBody(c.req.raw, [
+                "additionalDirectoryIds",
+                "artifactIds",
+                "content",
+                "idempotencyKey",
+                "images",
+                "resources",
+            ]);
+            return c.json(
+                await c.env.services.bots.submitProjectConversationTurn(
+                    pathIdentifier(c.req.param("conversationId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    identifier(value, "idempotencyKey"),
+                    string(value, "content", 100_000, true),
+                    identifiers(value, "additionalDirectoryIds", 16),
+                    decodePromptImagesValue(value["images"]),
+                    decodePromptResourcesValue(value["resources"]),
+                    identifiers(value, "artifactIds", 16),
+                    Date.now(),
+                    c.var.signal,
+                ),
+                202,
+            );
+        })
+        .post("/conversations/:conversationId/configuration-revisions", async (c) => {
+            const value = await requestBody(c.req.raw, [
+                "additionalDirectoryIds",
+                "booleanValue",
+                "configId",
+                "idempotencyKey",
+                "value",
+                "valueType",
+            ]);
+            return c.json(
+                await c.env.services.bots.configureProjectConversation(
+                    pathIdentifier(c.req.param("conversationId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    identifier(value, "idempotencyKey"),
+                    identifiers(value, "additionalDirectoryIds", 16),
+                    identifier(value, "configId"),
+                    string(value, "value", 500, true),
+                    boolean(value, "booleanValue"),
+                    string(value, "valueType", 32),
+                    Date.now(),
+                    c.var.signal,
+                ),
+                202,
+            );
+        })
         .get("/bots/:botId/behavior-revisions", async (c) =>
             c.json(
                 await c.env.services.bots.listBehaviorRevisions(

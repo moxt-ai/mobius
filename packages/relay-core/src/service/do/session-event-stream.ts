@@ -13,7 +13,7 @@ const EVENT_BUFFER_CAPACITY = 256;
 const HEARTBEAT_INTERVAL_MILLISECONDS = 15_000;
 
 function streamKey(scope: ProjectScope, sessionId: string): string {
-    return `${scope.tenantId}\u0000${scope.projectId}\u0000${sessionId}`;
+    return `${scope.storageLocator.resolveHostingPlacement()}\u0000${scope.projectId}\u0000${sessionId}`;
 }
 
 class SessionEventSubscriber {

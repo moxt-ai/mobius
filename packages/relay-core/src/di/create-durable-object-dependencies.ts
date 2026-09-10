@@ -1,5 +1,10 @@
 import type { BotSessionRuntime } from "../entity/bot/bot-session.ts";
-import { DEFAULT_SESSION_QUOTA_POLICY, type SessionQuotaPolicy } from "../entity/do/session.ts";
+import {
+    DEFAULT_SESSION_QUOTA_POLICY,
+    ProjectScope,
+    type SessionQuotaPolicy,
+    StaticSessionQuotaPolicyProvider,
+} from "../entity/do/session.ts";
 import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { SessionCommandGateway, SessionQueryGateway } from "../gateway/index.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
@@ -165,9 +170,12 @@ function createRuntimeRelayDependencies(cx: {
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
     };
 }) {
-    const forTenant = async (tenantId: string, signal: AbortSignal) => {
-        const tenant = await cx.gateways.tenantShardingDirectory.resolve(tenantId, signal);
+    const forProject = async (scope: ProjectScope, signal: AbortSignal) => {
+        const tenant = await cx.gateways.tenantShardingDirectory.resolveProject(scope.storageLocator, signal);
         signal.throwIfAborted();
+        if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+            throw new Error("The Project placement is invalid");
+        }
         const database = cx.gateways.databaseResolver.resolve(tenant.tenantSharding);
         const conversations = new BotConversationStorage(tenant, cx.gateways.databaseResolver);
         const context = {
@@ -194,17 +202,17 @@ function createRuntimeRelayDependencies(cx: {
         | "failConversationProvisioning"
     > = {
         approveBinding: async (scope, runtimeId, event, now, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.approveBinding(scope, runtimeId, event, now, signal),
+            (await forProject(scope, signal)).bots.approveBinding(scope, runtimeId, event, now, signal),
         rejectBinding: async (scope, runtimeId, event, now, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.rejectBinding(scope, runtimeId, event, now, signal),
+            (await forProject(scope, signal)).bots.rejectBinding(scope, runtimeId, event, now, signal),
         listPendingControl: async (scope, runtimeId, limit, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.listPendingControl(scope, runtimeId, limit, signal),
+            (await forProject(scope, signal)).bots.listPendingControl(scope, runtimeId, limit, signal),
         listPendingProvisioning: async (scope, runtimeId, limit, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.listPendingProvisioning(scope, runtimeId, limit, signal),
+            (await forProject(scope, signal)).bots.listPendingProvisioning(scope, runtimeId, limit, signal),
         activateConversation: async (scope, conversationId, now, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.activateConversation(scope, conversationId, now, signal),
+            (await forProject(scope, signal)).bots.activateConversation(scope, conversationId, now, signal),
         failConversationProvisioning: async (scope, conversationId, code, now, signal) =>
-            (await forTenant(scope.tenantId, signal)).bots.failConversationProvisioning(
+            (await forProject(scope, signal)).bots.failConversationProvisioning(
                 scope,
                 conversationId,
                 code,
@@ -213,15 +221,17 @@ function createRuntimeRelayDependencies(cx: {
             ),
     };
     const credentials: Pick<ChannelCredentialService, "isActive"> = {
-        isActive: async (identity, signal) =>
-            (await forTenant(identity.tenantId, signal)).credentials.isActive(identity, signal),
+        isActive: async (identity, signal) => {
+            const scope = new ProjectScope(identity.tenantId, identity.projectId);
+            return (await forProject(scope, signal)).credentials.isActive(identity, signal);
+        },
     };
     const services = {
         bots,
         credentials,
         recovery: new RuntimeRecoveryService({ services: { bots }, gateways: cx.gateways }),
         connections: new RuntimeConnectionService(new RuntimeConnectionStorage(cx.database)),
-        channel: (runtimeId: string, scope: import("../entity/do/session.ts").ProjectScope) =>
+        channel: (runtimeId: string, scope: ProjectScope) =>
             new ChannelActor({
                 config: { runtimeId, scope },
                 gateways: { commands: cx.gateways.sessions, queries: cx.gateways.sessions, peers: cx.gateways.peers },
@@ -263,7 +273,7 @@ export function createDurableObjectDependencies(cx: {
 }) {
     const sessions = new RemoteSessionRuntime({
         storages: { directory: new SessionDirectoryStorage(cx.gateways.databaseResolver) },
-        config: { quota: cx.quota },
+        config: { quotaPolicy: new StaticSessionQuotaPolicyProvider(cx.quota) },
         gateways: {
             transport: cx.gateways.sessionTransport,
             databaseResolver: cx.gateways.databaseResolver,

@@ -7,6 +7,7 @@ import {
     type BotProvisioningOutboxRecord,
     conversationResponse,
     decodeProvisioningPayload,
+    projectConversationResponse,
     replyRouteFromRow,
 } from "../../entity/bot/bot-conversation.ts";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
@@ -90,9 +91,48 @@ export class BotConversationService {
             access.actor.actorId,
             "owner",
             key,
+            key,
             "New chat",
             new OwnerBotReplyRoute(),
             binding,
+            true,
+            now,
+            signal,
+        );
+    };
+
+    readonly createCanonicalProjectConversation = async (
+        access: ProjectBotAccess,
+        binding: ApprovedBindingContext,
+        idempotencyKey: string,
+        clientReference: string,
+        title: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const duplicate = await this.#storage.readDuplicateConversation(access.botId, "owner", idempotencyKey, signal);
+        if (duplicate !== null) {
+            if (duplicate.client_reference !== clientReference || duplicate.title !== title) {
+                throw new BotApiError(
+                    "idempotency_conflict",
+                    "The conversation idempotency key was reused with different content",
+                    "conflict",
+                );
+            }
+            return this.planFromOutbox(duplicate);
+        }
+        return this.createConversation(
+            access.scope,
+            access.botId,
+            access.conversationActorKind,
+            access.actor.actorId,
+            "owner",
+            idempotencyKey,
+            clientReference,
+            title,
+            new OwnerBotReplyRoute(),
+            binding,
+            false,
             now,
             signal,
         );
@@ -114,9 +154,11 @@ export class BotConversationService {
             access.actor.actorId,
             access.connectionId,
             key,
+            key,
             title,
             new BotConnectionReplyRoute(access.connectionId, targetId),
             binding,
+            false,
             now,
             signal,
         );
@@ -128,9 +170,11 @@ export class BotConversationService {
         creatorPrincipalId: string,
         creatorKey: string,
         clientConversationKey: string,
+        clientReference: string,
         title: string,
         replyRoute: BotReplyRoute,
         binding: ApprovedBindingContext,
+        retainOwnerDraft: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<BotConversationPlan> => {
@@ -165,8 +209,10 @@ export class BotConversationService {
                     scope,
                     creatorKey,
                     clientConversationKey,
+                    clientReference,
                     provisioning,
                     outboxId,
+                    retainOwnerDraft,
                     now,
                     signal,
                 ))
@@ -185,7 +231,7 @@ export class BotConversationService {
                 signal,
             );
             if (duplicate === null) {
-                if (creatorKind === "owner") {
+                if (creatorKind === "owner" && retainOwnerDraft) {
                     const draft = await this.#storage.readOwnerDraft(botId, signal);
                     if (draft !== null) {
                         return this.planFromOutbox(draft);
@@ -195,6 +241,18 @@ export class BotConversationService {
                     "bot_service_unavailable",
                     "The Bot conversation could not be created",
                     "unavailable",
+                    { cause },
+                );
+            }
+            if (
+                creatorKind === "owner" &&
+                !retainOwnerDraft &&
+                (duplicate.client_reference !== clientReference || duplicate.title !== title)
+            ) {
+                throw new BotApiError(
+                    "idempotency_conflict",
+                    "The conversation idempotency key was reused with different content",
+                    "conflict",
                     { cause },
                 );
             }
@@ -223,6 +281,22 @@ export class BotConversationService {
         }
         const row = await this.readConversation(conversationId, signal);
         return { provisioning, response: conversationResponse(row) };
+    };
+
+    readonly projectResource = async (
+        access: ProjectBotAccess,
+        conversationId: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        const row = await this.readConversation(conversationId, signal);
+        if (row.bot_id !== access.botId) {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "The Bot conversation is not accessible",
+                "access-denied",
+            );
+        }
+        return projectConversationResponse(row, access.scope.projectId);
     };
 
     private readonly planFromOutbox = (row: BotProvisioningOutboxRecord): BotConversationPlan => {

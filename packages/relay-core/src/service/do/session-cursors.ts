@@ -50,7 +50,7 @@ export function decodeEventCursor(encoded: string, scope: ProjectScope, sessionI
     const sequence = value["sequence"];
     if (
         !hasExactKeys(value, ["projectId", "sequence", "sessionId", "tenantId"]) ||
-        value["tenantId"] !== scope["tenantId"] ||
+        value["tenantId"] !== scope.storageLocator.resolveHostingPlacement() ||
         value["projectId"] !== scope["projectId"] ||
         value["sessionId"] !== sessionId ||
         typeof sequence !== "number" ||
@@ -63,7 +63,7 @@ export function decodeEventCursor(encoded: string, scope: ProjectScope, sessionI
         projectId: scope.projectId,
         sequence,
         sessionId,
-        tenantId: scope.tenantId,
+        tenantId: scope.storageLocator.resolveHostingPlacement(),
     };
 }
 
@@ -73,7 +73,7 @@ export function decodeMessageCursor(encoded: string, scope: ProjectScope, sessio
     const createdAt = value["createdAt"];
     if (
         !hasExactKeys(value, ["commandId", "createdAt", "projectId", "sessionId", "tenantId"]) ||
-        value["tenantId"] !== scope["tenantId"] ||
+        value["tenantId"] !== scope.storageLocator.resolveHostingPlacement() ||
         value["projectId"] !== scope["projectId"] ||
         value["sessionId"] !== sessionId ||
         typeof commandId !== "string" ||
@@ -88,7 +88,7 @@ export function decodeMessageCursor(encoded: string, scope: ProjectScope, sessio
         createdAt,
         projectId: scope.projectId,
         sessionId,
-        tenantId: scope.tenantId,
+        tenantId: scope.storageLocator.resolveHostingPlacement(),
     };
 }
 
@@ -98,7 +98,7 @@ export function decodeDirectoryCursor(encoded: string, scope: ProjectScope): Dir
     const updatedAt = value["updatedAt"];
     if (
         !hasExactKeys(value, ["projectId", "sessionId", "tenantId", "updatedAt"]) ||
-        value["tenantId"] !== scope["tenantId"] ||
+        value["tenantId"] !== scope.storageLocator.resolveHostingPlacement() ||
         value["projectId"] !== scope["projectId"] ||
         typeof sessionId !== "string" ||
         typeof updatedAt !== "number" ||
@@ -110,7 +110,7 @@ export function decodeDirectoryCursor(encoded: string, scope: ProjectScope): Dir
     return {
         projectId: scope.projectId,
         sessionId,
-        tenantId: scope.tenantId,
+        tenantId: scope.storageLocator.resolveHostingPlacement(),
         updatedAt,
     };
 }

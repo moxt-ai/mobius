@@ -7,12 +7,12 @@ credential.
 
 ```text
 Project
-|- Runtime A -> Channel A -> daemon credential A
-`- Runtime B -> Channel B -> daemon credential B
+|- Runtime A -> Channel A -> Runtime Credential A
+`- Runtime B -> Channel B -> Runtime Credential B
 ```
 
 Each Runtime has its own generated Runtime ID, Channel ID, one-time pairing
-code, daemon credential, connection lease, machine metadata, and Agent catalog.
+code, Runtime Credential, connection lease, machine metadata, and Agent catalog.
 Project credentials are a separate authority. Accountless owner and scoped
 application credentials may pair Runtimes when their server-owned permissions
 include `runtime:pair`; browser, linked-device, Runtime daemon, and Bot
@@ -51,7 +51,7 @@ All paths are beneath the configured Mobius API prefix, normally
 Create one pending Runtime pairing with a caller-owned idempotency key:
 
 ```http
-POST /projects/{projectId}/runtime-pairings
+POST /v1/projects/{projectId}/runtime-pairings
 Authorization: Bearer <project-owner-credential>
 Content-Type: application/json
 
@@ -74,15 +74,32 @@ one-time inputs, rather than allocating another Runtime:
 }
 ```
 
-The local daemon claims `pairingCode` through the existing
-`POST /pairings/claim` operation. A claim succeeds exactly once and returns the
-new Runtime's daemon credential. Replaying a claimed or expired code returns
+The local Runtime redeems both the pairing identifier and `pairingCode` through:
+
+```http
+POST /v1/runtime-pairings/{pairingId}/redeem
+Content-Type: application/json
+
+{
+  "pairingCode": "XXXX-XXXX-XXXX-XXXX-XXXX",
+  "machineName": "build-mac",
+  "workspaceName": "workspace",
+  "agents": [],
+  "installableAgents": []
+}
+```
+
+A redemption succeeds exactly once and returns
+`{"channelId":"...","runtimeCredential":"...","runtimeId":"..."}`.
+The Runtime then connects to `WSS /v1/runtimes/connect` with
+`Authorization: Bearer <runtimeCredential>`; the credential is never placed in
+the public WebSocket URL. Replaying a claimed or expired code returns
 `invalid_pairing_code` and never issues another credential.
 
 An owner can inspect the lifecycle without exposing `pollToken` in a URL:
 
 ```http
-GET /projects/{projectId}/runtime-pairings/{pairingId}
+GET /v1/projects/{projectId}/runtime-pairings/{pairingId}
 Authorization: Bearer <project-owner-credential>
 ```
 
@@ -96,7 +113,7 @@ returns `runtime_quota_exceeded` with HTTP 429 while the quota is full.
 
 ## Listing, selection, and revocation
 
-`GET /projects/{projectId}/runtimes` returns all paired Runtimes in the Project.
+`GET /v1/projects/{projectId}/runtimes` returns all paired Runtimes in the Project.
 Online state comes from each Runtime's own Durable Object and is not shared.
 Session creation, Session rebinding, import, Turn dispatch, and Bot execution
 binding reauthorize the selected `runtimeId` against the authenticated Project.
@@ -107,7 +124,7 @@ sent.
 Revoke exactly one Runtime:
 
 ```http
-DELETE /projects/{projectId}/runtimes/{runtimeId}
+DELETE /v1/projects/{projectId}/runtimes/{runtimeId}
 Authorization: Bearer <project-owner-credential>
 ```
 
@@ -142,7 +159,7 @@ for concrete lifecycle classes and credential guidance.
 
 ## Audit and storage
 
-D1 stores only hashes of pairing, polling, owner, host, and daemon secrets.
+D1 stores only hashes of pairing, polling, owner, host, and Runtime secrets.
 `runtime_pairing_audit_events` records `requested`, `claimed`, `expired`,
 `revoked`, and `rejected` outcomes with Project, pairing, Runtime, actor, and
 timestamp correlation. Public errors are sanitized; executable paths,

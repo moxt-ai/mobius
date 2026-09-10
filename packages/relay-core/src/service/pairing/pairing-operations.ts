@@ -3,6 +3,7 @@ import type {
     ProjectPermission,
     RuntimeAccessContext,
 } from "../../entity/authentication/project-authentication.ts";
+import type { ProjectScope } from "../../entity/do/session.ts";
 import type {
     AgentDescriptor,
     ChannelDescriptor,
@@ -21,6 +22,7 @@ import type {
 } from "../../entity/pairing/pairing.ts";
 export interface PairingOperations {
     readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
+    readonly authorizeRuntimeCredential: (token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeHost: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelHostCredential>;
     readonly authorizeProjectOwnerRuntimeHost: (
         projectId: string,
@@ -39,6 +41,11 @@ export interface PairingOperations {
         runtimeId: string,
         token: string,
         permission: ProjectPermission,
+        signal: AbortSignal,
+    ) => Promise<VerifiedChannelAccess>;
+    readonly authorizeProjectScopeRuntime: (
+        scope: ProjectScope,
+        runtimeId: string,
         signal: AbortSignal,
     ) => Promise<VerifiedChannelAccess>;
     readonly claimPairing: (
@@ -85,6 +92,15 @@ export interface PairingOperations {
         token: string,
         signal: AbortSignal,
     ) => Promise<PairingStatus>;
+    readonly redeemRuntimePairing: (
+        pairingId: string,
+        pairingCode: string,
+        machineName: string,
+        workspaceName: string,
+        agents: readonly AgentDescriptor[],
+        installableAgents: readonly InstallableAgentDescriptor[],
+        signal: AbortSignal,
+    ) => Promise<ClaimedPairing>;
     readonly redeemChannelAccessGrant: (
         channelId: string,
         grantId: string,

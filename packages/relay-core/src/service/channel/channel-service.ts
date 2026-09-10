@@ -71,6 +71,11 @@ export class ChannelService {
         return await this.#channelGateway.acceptDaemon(access, request, signal);
     };
 
+    readonly acceptRuntime = async (token: string, request: Request, signal: AbortSignal): Promise<Response> => {
+        const access = await this.#pairings.authorizeRuntimeCredential(token, signal);
+        return await this.#channelGateway.acceptDaemon(access, request, signal);
+    };
+
     readonly readArtifactContent = async (
         channelId: string,
         token: string,

@@ -137,7 +137,9 @@ describe.sequential("Native Session boundaries", () => {
         }
     });
 
-    it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async () => {
+    it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -257,11 +259,21 @@ describe.sequential("Native Session boundaries", () => {
                 }),
             );
 
-            await waitFor(() => {
-                expect(screen.getAllByText("Explain the existing workspace")).toHaveLength(1);
-                expect(screen.getAllByText(/CLAUDE_FRAGMENTED_OK/)).toHaveLength(1);
-                expect(screen.queryByText(/history_sync_failed:/)).toBeNull();
-            });
+            await waitForDocumentState(() => {
+                const transcript = screen.queryByRole("log");
+                if (transcript === null) {
+                    return false;
+                }
+                return (
+                    within(transcript).queryAllByText("Explain the existing workspace").length === 1 &&
+                    within(transcript).queryAllByText(/CLAUDE_FRAGMENTED_OK/).length === 1 &&
+                    screen.queryAllByText(/history_sync_failed:/).length === 0
+                );
+            }, signal);
+            const transcript = screen.getByRole("log");
+            expect(within(transcript).getAllByText("Explain the existing workspace")).toHaveLength(1);
+            expect(within(transcript).getAllByText(/CLAUDE_FRAGMENTED_OK/)).toHaveLength(1);
+            expect(screen.queryAllByText(/history_sync_failed:/)).toHaveLength(0);
         } finally {
             cleanup();
             await closeMobiusTransport();

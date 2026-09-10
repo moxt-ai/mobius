@@ -17,25 +17,35 @@ const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 const MAX_CONNECTION_FILE_LENGTH = 16 * 1024;
 const CLAIM_RESPONSE_KEYS: readonly string[] = ["channelId", "daemonToken", "runtimeId"];
-const SAVED_CONNECTION_KEYS: readonly string[] = ["defaultWorkspace", "channelId", "daemonToken", "relayOrigin"];
+const REDEEM_RESPONSE_KEYS: readonly string[] = ["channelId", "runtimeCredential", "runtimeId"];
+const LEGACY_SAVED_CONNECTION_KEYS: readonly string[] = ["defaultWorkspace", "channelId", "daemonToken", "relayOrigin"];
+const SAVED_CONNECTION_KEYS: readonly string[] = ["defaultWorkspace", "channelId", "relayOrigin", "runtimeCredential"];
 
 interface PairCommandOptions {
     readonly code: string;
+    readonly pairingId: string;
     readonly relayOrigin: URL;
     readonly workspace: string;
 }
 
 interface ClaimPairingResponse {
     readonly channelId: string;
-    readonly daemonToken: string;
+    readonly runtimeCredential: string;
     readonly runtimeId: string;
 }
 
 interface SavedConnection {
     readonly defaultWorkspace: string;
     readonly channelId: string;
-    readonly daemonToken: string;
     readonly relayOrigin: URL;
+    readonly runtimeCredential: string;
+}
+
+export interface MobiusRuntimePairingOptions {
+    readonly defaultWorkspace: string;
+    readonly pairingCode: string;
+    readonly pairingId: string;
+    readonly relayOrigin: string;
 }
 
 export interface PairedDaemon {
@@ -85,7 +95,7 @@ function readSingleOption(arguments_: readonly string[], option: string): string
 function assertKnownArguments(arguments_: readonly string[]): void {
     for (let index = 0; index < arguments_.length; index += 2) {
         const option = arguments_[index];
-        if (option !== "--url" && option !== "--code" && option !== "--workspace") {
+        if (option !== "--url" && option !== "--code" && option !== "--pairing" && option !== "--workspace") {
             throw new PairingClientError("invalid_arguments", `Unknown pairing option: ${option ?? "missing option"}`);
         }
     }
@@ -128,11 +138,19 @@ function parsePairCommand(arguments_: readonly string[]): PairCommandOptions {
     assertKnownArguments(arguments_);
     return {
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
+        pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
         workspace: arguments_.includes("--workspace")
             ? readSingleOption(arguments_, "--workspace")
             : loadDefaultWorkspace(),
     };
+}
+
+function validatePairingId(value: string): string {
+    if (!IDENTIFIER_PATTERN.test(value)) {
+        throw new PairingClientError("invalid_pairing_id", "The Runtime pairing ID is invalid");
+    }
+    return value;
 }
 
 function parseChannelArgument(arguments_: readonly string[]): string {
@@ -195,24 +213,28 @@ function readRelayError(value: unknown): PairingClientError {
     return new PairingClientError("pairing_failed", "The relay could not pair this machine");
 }
 
-function decodeClaimResponse(value: unknown): ClaimPairingResponse {
-    if (!isRecord(value) || !hasExactKeys(value, CLAIM_RESPONSE_KEYS)) {
+function decodePairingResponse(
+    value: unknown,
+    credentialField: string,
+    expectedKeys: readonly string[],
+): ClaimPairingResponse {
+    if (!isRecord(value) || !hasExactKeys(value, expectedKeys)) {
         throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
     }
     const channelId = value["channelId"];
-    const daemonToken = value["daemonToken"];
+    const runtimeCredential = value[credentialField];
     const runtimeId = value["runtimeId"];
     if (
         typeof channelId !== "string" ||
         !IDENTIFIER_PATTERN.test(channelId) ||
-        typeof daemonToken !== "string" ||
-        !TOKEN_PATTERN.test(daemonToken) ||
+        typeof runtimeCredential !== "string" ||
+        !TOKEN_PATTERN.test(runtimeCredential) ||
         typeof runtimeId !== "string" ||
         !IDENTIFIER_PATTERN.test(runtimeId)
     ) {
         throw new PairingClientError("invalid_relay_response", "The relay returned an invalid pairing response");
     }
-    return { channelId, daemonToken, runtimeId };
+    return { channelId, runtimeCredential, runtimeId };
 }
 
 async function claimPairing(
@@ -229,7 +251,10 @@ async function claimPairing(
         id: agent.id,
         label: agent.label,
     }));
-    const endpoint = mobiusApiUrl(options.relayOrigin, "/pairings/claim");
+    const endpoint =
+        options.pairingId.length > 0
+            ? mobiusApiUrl(options.relayOrigin, `/v1/runtime-pairings/${encodeURIComponent(options.pairingId)}/redeem`)
+            : mobiusApiUrl(options.relayOrigin, "/pairings/claim");
     let response: Response;
     try {
         response = await fetch(endpoint, {
@@ -253,16 +278,19 @@ async function claimPairing(
     if (!response.ok) {
         throw readRelayError(value);
     }
-    return decodeClaimResponse(value);
+    return options.pairingId.length > 0
+        ? decodePairingResponse(value, "runtimeCredential", REDEEM_RESPONSE_KEYS)
+        : decodePairingResponse(value, "daemonToken", CLAIM_RESPONSE_KEYS);
 }
 
 async function persistConnection(
     channelId: string,
     relayOrigin: URL,
-    daemonToken: string,
+    runtimeCredential: string,
     defaultWorkspace: string,
+    environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<string> {
-    const connectionsDirectory = join(readStateDirectory(), "connections");
+    const connectionsDirectory = join(readStateDirectory(environment), "connections");
     await mkdir(connectionsDirectory, { mode: 0o700, recursive: true });
     const connectionPath = join(connectionsDirectory, `${channelId}.json`);
     const temporaryPath = join(connectionsDirectory, `.${channelId}.${randomUUID()}.tmp`);
@@ -272,8 +300,8 @@ async function persistConnection(
             {
                 defaultWorkspace,
                 channelId,
-                daemonToken,
                 relayOrigin: relayOrigin.toString(),
+                runtimeCredential,
             },
             null,
             2,
@@ -285,20 +313,23 @@ async function persistConnection(
 }
 
 function decodeSavedConnection(value: unknown, expectedChannelId: string): SavedConnection {
-    if (!isRecord(value) || !hasExactKeys(value, SAVED_CONNECTION_KEYS)) {
+    if (
+        !isRecord(value) ||
+        (!hasExactKeys(value, SAVED_CONNECTION_KEYS) && !hasExactKeys(value, LEGACY_SAVED_CONNECTION_KEYS))
+    ) {
         throw new PairingClientError("invalid_connection", "The saved connection is invalid");
     }
     const defaultWorkspace = value["defaultWorkspace"];
     const channelId = value["channelId"];
-    const daemonToken = value["daemonToken"];
+    const runtimeCredential = value["runtimeCredential"] ?? value["daemonToken"];
     const relayOrigin = value["relayOrigin"];
     if (
         typeof defaultWorkspace !== "string" ||
         typeof channelId !== "string" ||
         channelId !== expectedChannelId ||
         !IDENTIFIER_PATTERN.test(channelId) ||
-        typeof daemonToken !== "string" ||
-        !TOKEN_PATTERN.test(daemonToken) ||
+        typeof runtimeCredential !== "string" ||
+        !TOKEN_PATTERN.test(runtimeCredential) ||
         typeof relayOrigin !== "string"
     ) {
         throw new PairingClientError("invalid_connection", "The saved connection is invalid");
@@ -306,13 +337,16 @@ function decodeSavedConnection(value: unknown, expectedChannelId: string): Saved
     return {
         defaultWorkspace,
         channelId,
-        daemonToken,
         relayOrigin: parseRelayOrigin(relayOrigin),
+        runtimeCredential,
     };
 }
 
-async function readSavedConnection(channelId: string): Promise<SavedConnection> {
-    const connectionPath = join(readStateDirectory(), "connections", `${channelId}.json`);
+async function readSavedConnection(
+    channelId: string,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<SavedConnection> {
+    const connectionPath = join(readStateDirectory(environment), "connections", `${channelId}.json`);
     let encoded = "";
     const handle = await open(connectionPath, "r");
     try {
@@ -335,8 +369,8 @@ async function readSavedConnection(channelId: string): Promise<SavedConnection> 
     return {
         defaultWorkspace: await resolveDefaultWorkspace(connection.defaultWorkspace),
         channelId: connection.channelId,
-        daemonToken: connection.daemonToken,
         relayOrigin: connection.relayOrigin,
+        runtimeCredential: connection.runtimeCredential,
     };
 }
 
@@ -350,15 +384,13 @@ function buildPairedDaemon(
     connection: SavedConnection,
     connectionPath: string,
     inventory: LocalAgentInventory,
+    environment: Readonly<NodeJS.ProcessEnv>,
 ): PairedDaemon {
     assertInventoryUsable(inventory);
-    const relayUrl = mobiusApiUrl(
-        connection.relayOrigin,
-        `/channels/${encodeURIComponent(connection.channelId)}/daemon`,
-    );
+    const relayUrl = mobiusApiUrl(connection.relayOrigin, "/v1/runtimes/connect");
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
-    relayUrl.searchParams.set("token", connection.daemonToken);
-    const auditDatabasePath = join(readStateDirectory(), "audit", `${connection.channelId}.sqlite`);
+    relayUrl.searchParams.set("token", connection.runtimeCredential);
+    const auditDatabasePath = join(readStateDirectory(environment), "audit", `${connection.channelId}.sqlite`);
 
     return {
         channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),
@@ -376,15 +408,15 @@ function buildPairedDaemon(
     };
 }
 
-export async function pairLocalMachine(
-    arguments_: readonly string[],
-    signal: AbortSignal = new AbortController().signal,
+async function pairRuntime(
+    options: PairCommandOptions,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<PairedDaemon> {
-    const options = parsePairCommand(arguments_);
     const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
-        environment: process.env,
+        environment,
         signal,
     });
     assertInventoryUsable(inventory);
@@ -393,32 +425,66 @@ export async function pairLocalMachine(
     const connectionPath = await persistConnection(
         claim.channelId,
         options.relayOrigin,
-        claim.daemonToken,
+        claim.runtimeCredential,
         defaultWorkspace,
+        environment,
     );
     return buildPairedDaemon(
         {
             defaultWorkspace,
             channelId: claim.channelId,
-            daemonToken: claim.daemonToken,
             relayOrigin: options.relayOrigin,
+            runtimeCredential: claim.runtimeCredential,
         },
         connectionPath,
         inventory,
+        environment,
     );
+}
+
+export async function pairMobiusRuntime(
+    options: MobiusRuntimePairingOptions,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): Promise<PairedDaemon> {
+    return await pairRuntime(
+        {
+            code: parsePairingCode(options.pairingCode),
+            pairingId: validatePairingId(options.pairingId),
+            relayOrigin: parseRelayOrigin(options.relayOrigin),
+            workspace: options.defaultWorkspace,
+        },
+        signal,
+        environment,
+    );
+}
+
+export async function pairLocalMachine(
+    arguments_: readonly string[],
+    signal: AbortSignal = new AbortController().signal,
+): Promise<PairedDaemon> {
+    return await pairRuntime(parsePairCommand(arguments_), signal, process.env);
+}
+
+export async function resumeMobiusRuntime(
+    channelId: string,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): Promise<PairedDaemon> {
+    const normalizedChannelId = validatePairingId(channelId);
+    const connectionPath = join(readStateDirectory(environment), "connections", `${normalizedChannelId}.json`);
+    const connection = await readSavedConnection(normalizedChannelId, environment);
+    const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace: connection.defaultWorkspace,
+        environment,
+        signal,
+    });
+    return buildPairedDaemon(connection, connectionPath, inventory, environment);
 }
 
 export async function resumeLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
-    const channelId = parseChannelArgument(arguments_);
-    const connectionPath = join(readStateDirectory(), "connections", `${channelId}.json`);
-    const connection = await readSavedConnection(channelId);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace: connection.defaultWorkspace,
-        environment: process.env,
-        signal,
-    });
-    return buildPairedDaemon(connection, connectionPath, inventory);
+    return await resumeMobiusRuntime(parseChannelArgument(arguments_), signal, process.env);
 }

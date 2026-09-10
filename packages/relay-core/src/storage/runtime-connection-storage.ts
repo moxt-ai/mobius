@@ -48,14 +48,14 @@ export class RuntimeConnectionStorage {
         this.#database.query(
             `SELECT 1 FROM runtime_revocations
             WHERE runtime_id = ? AND tenant_id = ? AND project_id = ?`,
-            [runtimeId, scope.tenantId, scope.projectId],
+            [runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId],
         )[0] !== undefined;
 
     readonly revoke = (runtimeId: string, scope: ProjectScope, now: number): void => {
         this.#database.run(
             `INSERT INTO runtime_revocations (runtime_id, tenant_id, project_id, revoked_at)
             VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-            [runtimeId, scope.tenantId, scope.projectId, now],
+            [runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId, now],
         );
     };
 

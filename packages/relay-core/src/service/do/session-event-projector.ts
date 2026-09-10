@@ -330,6 +330,7 @@ export class SessionEventProjector {
                 kind: "configuration",
                 bindingId: event.requestId,
                 configRevision,
+                configOptions: event.configOptions,
                 binding:
                     existing === undefined
                         ? {

@@ -183,6 +183,14 @@ function requiredString(value: Readonly<Record<string, unknown>>, key: string): 
     return field;
 }
 
+function configuredTenantId(): string {
+    const tenantId = env.MOBIUS_TENANT_ID;
+    if (tenantId === undefined) {
+        throw new Error("Expected the Standalone tenant binding");
+    }
+    return tenantId;
+}
+
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
     const digest = await crypto.subtle.digest("SHA-256", Uint8Array.from(bytes));
     return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -191,6 +199,9 @@ async function sha256Hex(bytes: Uint8Array): Promise<string> {
 function decodeCreatedPairing(value: unknown): CreatedPairingResponse {
     if (!isRecord(value)) {
         throw new Error("Expected a pairing response object");
+    }
+    if (Object.hasOwn(value, "tenantId")) {
+        throw new Error("Standalone exposed its internal tenant placement");
     }
     return {
         channelId: requiredString(value, "channelId"),
@@ -201,7 +212,7 @@ function decodeCreatedPairing(value: unknown): CreatedPairingResponse {
         pollToken: requiredString(value, "pollToken"),
         projectId: requiredString(value, "projectId"),
         runtimeId: requiredString(value, "runtimeId"),
-        tenantId: requiredString(value, "tenantId"),
+        tenantId: configuredTenantId(),
     };
 }
 
@@ -246,11 +257,14 @@ function decodeRedeemedAccessGrant(value: unknown): RedeemedAccessGrantResponse 
     if (!isRecord(value)) {
         throw new Error("Expected a redeemed access grant response object");
     }
+    if (Object.hasOwn(value, "tenantId")) {
+        throw new Error("Standalone exposed its internal tenant placement");
+    }
     return {
         channelId: requiredString(value, "channelId"),
         hostToken: requiredString(value, "hostToken"),
         projectId: requiredString(value, "projectId"),
-        tenantId: requiredString(value, "tenantId"),
+        tenantId: configuredTenantId(),
     };
 }
 
@@ -1006,7 +1020,7 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
-    it("Given a deployment assigned to an existing tenant, When two machines pair and create sessions, Then both use that tenant while their project credentials remain isolated", async () => {
+    it("Given a Standalone deployment, When two machines pair and create sessions, Then tenant placement remains internal while Project credentials stay isolated", async () => {
         const first = await pairChannel();
         const second = await pairChannel();
         expect(first.created.tenantId).toBe("standalone");
@@ -1014,10 +1028,12 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(first.created.projectId).not.toBe(second.created.projectId);
         const session = await createSession(first.created, "existing-tenant-session");
         expect(session.status).toBe(201);
-        await expect(session.json()).resolves.toMatchObject({ tenantId: "standalone" });
+        const firstSession = await session.json();
+        expect(isRecord(firstSession) && Object.hasOwn(firstSession, "tenantId")).toBe(false);
         const secondSession = await createSession(second.created, "existing-tenant-second-session");
         expect(secondSession.status).toBe(201);
-        await expect(secondSession.json()).resolves.toMatchObject({ tenantId: "standalone" });
+        const secondSessionResource = await secondSession.json();
+        expect(isRecord(secondSessionResource) && Object.hasOwn(secondSessionResource, "tenantId")).toBe(false);
         const crossProjectRuntime = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions`,
             {
@@ -1094,12 +1110,13 @@ describe.sequential("Cloudflare session deployment", () => {
         const paired = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/${created.pairingId}?token=${created.pollToken}`,
         );
-        await expect(paired.json()).resolves.toMatchObject({
+        const pairedResource = await paired.json();
+        expect(isRecord(pairedResource) && Object.hasOwn(pairedResource, "tenantId")).toBe(false);
+        expect(pairedResource).toMatchObject({
             channelId: created.channelId,
             projectId: created.projectId,
             runtimeId: created.runtimeId,
             status: "paired",
-            tenantId: created.tenantId,
         });
         const ownerPaired = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/runtime-pairings/${created.pairingId}`,
@@ -1117,11 +1134,12 @@ describe.sequential("Cloudflare session deployment", () => {
             { headers: authorization(created) },
         );
         expect(channel.status).toBe(200);
-        await expect(channel.json()).resolves.toMatchObject({
+        const channelResource = await channel.json();
+        expect(isRecord(channelResource) && Object.hasOwn(channelResource, "tenantId")).toBe(false);
+        expect(channelResource).toMatchObject({
             channelId: created.channelId,
             projectId: created.projectId,
             runtimeId: created.runtimeId,
-            tenantId: created.tenantId,
         });
         const unauthorizedHost = await exports.default.fetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}/host?token=${"x".repeat(43)}`,
@@ -2425,10 +2443,11 @@ describe.sequential("Cloudflare session deployment", () => {
             },
         );
         expect(imported.status).toBe(201);
-        await expect(imported.json()).resolves.toMatchObject({
+        const importedResource = await imported.json();
+        expect(isRecord(importedResource) && Object.hasOwn(importedResource, "tenantId")).toBe(false);
+        expect(importedResource).toMatchObject({
             projectId: destination.created.projectId,
             sessionId,
-            tenantId: destination.created.tenantId,
         });
 
         const deleted = await exports.default.fetch(

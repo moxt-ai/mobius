@@ -43,6 +43,14 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         created_at INTEGER NOT NULL,
         PRIMARY KEY (scope_key, session_id, binding_id)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_configuration_snapshots (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        config_revision INTEGER NOT NULL,
+        config_options_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS turns (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

@@ -453,10 +453,17 @@ class ActiveTurnReconciliationError extends Error {
 function activeTurnReconciliationEndpoint(config: DaemonConfig, turn: ActiveDaemonTurn): URL {
     const endpoint = new URL(config.relayUrl);
     endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
-    if (!endpoint.pathname.endsWith("/daemon")) {
-        throw new ActiveTurnReconciliationError("The Relay URL is invalid");
+    let channelPath = "";
+    if (endpoint.pathname.endsWith("/daemon")) {
+        channelPath = endpoint.pathname.slice(0, -"/daemon".length);
+    } else {
+        const runtimePath = "/v1/runtimes/connect";
+        if (!endpoint.pathname.endsWith(runtimePath)) {
+            throw new ActiveTurnReconciliationError("The Relay URL is invalid");
+        }
+        channelPath = `${endpoint.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
     }
-    endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/sessions/${encodeURIComponent(turn.command.sessionId)}/attempts/${encodeURIComponent(turn.attemptId)}/reconciliation`;
+    endpoint.pathname = `${channelPath}/sessions/${encodeURIComponent(turn.command.sessionId)}/attempts/${encodeURIComponent(turn.attemptId)}/reconciliation`;
     endpoint.searchParams.delete("liveness");
     return endpoint;
 }

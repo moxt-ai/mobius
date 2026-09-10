@@ -94,8 +94,9 @@ describe("Mobius CLI", () => {
             const url = new URL(request.url ?? "/", "http://127.0.0.1");
             if (
                 typeof key !== "string" ||
-                url.pathname !== `${MOBIUS_API_PREFIX}/channels/${channelId}/daemon` ||
-                url.searchParams.get("token") !== daemonToken
+                url.pathname !== `${MOBIUS_API_PREFIX}/v1/runtimes/connect` ||
+                url.searchParams.has("token") ||
+                request.headers.authorization !== `Bearer ${daemonToken}`
             ) {
                 socket.destroy();
                 return;

@@ -1,14 +1,34 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWorktreeEnvironment } from "./worktree/environment.ts";
 
 const OUTPUT_LIMIT = 256_000;
 const TEMPORARY_DEPLOYMENT_PROFILE = "mobius_temporary_preview";
 const DIRECTORY_DATABASE_BINDING = "DIRECTORY_DATABASE";
-const CLOUDFLARE_RELAY_PACKAGE = "@moxt-ai/mobius-relay-cloudflare-standalone";
+const PLATFORM_DIRECTORY_DATABASE_BINDING = "PLATFORM_DIRECTORY_DATABASE";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 const worktreeEnvironment = readWorktreeEnvironment();
+
+interface WranglerTarget {
+    readonly configDirectory: string;
+    readonly migrationBindings: readonly string[];
+    readonly packageName: string;
+}
+
+const standaloneTarget: WranglerTarget = {
+    configDirectory: resolve(repositoryRoot, "packages/relay-cloudflare-standalone"),
+    migrationBindings: [DIRECTORY_DATABASE_BINDING],
+    packageName: "@moxt-ai/mobius-relay-cloudflare-standalone",
+};
+const platformTarget: WranglerTarget = {
+    configDirectory: resolve(repositoryRoot, "packages/relay-cloudflare-platform"),
+    migrationBindings: [DIRECTORY_DATABASE_BINDING, PLATFORM_DIRECTORY_DATABASE_BINDING],
+    packageName: "@moxt-ai/mobius-relay-cloudflare-platform",
+};
+const platformConfigSuffix = "packages/relay-cloudflare-platform/wrangler.jsonc";
 
 class CommandFailedError extends Error {
     readonly exitCode: number;
@@ -107,9 +127,61 @@ function selectWranglerOptions(arguments_: readonly string[], names: readonly st
     return selected;
 }
 
+function targetsPlatform(arguments_: readonly string[]): boolean {
+    for (let index = 0; index < arguments_.length; index += 1) {
+        const argument = arguments_[index];
+        if (argument === "--config") {
+            const value = arguments_[index + 1];
+            if (value?.replaceAll("\\", "/").endsWith(platformConfigSuffix)) {
+                return true;
+            }
+        }
+        if (
+            argument?.startsWith("--config=") &&
+            argument.slice("--config=".length).replaceAll("\\", "/").endsWith(platformConfigSuffix)
+        ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function resolveConfigPath(value: string, target: WranglerTarget): string {
+    if (isAbsolute(value)) {
+        return value;
+    }
+    const repositoryPath = resolve(repositoryRoot, value);
+    return existsSync(repositoryPath) ? repositoryPath : resolve(target.configDirectory, value);
+}
+
+function normalizeConfigPath(arguments_: readonly string[], target: WranglerTarget): readonly string[] {
+    const normalized: string[] = [];
+    for (let index = 0; index < arguments_.length; index += 1) {
+        const argument = arguments_[index];
+        if (argument === undefined) {
+            continue;
+        }
+        if (argument === "--config") {
+            const value = arguments_[index + 1];
+            if (value !== undefined) {
+                normalized.push(argument, resolveConfigPath(value, target));
+                index += 1;
+                continue;
+            }
+        }
+        if (argument.startsWith("--config=")) {
+            normalized.push(`--config=${resolveConfigPath(argument.slice("--config=".length), target)}`);
+            continue;
+        }
+        normalized.push(argument);
+    }
+    return normalized;
+}
+
 async function applyD1Migrations(
     location: string,
     wranglerArguments: readonly string[],
+    target: WranglerTarget,
     signal: AbortSignal,
 ): Promise<void> {
     const forwardedOptions = selectWranglerOptions(wranglerArguments, [
@@ -119,22 +191,24 @@ async function applyD1Migrations(
         "--profile",
     ]);
     const temporaryOptions = hasArgument(wranglerArguments, "--temporary") ? ["--temporary"] : [];
-    await runPnpm(
-        [
-            "--filter",
-            CLOUDFLARE_RELAY_PACKAGE,
-            "exec",
-            "wrangler",
-            "d1",
-            "migrations",
-            "apply",
-            DIRECTORY_DATABASE_BINDING,
-            location,
-            ...forwardedOptions,
-            ...temporaryOptions,
-        ],
-        signal,
-    );
+    for (const binding of target.migrationBindings) {
+        await runPnpm(
+            [
+                "--filter",
+                target.packageName,
+                "exec",
+                "wrangler",
+                "d1",
+                "migrations",
+                "apply",
+                binding,
+                location,
+                ...forwardedOptions,
+                ...temporaryOptions,
+            ],
+            signal,
+        );
+    }
 }
 
 function isolateTemporaryDeployment(arguments_: readonly string[]): readonly string[] {
@@ -157,14 +231,16 @@ function printConnectionInstructions(workerUrl: string): void {
 }
 
 async function run(signal: AbortSignal): Promise<void> {
-    const wranglerArguments = addLocalDevelopmentPort(isolateTemporaryDeployment(process.argv.slice(2)));
+    const isolatedArguments = isolateTemporaryDeployment(process.argv.slice(2));
+    const target = targetsPlatform(isolatedArguments) ? platformTarget : standaloneTarget;
+    const wranglerArguments = normalizeConfigPath(addLocalDevelopmentPort(isolatedArguments), target);
     const deployRequested = wranglerArguments[0] === "deploy";
 
     if (!deployRequested) {
         if (wranglerArguments[0] === "dev" && !hasArgument(wranglerArguments, "--remote")) {
-            await applyD1Migrations("--local", wranglerArguments, signal);
+            await applyD1Migrations("--local", wranglerArguments, target, signal);
         }
-        await runPnpm(["--filter", CLOUDFLARE_RELAY_PACKAGE, "exec", "wrangler", ...wranglerArguments], signal);
+        await runPnpm(["--filter", target.packageName, "exec", "wrangler", ...wranglerArguments], signal);
         return;
     }
 
@@ -172,10 +248,10 @@ async function run(signal: AbortSignal): Promise<void> {
 
     const temporaryDeployment = hasArgument(wranglerArguments, "--temporary");
     const dryRun = hasArgument(wranglerArguments, "--dry-run");
-    const deploymentArguments = ["--filter", CLOUDFLARE_RELAY_PACKAGE, "exec", "wrangler", ...wranglerArguments];
+    const deploymentArguments = ["--filter", target.packageName, "exec", "wrangler", ...wranglerArguments];
 
     if (!dryRun && !temporaryDeployment) {
-        await applyD1Migrations("--remote", wranglerArguments, signal);
+        await applyD1Migrations("--remote", wranglerArguments, target, signal);
     }
 
     const output = await runPnpm(deploymentArguments, signal);
@@ -185,7 +261,7 @@ async function run(signal: AbortSignal): Promise<void> {
     }
 
     if (temporaryDeployment) {
-        await applyD1Migrations("--remote", wranglerArguments, signal);
+        await applyD1Migrations("--remote", wranglerArguments, target, signal);
     }
 
     const workerUrl = readWorkerUrl(output);

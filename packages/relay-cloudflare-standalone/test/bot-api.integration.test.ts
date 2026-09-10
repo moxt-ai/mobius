@@ -14,9 +14,16 @@ import {
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
+import { ExternalIdentityAuthenticatorRegistry } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createLegacyStandaloneWorker, StandaloneAuthenticationConfiguration } from "../src/worker.ts";
 
 const relayOrigin = "https://relay.test";
+const legacyWorker = createLegacyStandaloneWorker(
+    new StandaloneAuthenticationConfiguration(new ExternalIdentityAuthenticatorRegistry([])),
+);
+const legacyFetch: typeof exports.default.fetch = async (input, init) =>
+    await legacyWorker.fetch(new Request(input, init), env);
 const connectorScopeList = [
     "conversation-events:read",
     "inbound-conversation:create",
@@ -310,18 +317,15 @@ async function createApplicationCredential(
     permissions: readonly string[],
 ): Promise<string> {
     const application = await json(
-        await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/applications`,
-            {
-                body: JSON.stringify({ name, permissions }),
-                headers: ownerHeaders(pairing),
-                method: "POST",
-            },
-        ),
+        await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/applications`, {
+            body: JSON.stringify({ name, permissions }),
+            headers: ownerHeaders(pairing),
+            method: "POST",
+        }),
         201,
     );
     const issued = await json(
-        await exports.default.fetch(
+        await legacyFetch(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/project-applications/${stringField(application, "applicationId")}/credentials`,
             {
                 body: JSON.stringify({ expiresInSeconds: 3_600 }),
@@ -1406,8 +1410,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                 {
                     body: JSON.stringify({
                         actorRef: "project-owner",
+                        artifactIds: [],
                         clientMessageId: "runtime-a-after-revoke",
-                        resourceRefs: [],
                         text: "Do not fail over",
                     }),
                     headers: ownerHeaders(runtimeA),
@@ -1502,33 +1506,27 @@ describe.sequential("Provider-neutral Bot API", () => {
             });
 
             const provisionedBot = await json(
-                await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`,
-                    {
-                        body: JSON.stringify({ avatarRef: "", description: "", displayName: "Provisioned by Moxt" }),
-                        headers: applicationHeaders(provisionerCredential),
-                        method: "POST",
-                    },
-                ),
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`, {
+                    body: JSON.stringify({ avatarRef: "", description: "", displayName: "Provisioned by Moxt" }),
+                    headers: applicationHeaders(provisionerCredential),
+                    method: "POST",
+                }),
                 201,
             );
             expect(stringField(provisionedBot, "displayName")).toBe("Provisioned by Moxt");
 
             const additionalRuntime = await json(
-                await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/runtime-pairings`,
-                    {
-                        body: JSON.stringify({ idempotencyKey: "moxt-provisioned-runtime" }),
-                        headers: applicationHeaders(provisionerCredential),
-                        method: "POST",
-                    },
-                ),
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "moxt-provisioned-runtime" }),
+                    headers: applicationHeaders(provisionerCredential),
+                    method: "POST",
+                }),
                 201,
             );
             expect(stringField(additionalRuntime, "projectId")).toBe(pairing.projectId);
 
             const conversation = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
                     body: JSON.stringify({ clientConversationKey: "moxt-project-context" }),
                     headers: applicationHeaders(conversationCredential),
                     method: "POST",
@@ -1536,7 +1534,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 201,
             );
             const configuredSession = await json(
-                await exports.default.fetch(
+                await legacyFetch(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/sessions/${stringField(conversation, "sessionId")}/binding`,
                     {
                         body: JSON.stringify({
@@ -1554,7 +1552,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             expect(stringField(configuredSession, "sessionId")).toBe(stringField(conversation, "sessionId"));
             const accepted = await json(
-                await exports.default.fetch(
+                await legacyFetch(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${stringField(conversation, "conversationId")}/messages`,
                     {
                         body: JSON.stringify({
@@ -1576,7 +1574,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             });
 
             const readable = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
                     headers: applicationHeaders(eventReaderCredential),
                 }),
                 200,
@@ -1584,52 +1582,43 @@ describe.sequential("Provider-neutral Bot API", () => {
             expect(recordArrayField(readable, "conversations")).toHaveLength(1);
 
             await expectApiError(
-                await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/runtime-pairings`,
-                    {
-                        body: JSON.stringify({ idempotencyKey: "conversation-cannot-pair" }),
-                        headers: applicationHeaders(conversationCredential),
-                        method: "POST",
-                    },
-                ),
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/runtime-pairings`, {
+                    body: JSON.stringify({ idempotencyKey: "conversation-cannot-pair" }),
+                    headers: applicationHeaders(conversationCredential),
+                    method: "POST",
+                }),
                 403,
                 "project_permission_denied",
             );
             await expectApiError(
-                await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
-                    {
-                        body: JSON.stringify({
-                            agentConfigRevision: 1,
-                            agentRef: "codex",
-                            allowedDeliveryTargetIds: [target.deliveryTargetId],
-                            behaviorRevisionId: behavior.behaviorRevisionId,
-                            completionPolicy: { kind: "none" },
-                            expectedRevision: bot.lifecycleRevision,
-                            runtimeId: pairing.runtimeId,
-                            workspaceRef: "default",
-                        }),
-                        headers: applicationHeaders(conversationCredential),
-                        method: "POST",
-                    },
-                ),
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`, {
+                    body: JSON.stringify({
+                        agentConfigRevision: 1,
+                        agentRef: "codex",
+                        allowedDeliveryTargetIds: [target.deliveryTargetId],
+                        behaviorRevisionId: behavior.behaviorRevisionId,
+                        completionPolicy: { kind: "none" },
+                        expectedRevision: bot.lifecycleRevision,
+                        runtimeId: pairing.runtimeId,
+                        workspaceRef: "default",
+                    }),
+                    headers: applicationHeaders(conversationCredential),
+                    method: "POST",
+                }),
                 403,
                 "project_permission_denied",
             );
             await expectApiError(
-                await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/applications`,
-                    {
-                        body: JSON.stringify({ name: "forbidden-app", permissions: ["project:read"] }),
-                        headers: applicationHeaders(conversationCredential),
-                        method: "POST",
-                    },
-                ),
+                await legacyFetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/applications`, {
+                    body: JSON.stringify({ name: "forbidden-app", permissions: ["project:read"] }),
+                    headers: applicationHeaders(conversationCredential),
+                    method: "POST",
+                }),
                 403,
                 "project_permission_denied",
             );
             await expectApiError(
-                await exports.default.fetch(
+                await legacyFetch(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connections/${connection.connectionId}/outbound-events?after=0`,
                     { headers: applicationHeaders(conversationCredential) },
                 ),
@@ -1638,7 +1627,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             for (const credential of [pairing.daemonToken, connection.credential]) {
                 await expectApiError(
-                    await exports.default.fetch(
+                    await legacyFetch(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/applications`,
                         { headers: applicationHeaders(credential) },
                     ),
@@ -1647,7 +1636,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 );
             }
             await expectApiError(
-                await exports.default.fetch(
+                await legacyFetch(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${command.executionId}/delivery-targets/${target.deliveryTargetId}/messages`,
                     {
                         body: JSON.stringify({ idempotencyKey: "project-cannot-execute", text: "forbidden" }),
@@ -1662,7 +1651,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 "execution_context_required",
             );
 
-            const readerWrite = await exports.default.fetch(
+            const readerWrite = await legacyFetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${stringField(conversation, "conversationId")}/messages`,
                 {
                     body: JSON.stringify({

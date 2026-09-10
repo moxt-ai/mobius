@@ -6,6 +6,7 @@ import {
     RuntimeAccessContext,
 } from "../../entity/authentication/project-authentication.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
+import type { AgentDescriptor, ClaimedPairing, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
 import {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
     ChannelDescriptor,
@@ -65,6 +66,15 @@ export class PairingDirectoryService implements PairingOperations {
         return this.#cx.storages.forTenant(tenant);
     };
 
+    private readonly projectStorage = async (scope: ProjectScope, signal: AbortSignal) => {
+        const tenant = await this.#cx.gateways.tenantShardingDirectory.resolveProject(scope.storageLocator, signal);
+        signal.throwIfAborted();
+        if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+            throw new PairingDirectoryError("invalid_directory_record", "The Project storage locator is invalid");
+        }
+        return this.#cx.storages.forTenant(tenant);
+    };
+
     private readonly identityStorage = async (credential: PairingIdentityCredential, signal: AbortSignal) => {
         const tenant = await this.#cx.services.identities.authenticateTenant(credential, signal);
         return this.#cx.storages.forTenant(tenant);
@@ -116,6 +126,11 @@ export class PairingDirectoryService implements PairingOperations {
         );
     };
 
+    readonly authorizeRuntimeCredential: PairingOperations["authorizeRuntimeCredential"] = async (token, signal) => {
+        signal.throwIfAborted();
+        return await this.#cx.services.identities.authenticateRuntime(await hashSecret(validateToken(token)), signal);
+    };
+
     readonly authorizeHost: PairingOperations["authorizeHost"] = async (channelId, token, signal) => {
         const row = await this.readAuthorizedHost(channelId, token, signal);
         return new ChannelHostCredential(
@@ -143,8 +158,8 @@ export class PairingDirectoryService implements PairingOperations {
                 "An accountless owner credential is required to open a Runtime host connection",
             );
         }
-        const storage = await this.tenantStorage(owner.tenantId, signal);
-        const runtime = await this.readProjectRuntime(storage, owner, runtimeId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
+        const runtime = await this.readProjectRuntime(storage, owner.scope, runtimeId, signal);
         return new ChannelHostCredential(
             runtime.channelId,
             runtime.runtimeId,
@@ -162,19 +177,28 @@ export class PairingDirectoryService implements PairingOperations {
         signal,
     ) => {
         const access = await this.authorizeProject(projectId, token, permission, signal);
-        const storage = await this.tenantStorage(access.tenantId, signal);
-        return await this.readProjectRuntime(storage, access, runtimeId, signal);
+        const storage = await this.projectStorage(access.scope, signal);
+        return await this.readProjectRuntime(storage, access.scope, runtimeId, signal);
+    };
+
+    readonly authorizeProjectScopeRuntime: PairingOperations["authorizeProjectScopeRuntime"] = async (
+        scope,
+        runtimeId,
+        signal,
+    ) => {
+        const storage = await this.projectStorage(scope, signal);
+        return await this.readProjectRuntime(storage, scope, runtimeId, signal);
     };
 
     private readonly readProjectRuntime = async (
         storage: PairingStorage,
-        access: ProjectAccessContext,
+        scope: ProjectScope,
         runtimeId: string,
         signal: AbortSignal,
     ) => {
         const row = await storage.readRuntime(
-            access.tenantId,
-            access.projectId,
+            scope.storageLocator.resolveHostingPlacement(),
+            scope.projectId,
             validateIdentifier(runtimeId, "runtime_id"),
             signal,
         );
@@ -198,7 +222,7 @@ export class PairingDirectoryService implements PairingOperations {
         signal: AbortSignal,
     ) => {
         if (
-            row.tenant_id !== owner.tenantId ||
+            row.tenant_id !== owner.scope.storageLocator.resolveHostingPlacement() ||
             row.project_id !== owner.projectId ||
             row.created_by_owner_credential_id !== owner.credentialId
         ) {
@@ -234,17 +258,17 @@ export class PairingDirectoryService implements PairingOperations {
         const normalizedProjectId = validateIdentifier(projectId, "project_id");
         const normalizedKey = validateIdentifier(idempotencyKey, "idempotency_key");
         const owner = await this.authorizeProject(normalizedProjectId, token, ProjectPermission.RuntimePair, signal);
-        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
         const now = Date.now();
         await storage.expireProjectPairings(
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             owner.projectId,
             now,
             `rpa_${crypto.randomUUID()}_`,
             signal,
         );
         const existing = await storage.readRuntimePairingRequest(
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             owner.projectId,
             normalizedKey,
             signal,
@@ -265,7 +289,7 @@ export class PairingDirectoryService implements PairingOperations {
                     pollHash: await hashSecret(secrets.pollToken),
                     channelId,
                     runtimeId,
-                    tenantId: owner.tenantId,
+                    tenantId: owner.scope.storageLocator.resolveHostingPlacement(),
                     projectId: owner.projectId,
                     now,
                     expiresAt,
@@ -295,7 +319,7 @@ export class PairingDirectoryService implements PairingOperations {
         } catch (cause) {
             signal.throwIfAborted();
             const duplicate = await storage.readRuntimePairingRequest(
-                owner.tenantId,
+                owner.scope.storageLocator.resolveHostingPlacement(),
                 owner.projectId,
                 normalizedKey,
                 signal,
@@ -303,12 +327,16 @@ export class PairingDirectoryService implements PairingOperations {
             if (duplicate !== null) {
                 return this.decodeCreatedRuntimePairing(duplicate, owner, token, normalizedKey, signal);
             }
-            const quota = await storage.countActiveRuntimes(owner.tenantId, owner.projectId, signal);
+            const quota = await storage.countActiveRuntimes(
+                owner.scope.storageLocator.resolveHostingPlacement(),
+                owner.projectId,
+                signal,
+            );
             if (quota !== null && quota.active_count >= MAX_RUNTIMES_PER_PROJECT) {
                 await storage.recordAudit(
                     {
                         auditId: `rpa_${crypto.randomUUID()}`,
-                        tenantId: owner.tenantId,
+                        tenantId: owner.scope.storageLocator.resolveHostingPlacement(),
                         projectId: owner.projectId,
                         pairingId,
                         runtimeId,
@@ -342,9 +370,9 @@ export class PairingDirectoryService implements PairingOperations {
         signal,
     ) => {
         const owner = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
-        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
         const row = await storage.readProjectPairing(
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             owner.projectId,
             validateIdentifier(pairingId, "pairing_id"),
             signal,
@@ -362,9 +390,9 @@ export class PairingDirectoryService implements PairingOperations {
         signal,
     ) => {
         const owner = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRevoke, signal);
-        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
         const row = await storage.readRevocableRuntime(
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             owner.projectId,
             validateIdentifier(runtimeId, "runtime_id"),
             signal,
@@ -384,13 +412,13 @@ export class PairingDirectoryService implements PairingOperations {
                 pairingId: row.pairing_id,
                 channelId: row.channel_id,
                 runtimeId: row.runtime_id,
-                tenantId: owner.tenantId,
+                tenantId: owner.scope.storageLocator.resolveHostingPlacement(),
                 projectId: owner.projectId,
                 ownerId: owner.credentialId,
                 revokedAt,
                 audit: {
                     auditId: `rpa_${crypto.randomUUID()}`,
-                    tenantId: owner.tenantId,
+                    tenantId: owner.scope.storageLocator.resolveHostingPlacement(),
                     projectId: owner.projectId,
                     pairingId: row.pairing_id,
                     runtimeId: row.runtime_id,
@@ -412,21 +440,22 @@ export class PairingDirectoryService implements PairingOperations {
         );
     };
 
-    readonly claimPairing: PairingOperations["claimPairing"] = async (
-        pairingCode,
-        machineName,
-        workspaceName,
-        agents,
-        installableAgents,
-        signal,
-    ) => {
+    private readonly redeemPairing = async (
+        expectedPairingId: string,
+        pairingCode: string,
+        machineName: string,
+        workspaceName: string,
+        agents: readonly AgentDescriptor[],
+        installableAgents: readonly InstallableAgentDescriptor[],
+        signal: AbortSignal,
+    ): Promise<ClaimedPairing> => {
         signal.throwIfAborted();
         const daemonToken = createRandomToken(32);
         const now = Date.now();
         const codeHash = await hashSecret(normalizePairingCode(pairingCode));
         const storage = await this.identityStorage({ kind: "pairing-code", codeHash }, signal);
         const pairing = await storage.readPairingCode(codeHash, signal);
-        if (pairing === null) {
+        if (pairing === null || (expectedPairingId.length > 0 && pairing.pairing_id !== expectedPairingId)) {
             throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
         }
         if (pairing.status === "pending" && pairing.expires_at > now) {
@@ -466,6 +495,34 @@ export class PairingDirectoryService implements PairingOperations {
         );
         throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
     };
+
+    readonly claimPairing: PairingOperations["claimPairing"] = async (
+        pairingCode,
+        machineName,
+        workspaceName,
+        agents,
+        installableAgents,
+        signal,
+    ) => await this.redeemPairing("", pairingCode, machineName, workspaceName, agents, installableAgents, signal);
+
+    readonly redeemRuntimePairing: PairingOperations["redeemRuntimePairing"] = async (
+        pairingId,
+        pairingCode,
+        machineName,
+        workspaceName,
+        agents,
+        installableAgents,
+        signal,
+    ) =>
+        await this.redeemPairing(
+            validateIdentifier(pairingId, "pairing_id"),
+            pairingCode,
+            machineName,
+            workspaceName,
+            agents,
+            installableAgents,
+            signal,
+        );
 
     readonly createChannelAccessGrant: PairingOperations["createChannelAccessGrant"] = async (
         channelId,
@@ -511,10 +568,10 @@ export class PairingDirectoryService implements PairingOperations {
         const expiresAt = now + lifetimeMilliseconds;
         const credentialId = `bcr_${createRandomToken(18)}`;
         const browserToken = createRandomToken(32);
-        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
         const result = await storage.createBrowser(
             credentialId,
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             owner.projectId,
             await hashSecret(browserToken),
             owner.credentialId,
@@ -529,7 +586,7 @@ export class PairingDirectoryService implements PairingOperations {
             credentialId,
             new Date(expiresAt).toISOString(),
             owner.projectId,
-            owner.tenantId,
+            owner.scope.storageLocator.resolveHostingPlacement(),
             browserToken,
         );
     };
@@ -612,8 +669,12 @@ export class PairingDirectoryService implements PairingOperations {
 
     readonly listProjectRuntimes: PairingOperations["listProjectRuntimes"] = async (projectId, token, signal) => {
         const access = await this.authorizeProject(projectId, token, ProjectPermission.RuntimeRead, signal);
-        const storage = await this.tenantStorage(access.tenantId, signal);
-        const page = await storage.listRuntimes(access.tenantId, access.projectId, signal);
+        const storage = await this.projectStorage(access.scope, signal);
+        const page = await storage.listRuntimes(
+            access.scope.storageLocator.resolveHostingPlacement(),
+            access.projectId,
+            signal,
+        );
         return page.results.map(
             (row) =>
                 new ChannelDescriptor(
@@ -779,10 +840,17 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const owner = await this.authorizeProject(projectId, token, ProjectPermission.OwnerCredentialsManage, signal);
         const normalizedCredentialId = validateIdentifier(credentialId, "credential_id");
-        const storage = await this.tenantStorage(owner.tenantId, signal);
+        const storage = await this.projectStorage(owner.scope, signal);
         if (
-            (await storage.revokeBrowser(owner.tenantId, owner.projectId, normalizedCredentialId, Date.now(), signal))
-                .meta.changes !== 1
+            (
+                await storage.revokeBrowser(
+                    owner.scope.storageLocator.resolveHostingPlacement(),
+                    owner.projectId,
+                    normalizedCredentialId,
+                    Date.now(),
+                    signal,
+                )
+            ).meta.changes !== 1
         ) {
             throw new PairingDirectoryError("browser_credential_not_found", "The browser credential was not found");
         }

@@ -5,6 +5,7 @@ import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -58,12 +59,14 @@ describe("CLI environment proxy", () => {
         const tunnelTargets: string[] = [];
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-proxy-test-"));
 
-        const pairingServer = createServer((_request, response) => {
+        const pairingPaths: string[] = [];
+        const pairingServer = createServer((request, response) => {
+            pairingPaths.push(new URL(request.url ?? "/", "http://127.0.0.1").pathname);
             response.writeHead(200, { "content-type": "application/json" });
             response.end(
                 JSON.stringify({
                     channelId: "proxy-channel",
-                    daemonToken: "a".repeat(32),
+                    runtimeCredential: "a".repeat(32),
                     runtimeId: "proxy-runtime",
                 }),
             );
@@ -137,19 +140,20 @@ describe("CLI environment proxy", () => {
         process.env["PATH"] = "";
 
         try {
-            const { pairLocalMachine } = await import("../src/pairing/pair-local-machine.ts");
+            const { pairMobiusRuntime } = await import("../src/runtime.ts");
             const { connectRelay } = await import("../src/relay-connection/connect.ts");
             const { environmentProxyDispatcher } = await import("../src/network/environment-proxy.ts");
 
             const pairingPort = readPort(pairingServer);
-            await pairLocalMachine([
-                "--url",
-                `http://127.0.0.1:${pairingPort}`,
-                "--code",
-                "ABCD-EFGH-JKLM-NPQR-STUV",
-                "--workspace",
-                process.cwd(),
-            ]);
+            await pairMobiusRuntime(
+                {
+                    defaultWorkspace: process.cwd(),
+                    pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
+                    pairingId: "proxy-pairing",
+                    relayOrigin: `http://127.0.0.1:${pairingPort}`,
+                },
+                AbortSignal.timeout(2_000),
+            );
 
             const relayPort = readPort(relayServer);
             const socket = await connectRelay(
@@ -160,6 +164,7 @@ describe("CLI environment proxy", () => {
 
             expect(tunnelTargets).toContain(`127.0.0.1:${pairingPort}`);
             expect(tunnelTargets).toContain(`127.0.0.1:${relayPort}`);
+            expect(pairingPaths).toEqual([`${MOBIUS_API_PREFIX}/v1/runtime-pairings/proxy-pairing/redeem`]);
             await environmentProxyDispatcher.close();
         } finally {
             if (previousHttpProxy === undefined) {

@@ -1,4 +1,10 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import {
+    decodePromptImagesValue,
+    decodePromptResourcesValue,
+    MOBIUS_API_PREFIX,
+    type PromptImage,
+    type PromptResource,
+} from "@moxt-ai/mobius-protocol";
 import {
     decodeMobiusBot,
     decodeMobiusBotBehavior,
@@ -16,6 +22,7 @@ import {
     MobiusBotDirectory,
     MobiusBotProfileRevision,
     MobiusNoBotCompletionPolicy,
+    MobiusProjectConversation,
     MobiusRequiredBotCompletionPolicy,
 } from "./bot-owner-resources.ts";
 import {
@@ -40,6 +47,7 @@ import {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
+import { decodeMobiusTurn, type MobiusTurn } from "./resources.ts";
 import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
 
 export const MOBIUS_BOT_API_VERSION = "v1";
@@ -103,6 +111,78 @@ export interface CreateMobiusBotConnectionGrantRequest {
 
 export interface CreateMobiusOwnerConversationRequest {
     readonly clientConversationKey: string;
+}
+
+export interface MobiusConversationConfigurationRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly booleanValue: boolean;
+    readonly configId: string;
+    readonly idempotencyKey: string;
+    readonly value: string;
+    readonly valueType: string;
+}
+
+export interface MobiusInitialConversationConfigurationRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly booleanValue: boolean;
+    readonly configId: string;
+    readonly value: string;
+    readonly valueType: string;
+}
+
+export interface CreateMobiusProjectConversationRequest {
+    readonly botId: string;
+    readonly clientReference: string;
+    readonly configuration: MobiusInitialConversationConfigurationRequest;
+    readonly idempotencyKey: string;
+    readonly title: string;
+}
+
+export interface SubmitMobiusProjectConversationTurnRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly artifactIds: readonly string[];
+    readonly content: string;
+    readonly idempotencyKey: string;
+    readonly images: readonly PromptImage[];
+    readonly resources: readonly PromptResource[];
+}
+
+export class MobiusProjectConversationTurnAcceptance {
+    readonly duplicate: boolean;
+    readonly eventCursor: string;
+    readonly executionId: string;
+    readonly turn: MobiusTurn;
+    readonly turnId: string;
+
+    constructor(value: unknown) {
+        const resource = responseRecord(value);
+        if (typeof resource["duplicate"] !== "boolean") {
+            throw new MobiusProtocolError("The Project Conversation turn acceptance is invalid");
+        }
+        this.duplicate = resource["duplicate"];
+        this.eventCursor = boundedText(resource["eventCursor"], "Conversation event cursor", 512, true);
+        this.executionId = identifier(resource["executionId"], "Conversation execution");
+        this.turn = decodeMobiusTurn(resource["turn"]);
+        this.turnId = identifier(resource["turnId"], "Conversation turn");
+        if (this.turn.turnId !== this.turnId) {
+            throw new MobiusProtocolError("The Project Conversation turn acceptance is inconsistent");
+        }
+    }
+}
+
+export class MobiusConversationConfigurationAcceptance {
+    readonly duplicate: boolean;
+    readonly requestId: string;
+    readonly status = "accepted";
+
+    constructor(value: unknown) {
+        const resource = responseRecord(value);
+        if (typeof resource["duplicate"] !== "boolean" || resource["status"] !== "accepted") {
+            throw new MobiusProtocolError("The Conversation configuration acceptance is invalid");
+        }
+        this.duplicate = resource["duplicate"];
+        this.requestId = identifier(resource["requestId"], "Conversation configuration request");
+    }
 }
 
 export interface RedeemMobiusBotConnectionGrantRequest {
@@ -410,6 +490,52 @@ function projectBotsPath(projectId: string): string {
     return `${MOBIUS_BOT_API_VERSION}/projects/${encodeURIComponent(identifier(projectId, "project"))}/bots`;
 }
 
+function projectConversationsPath(projectId: string): string {
+    return `${MOBIUS_BOT_API_VERSION}/projects/${encodeURIComponent(identifier(projectId, "project"))}/conversations`;
+}
+
+function conversationPath(conversationId: string, resource: string): string {
+    const base = `${MOBIUS_BOT_API_VERSION}/conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}`;
+    return resource.length === 0 ? base : `${base}/${resource}`;
+}
+
+function serializedConversationConfiguration(request: unknown): Readonly<Record<string, unknown>> {
+    const value = requestRecord(
+        request,
+        ["additionalDirectoryIds", "booleanValue", "configId", "idempotencyKey", "value", "valueType"],
+        "Conversation configuration request",
+    );
+    if (typeof value["booleanValue"] !== "boolean") {
+        throw new MobiusValidationError("The Conversation configuration boolean value is invalid");
+    }
+    return {
+        additionalDirectoryIds: identifiers(value["additionalDirectoryIds"], "additional directory", 16),
+        booleanValue: value["booleanValue"],
+        configId: identifier(value["configId"], "configuration"),
+        idempotencyKey: identifier(value["idempotencyKey"], "configuration idempotency key"),
+        value: boundedText(value["value"], "configuration value", 500, true),
+        valueType: boundedText(value["valueType"], "configuration value type", 32),
+    };
+}
+
+function serializedInitialConversationConfiguration(request: unknown): Readonly<Record<string, unknown>> {
+    const value = requestRecord(
+        request,
+        ["additionalDirectoryIds", "booleanValue", "configId", "value", "valueType"],
+        "initial Conversation configuration request",
+    );
+    if (typeof value["booleanValue"] !== "boolean") {
+        throw new MobiusValidationError("The initial Conversation configuration boolean value is invalid");
+    }
+    return {
+        additionalDirectoryIds: identifiers(value["additionalDirectoryIds"], "additional directory", 16),
+        booleanValue: value["booleanValue"],
+        configId: identifier(value["configId"], "configuration"),
+        value: boundedText(value["value"], "configuration value", 500, true),
+        valueType: boundedText(value["valueType"], "configuration value type", 32),
+    };
+}
+
 function serializedCompletionPolicy(policy: MobiusBotCompletionPolicy): Readonly<Record<string, unknown>> {
     if (policy instanceof MobiusNoBotCompletionPolicy) {
         return { kind: "none" };
@@ -605,6 +731,79 @@ export class MobiusBotOwnerClient {
             ),
         );
     };
+
+    readonly createProjectConversation = async (
+        request: CreateMobiusProjectConversationRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversation> => {
+        const value = requestRecord(
+            request,
+            ["botId", "clientReference", "configuration", "idempotencyKey", "title"],
+            "Project Conversation request",
+        );
+        const configuration = value["configuration"];
+        if (!isRecord(configuration)) {
+            throw new MobiusValidationError("The initial Conversation configuration is invalid");
+        }
+        return new MobiusProjectConversation(
+            await this.#executor.post(
+                projectConversationsPath(this.#projectId),
+                {
+                    botId: identifier(value["botId"], "Bot"),
+                    clientReference: identifier(value["clientReference"], "client reference"),
+                    configuration: serializedInitialConversationConfiguration(configuration),
+                    idempotencyKey: identifier(value["idempotencyKey"], "Conversation idempotency key"),
+                    title: boundedText(value["title"], "Conversation title", 500, true),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly readProjectConversation = async (
+        conversationId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversation> =>
+        new MobiusProjectConversation(await this.#executor.get(conversationPath(conversationId, ""), signal));
+
+    readonly submitProjectConversationTurn = async (
+        conversationId: string,
+        request: SubmitMobiusProjectConversationTurnRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversationTurnAcceptance> => {
+        const value = requestRecord(
+            request,
+            ["additionalDirectoryIds", "artifactIds", "content", "idempotencyKey", "images", "resources"],
+            "Project Conversation turn request",
+        );
+        return new MobiusProjectConversationTurnAcceptance(
+            await this.#executor.post(
+                conversationPath(conversationId, "turns"),
+                {
+                    additionalDirectoryIds: identifiers(value["additionalDirectoryIds"], "additional directory", 16),
+                    artifactIds: identifiers(value["artifactIds"], "artifact", 16),
+                    content: boundedText(value["content"], "Conversation Turn content", 100_000, true),
+                    idempotencyKey: identifier(value["idempotencyKey"], "Turn idempotency key"),
+                    images: decodePromptImagesValue(value["images"]),
+                    resources: decodePromptResourcesValue(value["resources"]),
+                },
+                signal,
+            ),
+        );
+    };
+
+    readonly createConversationConfigurationRevision = async (
+        conversationId: string,
+        request: MobiusConversationConfigurationRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusConversationConfigurationAcceptance> =>
+        new MobiusConversationConfigurationAcceptance(
+            await this.#executor.post(
+                conversationPath(conversationId, "configuration-revisions"),
+                serializedConversationConfiguration(request),
+                signal,
+            ),
+        );
 
     readonly submitMessage = async (
         botId: string,

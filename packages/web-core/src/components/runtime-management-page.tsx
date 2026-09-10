@@ -195,7 +195,7 @@ function runtimeName(runtime: MobiusRuntimeDescriptor): string {
 }
 
 function pairingCommand(pairing: MobiusRuntimePairing): string {
-    return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --code ${pairing.pairingCode}`;
+    return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --pairing ${pairing.pairingId} --code ${pairing.pairingCode}`;
 }
 
 async function readRuntimeDirectory(

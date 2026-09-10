@@ -312,7 +312,6 @@ export class ChannelConnection {
     readonly hostToken: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(
@@ -322,7 +321,6 @@ export class ChannelConnection {
         machineName: string,
         workspaceName: string,
         hostToken: string,
-        tenantId: string,
         projectId: string,
         runtimeId: string,
         installableAgents: readonly InstallableAgentOption[] = [],
@@ -335,7 +333,6 @@ export class ChannelConnection {
         this.hostToken = hostToken;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
         this.workspaceName = workspaceName;
     }
 }
@@ -554,7 +551,6 @@ export class CreatedPairing {
     readonly hostToken: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
 
     constructor(
         pairingId: string,
@@ -563,7 +559,6 @@ export class CreatedPairing {
         channelId: string,
         expiresAt: Date,
         hostToken: string,
-        tenantId: string,
         projectId: string,
         runtimeId: string,
     ) {
@@ -575,7 +570,6 @@ export class CreatedPairing {
         this.hostToken = hostToken;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
     }
 }
 

@@ -27,6 +27,29 @@ function exact(value: Readonly<Record<string, unknown>>, fields: readonly string
         throw new BotApiError("invalid_request", "The request fields are invalid", "invalid-input");
     }
 }
+
+export interface ConversationConfigurationInput {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly booleanValue: boolean;
+    readonly configId: string;
+    readonly value: string;
+    readonly valueType: string;
+}
+
+export function conversationConfiguration(
+    value: Readonly<Record<string, unknown>>,
+    key = "configuration",
+): ConversationConfigurationInput {
+    const configuration = object(value, key);
+    exact(configuration, ["additionalDirectoryIds", "booleanValue", "configId", "value", "valueType"]);
+    return {
+        additionalDirectoryIds: identifiers(configuration, "additionalDirectoryIds", 16),
+        booleanValue: boolean(configuration, "booleanValue"),
+        configId: identifier(configuration, "configId"),
+        value: string(configuration, "value", 500, true),
+        valueType: string(configuration, "valueType", 32),
+    };
+}
 export function string(
     value: Readonly<Record<string, unknown>>,
     key: string,

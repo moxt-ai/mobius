@@ -82,6 +82,9 @@ export class SqliteSessionRuntime
     readonly acceptTurn: SessionCommandGateway["acceptTurn"] = (...parameters) =>
         this.#commands.acceptTurn(...parameters);
 
+    readonly acceptConfiguration: SessionCommandGateway["acceptConfiguration"] = (...parameters) =>
+        this.#commands.acceptConfiguration(...parameters);
+
     readonly acceptTurnCancellation: SessionCommandGateway["acceptTurnCancellation"] = (...parameters) =>
         this.#commands.acceptTurnCancellation(...parameters);
 
@@ -122,6 +125,9 @@ export class SqliteSessionRuntime
 
     readonly readSession: SessionQueryGateway["readSession"] = (...parameters) =>
         this.#queries.readSession(...parameters);
+
+    readonly readConfiguration: SessionQueryGateway["readConfiguration"] = (...parameters) =>
+        this.#queries.readConfiguration(...parameters);
 
     readonly readNativeHistory: SessionQueryGateway["readNativeHistory"] = (...parameters) =>
         this.#queries.readNativeHistory(...parameters);

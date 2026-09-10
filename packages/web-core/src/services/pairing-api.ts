@@ -506,7 +506,6 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
     const pollToken = value["pollToken"];
     const channelId = value["channelId"];
     const hostToken = value["hostToken"];
-    const tenantId = value["tenantId"];
     const projectId = value["projectId"];
     const runtimeId = value["runtimeId"];
     if (
@@ -520,8 +519,6 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
         !isIdentifier(channelId) ||
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
-        typeof tenantId !== "string" ||
-        !isIdentifier(tenantId) ||
         typeof projectId !== "string" ||
         !isIdentifier(projectId) ||
         typeof runtimeId !== "string" ||
@@ -536,7 +533,6 @@ function decodeCreatedPairing(value: unknown): CreatedPairing {
         channelId,
         readDate(value["expiresAt"], "expiry time"),
         hostToken,
-        tenantId,
         projectId,
         runtimeId,
     );
@@ -546,12 +542,10 @@ abstract class BrowserChannelCredential {
     abstract readonly authority: string;
     readonly hostToken: string;
     readonly projectId: string;
-    readonly tenantId: string;
 
-    constructor(hostToken: string, projectId: string, tenantId: string) {
+    constructor(hostToken: string, projectId: string) {
         this.hostToken = hostToken;
         this.projectId = projectId;
-        this.tenantId = tenantId;
     }
 }
 
@@ -571,8 +565,8 @@ class ProjectOwnerBrowserCredential extends BrowserChannelCredential {
     readonly authority = "project-owner";
     readonly ownerChannelId: string;
 
-    constructor(hostToken: string, projectId: string, tenantId: string, ownerChannelId: string) {
-        super(hostToken, projectId, tenantId);
+    constructor(hostToken: string, projectId: string, ownerChannelId: string) {
+        super(hostToken, projectId);
         this.ownerChannelId = ownerChannelId;
     }
 }
@@ -606,13 +600,12 @@ function saveBrowserChannelCredential(channelId: string, credential: BrowserChan
             authority: credential.authority,
             hostToken: credential.hostToken,
             projectId: credential.projectId,
-            tenantId: credential.tenantId,
         }),
     );
 }
 
 function saveChannelCredential(pairing: CreatedPairing): void {
-    const credential = new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId, pairing.tenantId);
+    const credential = new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId);
     saveBrowserChannelCredential(pairing.channelId, credential);
     saveProjectOwnerCredential(pairing.channelId, credential);
 }
@@ -624,7 +617,6 @@ function saveProjectOwnerCredential(ownerChannelId: string, credential: BrowserC
             hostToken: credential.hostToken,
             ownerChannelId,
             projectId: credential.projectId,
-            tenantId: credential.tenantId,
         }),
     );
 }
@@ -652,19 +644,16 @@ function readProjectOwnerCredential(projectId: string): ProjectOwnerBrowserCrede
     const hostToken = value["hostToken"];
     const ownerChannelId = value["ownerChannelId"];
     const storedProjectId = value["projectId"];
-    const tenantId = value["tenantId"];
     if (
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
         typeof ownerChannelId !== "string" ||
         !isIdentifier(ownerChannelId) ||
-        storedProjectId !== projectId ||
-        typeof tenantId !== "string" ||
-        !isIdentifier(tenantId)
+        storedProjectId !== projectId
     ) {
         throw new PairingApiError("project_owner_credential_invalid", "The saved Project owner credential is invalid.");
     }
-    return new ProjectOwnerBrowserCredential(hostToken, projectId, tenantId, ownerChannelId);
+    return new ProjectOwnerBrowserCredential(hostToken, projectId, ownerChannelId);
 }
 
 function readChannelCredential(channelId: string): BrowserChannelCredential {
@@ -679,27 +668,24 @@ function readChannelCredential(channelId: string): BrowserChannelCredential {
         throw new PairingApiError("channel_credential_missing", "This browser does not have access to the channel.");
     }
     const hostToken = value["hostToken"];
-    const tenantId = value["tenantId"];
     const projectId = value["projectId"];
     const authority = value["authority"];
     if (
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
-        typeof tenantId !== "string" ||
-        !isIdentifier(tenantId) ||
         typeof projectId !== "string" ||
         !isIdentifier(projectId)
     ) {
         throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
     }
     if (authority === "owner") {
-        return new OwnerBrowserChannelCredential(hostToken, projectId, tenantId);
+        return new OwnerBrowserChannelCredential(hostToken, projectId);
     }
     if (authority === "linked") {
-        return new LinkedBrowserChannelCredential(hostToken, projectId, tenantId);
+        return new LinkedBrowserChannelCredential(hostToken, projectId);
     }
     if (authority === undefined) {
-        return new LegacyBrowserChannelCredential(hostToken, projectId, tenantId);
+        return new LegacyBrowserChannelCredential(hostToken, projectId);
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
@@ -753,18 +739,15 @@ function decodeRedeemedChannelCredential(value: unknown, expectedChannelId: stri
     }
     const hostToken = value["hostToken"];
     const projectId = value["projectId"];
-    const tenantId = value["tenantId"];
     if (
         typeof hostToken !== "string" ||
         !isToken(hostToken) ||
         typeof projectId !== "string" ||
-        !isIdentifier(projectId) ||
-        typeof tenantId !== "string" ||
-        !isIdentifier(tenantId)
+        !isIdentifier(projectId)
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel credential.");
     }
-    return new LinkedBrowserChannelCredential(hostToken, projectId, tenantId);
+    return new LinkedBrowserChannelCredential(hostToken, projectId);
 }
 
 abstract class ChannelAccessFragmentState {}
@@ -860,7 +843,7 @@ function decodeChannelConnection(
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid channel.");
     }
-    if (value["tenantId"] !== credential.tenantId || value["projectId"] !== credential.projectId) {
+    if (value["projectId"] !== credential.projectId) {
         throw new PairingApiError("invalid_relay_response", "The relay returned a channel from another project.");
     }
     const agents = decodeAgents(value["agents"]);
@@ -878,7 +861,6 @@ function decodeChannelConnection(
         readString(value["machineName"], "machine name", 120),
         readString(value["workspaceName"], "workspace name", 120),
         credential.hostToken,
-        credential.tenantId,
         credential.projectId,
         runtimeId,
         installableAgents,
@@ -889,7 +871,7 @@ function runtimeConnection(
     runtime: MobiusRuntimeDescriptor,
     credential: ProjectOwnerBrowserCredential,
 ): ChannelConnection {
-    if (runtime.projectId !== credential.projectId || runtime.tenantId !== credential.tenantId) {
+    if (runtime.projectId !== credential.projectId) {
         throw new PairingApiError("invalid_relay_response", "The relay returned a Runtime from another Project.");
     }
     const agents = runtime.agents.map(
@@ -917,7 +899,6 @@ function runtimeConnection(
         runtime.machineName,
         runtime.workspaceName,
         credential.hostToken,
-        credential.tenantId,
         credential.projectId,
         runtime.runtimeId,
         installableAgents,
@@ -1056,7 +1037,7 @@ export async function readBrowserPairingStatus(pairing: CreatedPairing): Promise
         decodeChannelConnection(
             value,
             pairing.channelId,
-            new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId, pairing.tenantId),
+            new OwnerBrowserChannelCredential(pairing.hostToken, pairing.projectId),
         ),
     );
 }
@@ -1364,7 +1345,7 @@ export async function readRuntimeManagementAccess(
         await readLinkedChannelDevices(channelId, cancellationSignal);
         saveBrowserChannelCredential(
             channelId,
-            new OwnerBrowserChannelCredential(credential.hostToken, credential.projectId, credential.tenantId),
+            new OwnerBrowserChannelCredential(credential.hostToken, credential.projectId),
         );
         saveProjectOwnerCredential(channelId, credential);
         return new OwnerRuntimeManagementAccess();
@@ -1372,7 +1353,7 @@ export async function readRuntimeManagementAccess(
         if (error instanceof PairingApiError && error.code === "owner_access_required") {
             saveBrowserChannelCredential(
                 channelId,
-                new LinkedBrowserChannelCredential(credential.hostToken, credential.projectId, credential.tenantId),
+                new LinkedBrowserChannelCredential(credential.hostToken, credential.projectId),
             );
             return new ReadOnlyRuntimeManagementAccess();
         }
@@ -1451,18 +1432,17 @@ function connectionCredential(connection: ChannelConnection): BrowserChannelCred
         return new ProjectOwnerBrowserCredential(
             connection.hostToken,
             connection.projectId,
-            connection.tenantId,
             connection.credentialAuthority.ownerChannelId,
         );
     }
     if (connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) {
-        return new OwnerBrowserChannelCredential(connection.hostToken, connection.projectId, connection.tenantId);
+        return new OwnerBrowserChannelCredential(connection.hostToken, connection.projectId);
     }
     if (connection.credentialAuthority instanceof LinkedChannelCredentialAuthority) {
-        return new LinkedBrowserChannelCredential(connection.hostToken, connection.projectId, connection.tenantId);
+        return new LinkedBrowserChannelCredential(connection.hostToken, connection.projectId);
     }
     if (connection.credentialAuthority instanceof LegacyChannelCredentialAuthority) {
-        return new LegacyBrowserChannelCredential(connection.hostToken, connection.projectId, connection.tenantId);
+        return new LegacyBrowserChannelCredential(connection.hostToken, connection.projectId);
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
@@ -1544,7 +1524,6 @@ function decodeRecordedSession(
 ): { readonly hasNativeHistory: boolean; readonly session: RecordedSession } {
     const binding = value.defaultBinding;
     if (
-        value.tenantId !== credential.tenantId ||
         value.projectId !== credential.projectId ||
         value.state.kind !== "ready" ||
         binding.sessionId !== value.sessionId ||
@@ -1718,5 +1697,5 @@ export async function readChannelHistoryForSynchronization(
 }
 
 export function pairingCommand(pairing: CreatedPairing): string {
-    return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --code ${pairing.pairingCode}`;
+    return `npx --yes @moxt-ai/mobius pair --url ${JSON.stringify(window.location.origin)} --pairing ${pairing.pairingId} --code ${pairing.pairingCode}`;
 }

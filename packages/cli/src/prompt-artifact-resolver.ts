@@ -88,10 +88,17 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
 function downloadUrl(config: DaemonConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
     const url = new URL(config.relayUrl);
     url.protocol = url.protocol === "wss:" ? "https:" : "http:";
-    if (!url.pathname.endsWith("/daemon")) {
-        throw new PromptArtifactError("artifact_endpoint_invalid", "The Relay artifact endpoint is invalid");
+    let channelPath = "";
+    if (url.pathname.endsWith("/daemon")) {
+        channelPath = url.pathname.slice(0, -"/daemon".length);
+    } else {
+        const runtimePath = "/v1/runtimes/connect";
+        if (!url.pathname.endsWith(runtimePath)) {
+            throw new PromptArtifactError("artifact_endpoint_invalid", "The Relay artifact endpoint is invalid");
+        }
+        channelPath = `${url.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
     }
-    url.pathname = `${url.pathname.slice(0, -"/daemon".length)}/sessions/${encodeURIComponent(command.sessionId)}/commands/${encodeURIComponent(command.commandId)}/artifacts/${encodeURIComponent(reference.artifactId)}/content`;
+    url.pathname = `${channelPath}/sessions/${encodeURIComponent(command.sessionId)}/commands/${encodeURIComponent(command.commandId)}/artifacts/${encodeURIComponent(reference.artifactId)}/content`;
     url.searchParams.delete("liveness");
     return url;
 }

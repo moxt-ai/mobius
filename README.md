@@ -104,13 +104,13 @@ one running Bot to use only its approved outbound targets. See [Bots and
 external connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and
 security model.
 
-The same deployment may authorize accountless owners, short-lived browser
-access, external OIDC identities, and least-privilege server applications. All
-Project-facing credentials normalize into one permission-bearing access
-context, while Runtime, Connector, execution-capability, and local-grant trust
-planes remain independent. See [Project authentication and credential
-operations](docs/project-authentication.md) for OIDC host construction, the Moxt
-server pattern, recovery guidance, route permissions, and the rotation runbook.
+Standalone and Platform expose separate hosting trust planes. Standalone keeps
+accountless Project ownership; Platform adds OIDC developers, Tenant/App
+provisioning, AppCredentials, and exact-Session browser credentials. Both
+normalize authorized work into the shared Project services while Runtime,
+Connector, execution-capability, and local-grant authority remain independent.
+See [Cloudflare Platform hosting](docs/platform-hosting.md) and [Project
+authentication and credential operations](docs/project-authentication.md).
 
 ### Agent harness integrations
 
@@ -155,7 +155,7 @@ Open [http://127.0.0.1:8787](http://127.0.0.1:8787). The default page creates a
 short-lived pairing code and displays a command like this:
 
 ```bash
-npx --yes @moxt-ai/mobius pair --url http://127.0.0.1:8787 --code XXXX-XXXX-XXXX-XXXX-XXXX
+npx --yes @moxt-ai/mobius pair --url http://127.0.0.1:8787 --pairing <runtime-pairing-id> --code XXXX-XXXX-XXXX-XXXX-XXXX
 ```
 
 Run that command anywhere on the machine. The published
@@ -438,6 +438,18 @@ profile before the first deployment and continue using it for that Worker;
 switching profiles does not migrate existing session history. In particular, an
 existing R2 deployment must keep using `pnpm deploy:cloudflare:r2`.
 
+For multi-tenant application hosting, deploy the independent Platform Worker:
+
+```bash
+pnpm deploy:cloudflare:platform
+```
+
+Platform requires deployment-owned OIDC, browser-origin, and two-D1 binding
+configuration and never enables accountless public bootstrap. It does not alter
+the Standalone Worker or its data. See [Cloudflare Platform
+hosting](docs/platform-hosting.md) for initial provisioning and credential
+boundaries.
+
 ### One-command Cloudflare preview
 
 Run the temporary deployment from the repository root:
@@ -490,8 +502,9 @@ selected agent advertises that capability.
 packages/
   relay-core/        Portable Relay API, channel actor, state contracts, and ports
   relay-cloudflare/  Reusable Cloudflare Durable Objects, D1, and R2 adapters
+  relay-cloudflare-platform/  Multi-tenant Platform Worker and control plane
   relay-cloudflare-standalone/  Standalone Worker entry point and deployment composition
-  cli/               Publishable @moxt-ai/mobius CLI, including the local daemon
+  cli/               Publishable @moxt-ai/mobius CLI and reusable /runtime engine
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
   web-sdk/           Browser-and-Node TypeScript SDK

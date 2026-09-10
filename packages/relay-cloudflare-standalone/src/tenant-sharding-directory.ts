@@ -5,4 +5,7 @@ export class StandaloneTenantShardingDirectory implements TenantShardingDirector
         signal.throwIfAborted();
         return { tenantId, tenantSharding: { hasShard: false } };
     };
+
+    readonly resolveProject: TenantShardingDirectory["resolveProject"] = async (locator, signal) =>
+        await this.resolve(locator.resolveHostingPlacement(), signal);
 }

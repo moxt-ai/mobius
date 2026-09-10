@@ -1,12 +1,14 @@
 {
     "$schema": "https://unpkg.com/knip@6/schema.json",
     "workspaces": {
+        "packages/cli": {
+            "entry": ["src/index.ts", "src/runtime.ts"]
+        },
         "packages/web-core": {
             "project": ["src/**/*.{ts,tsx}"]
         },
         "packages/web": {
             "ignoreDependencies": [
-                "@moxt-ai/mobius-sdk",
                 "@radix-ui/react-select",
                 "class-variance-authority",
                 "clsx",
@@ -18,6 +20,9 @@
             ]
         },
         "packages/relay-cloudflare-standalone": {
+            "ignoreDependencies": ["cloudflare"]
+        },
+        "packages/relay-cloudflare-platform": {
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/web-sdk": {

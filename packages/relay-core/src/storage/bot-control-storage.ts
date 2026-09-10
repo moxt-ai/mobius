@@ -111,7 +111,7 @@ export class BotControlStorage {
                   ON profiles.profile_revision_id = bots.current_profile_revision_id
                 WHERE bots.tenant_id = ? AND bots.project_id = ?
                 ORDER BY bots.updated_at DESC, bots.bot_id DESC`)
-            .bind(access.scope.tenantId, access.scope.projectId)
+            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .all<BotProfileRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -124,7 +124,7 @@ export class BotControlStorage {
                 INNER JOIN bots ON bots.bot_id = behaviors.bot_id
                 WHERE behaviors.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
                 ORDER BY behaviors.revision_number DESC`)
-            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .all<BehaviorRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -137,7 +137,7 @@ export class BotControlStorage {
                 INNER JOIN bots ON bots.bot_id = bindings.bot_id
                 WHERE bindings.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
                 ORDER BY bindings.binding_revision DESC`)
-            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .all<BindingRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -214,7 +214,14 @@ export class BotControlStorage {
                        lifecycle, lifecycle_revision, created_at, updated_at
                      ) VALUES (?, ?, ?, ?, 'draft', 1, ?, ?)`,
                     )
-                    .bind(botId, access.scope.tenantId, access.scope.projectId, profileRevisionId, now, now),
+                    .bind(
+                        botId,
+                        access.scope.storageLocator.resolveHostingPlacement(),
+                        access.scope.projectId,
+                        profileRevisionId,
+                        now,
+                        now,
+                    ),
                 this.audit(
                     access.scope,
                     botId,
@@ -371,7 +378,7 @@ export class BotControlStorage {
                    FROM pairing_channels
                   WHERE runtime_id = ? AND tenant_id = ? AND project_id = ? AND status = 'paired'`,
             )
-            .bind(runtimeId, scope.tenantId, scope.projectId)
+            .bind(runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId)
             .first<RuntimeRow>(signal);
         signal.throwIfAborted();
         return runtime;
@@ -498,7 +505,7 @@ export class BotControlStorage {
                     AND outbox.message_kind = 'binding_approval'
                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT ?`,
             )
-            .bind(scope.tenantId, scope.projectId, runtimeId, limit)
+            .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, runtimeId, limit)
             .all<{ readonly payload: string }>(signal);
         signal.throwIfAborted();
         return rows.results.map((row) => row.payload);
@@ -647,7 +654,7 @@ export class BotControlStorage {
                      ON profiles.profile_revision_id = bots.current_profile_revision_id
                   WHERE bots.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?`,
             )
-            .bind(access.botId, access.scope.tenantId, access.scope.projectId)
+            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
             .first<BotProfileRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -697,7 +704,11 @@ export class BotControlStorage {
                    FROM pairing_channels
                   WHERE tenant_id = ? AND project_id = ? AND runtime_id = ? AND status = 'paired'`,
             )
-            .bind(scope.tenantId, scope.projectId, validateIdentifier(runtimeId, "runtime_id"))
+            .bind(
+                scope.storageLocator.resolveHostingPlacement(),
+                scope.projectId,
+                validateIdentifier(runtimeId, "runtime_id"),
+            )
             .first<RuntimeRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -755,7 +766,7 @@ export class BotControlStorage {
                     )
                     .bind(
                         `aud_${createRandomToken(18)}`,
-                        access.scope.tenantId,
+                        access.scope.storageLocator.resolveHostingPlacement(),
                         access.scope.projectId,
                         access.botId,
                         access.actor.kind.value,
@@ -815,7 +826,7 @@ export class BotControlStorage {
                 event.behaviorRevisionId,
                 event.bindingRevision,
                 runtimeId,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -858,7 +869,7 @@ export class BotControlStorage {
                 event.localGrantId,
                 event.agentIdentityDigest,
                 event.workspaceIdentityDigest,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -899,7 +910,7 @@ export class BotControlStorage {
                 runtimeId,
                 event.code,
                 event.message,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -929,7 +940,7 @@ export class BotControlStorage {
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.tenantId,
+                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

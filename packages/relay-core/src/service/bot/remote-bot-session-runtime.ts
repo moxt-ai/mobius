@@ -86,7 +86,7 @@ function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): Exe
     }
     const tenantId = text(value, "tenantId");
     const projectId = text(value, "projectId");
-    if (tenantId !== expectedScope.tenantId || projectId !== expectedScope.projectId) {
+    if (tenantId !== expectedScope.storageLocator.resolveHostingPlacement() || projectId !== expectedScope.projectId) {
         throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit scope is invalid");
     }
     return new ExecutionPermit(
@@ -106,6 +106,13 @@ function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): Exe
         integer(value, "expiresAtEpochMilliseconds"),
         integer(value, "remainingUses"),
     );
+}
+
+function infrastructureScope(scope: ProjectScope): Readonly<Record<string, string>> {
+    return {
+        projectId: scope.projectId,
+        tenantId: scope.storageLocator.resolveHostingPlacement(),
+    };
 }
 
 function record(value: Readonly<Record<string, unknown>>, key: string): Readonly<Record<string, unknown>> {
@@ -381,7 +388,7 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
                 scope,
                 sessionId,
                 new Request(`https://session.internal/internal/sessions/${operation}`, {
-                    body: JSON.stringify({ ...body, scope }),
+                    body: JSON.stringify({ ...body, scope: infrastructureScope(scope) }),
                     headers: { "content-type": "application/json" },
                     method: "POST",
                     signal,

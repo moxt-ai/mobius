@@ -54,10 +54,13 @@ import {
     type MobiusInteractionResponseRequest,
     type MobiusMessagePage,
     type MobiusPageRequest,
+    MobiusPairedRuntimePairingStatus,
     type MobiusRuntimeDescriptor,
     type MobiusRuntimePairing,
+    MobiusRuntimePairingLifecycle,
     type MobiusRuntimePairingRequest,
     type MobiusRuntimePairingStatus,
+    type MobiusRuntimePairingWaitOptions,
     type MobiusServiceCapabilities,
     type MobiusSession,
     type MobiusSessionEvent,
@@ -114,15 +117,19 @@ class PlatformMobiusHttpTransport implements MobiusHttpTransport {
     readonly fetch = async (request: Request): Promise<Response> => await globalThis.fetch(request);
 }
 
-export interface MobiusClientOptions {
+export interface MobiusEndpointOptions {
+    readonly authenticationProviderId?: string;
     readonly credentialProvider: MobiusCredentialProvider;
     readonly endpoint: string;
     readonly maxStreamReconnectAttempts?: number;
     readonly operationTimeoutMilliseconds?: number;
-    readonly projectId: string;
     readonly streamConnectionTimeoutMilliseconds?: number;
     readonly streamLivenessTimeoutMilliseconds?: number;
     readonly transport?: MobiusHttpTransport;
+}
+
+export interface MobiusClientOptions extends MobiusEndpointOptions {
+    readonly projectId: string;
 }
 
 function validatePositiveInteger(value: number, name: string): number {
@@ -162,7 +169,7 @@ function projectPath(projectId: string, resourcePath: string): string {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(projectId)) {
         throw new MobiusValidationError("The Mobius project identifier is invalid");
     }
-    return `projects/${encodeURIComponent(projectId)}/${resourcePath}`;
+    return `v1/projects/${encodeURIComponent(projectId)}/${resourcePath}`;
 }
 
 function sessionPath(projectId: string, sessionId: string, resourcePath: string): string {
@@ -327,7 +334,8 @@ class StreamConnection {
     };
 }
 
-class MobiusRequestExecutor {
+export class MobiusRequestExecutor {
+    readonly #authenticationProviderId: string;
     readonly #credentialProvider: MobiusCredentialProvider;
     readonly #endpoint: URL;
     readonly #operationTimeoutMilliseconds: number;
@@ -335,7 +343,16 @@ class MobiusRequestExecutor {
     readonly #streamLivenessTimeoutMilliseconds: number;
     readonly #transport: MobiusHttpTransport;
 
-    constructor(options: MobiusClientOptions) {
+    constructor(options: MobiusEndpointOptions) {
+        const authenticationProviderId = options.authenticationProviderId ?? "";
+        if (
+            authenticationProviderId.length > 128 ||
+            authenticationProviderId.includes("\r") ||
+            authenticationProviderId.includes("\n")
+        ) {
+            throw new MobiusValidationError("The Mobius authentication provider identifier is invalid");
+        }
+        this.#authenticationProviderId = authenticationProviderId;
         this.#credentialProvider = options.credentialProvider;
         this.#endpoint = normalizeEndpoint(options.endpoint);
         this.#operationTimeoutMilliseconds = validatePositiveInteger(
@@ -382,15 +399,13 @@ class MobiusRequestExecutor {
         const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
         try {
             const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
+            const headers = this.authenticationHeaders(credential, "application/json");
+            headers.set("content-type", mediaType);
+            headers.set("x-mobius-upload-token", validateCredential(uploadToken));
             const response = await this.#transport.fetch(
                 new Request(requestUrl(this.#endpoint, path), {
                     body: Uint8Array.from(bytes),
-                    headers: {
-                        accept: "application/json",
-                        authorization: `Bearer ${credential}`,
-                        "content-type": mediaType,
-                        "x-mobius-upload-token": validateCredential(uploadToken),
-                    },
+                    headers,
                     method: "PUT",
                     signal: deadline.signal,
                 }),
@@ -416,10 +431,7 @@ class MobiusRequestExecutor {
             const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
             const response = await this.#transport.fetch(
                 new Request(requestUrl(this.#endpoint, path), {
-                    headers: {
-                        accept: artifact.mediaType,
-                        authorization: `Bearer ${credential}`,
-                    },
+                    headers: this.authenticationHeaders(credential, artifact.mediaType),
                     signal: deadline.signal,
                 }),
             );
@@ -470,10 +482,7 @@ class MobiusRequestExecutor {
             const credential = validateCredential(await this.#credentialProvider.credential(controller.signal));
             response = await this.#transport.fetch(
                 new Request(requestUrl(this.#endpoint, path), {
-                    headers: {
-                        accept: MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
-                        authorization: `Bearer ${credential}`,
-                    },
+                    headers: this.authenticationHeaders(credential, MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE),
                     signal: controller.signal,
                 }),
             );
@@ -528,10 +537,7 @@ class MobiusRequestExecutor {
         const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
         try {
             const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
-            const headers = new Headers({
-                accept: "application/json",
-                authorization: `Bearer ${credential}`,
-            });
+            const headers = this.authenticationHeaders(credential, "application/json");
             if (hasBody) {
                 headers.set("content-type", "application/json");
             }
@@ -560,10 +566,7 @@ class MobiusRequestExecutor {
             const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
             const response = await this.#transport.fetch(
                 new Request(requestUrl(this.#endpoint, path), {
-                    headers: {
-                        accept: "application/json",
-                        authorization: `Bearer ${credential}`,
-                    },
+                    headers: this.authenticationHeaders(credential, "application/json"),
                     method,
                     signal: deadline.signal,
                 }),
@@ -580,9 +583,17 @@ class MobiusRequestExecutor {
             deadline.finish();
         }
     };
+
+    private readonly authenticationHeaders = (credential: string, accept: string): Headers => {
+        const headers = new Headers({ accept, authorization: `Bearer ${credential}` });
+        if (this.#authenticationProviderId.length > 0) {
+            headers.set("x-mobius-oidc-provider", this.#authenticationProviderId);
+        }
+        return headers;
+    };
 }
 
-async function readExactResponseBytes(
+export async function readExactResponseBytes(
     response: Response,
     expectedByteLength: number,
     signal: AbortSignal,
@@ -790,6 +801,51 @@ export class MobiusRuntimePairingResources {
             ),
         );
     };
+
+    readonly waitUntilPaired = async (
+        pairingId: string,
+        options: MobiusRuntimePairingWaitOptions,
+        signal: AbortSignal,
+    ): Promise<MobiusPairedRuntimePairingStatus> => {
+        const deadline = Date.now() + options.timeoutMilliseconds;
+        while (true) {
+            if (signal.aborted) {
+                throw new MobiusCancellationError({ cause: signal.reason });
+            }
+            const status = await this.read(pairingId, signal);
+            if (status instanceof MobiusPairedRuntimePairingStatus) {
+                return status;
+            }
+            if (status.status === MobiusRuntimePairingLifecycle.Expired) {
+                throw new MobiusApiError("runtime_pairing_expired", "The Runtime pairing expired", 410);
+            }
+            if (status.status === MobiusRuntimePairingLifecycle.Revoked) {
+                throw new MobiusApiError("runtime_pairing_revoked", "The Runtime pairing was revoked", 410);
+            }
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) {
+                throw new MobiusTimeoutError();
+            }
+            await waitForPairingPoll(Math.min(options.pollIntervalMilliseconds, remaining), signal);
+        }
+    };
+}
+
+function waitForPairingPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) {
+        return Promise.reject(new MobiusCancellationError({ cause: signal.reason }));
+    }
+    return new Promise((resolve, reject) => {
+        const timeout = globalThis.setTimeout(() => {
+            signal.removeEventListener("abort", cancel);
+            resolve();
+        }, milliseconds);
+        const cancel = (): void => {
+            globalThis.clearTimeout(timeout);
+            reject(new MobiusCancellationError({ cause: signal.reason }));
+        };
+        signal.addEventListener("abort", cancel, { once: true });
+    });
 }
 
 export class MobiusSessionResources {
@@ -1021,6 +1077,7 @@ export class MobiusEventSubscription {
     readonly #maximumReconnectAttempts: number;
     readonly #observer: MobiusSessionEventObserver;
     readonly #path: string;
+    readonly #cursorParameter: string;
     #closed = false;
     #cursor: string;
     #hasSequence = false;
@@ -1036,6 +1093,7 @@ export class MobiusEventSubscription {
         controller: AbortController,
         firstConnection: StreamConnection,
         maximumReconnectAttempts: number,
+        cursorParameter = "cursor",
     ) {
         this.#cursor = cursor;
         this.#controller = controller;
@@ -1044,6 +1102,7 @@ export class MobiusEventSubscription {
         this.#maximumReconnectAttempts = maximumReconnectAttempts;
         this.#observer = observer;
         this.#path = path;
+        this.#cursorParameter = cursorParameter;
         if (this.#externalSignal.aborted) {
             this.abortFromExternal();
         } else {
@@ -1219,7 +1278,7 @@ export class MobiusEventSubscription {
         if (this.#cursor.length === 0) {
             return this.#path;
         }
-        return `${this.#path}?cursor=${encodeURIComponent(this.#cursor)}`;
+        return `${this.#path}?${this.#cursorParameter}=${encodeURIComponent(this.#cursor)}`;
     };
 
     private readonly recover = async (
@@ -1352,6 +1411,77 @@ export class MobiusEventResources {
             path.searchParams.set("cursor", page.cursor);
         }
         return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+    };
+
+    readonly close = (): void => {
+        for (const subscription of this.#subscriptions) {
+            subscription.close();
+        }
+        this.#subscriptions.clear();
+    };
+}
+
+export class MobiusFixedSessionEventResources {
+    readonly #executor: MobiusRequestExecutor;
+    readonly #maximumReconnectAttempts: number;
+    readonly #subscriptions = new Set<MobiusEventSubscription>();
+
+    constructor(executor: MobiusRequestExecutor, maximumReconnectAttempts = DEFAULT_STREAM_RECONNECT_ATTEMPTS) {
+        this.#executor = executor;
+        this.#maximumReconnectAttempts = validatePositiveInteger(
+            maximumReconnectAttempts,
+            "stream reconnect attempt limit",
+        );
+    }
+
+    readonly subscribe = async (
+        cursor: string,
+        observer: MobiusSessionEventObserver,
+        signal: AbortSignal,
+    ): Promise<MobiusEventSubscription> => {
+        if (cursor.length > 512) {
+            throw new MobiusValidationError("The Session event cursor is invalid");
+        }
+        const path = "v1/client/session/events";
+        const streamPath = cursor.length === 0 ? path : `${path}?after=${encodeURIComponent(cursor)}`;
+        const controller = new AbortController();
+        const abortFromExternal = (): void => controller.abort(signal.reason);
+        if (signal.aborted) {
+            abortFromExternal();
+        } else {
+            signal.addEventListener("abort", abortFromExternal, { once: true });
+        }
+        let firstConnection: StreamConnection;
+        try {
+            firstConnection = await this.#executor.openEventStream(streamPath, controller.signal);
+        } finally {
+            signal.removeEventListener("abort", abortFromExternal);
+        }
+        const subscription = new MobiusEventSubscription(
+            this.#executor,
+            path,
+            cursor,
+            observer,
+            signal,
+            controller,
+            firstConnection,
+            this.#maximumReconnectAttempts,
+            "after",
+        );
+        this.#subscriptions.add(subscription);
+        const remove = subscription.completed.finally(() => {
+            this.#subscriptions.delete(subscription);
+        });
+        void remove.catch(() => {});
+        return subscription;
+    };
+
+    readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusEventPage> => {
+        const query = new URLSearchParams({ limit: page.limit.toString() });
+        if (page.cursor.length > 0) {
+            query.set("after", page.cursor);
+        }
+        return decodeMobiusEventPage(await this.#executor.get(`v1/client/session/events?${query.toString()}`, signal));
     };
 
     readonly close = (): void => {

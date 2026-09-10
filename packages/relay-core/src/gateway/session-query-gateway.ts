@@ -2,12 +2,18 @@ import type { Attempt, Interaction, NativeSessionHistory, Turn } from "@moxt-ai/
 import type {
     ActivityDetail,
     ProjectScope,
+    SessionConfigurationSnapshot,
     SessionDirectoryPage,
     SessionEventPage,
     SessionMessagePage,
     SessionSummary,
 } from "../entity/do/session.ts";
 export interface SessionQueryGateway {
+    readonly readConfiguration: (
+        scope: ProjectScope,
+        sessionId: string,
+        signal: AbortSignal,
+    ) => Promise<SessionConfigurationSnapshot>;
     readonly listSessions: (
         scope: ProjectScope,
         cursor: string | null,

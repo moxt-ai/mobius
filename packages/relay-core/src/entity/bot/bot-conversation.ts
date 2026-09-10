@@ -10,6 +10,7 @@ export interface BotConversationRecord {
     readonly binding_revision: number;
     readonly bot_id: string;
     readonly client_conversation_key: string;
+    readonly client_reference: string;
     readonly connection_id: unknown;
     readonly conversation_id: string;
     readonly created_at: number;
@@ -144,4 +145,21 @@ export function conversationResponse(row: BotConversationRecord): object {
         return { ...response, connectionId: row.connection_id, replyDeliveryTargetId: row.reply_delivery_target_id };
     }
     return response;
+}
+
+export function projectConversationResponse(row: BotConversationRecord, projectId: string): object {
+    return {
+        behaviorRevisionId: row.behavior_revision_id,
+        bindingId: row.binding_id,
+        bindingRevision: row.binding_revision,
+        botId: row.bot_id,
+        clientReference: row.client_reference,
+        conversationId: row.conversation_id,
+        createdAt: new Date(row.created_at).toISOString(),
+        idempotencyKey: row.client_conversation_key,
+        lifecycle: row.lifecycle,
+        projectId,
+        sessionId: row.session_id,
+        title: row.title,
+    };
 }

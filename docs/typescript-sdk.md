@@ -5,6 +5,21 @@ environments and modern browsers. It talks only to the public Relay boundary;
 switching between a self-hosted Relay and the managed service changes the
 endpoint and credential provider, not the Session workflow.
 
+Use the entry point that matches the caller's trust boundary:
+
+| Entry | Caller | Exposed resources |
+| --- | --- | --- |
+| `@moxt-ai/mobius-sdk/server` | trusted Standalone or Platform backend | shared Project, Runtime, Bot, Conversation, Session, Turn, Event, Interaction, and Artifact clients |
+| `@moxt-ai/mobius-sdk/platform` | Platform developer or trusted App backend | OIDC Tenant/App provisioning, AppCredential lifecycle, Project provisioning, and Conversation credential lifecycle |
+| `@moxt-ai/mobius-sdk/browser` | third-party browser holding one short-lived credential | only the fixed Session's messages, turns, events, interactions, and artifacts |
+| `@moxt-ai/mobius-sdk` | compatibility import | current combined legacy root surface |
+
+The browser entry does not export Project, Runtime, Bot, Tenant, App, or
+credential-management clients. Its requests target only
+`/mobius/api/v1/client/session/*`; the server derives Conversation and Session
+identity from the credential record rather than a URL, query, body, or custom
+header target.
+
 The package root exposes Session, Turn, Attempt, Event, Interaction, Artifact,
 Runtime pairing, Runtime, credential, and portability resources. It has no React or Zustand
 dependency. The built-in Web application's Channel control transport remains

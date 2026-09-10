@@ -2,16 +2,20 @@ import {
     AGENT_MESSAGE_DELTA_KIND,
     type CommittedSessionEvent,
     decodeCommittedSessionEvent,
+    decodeSessionConfigureCommand,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
     encodeCommittedSessionEvent,
     encodeSessionCancelCommand,
+    encodeSessionConfigureCommand,
     encodeSessionEventEnvelope,
     encodeSessionPromptCommand,
     SESSION_CANCEL_KIND,
+    SESSION_CONFIGURE_KIND,
     SESSION_EVENT_COMMITTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
+    type SessionConfigureCommand,
     type SessionEventEnvelope,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -23,6 +27,7 @@ import {
     type CreateSessionBindingRequest,
     CreateSessionRequest,
     type ProjectScope,
+    SessionConfigurationAcceptance,
     SessionRuntimeError,
     type SessionSummary,
     type TurnAcceptance,
@@ -213,6 +218,97 @@ export class SessionCommandService {
         }
     };
 
+    readonly acceptConfiguration = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        command: SessionConfigureCommand,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<SessionConfigurationAcceptance> => {
+        signal.throwIfAborted();
+        validateTimestamp(now);
+        validateDomainIdentifier(runtimeId, "runtime");
+        let validatedCommand: SessionConfigureCommand;
+        try {
+            validatedCommand = decodeSessionConfigureCommand(JSON.stringify(command));
+        } catch (cause) {
+            throw new SessionRuntimeError("session_conflict", "The Session configuration command is invalid", {
+                cause,
+            });
+        }
+        const session = this.#store.requireActiveSessionRow(scope, validatedCommand.sessionId, now);
+        if (
+            rowString(session, "runtime_id") !== runtimeId ||
+            rowString(session, "agent_id") !== validatedCommand.agentId ||
+            rowString(session, "binding_id") !== validatedCommand.bindingId ||
+            rowString(session, "directory_id") !== validatedCommand.directoryId
+        ) {
+            throw new SessionRuntimeError(
+                "session_access_denied",
+                "The Session configuration target is not the active immutable binding",
+            );
+        }
+        const key = scopeKey(scope);
+        const encodedCommand = encodeSessionConfigureCommand(validatedCommand);
+        const requestHash = await sha256(new TextEncoder().encode(encodedCommand));
+        signal.throwIfAborted();
+        const duplicate = this.#storage.findCommandReceiptResult({
+            scopeKey: key,
+            sessionId: validatedCommand.sessionId,
+            commandKind: SESSION_CONFIGURE_KIND,
+            idempotencyKey: validatedCommand.requestId,
+        });
+        if (duplicate !== undefined) {
+            if (rowString(duplicate, "request_hash") !== requestHash) {
+                throw new SessionRuntimeError(
+                    "idempotency_conflict",
+                    "The idempotency key was reused with another Session configuration",
+                );
+            }
+            const pending = this.#storage.findPendingWork(
+                key,
+                validatedCommand.sessionId,
+                rowString(duplicate, "result_id"),
+            );
+            if (pending === undefined) {
+                throw new SessionRuntimeError(
+                    "session_storage_unavailable",
+                    "The accepted Session configuration is incomplete",
+                );
+            }
+            return new SessionConfigurationAcceptance(
+                validatedCommand.requestId,
+                true,
+                pendingWorkFromRow(pending, scope),
+            );
+        }
+        const workId = `configure_${crypto.randomUUID()}`;
+        const pending = this.#storage.insertCommandWithDispatch({
+            receipt: {
+                scopeKey: key,
+                sessionId: validatedCommand.sessionId,
+                commandKind: SESSION_CONFIGURE_KIND,
+                idempotencyKey: validatedCommand.requestId,
+                requestHash,
+                resultId: workId,
+                acceptedAt: now,
+            },
+            dispatch: {
+                scopeKey: key,
+                sessionId: validatedCommand.sessionId,
+                workId,
+                runtimeId,
+                deliveryPayload: encodedCommand,
+                queuedAt: now,
+            },
+        });
+        return new SessionConfigurationAcceptance(
+            validatedCommand.requestId,
+            false,
+            pendingWorkFromRow(pending, scope),
+        );
+    };
+
     readonly acceptTurnCancellation = async (
         scope: ProjectScope,
         runtimeId: string,
@@ -247,7 +343,7 @@ export class SessionCommandService {
                 "The Runtime does not own the Turn's immutable binding",
             );
         }
-        const duplicate = this.#storage.findCancellationReceipt({
+        const duplicate = this.#storage.findCommandReceiptResult({
             scopeKey: key,
             sessionId: sessionId,
             commandKind: SESSION_CANCEL_KIND,
@@ -283,7 +379,7 @@ export class SessionCommandService {
             kind: SESSION_CANCEL_KIND,
             sessionId,
         });
-        const pending = this.#storage.insertCancellationWithDispatch({
+        const pending = this.#storage.insertCommandWithDispatch({
             receipt: {
                 scopeKey: key,
                 sessionId: sessionId,

@@ -151,7 +151,7 @@ export class SessionArchiveService {
             const chunkId = `${targetId}.${index.toString().padStart(6, "0")}`;
             const digest = await sha256(compressed);
             await this.#content.write(
-                new ContentTarget(scope.tenantId, scope.projectId, sessionId, chunkId),
+                new ContentTarget(scope.storageLocator.resolveHostingPlacement(), scope.projectId, sessionId, chunkId),
                 {
                     bytes: compressed,
                     contentEncoding: "gzip",
@@ -246,7 +246,12 @@ export class SessionArchiveService {
             for (const segment of segments) {
                 signal.throwIfAborted();
                 const content = await this.#content.read(
-                    new ContentTarget(scope.tenantId, scope.projectId, sessionId, segment.artifactId),
+                    new ContentTarget(
+                        scope.storageLocator.resolveHostingPlacement(),
+                        scope.projectId,
+                        sessionId,
+                        segment.artifactId,
+                    ),
                     signal,
                 );
                 if (
@@ -368,7 +373,12 @@ export class SessionArchiveService {
     ): Promise<void> => {
         try {
             await this.#content.delete(
-                new ContentTarget(scope.tenantId, scope.projectId, sessionId, artifactId),
+                new ContentTarget(
+                    scope.storageLocator.resolveHostingPlacement(),
+                    scope.projectId,
+                    sessionId,
+                    artifactId,
+                ),
                 signal,
             );
         } catch (error) {

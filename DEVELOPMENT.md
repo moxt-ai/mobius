@@ -1,5 +1,24 @@
 # Development Guide
 
+## Hosting profiles
+
+Cloudflare Platform and Standalone are separate products at their public entry
+points. Platform owns OIDC, Tenant, App, AppCredential, and
+ConversationAccessCredential. Standalone owns accountless Project bootstrap and
+Owner Capability. Shared Relay services consume normalized access contexts and
+an opaque storage locator; they do not decide which hosting credential is valid.
+
+Run Platform locally with `pnpm dev:cloudflare:platform`. Its OIDC provider,
+operator subject, and exact browser origin JSON variables are documented in
+[Cloudflare Platform hosting](./docs/platform-hosting.md). Never enable a public
+accountless bootstrap in that entry point or mount Platform credential routes in
+the default Standalone entry point.
+
+The reusable local daemon entry is `@moxt-ai/mobius/runtime`. Keep CLI parsing
+and host signal handling outside the engine, and keep AppCredential, OIDC, and
+Conversation credential values out of its configuration. See [Embedded Mobius
+Runtime](./docs/runtime-sdk.md).
+
 ## Pairing tenant ownership
 
 Pairing creation uses an existing tenant supplied by the host's `PairingTenantResolver`.
@@ -20,8 +39,9 @@ do not require creating a new tenant.
 Bootstrap pairing creates a project, channel, runtime, and persistent project-owner
 credential. An authenticated project owner can add runtimes to that project;
 additional runtime pairing preserves the project and owner credential. Revoking
-a runtime does not revoke project ownership. Pairing and session responses carry the resolved tenant ID. Tenant
-quotas now aggregate new projects assigned to the same tenant. Previously issued
+a runtime does not revoke project ownership. Standalone Pairing and Session responses
+do not expose their internal hosting placement. Platform Tenant quotas aggregate
+Projects and Sessions assigned to the same storage locator. Previously issued
 credentials and stored sessions keep their original ownership; this change does
 not reassign existing data.
 

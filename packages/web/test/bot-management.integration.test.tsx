@@ -35,6 +35,7 @@ import {
     saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
+    waitForDocumentState,
 } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
@@ -92,8 +93,15 @@ function modelConfigOptions(model: string, fastMode = false): readonly SessionCo
     ];
 }
 
+async function waitForActiveBot(signal: AbortSignal): Promise<void> {
+    await waitForDocumentState(() => screen.queryByText("Active") !== null, signal);
+    expect(screen.getByText("Active")).toBeTruthy();
+}
+
 describe.sequential("Bot management and conversations", () => {
-    it("Given every ready local Agent, When the owner confirms Bot activation in Web, Then every Agent is selectable and no second local approval is requested", async () => {
+    it("Given every ready local Agent, When the owner confirms Bot activation in Web, Then every Agent is selectable and no second local approval is requested", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon({
             agents: [
                 new AgentOption("codex", "Codex", "/usr/local/bin/codex", "codex 0.153.0", {
@@ -176,7 +184,7 @@ describe.sequential("Bot management and conversations", () => {
             );
             paired.daemon.send(approvedEvent);
             expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
-            await screen.findByText("Active");
+            await waitForActiveBot(signal);
             await screen.findByText("Bot activated on Integration machine.");
         } finally {
             cleanup();
@@ -185,7 +193,9 @@ describe.sequential("Bot management and conversations", () => {
         }
     });
 
-    it("Given an Agent without Bot instructions, When the owner activates an identity-only Bot, Then the local boundary approves an empty behavior contract", async () => {
+    it("Given an Agent without Bot instructions, When the owner activates an identity-only Bot, Then the local boundary approves an empty behavior contract", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -224,7 +234,7 @@ describe.sequential("Bot management and conversations", () => {
             paired.daemon.send(approvedEvent);
             expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
             fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
-            await screen.findByText("Active");
+            await waitForActiveBot(signal);
         } finally {
             cleanup();
             await closeMobiusTransport();
@@ -232,7 +242,9 @@ describe.sequential("Bot management and conversations", () => {
         }
     });
 
-    it("Given an active Bot and a new local chat, When the user switches the conversation target from Local Agents to Bots, Then Web starts a Bot conversation that can send a message", async () => {
+    it("Given an active Bot and a new local chat, When the user switches the conversation target from Local Agents to Bots, Then Web starts a Bot conversation that can send a message", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -269,7 +281,7 @@ describe.sequential("Bot management and conversations", () => {
             paired.daemon.send(approvedEvent);
             expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
             fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
-            await screen.findByText("Active");
+            await waitForActiveBot(signal);
 
             fireEvent.click(
                 within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole("button", {
@@ -297,7 +309,11 @@ describe.sequential("Bot management and conversations", () => {
             const botPanel = screen.getByRole("tabpanel", { name: "Bots" });
             fireEvent.click(await within(botPanel).findByRole("button", { name: "New chat Bot, Active" }));
 
-            await screen.findByRole("heading", { level: 2, name: "New chat" });
+            await waitForDocumentState(
+                () => screen.queryByRole("heading", { level: 2, name: "New chat" }) !== null,
+                signal,
+            );
+            expect(screen.getByRole("heading", { level: 2, name: "New chat" })).toBeTruthy();
             expect(window.location.pathname).toBe(
                 `/channels/${encodeURIComponent(paired.channelId)}/bots/${encodeURIComponent(approvalRequest.botId)}/conversations/${window.location.pathname.split("/").at(-1) ?? ""}`,
             );
@@ -322,7 +338,9 @@ describe.sequential("Bot management and conversations", () => {
         }
     });
 
-    it("Given an owner Bot already has an untouched New chat, When the user starts one again and sends the first prompt, Then Web reuses the draft and derives its title", async () => {
+    it("Given an owner Bot already has an untouched New chat, When the user starts one again and sends the first prompt, Then Web reuses the draft and derives its title", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -358,7 +376,7 @@ describe.sequential("Bot management and conversations", () => {
             paired.daemon.send(approvedEvent);
             expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
             fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
-            await screen.findByText("Active");
+            await waitForActiveBot(signal);
 
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
             fireEvent.click(await screen.findByRole("button", { name: "New chat" }));
@@ -515,7 +533,9 @@ describe.sequential("Bot management and conversations", () => {
         }
     });
 
-    it("Given an owned Channel with a compatible local Agent, When the user creates and activates a Bot and sends it a message, Then Web restores the durable Bot conversation and response", async () => {
+    it("Given an owned Channel with a compatible local Agent, When the user creates and activates a Bot and sends it a message, Then Web restores the durable Bot conversation and response", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -561,7 +581,7 @@ describe.sequential("Bot management and conversations", () => {
             expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
 
             fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
-            await screen.findByText("Active");
+            await waitForActiveBot(signal);
 
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
             await screen.findByRole("heading", { level: 2, name: "Conversations" });
