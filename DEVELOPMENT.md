@@ -182,6 +182,38 @@ After trusted publishing is configured, merge a CLI version change to `main` to
 publish it. No release tag is required. The workflow uses npm trusted publishing,
 so it does not require an `NPM_TOKEN` repository secret.
 
+## Publishing the SDK
+
+`.github/workflows/publish-sdk.yml` publishes `@moxt-ai/mobius-sdk` when the
+version in `packages/web-sdk/package.json` changes on `main`, following the CLI
+release policy. It runs `pnpm check`, packs the protocol and SDK with pnpm, and
+prints an npm publication dry run before publishing. pnpm packing applies
+`publishConfig` and replaces workspace dependencies with registry versions.
+
+The SDK depends on `@moxt-ai/mobius-protocol`. The workflow publishes the local
+protocol version first if npm returns 404 for that version; an existing version
+is reused. Bump the protocol version alongside the SDK when protocol changes
+must ship. Registry failures other than 404 stop the release.
+
+Configure npm trusted publishing for **both** packages with organization
+`moxt-ai`, repository `mobius`, workflow `publish-sdk.yml`, no environment, and
+direct `npm publish` enabled. For a package that does not yet exist, bootstrap
+its first publication with an authorized npm account, then configure its trusted
+publisher. No npm token is committed or required by this workflow.
+
+To inspect the exact release artifacts locally without publishing:
+
+```bash
+mkdir -p /path/to/release-preview
+pnpm --dir packages/protocol pack --out /path/to/release-preview/mobius-protocol.tgz
+pnpm --dir packages/web-sdk pack --out /path/to/release-preview/mobius-sdk.tgz
+npm publish /path/to/release-preview/mobius-protocol.tgz --access public --dry-run
+npm publish /path/to/release-preview/mobius-sdk.tgz --access public --dry-run
+```
+
+Adding the workflow alone does not release a version; merge an SDK version bump
+after the npm publishers are configured.
+
 ## Adding a Local Agent
 
 See [Local Agent Integration](./docs/local-agent-integration.md) for the module
