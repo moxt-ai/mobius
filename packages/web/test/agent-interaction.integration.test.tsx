@@ -733,6 +733,70 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given an Agent returns a Mermaid diagram, When the user opens its fullscreen view, Then the chat renders an accessible diagram with its source action", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            const response = [
+                "Rendering flow:",
+                "",
+                "```mermaid",
+                "flowchart LR",
+                '    A["Agent response"] --> B["Rendered diagram"]',
+                "```",
+            ].join("\n");
+            await completeRenderedPrompt(paired.daemon, "Show the chat rendering flow", response, "Rendering flow:");
+
+            const agentMessage = await screen.findByRole("article", {
+                name: "Message from Codex",
+            });
+            fireEvent.click(within(agentMessage).getByRole("button", { name: "View fullscreen" }));
+            const fullscreen = await screen.findByRole("dialog", { name: "View fullscreen" });
+            expect(await within(fullscreen).findByRole("img", { name: "Mermaid chart" })).toBeTruthy();
+            expect(within(agentMessage).getByRole("button", { name: "Copy code" })).toBeTruthy();
+            expect(within(agentMessage).queryByText("flowchart LR")).toBeNull();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given an Agent returns invalid Mermaid source, When the user opens the diagram, Then the chat announces the error and preserves the source", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            const invalidSource = "this is not a diagram";
+            const response = ["Broken rendering example:", "", "```mermaid", invalidSource, "```"].join("\n");
+            await completeRenderedPrompt(paired.daemon, "Show a broken diagram", response, "Broken rendering example:");
+
+            const agentMessage = await screen.findByRole("article", {
+                name: "Message from Codex",
+            });
+            fireEvent.click(within(agentMessage).getByRole("button", { name: "View fullscreen" }));
+            const error = await screen.findByRole("alert");
+            expect(error.textContent).toContain("Diagram could not be rendered");
+            expect(within(error.parentElement ?? error).getByText(invalidSource)).toBeTruthy();
+            expect(within(error.parentElement ?? error).getByRole("button", { name: "Retry diagram" })).toBeTruthy();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given an Agent records Markdown reasoning and structured tool output, When the completed steps are expanded, Then the details read as formatted work instead of raw protocol text", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

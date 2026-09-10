@@ -379,6 +379,7 @@ export async function completeRenderedPrompt(
     daemon: StatefulDaemon,
     promptText: string,
     responseText: string,
+    renderedText: string = responseText,
 ): Promise<SessionPromptCommand> {
     const promptInput = await screen.findByRole("textbox", {
         name: "Message the local agent",
@@ -417,7 +418,7 @@ export async function completeRenderedPrompt(
             stopReason: "end_turn",
         }),
     );
-    await screen.findAllByText(responseText);
+    await screen.findAllByText(renderedText);
     return prompt;
 }
 

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @source "../node_modules/streamdown/dist/*.js";
 @source "../../web-core/node_modules/@streamdown/code/dist/*.js";
+@source "../../web-core/node_modules/@streamdown/mermaid/dist/*.js";
 @source "../../web-core/src/**/*.{ts,tsx}";
 
 :root {
@@ -199,6 +200,20 @@
         0 6px 18px rgba(15, 23, 42, 0.035);
 }
 
+.agent-markdown [data-streamdown="mermaid-block"] {
+    max-width: 100%;
+    margin-block: 16px;
+    gap: 0;
+    overflow: hidden;
+    padding: 0;
+    border: 0.5px solid rgba(0, 0, 0, 0.12);
+    border-radius: 13px;
+    background: #f1f3f5;
+    box-shadow:
+        0 1px 2px rgba(15, 23, 42, 0.04),
+        0 6px 18px rgba(15, 23, 42, 0.035);
+}
+
 .agent-markdown [data-streamdown="code-block-header"] {
     height: 48px;
     padding: 0 58px 0 14px;
@@ -209,7 +224,24 @@
     letter-spacing: 0.02em;
 }
 
+.agent-markdown [data-streamdown="mermaid-block"] > :first-child {
+    height: 48px;
+    padding: 0 146px 0 14px;
+    border-bottom: 0.5px solid rgba(0, 0, 0, 0.09);
+    color: var(--copy-tertiary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
 .agent-markdown [data-streamdown="code-block"] > :has(> [data-streamdown="code-block-actions"]) {
+    position: relative;
+    top: auto;
+    height: 48px;
+    margin-top: -48px;
+}
+
+.agent-markdown [data-streamdown="mermaid-block"] > :has(> [data-streamdown="mermaid-block-actions"]) {
     position: relative;
     top: auto;
     height: 48px;
@@ -226,7 +258,30 @@
     box-shadow: none;
 }
 
-.agent-markdown [data-streamdown="code-block-actions"] button {
+.agent-markdown [data-streamdown="mermaid-block-actions"] {
+    height: 48px;
+    gap: 0;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+.agent-markdown [data-streamdown="mermaid"] button,
+[data-streamdown][data-streamdown="mermaid-fullscreen"] button {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.agent-markdown [data-streamdown="mermaid"] button:focus-visible,
+[data-streamdown][data-streamdown="mermaid-fullscreen"] button:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
+    outline-offset: -3px;
+}
+
+.agent-markdown [data-streamdown="code-block-actions"] button,
+.agent-markdown [data-streamdown="mermaid-block-actions"] button {
     display: inline-flex;
     width: 44px;
     height: 44px;
@@ -237,14 +292,36 @@
     color: var(--copy-tertiary);
 }
 
-.agent-markdown [data-streamdown="code-block-actions"] button:hover {
+.agent-markdown [data-streamdown="code-block-actions"] button:hover,
+.agent-markdown [data-streamdown="mermaid-block-actions"] button:hover {
     background: rgba(0, 0, 0, 0.055);
     color: var(--foreground);
 }
 
-.agent-markdown [data-streamdown="code-block-actions"] button:focus-visible {
+.agent-markdown [data-streamdown="code-block-actions"] button:focus-visible,
+.agent-markdown [data-streamdown="mermaid-block-actions"] button:focus-visible {
     outline: 2px solid color-mix(in srgb, var(--ring) 72%, transparent);
     outline-offset: -3px;
+}
+
+.agent-markdown [data-streamdown="mermaid-block"] > :last-child {
+    min-height: 180px;
+    overflow: auto;
+    padding: 16px;
+    border: 0;
+    border-radius: 0;
+    background: #fbfcfd;
+    overscroll-behavior-inline: contain;
+    scrollbar-color: rgba(0, 0, 0, 0.18) transparent;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+}
+
+.agent-markdown [data-streamdown="mermaid"] svg {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    margin-inline: auto;
 }
 
 .agent-markdown [data-streamdown="code-block-body"] {
@@ -428,6 +505,11 @@
         padding: 13px 12px 15px;
         font-size: 12.5px;
         line-height: 1.65;
+    }
+
+    .agent-markdown [data-streamdown="mermaid-block"] > :last-child {
+        min-height: 148px;
+        padding: 12px;
     }
 
     .agent-markdown [data-streamdown="table-header-cell"],

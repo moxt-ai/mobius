@@ -1,16 +1,71 @@
 import { code } from "@streamdown/code";
-import { Streamdown } from "streamdown";
+import type { MermaidConfig } from "@streamdown/mermaid";
+import { type DiagramPlugin, type MermaidErrorComponentProps, Streamdown } from "streamdown";
 import "streamdown/styles.css";
 import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
 const STREAM_ANIMATION = Object.freeze({ duration: 180, stagger: 0 });
+const MERMAID_CONFIG = Object.freeze({
+    securityLevel: "strict",
+    startOnLoad: false,
+    suppressErrorRendering: true,
+    theme: "neutral",
+});
+const MERMAID_PLUGIN: DiagramPlugin = Object.freeze({
+    getMermaid: (config: MermaidConfig = MERMAID_CONFIG) =>
+        Object.freeze({
+            initialize: () => undefined,
+            render: async (id: string, source: string) => {
+                const { createMermaidPlugin } = await import("@streamdown/mermaid");
+                const renderer = createMermaidPlugin({ config: MERMAID_CONFIG }).getMermaid(config);
+                return await renderer.render(id, source);
+            },
+        }),
+    language: "mermaid",
+    name: "mermaid",
+    type: "diagram",
+});
 const STREAMDOWN_CONTROLS = Object.freeze({
     code: Object.freeze({ copy: true, download: false }),
+    mermaid: Object.freeze({ copy: true, download: true, fullscreen: true, panZoom: true }),
 });
-const STREAMDOWN_PLUGINS = Object.freeze({ code });
+const STREAMDOWN_PLUGINS = Object.freeze({ code, mermaid: MERMAID_PLUGIN });
 const STREAMDOWN_TRANSLATIONS = Object.freeze({ copyCode: "Copy code" });
+
+function MermaidError({ chart, error, retry }: MermaidErrorComponentProps) {
+    return (
+        <section aria-label="Mermaid diagram error" className="mermaid-error grid gap-3 p-1">
+            <div className="grid gap-1" role="alert">
+                <p className="m-0 text-sm font-semibold text-destructive">Diagram could not be rendered.</p>
+                <p className="m-0 break-words font-mono text-xs leading-5 text-copy-secondary">{error}</p>
+            </div>
+            <div className="flex flex-wrap items-start gap-2">
+                <button
+                    className="inline-flex min-h-11 items-center rounded-lg border border-border bg-white px-3 text-xs font-medium text-foreground hover:bg-surface-subtle focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:outline-none"
+                    onClick={retry}
+                    type="button"
+                >
+                    Retry diagram
+                </button>
+                <details className="min-w-0 flex-1 text-xs text-copy-secondary">
+                    <summary className="flex min-h-11 cursor-pointer items-center rounded-lg px-2 font-medium focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:outline-none">
+                        Show Mermaid source
+                    </summary>
+                    <pre className="m-0 max-h-64 overflow-auto rounded-lg bg-surface-subtle p-3 font-mono text-xs leading-5 whitespace-pre">
+                        <code>{chart}</code>
+                    </pre>
+                </details>
+            </div>
+        </section>
+    );
+}
+
+const STREAMDOWN_MERMAID = Object.freeze({
+    config: MERMAID_CONFIG,
+    errorComponent: MermaidError,
+});
 
 function isSafeLink(href: string): boolean {
     return (
@@ -59,6 +114,7 @@ export function AgentMarkdown({ markdown, streaming }: AgentMarkdownProps) {
             controls={STREAMDOWN_CONTROLS}
             isAnimating={streaming}
             lineNumbers={false}
+            mermaid={STREAMDOWN_MERMAID}
             mode={streaming ? "streaming" : "static"}
             plugins={STREAMDOWN_PLUGINS}
             translations={STREAMDOWN_TRANSLATIONS}
