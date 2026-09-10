@@ -938,6 +938,16 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
     const images = decodePromptImagesValue(value["images"] ?? []);
     const resources = decodePromptResourcesValue(value["resources"] ?? []);
     const contents = decodeRecordedContents(value["contents"]);
+    const disposition =
+        value["disposition"] === undefined ? "reject" : readText(value["disposition"], "prompt disposition", 16);
+    if (disposition !== "reject" && disposition !== "queue" && disposition !== "steer") {
+        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid prompt disposition.");
+    }
+    const targetCommandId =
+        value["targetCommandId"] === undefined ? "" : readText(value["targetCommandId"], "target command", 128);
+    if (targetCommandId.length > 0 && !isIdentifier(targetCommandId)) {
+        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid target command.");
+    }
     const status = value["status"];
     if (status === "pending") {
         return new PendingRecordedTurn(
@@ -951,6 +961,8 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             images,
             resources,
             contents,
+            disposition,
+            targetCommandId,
         );
     }
     if (status === "running") {
@@ -966,6 +978,8 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             images,
             resources,
             contents,
+            disposition,
+            targetCommandId,
         );
     }
     if (status === "completed") {
@@ -982,6 +996,8 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             images,
             resources,
             contents,
+            disposition,
+            targetCommandId,
         );
     }
     if (status === "failed") {
@@ -998,6 +1014,8 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             images,
             resources,
             contents,
+            disposition,
+            targetCommandId,
         );
     }
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
@@ -1565,11 +1583,13 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         commandId: value["commandId"],
         contents: [],
         createdAt: value["createdAt"],
+        disposition: value["disposition"],
         images: value["images"],
         prompt: value["prompt"],
         resources: value["resources"],
         response: value["response"],
         sessionId: value["sessionId"],
+        targetCommandId: value["targetCommandId"],
     };
     const attempt = value["attempt"];
     if (attempt === null || (isRecord(attempt) && attempt["kind"] === "none")) {

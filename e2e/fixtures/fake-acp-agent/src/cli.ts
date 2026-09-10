@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -186,6 +187,7 @@ class FakeSessionState {
 const nativeHistory = new Map<
     string,
     {
+        readonly messageId: string;
         readonly role: "user" | "assistant";
         readonly text: string;
         readonly images?: readonly {
@@ -246,18 +248,21 @@ function readPersistedState(sessionId: string): FakeSessionState {
     if (Array.isArray(history)) {
         nativeHistory.set(
             sessionId,
-            history.map((message: unknown) => {
+            history.map((message: unknown, index: number) => {
                 if (typeof message !== "object" || message === null) {
                     throw new Error("Invalid saved message");
                 }
                 const role = Reflect.get(message, "role");
                 const text = Reflect.get(message, "text");
+                const persistedMessageId = Reflect.get(message, "messageId");
                 if ((role !== "user" && role !== "assistant") || typeof text !== "string") {
                     throw new Error("Invalid saved message");
                 }
                 const images: unknown = Reflect.get(message, "images");
+                const messageId =
+                    typeof persistedMessageId === "string" ? persistedMessageId : `saved-${index.toString()}`;
                 if (images === undefined) {
-                    return { role, text };
+                    return { messageId, role, text };
                 }
                 if (!Array.isArray(images)) {
                     throw new Error("Invalid saved images");
@@ -265,6 +270,7 @@ function readPersistedState(sessionId: string): FakeSessionState {
                 return {
                     role,
                     text,
+                    messageId,
                     images: images.map((image: unknown) => {
                         if (typeof image !== "object" || image === null) {
                             throw new Error("Invalid saved image");
@@ -445,6 +451,7 @@ function sessionConfiguration(state: FakeSessionState): Readonly<Record<string, 
 
 const sessions = new Map<string, FakeSessionState>();
 const turnCancellations = new Map<string, AbortController>();
+const steeringWaiters = new Map<string, PromiseWithResolvers<string>>();
 let listCommandsAnnounced = false;
 const agentName = readAgentName();
 const stream = acp.ndJsonStream(writableWebStream(process.stdout), readableWebStream(process.stdin));
@@ -453,7 +460,13 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
     .onRequest(acp.methods.agent.initialize, (context) => {
         failFirstRuntimeInitialization(context.params.clientCapabilities, agentName);
         return {
+            _meta: {
+                steering: { supported: !process.argv.includes("--no-steering") },
+            },
             agentCapabilities: {
+                _meta: {
+                    claudeCode: { promptQueueing: !process.argv.includes("--no-prompt-queueing") },
+                },
                 loadSession: !process.argv.includes("--no-load-session"),
                 ...(process.argv.includes("--http-mcp") ? { mcpCapabilities: { http: true } } : {}),
                 promptCapabilities: {
@@ -621,11 +634,47 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             cwd: context.params.cwd,
             additionalDirectories: context.params.additionalDirectories ?? [],
         });
-        nativeHistory.set(sessionId, [...(nativeHistory.get(context.params.sessionId) ?? [])]);
-        sessions.set(sessionId, state);
-        persistState(sessionId, state);
+        const sourceHistory = nativeHistory.get(context.params.sessionId) ?? [];
+        const fork = isRecord(context.params._meta) ? context.params._meta["jetbrains"] : undefined;
+        const air = isRecord(fork) ? fork["air"] : undefined;
+        const point = isRecord(air) ? air["fork"] : undefined;
+        let forkHistory = [...sourceHistory];
+        if (isRecord(point) && point["version"] === 1) {
+            const requestedMessageId = point["messageId"];
+            let messageIndex =
+                typeof requestedMessageId === "string"
+                    ? sourceHistory.findIndex((message) => message.messageId === requestedMessageId)
+                    : -1;
+            const requestedFingerprint = point["messageFingerprint"];
+            const requestedOccurrence = point["messageOccurrence"];
+            if (
+                messageIndex < 0 &&
+                typeof requestedFingerprint === "string" &&
+                typeof requestedOccurrence === "number" &&
+                Number.isSafeInteger(requestedOccurrence) &&
+                requestedOccurrence > 0
+            ) {
+                const matches = sourceHistory
+                    .map((message, index) => ({ index, message }))
+                    .filter(
+                        ({ message }) =>
+                            message.role === "assistant" &&
+                            `sha256:${createHash("sha256").update(message.text, "utf8").digest("hex")}` ===
+                                requestedFingerprint,
+                    );
+                messageIndex = matches[requestedOccurrence - 1]?.index ?? -1;
+            }
+            if (messageIndex < 0 || sourceHistory[messageIndex]?.role !== "assistant") {
+                throw new Error("Unknown fork point");
+            }
+            forkHistory = sourceHistory.slice(0, messageIndex + 1);
+        }
+        const forkedState = state.withTurnCount(forkHistory.filter((message) => message.role === "assistant").length);
+        nativeHistory.set(sessionId, forkHistory);
+        sessions.set(sessionId, forkedState);
+        persistState(sessionId, forkedState);
         return {
-            ...sessionConfiguration(state),
+            ...sessionConfiguration(forkedState),
             sessionId,
         };
     })
@@ -656,13 +705,13 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         }
         const state = readPersistedState(context.params.sessionId);
         sessions.set(context.params.sessionId, state);
-        for (const [index, message] of (nativeHistory.get(context.params.sessionId) ?? []).entries()) {
+        for (const message of nativeHistory.get(context.params.sessionId) ?? []) {
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
                     sessionUpdate: message.role === "user" ? "user_message_chunk" : "agent_message_chunk",
                     content: { type: "text", text: message.text },
-                    messageId: `saved-${index.toString()}`,
+                    messageId: message.messageId,
                 },
             });
             for (const image of message.images ?? []) {
@@ -670,7 +719,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     sessionId: context.params.sessionId,
                     update: {
                         sessionUpdate: "user_message_chunk",
-                        messageId: `saved-${index.toString()}`,
+                        messageId: message.messageId,
                         // Codex ACP replays persisted images as named text links.
                         content:
                             readAgentName() === "Codex"
@@ -748,6 +797,25 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         persistState(context.params.sessionId, updated);
         return {};
     })
+    .onRequest(
+        "_session/steering",
+        (params: unknown) => params,
+        (context) => {
+            if (!isRecord(context.params)) {
+                throw new Error("Invalid steering request");
+            }
+            const sessionId = context.params["sessionId"];
+            if (typeof sessionId !== "string") {
+                throw new Error("Invalid steering session");
+            }
+            const waiter = steeringWaiters.get(sessionId);
+            if (waiter === undefined) {
+                return { outcome: "promptRequired", reason: "noRunningTurn" };
+            }
+            waiter.resolve(readPromptText(context.params["prompt"]));
+            return { outcome: "injected" };
+        },
+    )
     .onRequest(acp.methods.agent.session.prompt, async (context) => {
         const previousState = sessions.get(context.params.sessionId);
         if (previousState === undefined) {
@@ -756,8 +824,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
 
         context.signal.throwIfAborted();
         const prompt = readPromptText(context.params.prompt);
+        const turnNumber = previousState.turnCount + 1;
         const transcript = nativeHistory.get(context.params.sessionId) ?? [];
         transcript.push({
+            messageId: `user-${turnNumber.toString()}`,
             role: "user",
             text: prompt,
             images: context.params.prompt.flatMap((block) =>
@@ -772,7 +842,6 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 updatedAt: "2026-09-05T00:00:00Z",
             },
         });
-        const turnNumber = previousState.turnCount + 1;
         const metadata = nativeMetadata.get(context.params.sessionId);
         if (turnNumber === 1 && metadata !== undefined) {
             nativeMetadata.set(context.params.sessionId, {
@@ -785,6 +854,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         persistState(context.params.sessionId, state);
         const cancellation = new AbortController();
         turnCancellations.set(context.params.sessionId, cancellation);
+        const steering = Promise.withResolvers<string>();
+        if (prompt === "wait for steering") {
+            steeringWaiters.set(context.params.sessionId, steering);
+        }
         try {
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
@@ -823,6 +896,21 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             if (prompt === "wait until cancelled") {
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };
+            }
+            if (prompt === "wait for steering") {
+                const instruction = await steering.promise;
+                const text = `Steered: ${instruction}`;
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text, type: "text" },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                transcript.push({ messageId: `assistant-${turnNumber.toString()}`, role: "assistant", text });
+                persistState(context.params.sessionId, state);
+                return { stopReason: "end_turn" };
             }
             const toolCallId = `tool-${turnNumber.toString()}`;
 
@@ -1095,6 +1183,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                         text: responseText,
                         type: "text",
                     },
+                    messageId: `assistant-${turnNumber.toString()}`,
                     sessionUpdate: "agent_message_chunk",
                 },
             });
@@ -1111,12 +1200,14 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                             text: prompt,
                             type: "text",
                         },
+                        messageId: `assistant-${turnNumber.toString()}`,
                         sessionUpdate: "agent_message_chunk",
                     },
                 });
             }
 
             transcript.push({
+                messageId: `assistant-${turnNumber.toString()}`,
                 role: "assistant",
                 text:
                     responseText +
@@ -1132,6 +1223,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             return promptUsageResponse(prompt, turnNumber) ?? { stopReason: "end_turn" };
         } finally {
             turnCancellations.delete(context.params.sessionId);
+            steeringWaiters.delete(context.params.sessionId);
         }
     })
     .onNotification(acp.methods.agent.session.cancel, (context) => {

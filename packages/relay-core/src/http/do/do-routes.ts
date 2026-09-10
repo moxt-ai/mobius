@@ -550,6 +550,19 @@ class DoRoutes {
                     ),
                 );
             }
+            if (operation === "promote-turn-to-steering") {
+                assertExactKeys(body, ["now", "runtimeId", "scope", "sessionId", "turnId"]);
+                return Response.json(
+                    await this.#runtime.promoteQueuedTurnToSteering(
+                        scope,
+                        readString(body, "runtimeId"),
+                        readString(body, "sessionId"),
+                        readString(body, "turnId"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "artifact-create-upload") {
                 assertExactKeys(body, ["now", "request", "scope", "sessionId"]);
                 return Response.json(

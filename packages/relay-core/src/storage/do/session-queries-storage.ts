@@ -13,11 +13,13 @@ import {
     SessionRecordSchema,
     type TurnActivityRecord,
     TurnActivityRecordSchema,
+    TurnMessageAnchorRecordSchema,
     type TurnRecord,
     TurnRecordSchema,
 } from "../../entity/do/session-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
+import { rowString } from "./sqlite-row.ts";
 
 export class SessionQueriesStorage {
     readonly #database: DoSqlDatabase;
@@ -35,6 +37,18 @@ export class SessionQueriesStorage {
                 [scopeKey, sessionId, turnId],
             ),
         )[0];
+
+    readonly readTurnMessageId = (scopeKey: string, sessionId: string, commandId: string): string => {
+        const anchor = decodeStorageRows(
+            TurnMessageAnchorRecordSchema,
+            this.#database.query(
+                `SELECT message_id FROM turn_message_anchors
+       WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
+                [scopeKey, sessionId, commandId],
+            ),
+        )[0];
+        return anchor === undefined ? "" : rowString(anchor, "message_id");
+    };
 
     readonly findAttempt = (scopeKey: string, sessionId: string, attemptId: string): AttemptRecord | undefined =>
         decodeStorageRows(

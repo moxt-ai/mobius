@@ -760,11 +760,13 @@ describe("daemon relay connection liveness", () => {
                         bindingId: "workspace",
                         commandId: "reconciliation-command",
                         directoryId: "default",
+                        disposition: "reject",
                         images: [],
                         kind: SESSION_PROMPT_KIND,
                         prompt: "exercise ACP controls",
                         resources: [],
                         sessionId: "reconciliation-session",
+                        targetCommandId: "",
                     }),
                 );
             }

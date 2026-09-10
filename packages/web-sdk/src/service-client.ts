@@ -7,6 +7,7 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
     type NativeSessionHistory,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 
 import {
@@ -913,6 +914,15 @@ export class MobiusTurnResources {
             await this.#executor.post(
                 sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/cancel`),
                 request,
+                signal,
+            ),
+        );
+
+    readonly steer = async (sessionId: string, turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
+        decodeMobiusTurn(
+            await this.#executor.put(
+                sessionPath(this.#projectId, sessionId, `turns/${encodeURIComponent(turnId)}/disposition`),
+                { disposition: SessionPromptDisposition.Steer },
                 signal,
             ),
         );

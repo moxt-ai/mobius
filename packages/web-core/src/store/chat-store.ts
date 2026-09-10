@@ -49,6 +49,7 @@ import {
     ReadySessionState,
     RunningTurnState,
     type RuntimeConnectionState,
+    SteeringTurn,
     StoppedTurnState,
     StoppingTurnState,
     UserChatMessage,
@@ -75,6 +76,9 @@ export interface ChatStore {
     readonly agentInstallations: readonly AgentInstallationViewState[];
     readonly announcement: string;
     readonly appendAgentText: (turn: PendingTurn, delta: string, committedSequence: string) => void;
+    readonly beginQueuedTurn: (prompt: string) => PendingTurn;
+    readonly beginQueuedSteering: (commandId: string) => SteeringTurn;
+    readonly beginSteering: (prompt: string) => SteeringTurn;
     readonly beginTurn: (prompt: string) => PendingTurn;
     readonly beginAgentInstallation: (agentId: string, requestId: string) => void;
     readonly applyAgentInstallCancelled: (event: AgentInstallCancelledEvent) => void;
@@ -84,6 +88,7 @@ export interface ChatStore {
     readonly applyAgentInstallStarted: (event: AgentInstallStartedEvent) => void;
     readonly channelConfigured: boolean;
     readonly completeTurn: (turn: PendingTurn, attemptId: string, stopReason: string) => void;
+    readonly completeSteering: (turn: SteeringTurn) => void;
     readonly configureChannel: (
         connection: ChannelConnection,
         history: ChannelHistory,
@@ -93,6 +98,8 @@ export interface ChatStore {
     readonly createConversation: () => void;
     readonly errorMessage: string;
     readonly failTurn: (turn: PendingTurn, message: string) => void;
+    readonly failQueuedSteering: (turn: SteeringTurn, message: string) => void;
+    readonly failSteering: (turn: SteeringTurn, message: string) => void;
     readonly machineName: string;
     readonly installableAgents: readonly InstallableAgentOption[];
     readonly reconcileHistory: (history: ChannelHistory) => void;
@@ -143,7 +150,9 @@ const defaultAgent = new AgentOption("codex", "Codex", "Not reported", "Not repo
     imagePrompt: false,
     listSessions: false,
     loadSession: false,
+    promptQueueing: false,
     resumeSession: false,
+    steering: false,
     unstableForkSession: false,
 });
 const initialConversation = Conversation.create(defaultAgent);
@@ -612,6 +621,69 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
             };
         });
     },
+    beginQueuedTurn: (prompt) => {
+        const state = get();
+        const conversation = readActiveConversation(state);
+        if (!conversation.isRunning) {
+            throw new Error("A queued request requires an active turn");
+        }
+        const commandId = crypto.randomUUID();
+        const userMessage = UserChatMessage.createQueued(
+            commandId,
+            conversation.runningTurn().commandId,
+            prompt,
+            conversation.draftImages,
+            conversation.draftResources,
+        );
+        const agentMessage = AgentChatMessage.createQueued(commandId);
+        const updatedConversation = conversation.addTurn(prompt, userMessage, agentMessage);
+        set({
+            announcement: "Message queued. It will start after the current turn.",
+            conversations: replaceConversation(state.conversations, updatedConversation),
+            errorMessage: "",
+        });
+        return new PendingTurn(
+            conversation.agentId,
+            commandId,
+            conversation.id,
+            conversation.sessionId,
+            agentMessage.id,
+        );
+    },
+    beginQueuedSteering: (commandId) => {
+        const state = get();
+        const conversation = readActiveConversation(state);
+        if (!conversation.isRunning) {
+            throw new Error("Steering requires an active turn");
+        }
+        set({
+            announcement: "Steering sent to the running agent.",
+            conversations: replaceConversation(state.conversations, conversation.promoteQueuedMessage(commandId)),
+            errorMessage: "",
+        });
+        return new SteeringTurn(conversation.agentId, commandId, conversation.id, conversation.sessionId);
+    },
+    beginSteering: (prompt) => {
+        const state = get();
+        const conversation = readActiveConversation(state);
+        if (!conversation.isRunning) {
+            throw new Error("Steering requires an active turn");
+        }
+        const commandId = crypto.randomUUID();
+        const userMessage = UserChatMessage.createSteering(
+            commandId,
+            conversation.runningTurn().commandId,
+            prompt,
+            conversation.draftImages,
+            conversation.draftResources,
+        );
+        set({
+            announcement: "Steering sent to the running agent.",
+            conversations: replaceConversation(state.conversations, conversation.addSteering(userMessage)),
+            errorMessage: "",
+        });
+        return new SteeringTurn(conversation.agentId, commandId, conversation.id, conversation.sessionId);
+    },
     beginTurn: (prompt) => {
         const state = get();
         const conversation = readActiveConversation(state);
@@ -656,22 +728,36 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         set((state) => {
             const conversation = readConversation(state.conversations, turn.conversationId);
             const currentMessage = readAgentMessage(conversation, turn.agentMessageId);
-            const agentMessage =
-                stopReason === "cancelled"
-                    ? currentMessage
-                          .withFallbackText("The agent stopped before returning text.")
-                          .transition(new StoppedTurnState(attemptId))
-                    : currentMessage
-                          .withFallbackText("The agent completed without returning text.")
-                          .transition(new CompletedTurnState(attemptId, stopReason));
+            let agentMessage: AgentChatMessage;
+            if (conversation.isSteeringCommand(turn.commandId)) {
+                agentMessage = currentMessage.transition(new CompletedTurnState(attemptId, stopReason));
+            } else if (stopReason === "cancelled") {
+                agentMessage = currentMessage
+                    .withFallbackText("The agent stopped before returning text.")
+                    .transition(new StoppedTurnState(attemptId));
+            } else {
+                agentMessage = currentMessage
+                    .withFallbackText("The agent completed without returning text.")
+                    .transition(new CompletedTurnState(attemptId, stopReason));
+            }
             return {
-                announcement: stopReason === "cancelled" ? "Agent response stopped." : "Agent response completed.",
+                announcement: conversation.isSteeringCommand(turn.commandId)
+                    ? "The running agent accepted the steering message."
+                    : stopReason === "cancelled"
+                      ? "Agent response stopped."
+                      : "Agent response completed.",
                 conversations: replaceConversation(
                     state.conversations,
                     conversation.replaceAgentMessage(turn.agentMessageId, agentMessage),
                 ),
             };
         });
+    },
+    completeSteering: (turn) => {
+        set((state) => ({
+            announcement: "The running agent accepted the steering message.",
+            errorMessage: state.activeConversationId === turn.conversationId ? "" : state.errorMessage,
+        }));
     },
     configureChannel: (connection, history, selectedSessionId) => {
         const restored = restoreConversations(connection.agents, history);
@@ -720,11 +806,16 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     failTurn: (turn, message) => {
         set((state) => {
             const conversation = readConversation(state.conversations, turn.conversationId);
-            const agentMessage = readAgentMessage(conversation, turn.agentMessageId)
-                .withFallbackText("The agent could not complete this request.")
-                .transition(new FailedTurnState(message));
+            const currentMessage = readAgentMessage(conversation, turn.agentMessageId);
+            const agentMessage = conversation.isSteeringCommand(turn.commandId)
+                ? currentMessage.transition(new FailedTurnState(message))
+                : currentMessage
+                      .withFallbackText("The agent could not complete this request.")
+                      .transition(new FailedTurnState(message));
             return {
-                announcement: `Agent response failed. ${message}`,
+                announcement: conversation.isSteeringCommand(turn.commandId)
+                    ? `Steering failed. ${message}`
+                    : `Agent response failed. ${message}`,
                 conversations: replaceConversation(
                     state.conversations,
                     conversation.replaceAgentMessage(turn.agentMessageId, agentMessage),
@@ -732,6 +823,25 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
                 errorMessage: state.activeConversationId === turn.conversationId ? message : state.errorMessage,
             };
         });
+    },
+    failQueuedSteering: (turn, message) => {
+        set((state) => {
+            const conversation = readConversation(state.conversations, turn.conversationId);
+            return {
+                announcement: `Steering failed. ${message}`,
+                conversations: replaceConversation(
+                    state.conversations,
+                    conversation.restoreQueuedMessage(turn.commandId),
+                ),
+                errorMessage: state.activeConversationId === turn.conversationId ? message : state.errorMessage,
+            };
+        });
+    },
+    failSteering: (turn, message) => {
+        set((state) => ({
+            announcement: `Steering failed. ${message}`,
+            errorMessage: state.activeConversationId === turn.conversationId ? message : state.errorMessage,
+        }));
     },
     installableAgents: [],
     machineName: "Local machine",

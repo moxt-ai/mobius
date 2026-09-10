@@ -54,7 +54,9 @@ if (process.argv.includes("--version")) {
     "--no-delete-session",
     "--no-embedded-context",
     "--no-fork-session",
-    "--no-image-prompt"
+    "--no-image-prompt",
+    "--no-prompt-queueing",
+    "--no-steering"
   );
   await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
 }
@@ -100,7 +102,9 @@ if (process.argv.includes("--version")) {
                 imagePrompt: false,
                 listSessions: true,
                 loadSession: false,
+                promptQueueing: false,
                 resumeSession: true,
+                steering: false,
                 unstableForkSession: false,
             });
 

@@ -319,11 +319,14 @@ function decodeMessage(value: unknown): SessionMessage {
         attempt: decodeAttempt(value["attempt"]),
         commandId: readString(value, "commandId"),
         createdAt: readString(value, "createdAt"),
+        disposition: readString(value, "disposition"),
         images: decodePromptImagesValue(value["images"]),
+        messageId: readString(value, "messageId", true),
         prompt: readString(value, "prompt", true),
         resources: decodePromptResourcesValue(value["resources"]),
         response: readString(value, "response", true),
         sessionId: readString(value, "sessionId"),
+        targetCommandId: readString(value, "targetCommandId", true),
     };
 }
 
@@ -795,6 +798,24 @@ export class RemoteSessionRuntime
             turn: decodeTurn(value["turn"]),
         };
     };
+
+    readonly promoteQueuedTurnToSteering = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<Turn> =>
+        decodeTurn(
+            await this.request(
+                scope,
+                sessionId,
+                "promote-turn-to-steering",
+                { now, runtimeId, sessionId, turnId },
+                signal,
+            ),
+        );
 
     readonly createArtifactUpload = async (
         scope: ProjectScope,

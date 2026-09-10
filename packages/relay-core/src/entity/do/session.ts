@@ -352,11 +352,14 @@ export interface SessionMessage {
     readonly attempt: AttemptSummary | null;
     readonly commandId: string;
     readonly createdAt: string;
+    readonly disposition: string;
     readonly images: SessionPromptCommand["images"];
+    readonly messageId: string;
     readonly prompt: string;
     readonly resources: SessionPromptCommand["resources"];
     readonly response: string;
     readonly sessionId: string;
+    readonly targetCommandId: string;
 }
 
 export interface SessionMessagePage {

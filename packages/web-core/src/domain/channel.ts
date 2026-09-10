@@ -345,11 +345,13 @@ export abstract class RecordedTurn {
     readonly agentId: string;
     readonly commandId: string;
     readonly createdAt: Date;
+    readonly disposition: string;
     readonly images: readonly PromptImage[];
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
     readonly response: string;
     readonly sessionId: string;
+    readonly targetCommandId: string;
     readonly contents: readonly RecordedContent[];
     abstract readonly status: string;
 
@@ -364,16 +366,20 @@ export abstract class RecordedTurn {
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
         contents: readonly RecordedContent[],
+        disposition = "reject",
+        targetCommandId = "",
     ) {
         this.activities = activities;
         this.agentId = agentId;
         this.commandId = commandId;
         this.createdAt = createdAt;
+        this.disposition = disposition;
         this.images = images;
         this.prompt = prompt;
         this.resources = resources;
         this.response = response;
         this.sessionId = sessionId;
+        this.targetCommandId = targetCommandId;
         this.contents = contents;
     }
 }
@@ -392,8 +398,23 @@ export class PendingRecordedTurn extends RecordedTurn {
         images: readonly PromptImage[] = [],
         resources: readonly PromptResource[] = [],
         contents: readonly RecordedContent[] = [],
+        disposition = "reject",
+        targetCommandId = "",
     ) {
-        super(agentId, commandId, createdAt, prompt, response, sessionId, activities, images, resources, contents);
+        super(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+        );
     }
 }
 
@@ -413,8 +434,23 @@ export class RunningRecordedTurn extends RecordedTurn {
         images: readonly PromptImage[] = [],
         resources: readonly PromptResource[] = [],
         contents: readonly RecordedContent[] = [],
+        disposition = "reject",
+        targetCommandId = "",
     ) {
-        super(agentId, commandId, createdAt, prompt, response, sessionId, activities, images, resources, contents);
+        super(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+        );
         this.attemptId = attemptId;
     }
 }
@@ -437,8 +473,23 @@ export class CompletedRecordedTurn extends RecordedTurn {
         images: readonly PromptImage[] = [],
         resources: readonly PromptResource[] = [],
         contents: readonly RecordedContent[] = [],
+        disposition = "reject",
+        targetCommandId = "",
     ) {
-        super(agentId, commandId, createdAt, prompt, response, sessionId, activities, images, resources, contents);
+        super(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+        );
         this.attemptId = attemptId;
         this.stopReason = stopReason;
     }
@@ -462,8 +513,23 @@ export class FailedRecordedTurn extends RecordedTurn {
         images: readonly PromptImage[] = [],
         resources: readonly PromptResource[] = [],
         contents: readonly RecordedContent[] = [],
+        disposition = "reject",
+        targetCommandId = "",
     ) {
-        super(agentId, commandId, createdAt, prompt, response, sessionId, activities, images, resources, contents);
+        super(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+        );
         this.code = code;
         this.message = message;
     }

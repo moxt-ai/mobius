@@ -94,6 +94,10 @@ export const TurnRecordSchema = v.object({
 });
 export type TurnRecord = Readonly<v.InferOutput<typeof TurnRecordSchema>>;
 
+export const TurnMessageAnchorRecordSchema = v.object({
+    message_id: v.string(),
+});
+
 export const TurnRuntimeRecordSchema = v.object({ ...TurnRecordSchema.entries, runtime_id: v.string() });
 export type TurnRuntimeRecord = Readonly<v.InferOutput<typeof TurnRuntimeRecordSchema>>;
 

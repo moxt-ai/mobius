@@ -90,6 +90,7 @@ export async function startLocalRelay(): Promise<LocalRelay> {
         workers: [
             {
                 configPath: "packages/relay-cloudflare-standalone/wrangler.jsonc",
+                vars: { PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100" },
             },
             {
                 config: {

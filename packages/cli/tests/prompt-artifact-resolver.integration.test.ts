@@ -94,6 +94,7 @@ describe("daemon prompt artifact resolution", () => {
             bindingId: "workspace",
             commandId: "command-artifact",
             directoryId: "root",
+            disposition: "reject",
             images: [],
             kind: SESSION_PROMPT_KIND,
             prompt: "Use the attachments",
@@ -121,6 +122,7 @@ describe("daemon prompt artifact resolution", () => {
                 },
             ],
             sessionId: "session-artifact",
+            targetCommandId: "",
         };
 
         const resolved = await resolvePromptArtifacts(config, command, new AbortController().signal);
@@ -174,6 +176,7 @@ describe("daemon prompt artifact resolution", () => {
             bindingId: "workspace",
             commandId: "command-artifact",
             directoryId: "root",
+            disposition: "reject",
             images: [],
             kind: SESSION_PROMPT_KIND,
             prompt: "Use the attachment",
@@ -187,6 +190,7 @@ describe("daemon prompt artifact resolution", () => {
                 },
             ],
             sessionId: "session-artifact",
+            targetCommandId: "",
         };
 
         await expect(resolvePromptArtifacts(config, command, new AbortController().signal)).rejects.toMatchObject({

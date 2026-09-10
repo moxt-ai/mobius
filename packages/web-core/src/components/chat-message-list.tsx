@@ -3,8 +3,9 @@ import {
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-sdk";
-import { ArrowDown, MoreHorizontal } from "lucide-react";
+import { ArrowDown, GitFork, LoaderCircle, MoreHorizontal } from "lucide-react";
 import { useLayoutEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { AgentActivityList } from "@/components/agent-activity-list";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AgentMarkdown } from "@/components/agent-markdown";
@@ -13,10 +14,11 @@ import { ChatComposer } from "@/components/chat-composer";
 import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
 import { UserPromptMessage } from "@/components/user-prompt-message";
+import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import type { ChannelConnection } from "@/domain/channel";
 import { AgentChatMessage, type ChatMessage, NativeHistoryChatMessage, UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
-import { sendPrompt } from "@/services/mobius-transport";
+import { forkConversationAtTurn, sendPrompt } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const SCROLL_TAIL_THRESHOLD = 96;
@@ -94,14 +96,23 @@ function ThinkingIndicator() {
 function AgentMessage({
     agentLabel,
     connection,
+    conversationRunning,
     message,
     sessionId,
+    supportsFork,
 }: {
     readonly agentLabel: string;
     readonly connection: ChannelConnection;
+    readonly conversationRunning: boolean;
     readonly message: AgentChatMessage;
     readonly sessionId: string;
+    readonly supportsFork: boolean;
 }) {
+    const [forking, setForking] = useState(false);
+    const navigate = useNavigate();
+    const routes = useWorkspaceRoutes();
+    const showFork = supportsFork && message.state.appearance === "completed";
+
     return (
         <article
             aria-label={`Message from ${agentLabel}`}
@@ -163,6 +174,36 @@ function AgentMessage({
                             </dl>
                         </div>
                     </details>
+                    {showFork && (
+                        <Button
+                            aria-label={forking ? "Forking conversation" : "Fork conversation after this turn"}
+                            className="size-11 rounded-full text-muted-foreground hover:bg-black/[0.045] hover:text-copy-secondary lg:size-8"
+                            disabled={conversationRunning || forking}
+                            onClick={() => {
+                                setForking(true);
+                                void forkConversationAtTurn(message.commandId)
+                                    .then(async (targetSessionId) => {
+                                        if (targetSessionId.length > 0) {
+                                            await navigate(routes.sessionPath(targetSessionId));
+                                        }
+                                    })
+                                    .finally(() => setForking(false));
+                            }}
+                            size="icon"
+                            title={
+                                conversationRunning
+                                    ? "Wait for the running turn to finish"
+                                    : "Fork conversation after this turn"
+                            }
+                            variant="ghost"
+                        >
+                            {forking ? (
+                                <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
+                            ) : (
+                                <GitFork className="size-4" />
+                            )}
+                        </Button>
+                    )}
                 </div>
             </div>
         </article>
@@ -218,13 +259,17 @@ export function NativeSessionHistoryView({
 function Message({
     agentLabel,
     connection,
+    conversationRunning,
     message,
     sessionId,
+    supportsFork,
 }: {
     readonly agentLabel: string;
     readonly connection: ChannelConnection;
+    readonly conversationRunning: boolean;
     readonly message: ChatMessage;
     readonly sessionId: string;
+    readonly supportsFork: boolean;
 }) {
     if (message instanceof NativeHistoryChatMessage) {
         return <NativeSessionHistoryView history={message.history} agentLabel={agentLabel} />;
@@ -233,13 +278,23 @@ function Message({
         return <UserPromptMessage images={message.images} resources={message.resources} text={message.text} />;
     }
     if (message instanceof AgentChatMessage) {
-        return <AgentMessage agentLabel={agentLabel} connection={connection} message={message} sessionId={sessionId} />;
+        return (
+            <AgentMessage
+                agentLabel={agentLabel}
+                connection={connection}
+                conversationRunning={conversationRunning}
+                message={message}
+                sessionId={sessionId}
+                supportsFork={supportsFork}
+            />
+        );
     }
     return null;
 }
 
 export function ChatMessageList({ connection }: { readonly connection: ChannelConnection }) {
     const conversation = useChatStore(selectActiveConversation);
+    const messages = conversation.transcriptMessages;
     const viewportRef = useRef<HTMLDivElement>(null);
     const followLatestRef = useRef(true);
     const previousConversationIdRef = useRef(conversation.id);
@@ -254,7 +309,7 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
             previousConversationIdRef.current = conversation.id;
             followLatestRef.current = true;
         }
-        if (conversation.messages.length === 0) {
+        if (messages.length === 0) {
             viewport.scrollTop = 0;
             setShowLatest(false);
             return;
@@ -277,7 +332,7 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
                 }}
                 ref={viewportRef}
             >
-                {conversation.messages.length === 0 ? (
+                {messages.length === 0 ? (
                     <EmptyConversation />
                 ) : (
                     <div
@@ -287,20 +342,22 @@ export function ChatMessageList({ connection }: { readonly connection: ChannelCo
                         className="mx-auto min-h-full w-full max-w-[840px] px-3.5 pt-5 pb-12 sm:px-5 sm:pt-7 md:px-6 md:pt-10 md:pb-16"
                         role="log"
                     >
-                        {conversation.messages.map((message) => (
+                        {messages.map((message) => (
                             <Message
                                 agentLabel={conversation.agentLabel}
                                 connection={connection}
+                                conversationRunning={conversation.isRunning}
                                 key={message.id}
                                 message={message}
                                 sessionId={conversation.sessionId}
+                                supportsFork={conversation.session.capabilities.unstableForkSession}
                             />
                         ))}
                         <SessionInteractions />
                     </div>
                 )}
             </div>
-            {showLatest && conversation.messages.length > 0 && (
+            {showLatest && messages.length > 0 && (
                 <Button
                     aria-label="Scroll to latest message"
                     className="absolute bottom-3 left-1/2 z-10 size-9 -translate-x-1/2 rounded-full border-border/70 bg-background/95 p-0 text-foreground shadow-[0_4px_14px_rgba(0,0,0,0.1)] backdrop-blur-sm hover:bg-accent max-lg:size-11"

@@ -173,6 +173,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: "Hello",
                 }),
@@ -182,6 +183,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: ". How can I help?",
                 }),
@@ -225,7 +227,7 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given chat is ready for a message, When the send action becomes available, Then its primary surface is neutral and high contrast", async () => {
+    it("Given an Agent is working, When a queued follow-up is steered, Then it stays last while running and moves before the final response after completion", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -234,17 +236,27 @@ describe.sequential("Agent interaction boundaries", () => {
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
+            await sendReadySession(paired.daemon, prepare, [], {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: false,
+                resumeSession: true,
+                steering: true,
+                unstableForkSession: true,
+            });
             const promptInput = await screen.findByRole("textbox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
                 expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
             });
-            fireEvent.change(promptInput, {
-                target: { value: "Inspect the workspace" },
-            });
-
+            fireEvent.change(promptInput, { target: { value: "Inspect the failing workflow" } });
             const sendButton = screen.getByRole("button", { name: "Send message" });
             const sendSurface = sendButton.querySelector('[aria-hidden="true"]');
             if (!(sendSurface instanceof HTMLElement)) {
@@ -254,6 +266,270 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(sendSurface.classList.contains("bg-foreground")).toBe(true);
             expect(sendSurface.classList.contains("text-background")).toBe(true);
             expect(sendSurface.classList.contains("bg-primary")).toBe(false);
+            fireEvent.click(sendButton);
+            const runningPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(runningPrompt).toMatchObject({ disposition: "reject", targetCommandId: "" });
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "running-attempt",
+                    commandId: runningPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: runningPrompt.sessionId,
+                }),
+            );
+
+            expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
+            expect(screen.queryByText("Follow-up delivery")).toBeNull();
+            expect(screen.queryByRole("button", { name: "Queue next" })).toBeNull();
+            expect(screen.queryByRole("button", { name: "Steer now" })).toBeNull();
+            const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(followUpInput, { target: { value: "Run the regression suite afterward" } });
+            fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+            const followUpTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
+            expect(within(followUpTray).getByText("Run the regression suite afterward")).toBeTruthy();
+            expect(within(followUpTray).getByText("Queued")).toBeTruthy();
+            const steerQueuedMessage = within(followUpTray).getByRole("button", {
+                name: "Steer queued message: Run the regression suite afterward",
+            });
+            expect(within(screen.getByRole("log")).queryByText("Run the regression suite afterward")).toBeNull();
+            const composer = followUpInput.closest("footer");
+            const composerForm = followUpInput.closest("form");
+            if (composer === null || composerForm === null) {
+                throw new Error("Expected the follow-up tray and prompt form in the active composer");
+            }
+            expect(composer.contains(followUpTray)).toBe(true);
+            expect(followUpTray.nextElementSibling?.tagName).toBe("FORM");
+
+            fireEvent.click(steerQueuedMessage);
+            await waitFor(() => {
+                expect(screen.queryByRole("status", { name: "Pending follow-up messages" })).toBeNull();
+                expect(within(screen.getByRole("log")).getByText("Run the regression suite afterward")).toBeTruthy();
+                const runningTranscript = screen.getAllByLabelText(/Message from/);
+                expect(runningTranscript).toHaveLength(3);
+                expect(runningTranscript[0]?.textContent).toContain("Inspect the failing workflow");
+                expect(runningTranscript[1]?.getAttribute("aria-label")).toBe("Message from Codex");
+                expect(runningTranscript[2]?.textContent).toContain("Run the regression suite afterward");
+            });
+            const steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(steeringPrompt).toMatchObject({
+                disposition: "steer",
+                prompt: "Run the regression suite afterward",
+                targetCommandId: runningPrompt.commandId,
+            });
+            await paired.daemon.sendSessionEvent(
+                steeringPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "steering-attempt",
+                    commandId: steeringPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: steeringPrompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                steeringPrompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: steeringPrompt.commandId,
+                    kind: "session.completed",
+                    sessionId: steeringPrompt.sessionId,
+                    stopReason: "steered",
+                }),
+            );
+
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: runningPrompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: "steered-answer",
+                    sessionId: runningPrompt.sessionId,
+                    text: "The original turn accepted steering.",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: runningPrompt.commandId,
+                    kind: "session.completed",
+                    sessionId: runningPrompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            await waitFor(() => {
+                expect(screen.queryByText("The agent completed without returning text.")).toBeNull();
+                const transcript = screen
+                    .getAllByLabelText(/Message from/)
+                    .map((message) => message.textContent?.replaceAll(/\s+/g, " ").trim());
+                expect(transcript).toEqual([
+                    "Inspect the failing workflow",
+                    "Run the regression suite afterward",
+                    expect.stringContaining("The original turn accepted steering."),
+                ]);
+                expect(paired.daemon.available(SESSION_PROMPT_KIND)).toBe(0);
+            });
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given an Agent lacks native prompt queueing, When follow-ups are sent during a running Turn, Then Mobius runs them in order after the current Turn", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare, [], {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: false,
+                resumeSession: true,
+                steering: true,
+                unstableForkSession: true,
+            });
+            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            const initialPrompt = "Finish the current task";
+            fireEvent.change(promptInput, { target: { value: initialPrompt } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const runningPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "direct-steering-running-attempt",
+                    commandId: runningPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: runningPrompt.sessionId,
+                }),
+            );
+
+            const followUps = ["Run the second task", "Run the third task"];
+            for (const followUp of followUps) {
+                const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+                fireEvent.change(followUpInput, { target: { value: followUp } });
+                fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+                const tray = await screen.findByRole("status", { name: "Pending follow-up messages" });
+                expect(within(tray).getByText(followUp)).toBeTruthy();
+                expect(within(screen.getByRole("log")).queryByText(followUp)).toBeNull();
+            }
+            expect(paired.daemon.available(SESSION_PROMPT_KIND)).toBe(0);
+
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: runningPrompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: "first-answer",
+                    sessionId: runningPrompt.sessionId,
+                    text: "FIRST_COMPLETE",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: runningPrompt.commandId,
+                    kind: "session.completed",
+                    sessionId: runningPrompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+
+            const secondPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(secondPrompt).toMatchObject({
+                disposition: "queue",
+                prompt: followUps[0],
+                targetCommandId: runningPrompt.commandId,
+            });
+            await paired.daemon.sendSessionEvent(
+                secondPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "second-attempt",
+                    commandId: secondPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: secondPrompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                secondPrompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: secondPrompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: "second-answer",
+                    sessionId: secondPrompt.sessionId,
+                    text: "SECOND_COMPLETE",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                secondPrompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: secondPrompt.commandId,
+                    kind: "session.completed",
+                    sessionId: secondPrompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+
+            const thirdPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(thirdPrompt).toMatchObject({
+                disposition: "queue",
+                prompt: followUps[1],
+                targetCommandId: runningPrompt.commandId,
+            });
+            await paired.daemon.sendSessionEvent(
+                thirdPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "third-attempt",
+                    commandId: thirdPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: thirdPrompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                thirdPrompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: thirdPrompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: "third-answer",
+                    sessionId: thirdPrompt.sessionId,
+                    text: "THIRD_COMPLETE",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                thirdPrompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: thirdPrompt.commandId,
+                    kind: "session.completed",
+                    sessionId: thirdPrompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+
+            await waitFor(() => {
+                const transcript = screen
+                    .getAllByLabelText(/Message from/)
+                    .map((message) => message.textContent?.replaceAll(/\s+/g, " ").trim());
+                expect(transcript).toEqual([
+                    initialPrompt,
+                    expect.stringContaining("FIRST_COMPLETE"),
+                    followUps[0],
+                    expect.stringContaining("SECOND_COMPLETE"),
+                    followUps[1],
+                    expect.stringContaining("THIRD_COMPLETE"),
+                ]);
+            });
+            expect(screen.queryByText("The agent completed without returning text.")).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();
@@ -412,6 +688,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: [
                         "Use this entry point:",
@@ -545,6 +822,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: "Workspace inspected.",
                 }),
@@ -747,6 +1025,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: "Completed **safely**. [unsafe](javascript:alert(1)) <script>alert(1)</script>",
                 }),

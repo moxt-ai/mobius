@@ -1,4 +1,5 @@
 import {
+    AGENT_MESSAGE_DELTA_KIND,
     type CommittedSessionEvent,
     decodeCommittedSessionEvent,
     decodeSessionEventEnvelope,
@@ -6,12 +7,15 @@ import {
     encodeCommittedSessionEvent,
     encodeSessionCancelCommand,
     encodeSessionEventEnvelope,
+    encodeSessionPromptCommand,
     SESSION_CANCEL_KIND,
     SESSION_EVENT_COMMITTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
     type SessionPromptCommand,
+    SessionPromptDisposition,
+    type Turn,
     validateSessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
 import {
@@ -131,6 +135,8 @@ export class SessionCommandService {
         const turnId = `turn_${crypto.randomUUID()}`;
         const workId = `dispatch_${turnId}`;
         const result = this.#storage.insertTurnWithDispatch({
+            disposition: validatedCommand.disposition,
+            targetCommandId: validatedCommand.targetCommandId,
             turn: {
                 scopeKey: key,
                 sessionId: validatedCommand.sessionId,
@@ -188,7 +194,12 @@ export class SessionCommandService {
                 };
             }
             case "busy":
-                throw new SessionRuntimeError("session_busy", "The session already has an active command");
+                throw new SessionRuntimeError(
+                    "session_busy",
+                    validatedCommand.disposition === "reject"
+                        ? "The session already has an active command"
+                        : "The targeted active command is no longer available",
+                );
             case "inserted":
                 return {
                     kind: "accepted",
@@ -296,6 +307,68 @@ export class SessionCommandService {
             pendingWork: pendingWorkFromRow(pending, scope),
             turn: turnFromRow(turnRow),
         };
+    };
+
+    readonly promoteQueuedTurnToSteering = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<Turn> => {
+        signal.throwIfAborted();
+        validateTimestamp(now);
+        validateDomainIdentifier(runtimeId, "runtime");
+        validateDomainIdentifier(sessionId, "session");
+        validateDomainIdentifier(turnId, "turn");
+        this.#store.requireActiveSessionRow(scope, sessionId, now);
+        const key = scopeKey(scope);
+        const turnRow = this.#storage.findTurnRuntimeRecord({
+            scopeKey: key,
+            sessionId,
+            turnId,
+        });
+        if (turnRow === undefined) {
+            throw new SessionRuntimeError("session_not_found", "The Turn does not exist");
+        }
+        if (rowString(turnRow, "runtime_id") !== runtimeId) {
+            throw new SessionRuntimeError(
+                "session_access_denied",
+                "The Runtime does not own the Turn's immutable binding",
+            );
+        }
+        let command: SessionPromptCommand;
+        try {
+            command = decodeSessionPromptCommand(rowString(turnRow, "command_json"));
+        } catch (cause) {
+            throw new SessionRuntimeError("session_storage_unavailable", "The stored Turn request is invalid", {
+                cause,
+            });
+        }
+        if (command.disposition === SessionPromptDisposition.Steer) {
+            return turnFromRow(turnRow);
+        }
+        if (rowString(turnRow, "state") !== "queued" || command.disposition !== SessionPromptDisposition.Queue) {
+            throw new SessionRuntimeError("session_conflict", "Only a queued follow-up can be steered");
+        }
+        const active = this.#storage.findActiveTurn(key, sessionId);
+        if (active === undefined || rowString(active, "command_id") !== command.targetCommandId) {
+            throw new SessionRuntimeError("session_conflict", "The targeted active Turn is no longer available");
+        }
+        signal.throwIfAborted();
+        return turnFromRow(
+            this.#storage.promoteQueuedTurnToSteering({
+                commandJson: encodeSessionPromptCommand({
+                    ...command,
+                    disposition: SessionPromptDisposition.Steer,
+                }),
+                scopeKey: key,
+                sessionId,
+                turnId,
+                updatedAt: now,
+            }),
+        );
     };
 
     readonly commitEvent = async (
@@ -439,6 +512,7 @@ export class SessionCommandService {
             sourceKind: sourceKind,
             sourceId: sourceId,
             sourceSeq: sourceSeq,
+            messageId: prepared.event.kind === AGENT_MESSAGE_DELTA_KIND ? prepared.event.messageId : "",
             payload: prepared.payload,
             archiveSegmentId: archiveSegmentId,
             recordedAt: now,

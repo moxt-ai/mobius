@@ -1,3 +1,4 @@
+import { SessionPromptDisposition } from "@moxt-ai/mobius-sdk";
 import { FileText, Image as ImageIcon, LoaderCircle, Paperclip, Send, Square, X } from "lucide-react";
 import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
 
@@ -6,7 +7,7 @@ import { SessionConfigControls } from "@/components/session-config-controls";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkspacePicker } from "@/components/workspace-picker";
-import { DeletedSessionState } from "@/domain/chat";
+import { DeletedSessionState, type UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
     AttachmentReadError,
@@ -15,7 +16,7 @@ import {
     readPromptAttachment,
 } from "@/services/attachment-reader";
 import { hasSelectedComposerContext } from "@/services/composer-selected-context";
-import { prepareActiveSession, sendPrompt, stopActiveTurn } from "@/services/mobius-transport";
+import { prepareActiveSession, sendPrompt, steerQueuedPrompt, stopActiveTurn } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const COMPOSER_MAX_HEIGHT = 180;
@@ -105,6 +106,63 @@ function ContextUsageIndicator() {
     );
 }
 
+function followUpSummary(message: UserChatMessage): string {
+    if (message.text.length > 0) {
+        return message.text;
+    }
+    const attachmentCount = message.images.length + message.resources.length;
+    return `${attachmentCount.toString()} attached ${attachmentCount === 1 ? "item" : "items"}`;
+}
+
+function FollowUpTray() {
+    const conversation = useChatStore(selectActiveConversation);
+    const messages = conversation.followUpMessages;
+    if (messages.length === 0) {
+        return null;
+    }
+
+    return (
+        <section
+            aria-label="Pending follow-up messages"
+            aria-live="polite"
+            className="mx-auto mb-2 w-full max-w-[840px] overflow-hidden rounded-xl border-[0.5px] border-black/9 bg-white/95 shadow-[0_4px_18px_rgba(0,0,0,0.06)] backdrop-blur-sm"
+            role="status"
+        >
+            <div className="flex items-center justify-between border-b border-black/[0.055] px-3 py-1.5">
+                <span className="text-[10px] font-semibold tracking-[0.055em] text-copy-tertiary uppercase">
+                    Pending follow-ups
+                </span>
+                <span className="text-[10px] tabular-nums text-copy-tertiary">{messages.length.toString()}</span>
+            </div>
+            <ol className="max-h-32 overflow-y-auto p-1.5">
+                {messages.map((message) => (
+                    <li className="flex min-h-9 items-center gap-2 rounded-lg px-2 py-1.5" key={message.id}>
+                        <span className="inline-flex shrink-0 rounded-md bg-black/[0.045] px-1.5 py-0.5 text-[10px] leading-4 font-semibold text-copy-secondary">
+                            Queued
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs text-copy-secondary" title={message.text}>
+                            {followUpSummary(message)}
+                        </span>
+                        {conversation.session.capabilities.steering && (
+                            <Button
+                                aria-label={`Steer queued message: ${followUpSummary(message)}`}
+                                className="h-8 shrink-0 rounded-full px-3 text-xs text-success hover:bg-success-subtle hover:text-success"
+                                onClick={() => {
+                                    void steerQueuedPrompt(message.commandId);
+                                }}
+                                type="button"
+                                variant="ghost"
+                            >
+                                Steer
+                            </Button>
+                        )}
+                    </li>
+                ))}
+            </ol>
+        </section>
+    );
+}
+
 interface ChatComposerProps {
     readonly placement: "active" | "idle";
 }
@@ -136,7 +194,22 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         conversation.draft.trim().length > 0 ||
         conversation.draftImages.length > 0 ||
         conversation.draftResources.length > 0;
-    const canSend = runtime.canSend && !conversation.isRunning && conversation.session.isReady && hasPromptContent;
+    let activeDisposition: string = SessionPromptDisposition.Reject;
+    if (conversation.isRunning) {
+        activeDisposition = SessionPromptDisposition.Queue;
+    }
+    const canSubmitWhileRunning = activeDisposition !== SessionPromptDisposition.Reject;
+    const canSend =
+        runtime.canSend &&
+        conversation.session.isReady &&
+        hasPromptContent &&
+        (!conversation.isRunning || canSubmitWhileRunning);
+    const sendLabel =
+        activeDisposition === SessionPromptDisposition.Queue
+            ? "Queue message"
+            : activeDisposition === SessionPromptDisposition.Steer
+              ? "Steer agent"
+              : "Send message";
     const canAttach =
         conversation.session.capabilities.imagePrompt || conversation.session.capabilities.embeddedContextPrompt;
     const hasSelectedContext = hasSelectedComposerContext({
@@ -163,7 +236,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
     const submit = (event: FormEvent<HTMLFormElement>): void => {
         event.preventDefault();
         if (canSend) {
-            void sendPrompt(conversation.draft);
+            void sendPrompt(conversation.draft, activeDisposition);
         }
     };
 
@@ -191,7 +264,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         }
         event.preventDefault();
         if (canSend) {
-            void sendPrompt(conversation.draft);
+            void sendPrompt(conversation.draft, activeDisposition);
         }
     };
 
@@ -263,6 +336,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     {errorMessage}
                 </div>
             )}
+            <FollowUpTray />
             <form
                 className="composer-shell relative mx-auto w-full max-w-[840px] rounded-2xl bg-white px-2 py-1.5 sm:px-2.5 sm:py-2 md:rounded-[18px] md:px-3 md:py-2.5"
                 onSubmit={submit}
@@ -391,7 +465,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         <Button
                             aria-label="Attach images or text resources"
                             className="size-11 rounded-full text-copy-secondary hover:bg-black/[0.04] lg:size-9"
-                            disabled={!canAttach || conversation.isRunning || attaching}
+                            disabled={!canAttach || attaching}
                             onClick={() => fileInputRef.current?.click()}
                             size="icon"
                             title={
@@ -425,44 +499,42 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     </fieldset>
                     <div className="flex shrink-0 items-center gap-1 md:gap-2">
                         <ContextUsageIndicator />
-                        <Button
-                            aria-label={
-                                conversation.isRunning
-                                    ? conversation.canStop
-                                        ? "Stop agent"
-                                        : "Stopping agent"
-                                    : "Send message"
-                            }
-                            className="group size-11 rounded-full border-0 bg-transparent p-0 shadow-none hover:bg-transparent lg:size-9"
-                            disabled={conversation.isRunning ? !conversation.canStop : !canSend}
-                            onClick={
-                                conversation.isRunning
-                                    ? () => {
-                                          void stopActiveTurn();
-                                      }
-                                    : undefined
-                            }
-                            size="icon"
-                            type={conversation.isRunning ? "button" : "submit"}
-                        >
-                            <span
-                                aria-hidden="true"
-                                className={cn(
-                                    "flex size-9 items-center justify-center rounded-full transition-colors duration-150 motion-reduce:transition-none",
-                                    conversation.isRunning
-                                        ? "bg-destructive/10 text-destructive group-hover:bg-destructive/15"
-                                        : "bg-foreground text-background group-hover:bg-foreground/85",
-                                )}
+                        {conversation.isRunning && (
+                            <Button
+                                aria-label={conversation.canStop ? "Stop agent" : "Stopping agent"}
+                                className="group size-11 rounded-full border-0 bg-transparent p-0 shadow-none hover:bg-transparent lg:size-9"
+                                disabled={!conversation.canStop}
+                                onClick={() => {
+                                    void stopActiveTurn();
+                                }}
+                                size="icon"
+                                type="button"
                             >
-                                {conversation.isRunning ? (
-                                    conversation.canStop ? (
+                                <span
+                                    aria-hidden="true"
+                                    className="flex size-9 items-center justify-center rounded-full bg-destructive/10 text-destructive transition-colors duration-150 group-hover:bg-destructive/15 motion-reduce:transition-none"
+                                >
+                                    {conversation.canStop ? (
                                         <Square className="size-[14px] fill-current" />
                                     ) : (
                                         <LoaderCircle className="size-4 animate-spin" />
-                                    )
-                                ) : (
-                                    <Send className="size-4" />
-                                )}
+                                    )}
+                                </span>
+                            </Button>
+                        )}
+                        <Button
+                            aria-label={sendLabel}
+                            className="group size-11 rounded-full border-0 bg-transparent p-0 shadow-none hover:bg-transparent lg:size-9"
+                            disabled={!canSend}
+                            size="icon"
+                            title={sendLabel}
+                            type="submit"
+                        >
+                            <span
+                                aria-hidden="true"
+                                className="flex size-9 items-center justify-center rounded-full bg-foreground text-background transition-colors duration-150 group-hover:bg-foreground/85 motion-reduce:transition-none"
+                            >
+                                <Send className="size-4" />
                             </span>
                         </Button>
                     </div>

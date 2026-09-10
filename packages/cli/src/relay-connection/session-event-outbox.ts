@@ -134,6 +134,14 @@ export class SessionEventOutbox {
         this.#database.prepare(`UPDATE relay_turn_receipts SET state = ? WHERE command_id = ?`).run(state, commandId);
     };
 
+    readonly isTerminalExecution = (commandId: string, sessionId: string): boolean => {
+        const row = this.#database
+            .prepare(`SELECT state FROM relay_turn_receipts WHERE command_id = ? AND session_id = ?`)
+            .get(commandId, sessionId);
+        const state = typeof row === "object" && row !== null ? Reflect.get(row, "state") : undefined;
+        return state === "succeeded" || state === "failed" || state === "cancelled";
+    };
+
     readonly acknowledge = (acknowledgement: SessionEventAcknowledgement): void => {
         this.#database
             .prepare(

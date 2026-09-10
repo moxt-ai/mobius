@@ -53,6 +53,7 @@ export class SessionCommandsStorage {
                 ...scope,
                 sequence: plan.sequenceNumber,
                 now: plan.recordedAt,
+                messageId: plan.messageId,
                 projection: plan.projection,
             });
             this.#archive.stageEvent({
@@ -124,6 +125,8 @@ export class SessionCommandsStorage {
             return pendingWork;
         });
     readonly insertTurnWithDispatch = (input: {
+        readonly disposition: string;
+        readonly targetCommandId: string;
         readonly turn: Parameters<SessionCommandsStorage["insertQueuedTurn"]>[0];
         readonly receipt: Parameters<SessionCommandsStorage["insertCommandReceipt"]>[0];
         readonly dispatch: Parameters<SessionCommandsStorage["insertDispatch"]>[0];
@@ -143,7 +146,16 @@ export class SessionCommandsStorage {
                 const pendingWork = this.findPendingWork(scopeKey, sessionId, `dispatch_${existing.turn_id}`) ?? null;
                 return { kind: "existing", turn: existing, pendingWork };
             }
-            if (this.findActiveTurn(scopeKey, sessionId) !== undefined) {
+            const active = this.findActiveTurn(scopeKey, sessionId);
+            const acceptsSteering =
+                input.disposition === "steer" && active !== undefined && active.command_id === input.targetCommandId;
+            const acceptsQueue =
+                input.disposition === "queue" && this.acceptsQueueTarget(scopeKey, sessionId, input.targetCommandId);
+            if (
+                (input.disposition === "reject" && active !== undefined) ||
+                (input.disposition === "steer" && !acceptsSteering) ||
+                (input.disposition === "queue" && !acceptsQueue)
+            ) {
                 return { kind: "busy" };
             }
             this.insertQueuedTurn(input.turn);
@@ -156,6 +168,42 @@ export class SessionCommandsStorage {
                 throw new DatabaseError("database_unavailable", "The Turn dispatch was not committed atomically");
             }
             return { kind: "inserted", turn, pendingWork };
+        });
+    readonly promoteQueuedTurnToSteering = (input: {
+        readonly commandJson: string;
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly turnId: string;
+        readonly updatedAt: number;
+    }): TurnRecord =>
+        this.#database.transaction(() => {
+            const turnUpdate = this.#database.run(
+                `UPDATE turns
+         SET command_json = ?, updated_at = ?
+         WHERE scope_key = ? AND session_id = ? AND turn_id = ?
+           AND state = 'queued'
+           AND COALESCE(json_extract(command_json, '$.disposition'), 'reject') = 'queue'`,
+                [input.commandJson, input.updatedAt, input.scopeKey, input.sessionId, input.turnId],
+            );
+            if (turnUpdate.changes !== 1) {
+                throw new DatabaseError("database_unavailable", "The queued Turn could not be promoted atomically");
+            }
+            const dispatchUpdate = this.#database.run(
+                `UPDATE pending_work
+         SET delivery_payload = ?
+         WHERE scope_key = ? AND session_id = ? AND work_id = ?
+           AND work_kind = 'dispatch' AND state = 'pending'`,
+                [input.commandJson, input.scopeKey, input.sessionId, `dispatch_${input.turnId}`],
+            );
+            if (dispatchUpdate.changes !== 1) {
+                throw new DatabaseError("database_unavailable", "The promoted Turn dispatch is unavailable");
+            }
+            this.touchSession(input);
+            const turn = this.findTurn(input.scopeKey, input.sessionId, input.turnId);
+            if (turn === undefined) {
+                throw new DatabaseError("database_unavailable", "The promoted Turn disappeared");
+            }
+            return turn;
         });
     readonly recordRuntimeDisconnection = (input: {
         readonly scopeKey: string;
@@ -237,10 +285,34 @@ export class SessionCommandsStorage {
                 `SELECT command_id FROM turns
          WHERE scope_key = ? AND session_id = ?
            AND state IN ('queued', 'running', 'indeterminate')
+           AND COALESCE(json_extract(command_json, '$.disposition'), 'reject') <> 'steer'
+         ORDER BY rowid
          LIMIT 1`,
                 [scopeKey, sessionId],
             ),
         )[0];
+
+    readonly acceptsQueueTarget = (scopeKey: string, sessionId: string, targetCommandId: string): boolean =>
+        decodeStorageRows(
+            RecordPresenceSchema,
+            this.#database.query(
+                `SELECT 1 FROM turns target
+         WHERE target.scope_key = ? AND target.session_id = ? AND target.command_id = ?
+           AND COALESCE(json_extract(target.command_json, '$.disposition'), 'reject') <> 'steer'
+           AND NOT EXISTS (
+             SELECT 1 FROM turns later
+             WHERE later.scope_key = target.scope_key AND later.session_id = target.session_id
+               AND later.rowid > target.rowid
+               AND COALESCE(json_extract(later.command_json, '$.disposition'), 'reject') <> 'steer'
+               AND NOT (
+                 COALESCE(json_extract(later.command_json, '$.disposition'), 'reject') = 'queue'
+                 AND json_extract(later.command_json, '$.targetCommandId') = target.command_id
+               )
+           )
+         LIMIT 1`,
+                [scopeKey, sessionId, targetCommandId],
+            ),
+        ).length === 1;
 
     readonly insertQueuedTurn = (input: {
         readonly scopeKey: string;

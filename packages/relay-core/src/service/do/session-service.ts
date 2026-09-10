@@ -195,6 +195,8 @@ export class SessionService {
         sessionId: string,
         idempotencyKey: string,
         content: string,
+        disposition: string,
+        targetCommandId: string,
         additionalDirectoryIds: readonly string[],
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
@@ -226,11 +228,13 @@ export class SessionService {
                 bindingId: session.defaultBinding.bindingId,
                 commandId: idempotencyKey,
                 directoryId: session.defaultBinding.workspaceRef,
+                disposition,
                 images,
                 kind: SESSION_PROMPT_KIND,
                 prompt: content,
                 resources: [...resources, ...artifactResources],
                 sessionId,
+                targetCommandId,
             },
             now,
             signal,
@@ -346,6 +350,35 @@ export class SessionService {
             turnId,
             signal,
         );
+
+    readonly promoteQueuedTurnToSteering = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const scope = await this.projectScope(projectId, token, ProjectPermission.ConversationTurnCreate, signal);
+        const runtimeId = await this.#sessionQueries.readTurnRuntime(scope, sessionId, turnId, signal);
+        const access = await this.#pairings.authorizeProjectRuntime(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.ConversationTurnCreate,
+            signal,
+        );
+        const turn = await this.#sessionCommands.promoteQueuedTurnToSteering(
+            scope,
+            access.runtimeId,
+            sessionId,
+            turnId,
+            now,
+            signal,
+        );
+        await this.#channelGateway.dispatchPending(access, signal);
+        return turn;
+    };
 
     readonly cancelTurn = async (
         projectId: string,

@@ -38,7 +38,9 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "imagePrompt",
     "listSessions",
     "loadSession",
+    "promptQueueing",
     "resumeSession",
+    "steering",
     "unstableForkSession",
 ];
 
@@ -376,9 +378,11 @@ export interface SubmitMobiusTurnRequest {
     readonly additionalDirectoryIds: readonly string[];
     readonly artifactIds: readonly string[];
     readonly content: string;
+    readonly disposition?: string;
     readonly idempotencyKey: string;
     readonly images: readonly PromptImage[];
     readonly resources: readonly PromptResource[];
+    readonly targetCommandId?: string;
 }
 
 export interface CancelMobiusTurnRequest {
@@ -1648,11 +1652,14 @@ export class MobiusMessage {
     readonly attempt: MobiusAttemptSummary;
     readonly commandId: string;
     readonly createdAt: string;
+    readonly disposition: string;
     readonly images: readonly PromptImage[];
+    readonly messageId: string;
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
     readonly response: string;
     readonly sessionId: string;
+    readonly targetCommandId: string;
 
     constructor(
         activities: readonly MobiusActivitySummary[],
@@ -1661,11 +1668,14 @@ export class MobiusMessage {
         attempt: MobiusAttemptSummary,
         commandId: string,
         createdAt: string,
+        disposition: string,
         images: readonly PromptImage[],
+        messageId: string,
         prompt: string,
         resources: readonly PromptResource[],
         response: string,
         sessionId: string,
+        targetCommandId: string,
     ) {
         this.activities = activities;
         this.additionalDirectoryIds = additionalDirectoryIds;
@@ -1673,11 +1683,14 @@ export class MobiusMessage {
         this.attempt = attempt;
         this.commandId = commandId;
         this.createdAt = createdAt;
+        this.disposition = disposition;
         this.images = images;
+        this.messageId = messageId;
         this.prompt = prompt;
         this.resources = resources;
         this.response = response;
         this.sessionId = sessionId;
+        this.targetCommandId = targetCommandId;
     }
 }
 
@@ -1695,11 +1708,14 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
         decodeAttemptSummary(message["attempt"]),
         identifierField(message, "commandId"),
         validateTimestamp(stringField(message, "createdAt", 128), "createdAt"),
+        stringField(message, "disposition", 16),
         decodePromptImagesValue(message["images"]),
+        stringField(message, "messageId", 255),
         stringField(message, "prompt", 100_000),
         decodePromptResourcesValue(message["resources"]),
         stringField(message, "response", 8_500_000),
         identifierField(message, "sessionId"),
+        stringField(message, "targetCommandId", 128),
     );
 }
 

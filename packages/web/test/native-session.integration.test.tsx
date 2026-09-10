@@ -1,8 +1,10 @@
 import {
     decodeNativeSessionCommand,
+    decodeNativeSessionTurnForkCommand,
     decodeSessionPrepareCommand,
     encodeNativeSessionResult,
     NATIVE_SESSION_REQUEST_KIND,
+    NATIVE_SESSION_TURN_FORK_KIND,
     SESSION_PREPARE_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -21,6 +23,117 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Native Session boundaries", () => {
+    it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, preparation);
+            const first = await completeRenderedPrompt(
+                paired.daemon,
+                "Establish the implementation plan",
+                "The implementation plan is established.",
+            );
+            await completeRenderedPrompt(
+                paired.daemon,
+                "Apply the second-stage changes",
+                "The second-stage changes are applied.",
+            );
+            await completeRenderedPrompt(
+                paired.daemon,
+                "Repeat the first answer verbatim",
+                "The implementation plan is established.",
+            );
+
+            const firstAnswer = screen
+                .getAllByRole("article", { name: "Message from Codex" })
+                .find((article) => article.textContent?.includes("The implementation plan is established."));
+            if (firstAnswer === undefined) {
+                throw new Error("Expected the first completed answer");
+            }
+            fireEvent.click(
+                within(firstAnswer).getByRole("button", {
+                    name: "Fork conversation after this turn",
+                }),
+            );
+
+            const fork = decodeNativeSessionTurnForkCommand(await paired.daemon.receive(NATIVE_SESSION_TURN_FORK_KIND));
+            expect(fork).toMatchObject({
+                agentId: "codex",
+                messageId: `agent-${first.commandId}`,
+                messageOccurrence: 1,
+                sessionId: first.sessionId,
+                sourceCommandId: first.commandId,
+            });
+            paired.daemon.send(
+                encodeNativeSessionResult({
+                    action: "fork",
+                    history: {
+                        coveredCommandIds: [],
+                        coveredMessageIds: [],
+                        messages: [
+                            { role: "user", text: "Establish the implementation plan" },
+                            { role: "assistant", text: "The implementation plan is established." },
+                        ],
+                        status: "available",
+                        truncated: false,
+                    },
+                    kind: "native.session.result",
+                    ready: {
+                        additionalDirectories: [],
+                        agentId: fork.agentId,
+                        agentName: "Codex",
+                        agentVersion: "integration",
+                        capabilities: {
+                            additionalDirectories: true,
+                            audioPrompt: false,
+                            closeSession: true,
+                            deleteSession: true,
+                            embeddedContextPrompt: true,
+                            imagePrompt: true,
+                            listSessions: true,
+                            loadSession: true,
+                            promptQueueing: false,
+                            resumeSession: true,
+                            steering: false,
+                            unstableForkSession: true,
+                        },
+                        commands: [],
+                        configOptions: [],
+                        directoryId: fork.directoryId,
+                        directoryLabel: "mobius",
+                        kind: "session.ready",
+                        requestId: fork.requestId,
+                        restored: true,
+                        sessionId: fork.targetSessionId,
+                    },
+                    requestId: fork.requestId,
+                    sessionId: fork.sessionId,
+                    targetSessionId: fork.targetSessionId,
+                    title: fork.title,
+                }),
+            );
+
+            await waitFor(() => {
+                expect(screen.queryByRole("button", { name: "Forking conversation" })).toBeNull();
+            });
+            expect(screen.queryByRole("alert")?.textContent ?? "").toBe("");
+            await waitFor(() => {
+                expect(window.location.pathname).toContain(`/sessions/${encodeURIComponent(fork.targetSessionId)}`);
+            });
+            expect(await screen.findByText("The implementation plan is established.")).toBeTruthy();
+            expect(screen.queryByText("The second-stage changes are applied.")).toBeNull();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
@@ -59,7 +172,9 @@ describe.sequential("Native Session boundaries", () => {
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
+                        promptQueueing: false,
                         resumeSession: true,
+                        steering: false,
                         unstableForkSession: true,
                     },
                     entries: [
@@ -118,7 +233,9 @@ describe.sequential("Native Session boundaries", () => {
                             imagePrompt: true,
                             listSessions: true,
                             loadSession: true,
+                            promptQueueing: false,
                             resumeSession: true,
+                            steering: false,
                             unstableForkSession: true,
                         },
                         commands: [],
@@ -186,7 +303,9 @@ describe.sequential("Native Session boundaries", () => {
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
+                        promptQueueing: false,
                         resumeSession: true,
+                        steering: false,
                         unstableForkSession: true,
                     },
                     entries: [
@@ -301,7 +420,9 @@ describe.sequential("Native Session boundaries", () => {
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
+                        promptQueueing: false,
                         resumeSession: true,
+                        steering: false,
                         unstableForkSession: true,
                     },
                     entries: [
@@ -358,7 +479,9 @@ describe.sequential("Native Session boundaries", () => {
                             imagePrompt: true,
                             listSessions: true,
                             loadSession: true,
+                            promptQueueing: false,
                             resumeSession: true,
+                            steering: false,
                             unstableForkSession: true,
                         },
                         commands: [],

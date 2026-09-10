@@ -17,6 +17,7 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionResult,
+    decodeNativeSessionTurnForkRequest,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -29,6 +30,7 @@ import {
     decodeWorkspaceListCommand,
     encodeCommittedSessionEvent,
     encodeNativeSessionResult,
+    encodeNativeSessionTurnForkCommand,
     encodeRuntimeStatusEvent,
     encodeSessionEventAcknowledgement,
     encodeSessionEventRejection,
@@ -37,7 +39,10 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
+    NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
     type NativeSessionHistory,
+    type NativeSessionTurnForkCommand,
+    type NativeSessionTurnForkRequest,
     ProtocolMessageError,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
@@ -64,6 +69,7 @@ import {
     SessionRuntimeError,
 } from "../../entity/do/session.ts";
 import type { SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import { sha256 } from "../do/session-archive-codec.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
@@ -265,6 +271,13 @@ export class ChannelActor {
                 if (!result.duplicate) {
                     this.broadcast(this.#peers.hosts(), encodeCommittedSessionEvent(result.committed));
                 }
+                if (
+                    !result.duplicate &&
+                    (decodeMessageKind(envelope.payload) === "session.completed" ||
+                        decodeMessageKind(envelope.payload) === "session.failed")
+                ) {
+                    await this.dispatchPending(signal);
+                }
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
@@ -396,25 +409,7 @@ export class ChannelActor {
                     );
                     return;
                 }
-                if (!this.sendToDaemon(message)) {
-                    socket.send(
-                        encodeSessionFailedEvent({
-                            code: "runtime_offline",
-                            commandId: command.commandId,
-                            kind: SESSION_FAILED_KIND,
-                            message: "The local runtime disconnected before the accepted command could be forwarded",
-                            sessionId: command.sessionId,
-                        }),
-                    );
-                    return;
-                }
-                await this.#commands.markPendingWorkCompleted(
-                    this.#scope,
-                    command.sessionId,
-                    acceptance.pendingWork.workId,
-                    this.#clock.now(),
-                    signal,
-                );
+                await this.dispatchPending(signal);
                 this.broadcast(this.#peers.hosts(), message);
                 return;
             }
@@ -481,6 +476,70 @@ export class ChannelActor {
                     );
                 }
                 this.forwardControl(socket, message, command.requestId, command.sessionId);
+                return;
+            }
+            if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
+                const command = decodeNativeSessionTurnForkRequest(message);
+                try {
+                    if (!this.hasOnlineDaemon()) {
+                        throw new SessionRuntimeError("runtime_offline", "The local runtime is offline");
+                    }
+                    const source = await this.#queries.readSession(this.#scope, command.sessionId, signal);
+                    if (
+                        source.runtimeId !== this.#runtimeId ||
+                        source.agentId !== command.agentId ||
+                        source.defaultBinding.bindingId !== command.bindingId ||
+                        source.defaultBinding.workspaceRef !== command.directoryId
+                    ) {
+                        throw new SessionRuntimeError(
+                            "session_binding_mismatch",
+                            "The source Session binding changed before it could be forked",
+                        );
+                    }
+                    const authorized = await this.resolveTurnForkCommand(command, signal);
+                    await this.#commands.createSession(
+                        this.#scope,
+                        new CreateSessionRequest(
+                            command.targetSessionId,
+                            this.#runtimeId,
+                            command.agentId,
+                            command.bindingId,
+                            command.directoryId,
+                            new SessionRecordingPolicy(
+                                source.policy.level,
+                                source.policy.retentionMilliseconds,
+                                source.policy.hotEventLimit,
+                                source.policy.contentLimitBytes,
+                                source.policy.idempotencyRetentionMilliseconds,
+                            ),
+                            source.title,
+                        ),
+                        this.#clock.now(),
+                        signal,
+                    );
+                    if (!this.sendToDaemon(encodeNativeSessionTurnForkCommand(authorized))) {
+                        await this.#commands.deleteSession(
+                            this.#scope,
+                            command.targetSessionId,
+                            this.#clock.now(),
+                            signal,
+                        );
+                        throw new SessionRuntimeError("runtime_offline", "The local runtime went offline");
+                    }
+                } catch (error) {
+                    if (!(error instanceof SessionRuntimeError)) {
+                        throw error;
+                    }
+                    socket.send(
+                        encodeSessionOperationFailedEvent({
+                            code: error.code,
+                            kind: SESSION_OPERATION_FAILED_KIND,
+                            message: error.message,
+                            requestId: command.requestId,
+                            sessionId: command.sessionId,
+                        }),
+                    );
+                }
                 return;
             }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
@@ -576,6 +635,53 @@ export class ChannelActor {
             default:
                 throw new ProtocolMessageError("Unsupported daemon message");
         }
+    };
+
+    private readonly resolveTurnForkCommand = async (
+        command: NativeSessionTurnForkRequest,
+        signal: AbortSignal,
+    ): Promise<NativeSessionTurnForkCommand> => {
+        let cursor: Parameters<SessionQueryGateway["readMessages"]>[2] = null;
+        let found = false;
+        let messageId = "";
+        let response = "";
+        let occurrence = 0;
+        do {
+            const page = await this.#queries.readMessages(this.#scope, command.sessionId, cursor, 100, signal);
+            for (const message of page.messages) {
+                if (!found && message.commandId === command.sourceCommandId) {
+                    if (
+                        message.disposition === "steer" ||
+                        (message.attempt?.kind !== "succeeded" && message.attempt?.kind !== "cancelled")
+                    ) {
+                        throw new SessionRuntimeError(
+                            "fork_point_unavailable",
+                            "Only a completed Agent turn can be used as a fork point",
+                        );
+                    }
+                    found = true;
+                    messageId = message.messageId;
+                    response = message.response;
+                    occurrence = 1;
+                    continue;
+                }
+                if (found && message.response === response && message.disposition !== "steer") {
+                    occurrence += 1;
+                }
+            }
+            cursor = page.nextCursor;
+        } while (cursor !== null);
+        if (!found) {
+            throw new SessionRuntimeError("fork_point_not_found", "The selected fork point does not exist");
+        }
+        return {
+            ...command,
+            kind: "native.session.turn-fork",
+            messageFingerprint: `sha256:${await sha256(new TextEncoder().encode(response))}`,
+            messageId: messageId.length > 0 ? messageId : `mobius-${command.sourceCommandId}`,
+            messageOccurrence: occurrence,
+            title: (await this.#queries.readSession(this.#scope, command.sessionId, signal)).title,
+        };
     };
 
     private readonly validateHostControl = (

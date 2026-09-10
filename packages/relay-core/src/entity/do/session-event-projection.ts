@@ -10,6 +10,7 @@ export interface SessionEventCommit {
     readonly sourceId: string;
     readonly sourceSeq: string;
     readonly expectedPreviousSourceSequence: string | null;
+    readonly messageId: string;
     readonly payload: string;
     readonly archiveSegmentId: string;
     readonly recordedAt: number;

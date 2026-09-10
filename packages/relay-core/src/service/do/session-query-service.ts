@@ -422,11 +422,14 @@ export class SessionQueryService {
             attempt: attemptSummaryFromRow(row),
             commandId: command.commandId,
             createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
+            disposition: command.disposition,
             images: command.images,
+            messageId: this.#storage.readTurnMessageId(scopeKey(scope), sessionId, command.commandId),
             prompt: command.prompt,
             resources: command.resources,
             response: rowString(row, "response"),
             sessionId,
+            targetCommandId: command.targetCommandId,
         };
     };
 }

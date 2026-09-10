@@ -32,6 +32,7 @@ import {
     type SessionCompletedEvent,
     type SessionFailedEvent,
     type SessionPromptCommand,
+    SessionPromptDisposition,
     type SessionStartedEvent,
 } from "../messages.ts";
 
@@ -120,6 +121,20 @@ function readAllowedString(
         throw new ProtocolMessageError(`Invalid value field: ${key}`);
     }
     return field;
+}
+
+function readPromptDisposition(value: Readonly<Record<string, unknown>>): string {
+    const field = value["disposition"];
+    if (field === undefined || field === SessionPromptDisposition.Reject) {
+        return SessionPromptDisposition.Reject;
+    }
+    if (field === SessionPromptDisposition.Queue) {
+        return SessionPromptDisposition.Queue;
+    }
+    if (field === SessionPromptDisposition.Steer) {
+        return SessionPromptDisposition.Steer;
+    }
+    throw new ProtocolMessageError("Invalid value field: disposition");
 }
 
 function readSequence(value: Readonly<Record<string, unknown>>, key: string): number {
@@ -274,11 +289,13 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         "bindingId",
         "commandId",
         "directoryId",
+        "disposition",
         "images",
         "kind",
         "prompt",
         "resources",
         "sessionId",
+        "targetCommandId",
     ]);
     assertKind(value, SESSION_PROMPT_KIND);
 
@@ -295,17 +312,29 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         throw new ProtocolMessageError("Prompt must contain content");
     }
 
+    const disposition = readPromptDisposition(value);
+    const rawTargetCommandId = value["targetCommandId"];
+    const targetCommandId = rawTargetCommandId === undefined ? "" : readText(value, "targetCommandId", 128);
+    if (
+        (disposition === SessionPromptDisposition.Reject && targetCommandId.length > 0) ||
+        (disposition !== SessionPromptDisposition.Reject && !IDENTIFIER_PATTERN.test(targetCommandId))
+    ) {
+        throw new ProtocolMessageError("Prompt disposition has an invalid target command");
+    }
+
     return {
         additionalDirectoryIds: readDirectoryIdentifiers(value, "additionalDirectoryIds", 16),
         agentId: readIdentifier(value, "agentId"),
         bindingId: readIdentifier(value, "bindingId"),
         commandId: readIdentifier(value, "commandId"),
         directoryId: readDirectoryIdentifier(value, "directoryId"),
+        disposition,
         images,
         kind: SESSION_PROMPT_KIND,
         prompt,
         resources,
         sessionId: readIdentifier(value, "sessionId"),
+        targetCommandId,
     };
 }
 
@@ -378,12 +407,13 @@ export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent 
 
 export function decodeAgentMessageDeltaEvent(encoded: string): AgentMessageDeltaEvent {
     const value = parseJson(encoded);
-    assertExactKeys(value, ["commandId", "kind", "sessionId", "text"]);
+    assertExactKeys(value, ["commandId", "kind", "messageId", "sessionId", "text"]);
     assertKind(value, AGENT_MESSAGE_DELTA_KIND);
 
     return {
         commandId: readIdentifier(value, "commandId"),
         kind: AGENT_MESSAGE_DELTA_KIND,
+        messageId: value["messageId"] === undefined ? "" : readText(value, "messageId", 255),
         sessionId: readIdentifier(value, "sessionId"),
         text: readString(value, "text", MAX_EVENT_TEXT_LENGTH),
     };

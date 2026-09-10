@@ -1,5 +1,17 @@
-import type { AgentCapabilities } from "@agentclientprotocol/sdk";
+import type { InitializeResponse } from "@agentclientprotocol/sdk";
 import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasTrueChildField(value: unknown, childKey: string, fieldKey: string): boolean {
+    if (!isRecord(value)) {
+        return false;
+    }
+    const child = Reflect.get(value, childKey);
+    return isRecord(child) && Reflect.get(child, fieldKey) === true;
+}
 
 export function unsupportedSessionCapabilities(): SessionCapabilities {
     return Object.freeze({
@@ -11,12 +23,15 @@ export function unsupportedSessionCapabilities(): SessionCapabilities {
         imagePrompt: false,
         listSessions: false,
         loadSession: false,
+        promptQueueing: false,
         resumeSession: false,
+        steering: false,
         unstableForkSession: false,
     });
 }
 
-export function normalizeAcpCapabilities(capabilities: AgentCapabilities): SessionCapabilities {
+export function normalizeAcpCapabilities(initialized: InitializeResponse): SessionCapabilities {
+    const capabilities = initialized.agentCapabilities ?? {};
     const session = capabilities.sessionCapabilities;
     const prompt = capabilities.promptCapabilities;
     return Object.freeze({
@@ -28,7 +43,9 @@ export function normalizeAcpCapabilities(capabilities: AgentCapabilities): Sessi
         imagePrompt: prompt?.image === true,
         listSessions: session?.list != null,
         loadSession: capabilities.loadSession === true,
+        promptQueueing: hasTrueChildField(capabilities._meta, "claudeCode", "promptQueueing"),
         resumeSession: session?.resume != null,
+        steering: hasTrueChildField(initialized._meta, "steering", "supported"),
         unstableForkSession: session?.fork != null,
     });
 }

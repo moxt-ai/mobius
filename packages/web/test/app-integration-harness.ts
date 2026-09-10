@@ -13,8 +13,10 @@ import {
     SESSION_EVENT_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    type SessionCapabilities,
     type SessionConfigOption,
     type SessionPrepareCommand,
+    type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, expect } from "vitest";
@@ -88,7 +90,7 @@ function setHappyDomUrl(url: URL): void {
 }
 
 export class StatefulDaemon {
-    readonly #attemptIdsBySession = new Map<string, string>();
+    readonly #attemptIdsByCommand = new Map<string, string>();
     readonly #closed: Promise<void>;
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
@@ -162,6 +164,9 @@ export class StatefulDaemon {
         this.#socket.close(1000, "Web integration complete");
     };
 
+    readonly available = (kind: string): number =>
+        this.#messages.filter((message) => decodeMessageKind(message) === kind).length;
+
     readonly waitForClose = async (): Promise<void> => await this.#closed;
 
     readonly receive = (kind: string): Promise<string> => {
@@ -205,9 +210,14 @@ export class StatefulDaemon {
     readonly sendSessionEvent = async (sessionId: string, payload: string): Promise<string> => {
         const eventId = crypto.randomUUID();
         if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
-            this.#attemptIdsBySession.set(sessionId, decodeSessionStartedEvent(payload).attemptId);
+            const started = decodeSessionStartedEvent(payload);
+            this.#attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
         }
-        const attemptId = this.#attemptIdsBySession.get(sessionId);
+        const decoded: unknown = JSON.parse(payload);
+        const commandId =
+            isRecord(decoded) && typeof decoded["commandId"] === "string" ? decoded["commandId"] : undefined;
+        const attemptId =
+            commandId === undefined ? undefined : this.#attemptIdsByCommand.get(`${sessionId}:${commandId}`);
         const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
         const sourceSequence = (this.#sourceSequences.get(sourceKey) ?? 0) + 1;
         this.#sourceSequences.set(sourceKey, sourceSequence);
@@ -270,7 +280,9 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
+                        promptQueueing: false,
                         resumeSession: true,
+                        steering: false,
                         unstableForkSession: false,
                     },
                     id: "codex",
@@ -325,6 +337,20 @@ export async function sendReadySession(
     daemon: StatefulDaemon,
     prepare: SessionPrepareCommand,
     configOptions: readonly SessionConfigOption[] = [],
+    capabilities: SessionCapabilities = {
+        additionalDirectories: true,
+        audioPrompt: false,
+        closeSession: true,
+        deleteSession: true,
+        embeddedContextPrompt: true,
+        imagePrompt: true,
+        listSessions: true,
+        loadSession: true,
+        promptQueueing: false,
+        resumeSession: true,
+        steering: false,
+        unstableForkSession: true,
+    },
 ): Promise<void> {
     await daemon.sendSessionEvent(
         prepare.sessionId,
@@ -336,18 +362,7 @@ export async function sendReadySession(
             agentId: prepare.agentId,
             agentName: "Codex",
             agentVersion: "integration",
-            capabilities: {
-                additionalDirectories: true,
-                audioPrompt: false,
-                closeSession: true,
-                deleteSession: true,
-                embeddedContextPrompt: true,
-                imagePrompt: true,
-                listSessions: true,
-                loadSession: true,
-                resumeSession: true,
-                unstableForkSession: true,
-            },
+            capabilities,
             commands: [],
             configOptions,
             directoryId: prepare.directoryId,
@@ -364,7 +379,7 @@ export async function completeRenderedPrompt(
     daemon: StatefulDaemon,
     promptText: string,
     responseText: string,
-): Promise<void> {
+): Promise<SessionPromptCommand> {
     const promptInput = await screen.findByRole("textbox", {
         name: "Message the local agent",
     });
@@ -388,6 +403,7 @@ export async function completeRenderedPrompt(
         encodeAgentMessageDeltaEvent({
             commandId: prompt.commandId,
             kind: "agent.message.delta",
+            messageId: `agent-${prompt.commandId}`,
             sessionId: prompt.sessionId,
             text: responseText,
         }),
@@ -401,7 +417,8 @@ export async function completeRenderedPrompt(
             stopReason: "end_turn",
         }),
     );
-    await screen.findByText(responseText);
+    await screen.findAllByText(responseText);
+    return prompt;
 }
 
 export interface WebIntegrationEnvironment {

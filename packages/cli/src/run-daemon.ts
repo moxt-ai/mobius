@@ -28,6 +28,7 @@ import {
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
+    decodeNativeSessionTurnForkCommand,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
@@ -66,6 +67,7 @@ import {
     encodeWorkspaceEntriesEvent,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
+    NATIVE_SESSION_TURN_FORK_KIND,
     OwnerBotReplyRoute,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -91,6 +93,7 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionPrepareCommand,
     type SessionPromptCommand,
+    SessionPromptDisposition,
     type SessionUsageUpdatedEvent,
     WORKSPACE_LIST_KIND,
     type WorkspaceListCommand,
@@ -851,54 +854,85 @@ async function executePrompt(
             attemptId,
         );
         const attachments = await resolvePromptArtifacts(config, command, signal);
-        const result = await sessions.runPrompt({
-            additionalDirectories: resolved.additionalDirectories,
-            agent,
-            commandId: command.commandId,
-            cwd: resolved.cwd,
-            images: attachments.images,
-            onActivity: (activity) => {
-                publisher.recordAttempt(
-                    command.sessionId,
-                    encodeAgentActivityEvent({
-                        activityId: activity.activityId,
-                        activityType: activity.activityType,
-                        commandId: command.commandId,
-                        content: activity.content,
-                        detail: activity.detail,
-                        input: activity.input,
-                        kind: AGENT_ACTIVITY_KIND,
-                        locations: activity.locations,
-                        name: activity.name,
-                        output: activity.output,
-                        sequence: activity.sequence,
-                        sessionId: command.sessionId,
-                        status: activity.status,
-                        title: activity.title,
-                        toolKind: activity.toolKind,
-                    }),
-                    attemptId,
+        let stopReason: string;
+        if (command.disposition === SessionPromptDisposition.Steer) {
+            await sessions.steerPrompt({
+                additionalDirectories: resolved.additionalDirectories,
+                agent,
+                commandId: command.commandId,
+                cwd: resolved.cwd,
+                images: attachments.images,
+                prompt: command.prompt,
+                resources: attachments.resources,
+                sessionId: command.sessionId,
+                signal,
+                targetCommandId: command.targetCommandId,
+            });
+            stopReason = "steered";
+        } else {
+            if (
+                command.disposition === SessionPromptDisposition.Queue &&
+                !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
+            ) {
+                throw new AcpExecutionError(
+                    "The queued prompt target is unavailable",
+                    {},
+                    "prompt_queue_target_unavailable",
                 );
-                return Promise.resolve();
-            },
-            onText: (text) => {
-                publisher.recordAttempt(
-                    command.sessionId,
-                    encodeAgentMessageDeltaEvent({
-                        commandId: command.commandId,
-                        kind: AGENT_MESSAGE_DELTA_KIND,
-                        sessionId: command.sessionId,
-                        text,
-                    }),
-                    attemptId,
-                );
-                return Promise.resolve();
-            },
-            prompt: command.prompt,
-            resources: attachments.resources,
-            sessionId: command.sessionId,
-            signal,
-        });
+            }
+            const result = await sessions.runPrompt({
+                additionalDirectories: resolved.additionalDirectories,
+                agent,
+                commandId: command.commandId,
+                cwd: resolved.cwd,
+                disposition: command.disposition,
+                images: attachments.images,
+                onActivity: (activity) => {
+                    publisher.recordAttempt(
+                        command.sessionId,
+                        encodeAgentActivityEvent({
+                            activityId: activity.activityId,
+                            activityType: activity.activityType,
+                            commandId: command.commandId,
+                            content: activity.content,
+                            detail: activity.detail,
+                            input: activity.input,
+                            kind: AGENT_ACTIVITY_KIND,
+                            locations: activity.locations,
+                            name: activity.name,
+                            output: activity.output,
+                            sequence: activity.sequence,
+                            sessionId: command.sessionId,
+                            status: activity.status,
+                            title: activity.title,
+                            toolKind: activity.toolKind,
+                        }),
+                        attemptId,
+                    );
+                    return Promise.resolve();
+                },
+                onText: (text, messageId) => {
+                    publisher.recordAttempt(
+                        command.sessionId,
+                        encodeAgentMessageDeltaEvent({
+                            commandId: command.commandId,
+                            kind: AGENT_MESSAGE_DELTA_KIND,
+                            messageId,
+                            sessionId: command.sessionId,
+                            text,
+                        }),
+                        attemptId,
+                    );
+                    return Promise.resolve();
+                },
+                prompt: command.prompt,
+                resources: attachments.resources,
+                sessionId: command.sessionId,
+                signal,
+                targetCommandId: command.targetCommandId,
+            });
+            stopReason = result.stopReason;
+        }
 
         publisher.recordAttempt(
             command.sessionId,
@@ -906,14 +940,14 @@ async function executePrompt(
                 commandId: command.commandId,
                 kind: SESSION_COMPLETED_KIND,
                 sessionId: command.sessionId,
-                stopReason: result.stopReason,
+                stopReason,
             }),
             attemptId,
         );
-        outbox.transitionExecution(command.commandId, result.stopReason === "cancelled" ? "cancelled" : "succeeded");
+        outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
         audit.record({
             commandId: command.commandId,
-            event: result.stopReason === "cancelled" ? "session_cancelled" : "session_completed",
+            event: stopReason === "cancelled" ? "session_cancelled" : "session_completed",
             sessionId: command.sessionId,
         });
     } catch (error) {
@@ -1090,12 +1124,13 @@ async function executeBotPrompt(
                     );
                     return Promise.resolve();
                 },
-                onText: (text) => {
+                onText: (text, messageId) => {
                     publisher.recordAttempt(
                         command.sessionId,
                         encodeAgentMessageDeltaEvent({
                             commandId: command.commandId,
                             kind: AGENT_MESSAGE_DELTA_KIND,
+                            messageId,
                             sessionId: command.sessionId,
                             text,
                         }),
@@ -1520,6 +1555,94 @@ async function runRelayConnection(
                         });
                         return;
                     }
+                    if (kind === NATIVE_SESSION_TURN_FORK_KIND) {
+                        const command = decodeNativeSessionTurnForkCommand(encoded);
+                        const previous = [...nativeRequests.values()].filter(
+                            (request) => request.agentId === command.agentId,
+                        );
+                        if (
+                            nativeRequests.has(command.requestId) ||
+                            nativeRequests.size >= 4 ||
+                            previous.some((request) => !request.controller.signal.aborted)
+                        ) {
+                            reportOperationFailure(
+                                socket,
+                                command.requestId,
+                                command.sessionId,
+                                new AcpExecutionError(
+                                    "Another native session operation is running",
+                                    {},
+                                    "native_session_busy",
+                                ),
+                            );
+                            return;
+                        }
+                        const controller = new AbortController();
+                        const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
+                        const timeout = timer.schedule(
+                            () =>
+                                controller.abort(
+                                    new AcpExecutionError(
+                                        "Native session operation timed out",
+                                        {},
+                                        "native_session_timeout",
+                                    ),
+                                ),
+                            90_000,
+                        );
+                        const completion = (async (): Promise<void> => {
+                            try {
+                                operationSignal.throwIfAborted();
+                                if (previous.length > 0) {
+                                    await new Promise<void>((resolve, reject) => {
+                                        const cancel = (): void => reject(operationSignal.reason);
+                                        operationSignal.addEventListener("abort", cancel, { once: true });
+                                        void Promise.all(previous.map((request) => request.completion)).then(
+                                            () => {
+                                                operationSignal.removeEventListener("abort", cancel);
+                                                resolve();
+                                            },
+                                            (error: unknown) => {
+                                                operationSignal.removeEventListener("abort", cancel);
+                                                reject(error);
+                                            },
+                                        );
+                                    });
+                                }
+                                operationSignal.throwIfAborted();
+                                const result = await nativeSessions.executeTurnFork(command, operationSignal);
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(socket, encodeNativeSessionResult(result));
+                                }
+                            } catch (error) {
+                                const failure: unknown = operationSignal.aborted
+                                    ? (controller.signal.reason ??
+                                      new AcpExecutionError(
+                                          "Native session operation cancelled",
+                                          {},
+                                          "native_session_cancelled",
+                                      ))
+                                    : error;
+                                audit.record({
+                                    commandId: command.requestId,
+                                    details: { code: operationErrorCode(failure) },
+                                    event: "native_session_turn_fork_failed",
+                                    sessionId: command.sessionId,
+                                });
+                                reportOperationFailure(socket, command.requestId, command.sessionId, failure);
+                            } finally {
+                                timeout.cancel();
+                                nativeRequests.delete(command.requestId);
+                            }
+                        })();
+                        nativeRequests.set(command.requestId, {
+                            agentId: command.agentId,
+                            completion,
+                            controller,
+                            sessionId: command.sessionId,
+                        });
+                        return;
+                    }
                     if (kind === RUNTIME_LIVENESS_READY_KIND) {
                         decodeRuntimeLivenessReadyEvent(encoded);
                         connectionLiveness.start();
@@ -1683,7 +1806,9 @@ async function runRelayConnection(
 
                     const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                     activeTurns.set(command.commandId, turn);
-                    activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                    if (command.disposition !== SessionPromptDisposition.Steer) {
+                        activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                    }
                     void executePrompt(
                         outbox,
                         publisher,

@@ -81,7 +81,9 @@ export const sessionCapabilitiesSchema = z
         imagePrompt: z.boolean(),
         listSessions: z.boolean(),
         loadSession: z.boolean(),
+        promptQueueing: z.boolean().default(false),
         resumeSession: z.boolean(),
+        steering: z.boolean().default(false),
         unstableForkSession: z.boolean().default(false),
     })
     .readonly();

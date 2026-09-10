@@ -45,6 +45,7 @@ import {
     SessionEventRejectionCode,
     type SessionPrepareCommand,
     type SessionPromptCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import {
     MobiusArtifactUploadRequest,
@@ -71,7 +72,9 @@ const verifiedAgentCapabilities = {
     imagePrompt: true,
     listSessions: true,
     loadSession: true,
+    promptQueueing: true,
     resumeSession: true,
+    steering: true,
     unstableForkSession: false,
 };
 const readyAgents = [
@@ -276,6 +279,8 @@ class SocketMessages {
         }
         return new Promise((resolve) => this.#resolvers.push(resolve));
     };
+
+    readonly available = (): number => this.#messages.length;
 }
 
 function receiveMessageBeforeClose(socket: WebSocket): Promise<string> {
@@ -443,11 +448,13 @@ function prompt(sessionId: string, commandId: string, text: string): SessionProm
         bindingId: "workspace",
         commandId,
         directoryId: "root",
+        disposition: SessionPromptDisposition.Reject,
         images: [],
         kind: SESSION_PROMPT_KIND,
         prompt: text,
         resources: [],
         sessionId,
+        targetCommandId: "",
     };
 }
 
@@ -577,6 +584,7 @@ async function completeTurn(
         envelope(command.sessionId, `${command.commandId}-delta`, {
             commandId: command.commandId,
             kind: AGENT_MESSAGE_DELTA_KIND,
+            messageId: "",
             sessionId: command.sessionId,
             text: response,
         }),
@@ -603,6 +611,33 @@ afterEach(() => {
 });
 
 describe.sequential("Cloudflare session deployment", () => {
+    it("Given a ready Session with no recorded events, When a browser opens its event stream, Then the Relay immediately sends a connection frame before the first Turn", async () => {
+        const pairing = await pairChannel();
+        expect(await createSession(pairing.created, "empty-event-stream-session")).toMatchObject({ status: 201 });
+
+        const response = await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/empty-event-stream-session/events`,
+            {
+                headers: {
+                    ...authorization(pairing.created),
+                    accept: "text/event-stream",
+                },
+            },
+        );
+        expect(response.status).toBe(200);
+        if (response.body === null) {
+            throw new Error("Expected a Session event stream body");
+        }
+        const reader = response.body.getReader();
+        try {
+            const first = await reader.read();
+            expect(first.done).toBe(false);
+            expect(new TextDecoder().decode(first.value)).toBe(": connected\n\n");
+        } finally {
+            await reader.cancel();
+        }
+    });
+
     it("Given an existing Project owner, When a second Runtime is paired, used, and revoked through the SDK, Then retries are idempotent and only that Runtime becomes unavailable", async () => {
         const bootstrap = await pairChannel();
         const signal = new AbortController().signal;
@@ -1291,7 +1326,9 @@ describe.sequential("Cloudflare session deployment", () => {
                         imagePrompt: false,
                         listSessions: false,
                         loadSession: false,
+                        promptQueueing: false,
                         resumeSession: false,
+                        steering: false,
                         unstableForkSession: false,
                     },
                     id: "codex",
@@ -1685,6 +1722,7 @@ describe.sequential("Cloudflare session deployment", () => {
             const deltaEnvelope = envelope("session-b", "b-delta", {
                 commandId: running.commandId,
                 kind: AGENT_MESSAGE_DELTA_KIND,
+                messageId: "",
                 sessionId: running.sessionId,
                 text: "still running",
             });
@@ -1875,7 +1913,9 @@ describe.sequential("Cloudflare session deployment", () => {
                         imagePrompt: true,
                         listSessions: true,
                         loadSession: true,
+                        promptQueueing: false,
                         resumeSession: true,
+                        steering: false,
                         unstableForkSession: true,
                     },
                     commands: [],
@@ -2548,6 +2588,96 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given a Turn is running, When a capable Host queues a follow-up, Then the Relay preserves it until the running Turn completes and dispatches it next", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "queued-follow-up-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        try {
+            const running = prompt(sessionId, "queue-running", "run first");
+            await submitPrompt(host, daemon, running);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "queue-running-started", {
+                    attemptId: "queue-running-attempt",
+                    commandId: running.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+
+            const queued: SessionPromptCommand = {
+                ...prompt(sessionId, "queue-follow-up", "run next"),
+                disposition: SessionPromptDisposition.Queue,
+                targetCommandId: running.commandId,
+            };
+            host.socket.send(encodeSessionPromptCommand(queued));
+            expect(decodeSessionPromptCommand(await host.messages.next())).toEqual(queued);
+            expect(daemon.messages.available()).toBe(0);
+
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "queue-running-completed", {
+                    commandId: running.commandId,
+                    kind: SESSION_COMPLETED_KIND,
+                    sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            expect(decodeSessionPromptCommand(await daemon.messages.next())).toEqual(queued);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+            host.socket.close(1000, "Test complete");
+        }
+    });
+
+    it("Given a Turn is running, When a capable Host steers that exact Turn, Then the Relay dispatches the targeted follow-up immediately", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "steered-follow-up-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        try {
+            const running = prompt(sessionId, "steer-running", "run first");
+            await submitPrompt(host, daemon, running);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "steer-running-started", {
+                    attemptId: "steer-running-attempt",
+                    commandId: running.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+            const steered: SessionPromptCommand = {
+                ...prompt(sessionId, "steer-follow-up", "change direction"),
+                disposition: SessionPromptDisposition.Steer,
+                targetCommandId: running.commandId,
+            };
+
+            host.socket.send(encodeSessionPromptCommand(steered));
+            expect(decodeSessionPromptCommand(await daemon.messages.next())).toEqual(steered);
+            expect(decodeSessionPromptCommand(await host.messages.next())).toEqual(steered);
+        } finally {
+            daemon.socket.close(1000, "Test complete");
+            host.socket.close(1000, "Test complete");
+        }
+    });
+
     it("Given an active Turn, When its daemon sends a large event and completion without waiting between frames, Then the Relay commits both events in source order and keeps the connection open", async () => {
         const pairing = await pairChannel();
         const sessionId = "ordered-burst-session";
@@ -2969,6 +3099,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     envelope(sessionId, `cursor-delta-${index.toString()}`, {
                         commandId: command.commandId,
                         kind: AGENT_MESSAGE_DELTA_KIND,
+                        messageId: `agent-message-${index.toString()}`,
                         sessionId,
                         text: index.toString(),
                     }),

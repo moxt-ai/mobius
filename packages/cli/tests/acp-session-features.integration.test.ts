@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -83,11 +84,96 @@ class RecordingObserver implements AcpSessionObserver {
     };
 }
 
-function fakeAgent(): LocalAgentDefinition {
-    return new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath, "--agent-name", "Codex"]);
+function fakeAgent(additionalArguments: readonly string[] = []): LocalAgentDefinition {
+    return new LocalAgentDefinition("codex", "Codex", process.execPath, [
+        fakeAgentPath,
+        "--agent-name",
+        "Codex",
+        ...additionalArguments,
+    ]);
 }
 
 describe("ACP session features", () => {
+    it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
+        const manager = new AcpSessionManager();
+        const signal = new AbortController().signal;
+        const activityArrived = Promise.withResolvers<void>();
+        const output: { readonly messageId: string; readonly text: string }[] = [];
+        try {
+            const running = manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "running-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => {
+                    activityArrived.resolve();
+                    return Promise.resolve();
+                },
+                onText: (text, messageId) => {
+                    output.push({ messageId, text });
+                    return Promise.resolve();
+                },
+                prompt: "wait for steering",
+                resources: [],
+                sessionId: "steering-session",
+                signal,
+            });
+            await activityArrived.promise;
+
+            await expect(
+                manager.steerPrompt({
+                    additionalDirectories: [],
+                    agent: fakeAgent(),
+                    commandId: "steering-command",
+                    cwd: process.cwd(),
+                    images: [],
+                    prompt: "focus on the requested fix",
+                    resources: [],
+                    sessionId: "steering-session",
+                    signal,
+                    targetCommandId: "running-command",
+                }),
+            ).resolves.toBe("injected");
+            await expect(running).resolves.toMatchObject({ stopReason: "end_turn" });
+            expect(output).toContainEqual({
+                messageId: "assistant-1",
+                text: "Steered: focus on the requested fix",
+            });
+        } finally {
+            await manager.close();
+        }
+    });
+
+    it("Given an Agent lacks native prompt queueing, When Mobius dispatches a queued follow-up, Then the Agent executes it as the next turn", async () => {
+        const manager = new AcpSessionManager();
+        const output: string[] = [];
+        try {
+            const result = await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(["--no-prompt-queueing"]),
+                commandId: "queued-command",
+                cwd: process.cwd(),
+                disposition: "queue",
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    output.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "queued follow-up",
+                resources: [],
+                sessionId: "mobius-queued-session",
+                signal: new AbortController().signal,
+                targetCommandId: "prior-command",
+            });
+            expect(result).toMatchObject({ stopReason: "end_turn" });
+            expect(output.join("")).toBe("Codex turn 1: queued follow-up");
+        } finally {
+            await manager.close();
+        }
+    });
+
     it.each([
         ["absent usage", false, "end_turn"],
         ["unknown metadata", false, "end_turn"],
@@ -233,7 +319,9 @@ describe("ACP session features", () => {
                     embeddedContextPrompt: true,
                     imagePrompt: true,
                     loadSession: true,
+                    promptQueueing: true,
                     resumeSession: true,
+                    steering: true,
                 },
                 restored: false,
             });
@@ -477,6 +565,75 @@ describe("ACP session features", () => {
                 secondStore.close();
             }
         } finally {
+            if (previousState === undefined) {
+                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
+            }
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a Mobius conversation has multiple completed turns, When it is forked at an earlier Agent message, Then the native fork contains exactly the selected history prefix", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-turn-fork-"));
+        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = temporaryDirectory;
+        const store = new SqliteAcpSessionStore(join(temporaryDirectory, "sessions.sqlite"));
+        const manager = new AcpSessionManager(new RecordingObserver(), store);
+        const signal = new AbortController().signal;
+        const prompt = async (sessionId: string, commandId: string, text: string): Promise<string> => {
+            const output: string[] = [];
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (chunk) => {
+                    output.push(chunk);
+                    return Promise.resolve();
+                },
+                prompt: text,
+                resources: [],
+                sessionId,
+                signal,
+            });
+            return output.join("");
+        };
+        try {
+            expect(await prompt("source-session", "source-command-1", "first")).toBe("Codex turn 1: first");
+            expect(await prompt("source-session", "source-command-2", "second")).toBe("Codex turn 2: second");
+
+            const selectedResponse = "Codex turn 1: first";
+            const forked = await manager.forkSessionAtTurn(
+                {
+                    additionalDirectories: [],
+                    agent: fakeAgent(),
+                    cwd: temporaryDirectory,
+                    sessionId: "forked-session",
+                    signal,
+                },
+                "source-session",
+                {
+                    messageFingerprint: `sha256:${createHash("sha256").update(selectedResponse).digest("hex")}`,
+                    messageId: "assistant-1",
+                    messageOccurrence: 1,
+                },
+            );
+
+            expect(forked.history).toMatchObject({
+                status: "available",
+                messages: [
+                    expect.objectContaining({ role: "user", text: "first" }),
+                    expect.objectContaining({ role: "assistant", text: selectedResponse }),
+                ],
+            });
+            expect(JSON.stringify(forked.history)).not.toContain("second");
+            expect(await prompt("forked-session", "forked-command", "after fork")).toBe("Codex turn 2: after fork");
+        } finally {
+            await manager.close();
+            store.close();
             if (previousState === undefined) {
                 delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
             } else {

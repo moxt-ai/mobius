@@ -8,6 +8,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     type SessionElicitationRespondCommand,
     type SessionPermissionRespondCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import {
@@ -62,6 +63,34 @@ function readSha256(value: Readonly<Record<string, unknown>>, key: string): stri
         throw new PairingDirectoryError("invalid_request", `The ${key} field is invalid`);
     }
     return digest;
+}
+
+function readPromptDisposition(body: Readonly<Record<string, unknown>>): string {
+    const disposition = body["disposition"];
+    if (disposition === undefined) {
+        return SessionPromptDisposition.Reject;
+    }
+    if (
+        disposition !== SessionPromptDisposition.Reject &&
+        disposition !== SessionPromptDisposition.Queue &&
+        disposition !== SessionPromptDisposition.Steer
+    ) {
+        throw new PairingDirectoryError("invalid_request", "The disposition field is invalid");
+    }
+    return disposition;
+}
+
+function readTargetCommandId(body: Readonly<Record<string, unknown>>, disposition: string): string {
+    const requestedTarget = body["targetCommandId"] === undefined ? "" : readString(body, "targetCommandId", 128, true);
+    const targetCommandId =
+        requestedTarget.length === 0 ? "" : validateIdentifier(requestedTarget, "target_command_id");
+    if (
+        (disposition === SessionPromptDisposition.Reject && targetCommandId.length > 0) ||
+        (disposition !== SessionPromptDisposition.Reject && targetCommandId.length === 0)
+    ) {
+        throw new PairingDirectoryError("invalid_request", "The targetCommandId field is invalid");
+    }
+    return targetCommandId;
 }
 
 export function createSessionRoutes() {
@@ -265,16 +294,26 @@ export function createSessionRoutes() {
             const useCases = context.env.services.sessions;
             try {
                 const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, [
+                const legacyFields = [
                     "additionalDirectoryIds",
                     "artifactIds",
                     "content",
                     "idempotencyKey",
                     "images",
                     "resources",
-                ]);
+                ];
+                const hasDisposition = body["disposition"] !== undefined;
+                const hasTargetCommandId = body["targetCommandId"] !== undefined;
+                assertExactKeys(
+                    body,
+                    hasDisposition && hasTargetCommandId
+                        ? [...legacyFields, "disposition", "targetCommandId"]
+                        : legacyFields,
+                );
                 const additionalDirectoryIds = readIdentifierArray(body, "additionalDirectoryIds", 16, "directory_id");
                 const artifactIds = readIdentifierArray(body, "artifactIds", 16, "artifact_id");
+                const disposition = readPromptDisposition(body);
+                const targetCommandId = readTargetCommandId(body, disposition);
                 return context.json(
                     await useCases.submitTurn(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
@@ -282,6 +321,8 @@ export function createSessionRoutes() {
                         validateIdentifier(context.req.param("sessionId"), "session_id"),
                         validateIdentifier(readString(body, "idempotencyKey"), "idempotency_key"),
                         readString(body, "content", 100_000, true),
+                        disposition,
+                        targetCommandId,
                         additionalDirectoryIds,
                         decodePromptImagesValue(body["images"]),
                         decodePromptResourcesValue(body["resources"]),
@@ -426,6 +467,32 @@ export function createSessionRoutes() {
                         context.req.raw.signal,
                     ),
                     202,
+                );
+            } catch (error) {
+                preserveCancellation(context.req.raw.signal, error);
+                return sessionError(error);
+            }
+        })
+        .put("/projects/:projectId/sessions/:sessionId/turns/:turnId/disposition", async (context) => {
+            const useCases = context.env.services.sessions;
+            try {
+                const body = await parseJsonBody(context.req.raw);
+                assertExactKeys(body, ["disposition"]);
+                if (readPromptDisposition(body) !== SessionPromptDisposition.Steer) {
+                    throw new PairingDirectoryError(
+                        "invalid_request",
+                        "A queued Turn can only be promoted to steering",
+                    );
+                }
+                return context.json(
+                    await useCases.promoteQueuedTurnToSteering(
+                        validateIdentifier(context.req.param("projectId"), "project_id"),
+                        bearerToken(context.req.raw),
+                        validateIdentifier(context.req.param("sessionId"), "session_id"),
+                        validateIdentifier(context.req.param("turnId"), "turn_id"),
+                        context.env.gateways.nowEpochMilliseconds(),
+                        context.req.raw.signal,
+                    ),
                 );
             } catch (error) {
                 preserveCancellation(context.req.raw.signal, error);

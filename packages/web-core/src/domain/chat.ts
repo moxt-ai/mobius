@@ -15,7 +15,7 @@ import type {
     SessionUsageUpdatedEvent,
     WorkspaceEntry,
 } from "@moxt-ai/mobius-sdk";
-import { conversationTitleFromText } from "@moxt-ai/mobius-sdk";
+import { conversationTitleFromText, SessionPromptDisposition } from "@moxt-ai/mobius-sdk";
 import {
     type AgentOption,
     CompletedRecordedTurn,
@@ -37,7 +37,9 @@ const EMPTY_CAPABILITIES: SessionCapabilities = {
     imagePrompt: false,
     listSessions: false,
     loadSession: false,
+    promptQueueing: false,
     resumeSession: false,
+    steering: false,
     unstableForkSession: false,
 };
 
@@ -550,6 +552,19 @@ class PendingTurnState extends AgentTurnState {
     readonly stop = (): AgentTurnState => new StoppingTurnState("Pending");
 }
 
+class QueuedTurnState extends AgentTurnState {
+    readonly appearance = "queued";
+    readonly canStop = false;
+    readonly isStreaming = false;
+    readonly label = "Queued";
+    readonly progress = 0;
+    readonly details = (sessionId: string): readonly RunDetail[] => [
+        { label: "Session", value: sessionId },
+        { label: "State", value: "Waiting for the current turn to finish" },
+    ];
+    readonly stop = (): AgentTurnState => this;
+}
+
 export class RunningTurnState extends AgentTurnState {
     readonly appearance = "working";
     readonly canStop = true;
@@ -701,19 +716,23 @@ function mergeNativeHistory(
     ];
 }
 
-export class UserChatMessage extends ChatMessage {
+export abstract class UserChatMessage extends ChatMessage {
+    readonly commandId: string;
+    abstract readonly disposition: string;
     readonly images: readonly PromptImage[];
     readonly resources: readonly PromptResource[];
+    abstract readonly targetCommandId: string;
     readonly text: string;
 
     constructor(
-        id: string,
+        commandId: string,
         createdAt: Date,
         text: string,
         images: readonly PromptImage[] = [],
         resources: readonly PromptResource[] = [],
     ) {
-        super(id, createdAt);
+        super(`${commandId}:user`, createdAt);
+        this.commandId = commandId;
         this.images = images;
         this.resources = resources;
         this.text = text;
@@ -725,8 +744,111 @@ export class UserChatMessage extends ChatMessage {
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
     ): UserChatMessage {
-        return new UserChatMessage(`${commandId}:user`, new Date(), text, images, resources);
+        return new ImmediateUserChatMessage(commandId, new Date(), text, images, resources);
     }
+
+    static createQueued(
+        commandId: string,
+        targetCommandId: string,
+        text: string,
+        images: readonly PromptImage[],
+        resources: readonly PromptResource[],
+    ): UserChatMessage {
+        return new QueuedUserChatMessage(commandId, new Date(), text, images, resources, targetCommandId);
+    }
+
+    static createSteering(
+        commandId: string,
+        targetCommandId: string,
+        text: string,
+        images: readonly PromptImage[],
+        resources: readonly PromptResource[],
+    ): UserChatMessage {
+        return new SteeringUserChatMessage(commandId, new Date(), text, images, resources, targetCommandId);
+    }
+}
+
+class ImmediateUserChatMessage extends UserChatMessage {
+    readonly disposition = SessionPromptDisposition.Reject;
+    readonly targetCommandId = "";
+}
+
+class QueuedUserChatMessage extends UserChatMessage {
+    readonly disposition = SessionPromptDisposition.Queue;
+    readonly targetCommandId: string;
+
+    constructor(
+        commandId: string,
+        createdAt: Date,
+        text: string,
+        images: readonly PromptImage[],
+        resources: readonly PromptResource[],
+        targetCommandId: string,
+    ) {
+        super(commandId, createdAt, text, images, resources);
+        this.targetCommandId = targetCommandId;
+    }
+
+    readonly asSteering = (): SteeringUserChatMessage =>
+        new SteeringUserChatMessage(
+            this.commandId,
+            this.createdAt,
+            this.text,
+            this.images,
+            this.resources,
+            this.targetCommandId,
+        );
+}
+
+class SteeringUserChatMessage extends UserChatMessage {
+    readonly disposition = SessionPromptDisposition.Steer;
+    readonly targetCommandId: string;
+
+    constructor(
+        commandId: string,
+        createdAt: Date,
+        text: string,
+        images: readonly PromptImage[],
+        resources: readonly PromptResource[],
+        targetCommandId: string,
+    ) {
+        super(commandId, createdAt, text, images, resources);
+        this.targetCommandId = targetCommandId;
+    }
+
+    readonly asQueued = (): QueuedUserChatMessage =>
+        new QueuedUserChatMessage(
+            this.commandId,
+            this.createdAt,
+            this.text,
+            this.images,
+            this.resources,
+            this.targetCommandId,
+        );
+}
+
+function restoreUserMessage(turn: RecordedTurn): UserChatMessage {
+    if (turn.disposition === SessionPromptDisposition.Queue) {
+        return new QueuedUserChatMessage(
+            turn.commandId,
+            turn.createdAt,
+            turn.prompt,
+            turn.images,
+            turn.resources,
+            turn.targetCommandId,
+        );
+    }
+    if (turn.disposition === SessionPromptDisposition.Steer) {
+        return new SteeringUserChatMessage(
+            turn.commandId,
+            turn.createdAt,
+            turn.prompt,
+            turn.images,
+            turn.resources,
+            turn.targetCommandId,
+        );
+    }
+    return new ImmediateUserChatMessage(turn.commandId, turn.createdAt, turn.prompt, turn.images, turn.resources);
 }
 
 export class AgentChatMessage extends ChatMessage {
@@ -758,6 +880,10 @@ export class AgentChatMessage extends ChatMessage {
 
     static create(commandId: string): AgentChatMessage {
         return new AgentChatMessage(`${commandId}:agent`, commandId, new Date(), "", new AuthorizingTurnState());
+    }
+
+    static createQueued(commandId: string): AgentChatMessage {
+        return new AgentChatMessage(`${commandId}:agent`, commandId, new Date(), "", new QueuedTurnState());
     }
 
     readonly appendText = (delta: string, committedSequence: string): AgentChatMessage => {
@@ -874,8 +1000,13 @@ export class Conversation {
     readonly title: string;
 
     get activeStateLabel(): string {
+        const steeringCommands = this.steeringCommandIds();
         for (const message of this.messages.toReversed()) {
-            if (message instanceof AgentChatMessage && message.state.isStreaming) {
+            if (
+                message instanceof AgentChatMessage &&
+                !steeringCommands.has(message.commandId) &&
+                message.state.isStreaming
+            ) {
                 return message.state.label;
             }
         }
@@ -883,8 +1014,13 @@ export class Conversation {
     }
 
     get canStop(): boolean {
+        const steeringCommands = this.steeringCommandIds();
         for (const message of this.messages.toReversed()) {
-            if (message instanceof AgentChatMessage && message.state.isStreaming) {
+            if (
+                message instanceof AgentChatMessage &&
+                !steeringCommands.has(message.commandId) &&
+                message.state.isStreaming
+            ) {
                 return message.state.canStop;
             }
         }
@@ -892,12 +1028,79 @@ export class Conversation {
     }
 
     get isRunning(): boolean {
+        const steeringCommands = this.steeringCommandIds();
         for (const message of this.messages) {
-            if (message instanceof AgentChatMessage && message.state.isStreaming) {
+            if (
+                message instanceof AgentChatMessage &&
+                !steeringCommands.has(message.commandId) &&
+                message.state.isStreaming
+            ) {
                 return true;
             }
         }
         return false;
+    }
+
+    get followUpMessages(): readonly UserChatMessage[] {
+        const agentMessages = new Map<string, AgentChatMessage>();
+        for (const message of this.messages) {
+            if (message instanceof AgentChatMessage) {
+                agentMessages.set(message.commandId, message);
+            }
+        }
+        const followUps: UserChatMessage[] = [];
+        for (const message of this.messages) {
+            if (
+                message instanceof QueuedUserChatMessage &&
+                agentMessages.get(message.commandId)?.state.appearance === "queued"
+            ) {
+                followUps.push(message);
+            }
+        }
+        return followUps;
+    }
+
+    get transcriptMessages(): readonly ChatMessage[] {
+        const pendingFollowUpIds = new Set(this.followUpMessages.map((message) => message.id));
+        const steeringCommands = this.steeringCommandIds();
+        const steeringByTarget = new Map<string, SteeringUserChatMessage[]>();
+        for (const message of this.messages) {
+            if (message instanceof SteeringUserChatMessage) {
+                const messages = steeringByTarget.get(message.targetCommandId) ?? [];
+                messages.push(message);
+                steeringByTarget.set(message.targetCommandId, messages);
+            }
+        }
+        const injectedSteeringIds = new Set<string>();
+        const transcript: ChatMessage[] = [];
+        for (const message of this.messages) {
+            if (message instanceof SteeringUserChatMessage || pendingFollowUpIds.has(message.id)) {
+                continue;
+            }
+            if (message instanceof AgentChatMessage) {
+                if (steeringCommands.has(message.commandId)) {
+                    continue;
+                }
+                if (!message.state.isStreaming) {
+                    for (const steering of steeringByTarget.get(message.commandId) ?? []) {
+                        transcript.push(steering);
+                        injectedSteeringIds.add(steering.id);
+                    }
+                }
+                if (message.state.appearance === "queued") {
+                    continue;
+                }
+            }
+            transcript.push(message);
+        }
+        for (const steeringMessages of steeringByTarget.values()) {
+            for (const steering of steeringMessages) {
+                if (!injectedSteeringIds.has(steering.id)) {
+                    transcript.push(steering);
+                }
+            }
+        }
+        return transcript;
     }
 
     constructor(
@@ -1002,15 +1205,23 @@ export class Conversation {
         if (firstTurn === undefined || lastTurn === undefined) {
             throw new Error("Cannot restore an empty conversation");
         }
+        const firstConversationTurn =
+            turns.find((turn) => turn.disposition !== SessionPromptDisposition.Steer) ?? firstTurn;
+        const lastConversationTurn =
+            turns.toReversed().find((turn) => turn.disposition !== SessionPromptDisposition.Steer) ?? lastTurn;
         const messages: ChatMessage[] = [];
         for (const turn of turns) {
-            messages.push(
-                new UserChatMessage(`${turn.commandId}:user`, turn.createdAt, turn.prompt, turn.images, turn.resources),
-            );
+            messages.push(restoreUserMessage(turn));
+            if (turn.disposition === SessionPromptDisposition.Steer) {
+                continue;
+            }
             let state: AgentTurnState;
             let fallbackText = "";
             if (turn instanceof PendingRecordedTurn) {
-                state = new PendingTurnState();
+                state =
+                    turn.disposition === SessionPromptDisposition.Queue
+                        ? new QueuedTurnState()
+                        : new PendingTurnState();
             } else if (turn instanceof RunningRecordedTurn) {
                 state = new RunningTurnState(turn.attemptId);
             } else if (turn instanceof CompletedRecordedTurn) {
@@ -1045,8 +1256,8 @@ export class Conversation {
             agent.label,
             sessionId,
             sessionId,
-            conversationTitleFromText(firstTurn.prompt),
-            lastTurn.prompt.replaceAll(/\s+/g, " ").trim(),
+            conversationTitleFromText(firstConversationTurn.prompt),
+            lastConversationTurn.prompt.replaceAll(/\s+/g, " ").trim(),
             "",
             messages,
         );
@@ -1208,6 +1419,89 @@ export class Conversation {
             this.configRevision,
         );
 
+    readonly addSteering = (userMessage: UserChatMessage): Conversation => {
+        if (!this.isRunning) {
+            throw new Error("Steering requires an active Agent turn");
+        }
+        return new Conversation(
+            this.agentId,
+            this.agentLabel,
+            this.id,
+            this.sessionId,
+            this.title,
+            this.preview,
+            "",
+            [...this.messages, userMessage],
+            this.session,
+            this.directoryId,
+            this.directoryLabel,
+            this.additionalDirectories,
+            [],
+            [],
+            this.bindingId,
+            this.configRevision,
+        );
+    };
+
+    readonly isSteeringCommand = (commandId: string): boolean =>
+        this.messages.some((message) => message instanceof SteeringUserChatMessage && message.commandId === commandId);
+
+    readonly promoteQueuedMessage = (commandId: string): Conversation => {
+        let promoted = false;
+        const messages = this.messages.map((message) => {
+            if (message instanceof QueuedUserChatMessage && message.commandId === commandId) {
+                promoted = true;
+                return message.asSteering();
+            }
+            return message;
+        });
+        if (!promoted) {
+            throw new Error("The queued follow-up is no longer available for steering");
+        }
+        return new Conversation(
+            this.agentId,
+            this.agentLabel,
+            this.id,
+            this.sessionId,
+            this.title,
+            this.preview,
+            this.draft,
+            messages,
+            this.session,
+            this.directoryId,
+            this.directoryLabel,
+            this.additionalDirectories,
+            this.draftImages,
+            this.draftResources,
+            this.bindingId,
+            this.configRevision,
+        );
+    };
+
+    readonly restoreQueuedMessage = (commandId: string): Conversation =>
+        new Conversation(
+            this.agentId,
+            this.agentLabel,
+            this.id,
+            this.sessionId,
+            this.title,
+            this.preview,
+            this.draft,
+            this.messages.map((message) =>
+                message instanceof SteeringUserChatMessage && message.commandId === commandId
+                    ? message.asQueued()
+                    : message,
+            ),
+            this.session,
+            this.directoryId,
+            this.directoryLabel,
+            this.additionalDirectories,
+            this.draftImages,
+            this.draftResources,
+            this.bindingId,
+            this.configRevision,
+        );
+
     readonly replaceAgentMessage = (messageId: string, replacement: AgentChatMessage): Conversation =>
         new Conversation(
             this.agentId,
@@ -1359,12 +1653,27 @@ export class Conversation {
         );
 
     readonly runningTurn = (): PendingTurn => {
+        const steeringCommands = this.steeringCommandIds();
         for (const message of this.messages.toReversed()) {
-            if (message instanceof AgentChatMessage && message.state.isStreaming) {
+            if (
+                message instanceof AgentChatMessage &&
+                !steeringCommands.has(message.commandId) &&
+                message.state.isStreaming
+            ) {
                 return new PendingTurn(this.agentId, message.commandId, this.id, this.sessionId, message.id);
             }
         }
         throw new Error("Conversation has no active turn");
+    };
+
+    private readonly steeringCommandIds = (): ReadonlySet<string> => {
+        const commandIds = new Set<string>();
+        for (const message of this.messages) {
+            if (message instanceof SteeringUserChatMessage) {
+                commandIds.add(message.commandId);
+            }
+        }
+        return commandIds;
     };
 
     readonly updateDraft = (draft: string): Conversation =>
@@ -1550,6 +1859,20 @@ export class PendingTurn {
         this.conversationId = conversationId;
         this.sessionId = sessionId;
         this.agentMessageId = agentMessageId;
+    }
+}
+
+export class SteeringTurn {
+    readonly agentId: string;
+    readonly commandId: string;
+    readonly conversationId: string;
+    readonly sessionId: string;
+
+    constructor(agentId: string, commandId: string, conversationId: string, sessionId: string) {
+        this.agentId = agentId;
+        this.commandId = commandId;
+        this.conversationId = conversationId;
+        this.sessionId = sessionId;
     }
 }
 

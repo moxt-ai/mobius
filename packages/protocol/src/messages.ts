@@ -15,17 +15,25 @@ export const AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT = 1_024;
 export const SESSION_COMPLETED_KIND = "session.completed";
 export const SESSION_FAILED_KIND = "session.failed";
 
+export const SessionPromptDisposition = Object.freeze({
+    Queue: "queue",
+    Reject: "reject",
+    Steer: "steer",
+});
+
 export interface SessionPromptCommand {
     readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
     readonly bindingId: string;
     readonly commandId: string;
     readonly directoryId: string;
+    readonly disposition: string;
     readonly images: readonly PromptImage[];
     readonly kind: typeof SESSION_PROMPT_KIND;
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
     readonly sessionId: string;
+    readonly targetCommandId: string;
 }
 
 export interface SessionCancelCommand {
@@ -64,6 +72,7 @@ export interface SessionStartedEvent {
 export interface AgentMessageDeltaEvent {
     readonly commandId: string;
     readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
+    readonly messageId: string;
     readonly sessionId: string;
     readonly text: string;
 }

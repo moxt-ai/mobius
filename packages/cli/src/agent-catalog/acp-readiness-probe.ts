@@ -181,7 +181,7 @@ export async function probeAcpReadiness(
         await specification.verifyAcp(connection, initialized, defaultWorkspace, controller.signal);
         return new VerifiedAcpReadiness(
             normalizedVersion(initialized.agentInfo?.version ?? ""),
-            normalizeAcpCapabilities(initialized.agentCapabilities ?? {}),
+            normalizeAcpCapabilities(initialized),
         );
     } catch (error) {
         if (signal.aborted) {

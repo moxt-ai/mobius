@@ -68,6 +68,14 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS turns_page
         ON turns(scope_key, session_id, created_at DESC, command_id DESC);
+      CREATE TABLE IF NOT EXISTS turn_message_anchors (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        event_sequence INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, command_id)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS command_receipts (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

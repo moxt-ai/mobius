@@ -332,6 +332,7 @@ describe("browser relay connection", () => {
             const deltaPayload = encodeAgentMessageDeltaEvent({
                 commandId: prompt.commandId,
                 kind: "agent.message.delta",
+                messageId: "agent-message-1",
                 sessionId: prompt.sessionId,
                 text: "Hello",
             });

@@ -125,7 +125,11 @@ export class SessionEventProjector {
         // reviving an indeterminate Attempt. Only a terminal event resolves it.
         if (event.kind === AGENT_MESSAGE_DELTA_KIND) {
             this.requireCommandState(key, sessionId, event.commandId, ["running", "indeterminate"]);
-            return { kind: "response", commandId: event.commandId, text: event.text };
+            return {
+                kind: "response",
+                commandId: event.commandId,
+                text: event.text,
+            };
         }
         if (event.kind === AGENT_ACTIVITY_KIND) {
             const command = this.requireCommandState(key, sessionId, event.commandId, ["running", "indeterminate"]);

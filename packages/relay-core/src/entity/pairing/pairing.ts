@@ -19,7 +19,9 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
     "imagePrompt",
     "listSessions",
     "loadSession",
+    "promptQueueing",
     "resumeSession",
+    "steering",
     "unstableForkSession",
 ];
 
@@ -362,7 +364,9 @@ function unsupportedSessionCapabilities(): SessionCapabilities {
         imagePrompt: false,
         listSessions: false,
         loadSession: false,
+        promptQueueing: false,
         resumeSession: false,
+        steering: false,
         unstableForkSession: false,
     });
 }

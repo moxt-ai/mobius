@@ -6,6 +6,7 @@ import type {
     PendingWork,
     SessionEventEnvelope,
     SessionPromptCommand,
+    Turn,
 } from "@moxt-ai/mobius-protocol";
 import type {
     AttemptReconciliationOutcome,
@@ -47,6 +48,14 @@ export interface SessionCommandGateway {
         now: number,
         signal: AbortSignal,
     ) => Promise<TurnCancellationAcceptance>;
+    readonly promoteQueuedTurnToSteering: (
+        scope: ProjectScope,
+        runtimeId: string,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<Turn>;
     readonly setDefaultBinding: (
         scope: ProjectScope,
         sessionId: string,

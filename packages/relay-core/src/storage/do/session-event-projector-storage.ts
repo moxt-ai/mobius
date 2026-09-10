@@ -28,6 +28,7 @@ export class SessionEventProjectorStorage {
         readonly sessionId: string;
         readonly sequence: number;
         readonly now: number;
+        readonly messageId: string;
         readonly projection: SessionEventProjection;
     }): void => {
         const plan = input.projection;
@@ -41,6 +42,14 @@ export class SessionEventProjectorStorage {
                 return;
             case "response":
                 this.appendTurnResponse({ ...scope, ...plan });
+                if (input.messageId.length > 0) {
+                    this.upsertTurnMessageAnchor({
+                        ...scope,
+                        commandId: plan.commandId,
+                        eventSequence: input.sequence,
+                        messageId: input.messageId,
+                    });
+                }
                 return;
             case "activity": {
                 const event = plan.event;
@@ -211,6 +220,23 @@ export class SessionEventProjectorStorage {
          SET response = substr(response || ?, 1, 100000), updated_at = ?
          WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
             [input.text, input.updatedAt, input.scopeKey, input.sessionId, input.commandId],
+        );
+
+    private readonly upsertTurnMessageAnchor = (input: {
+        readonly commandId: string;
+        readonly eventSequence: number;
+        readonly messageId: string;
+        readonly scopeKey: string;
+        readonly sessionId: string;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `INSERT INTO turn_message_anchors (
+           scope_key, session_id, command_id, message_id, event_sequence
+         ) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(scope_key, session_id, command_id) DO UPDATE SET
+           message_id = excluded.message_id,
+           event_sequence = excluded.event_sequence`,
+            [input.scopeKey, input.sessionId, input.commandId, input.messageId, input.eventSequence],
         );
 
     readonly findEventSequence = (scopeKey: string, sessionId: string): EventSequenceRecord | undefined =>

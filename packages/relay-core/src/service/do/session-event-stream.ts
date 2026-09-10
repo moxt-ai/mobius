@@ -40,6 +40,7 @@ class SessionEventSubscriber {
         this.#onClose = onClose;
         this.#requestSignal = requestSignal;
         this.#requestSignal.addEventListener("abort", this.close, { once: true });
+        this.#controller.enqueue(this.#encoder.encode(": connected\n\n"));
         this.#heartbeatId = globalThis.setInterval(this.writeHeartbeat, HEARTBEAT_INTERVAL_MILLISECONDS);
     }
 

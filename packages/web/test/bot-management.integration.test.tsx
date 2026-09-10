@@ -105,7 +105,9 @@ describe.sequential("Bot management and conversations", () => {
                     imagePrompt: true,
                     listSessions: true,
                     loadSession: true,
+                    promptQueueing: false,
                     resumeSession: true,
+                    steering: false,
                     unstableForkSession: false,
                 }),
                 new AgentOption("cursor", "Cursor CLI", "/usr/local/bin/cursor-agent", "cursor 1.18.29", {
@@ -117,7 +119,9 @@ describe.sequential("Bot management and conversations", () => {
                     imagePrompt: false,
                     listSessions: true,
                     loadSession: true,
+                    promptQueueing: false,
                     resumeSession: true,
+                    steering: false,
                     unstableForkSession: false,
                 }),
             ],
@@ -596,6 +600,7 @@ describe.sequential("Bot management and conversations", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: prompt.sessionId,
                     text: "The launch is supported by the persisted evidence.",
                 }),
@@ -646,6 +651,7 @@ describe.sequential("Bot management and conversations", () => {
                 encodeAgentMessageDeltaEvent({
                     commandId: followUp.commandId,
                     kind: "agent.message.delta",
+                    messageId: "",
                     sessionId: followUp.sessionId,
                     text: "Verify the durable conversation after a full browser reload.",
                 }),

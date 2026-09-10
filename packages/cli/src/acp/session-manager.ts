@@ -96,13 +96,29 @@ export interface AcpConfigureOptions extends AcpPrepareOptions {
     readonly valueType: SessionConfigOption["type"];
 }
 
-export interface AcpTurnOptions extends AcpPrepareOptions {
-    readonly commandId: string;
+interface AcpPromptContentOptions {
     readonly images: readonly PromptImage[];
-    readonly onActivity: (activity: AcpActivity) => Promise<void>;
-    readonly onText: (text: string) => Promise<void>;
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
+}
+
+export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptions {
+    readonly commandId: string;
+    readonly disposition?: string;
+    readonly onActivity: (activity: AcpActivity) => Promise<void>;
+    readonly onText: (text: string, messageId: string) => Promise<void>;
+    readonly targetCommandId?: string;
+}
+
+export interface AcpSteerOptions extends AcpPrepareOptions, AcpPromptContentOptions {
+    readonly commandId: string;
+    readonly targetCommandId: string;
+}
+
+export interface AcpSessionForkPoint {
+    readonly messageFingerprint: string;
+    readonly messageId: string;
+    readonly messageOccurrence: number;
 }
 
 export interface AcpPermissionResponseOptions {
@@ -538,7 +554,7 @@ abstract class AcpTurnState {
     abstract readonly commandId: string;
     abstract readonly running: boolean;
     abstract readonly activities: AcpActivityTracker;
-    abstract readonly onText: (text: string) => Promise<void>;
+    abstract readonly onText: (text: string, messageId: string) => Promise<void>;
 }
 
 class IdleAcpTurn extends AcpTurnState {
@@ -552,12 +568,12 @@ class RunningAcpTurn extends AcpTurnState {
     readonly commandId: string;
     readonly running = true;
     readonly activities: AcpActivityTracker;
-    readonly onText: (text: string) => Promise<void>;
+    readonly onText: (text: string, messageId: string) => Promise<void>;
 
     constructor(
         commandId: string,
         onActivity: (activity: AcpActivity) => Promise<void>,
-        onText: (text: string) => Promise<void>,
+        onText: (text: string, messageId: string) => Promise<void>,
     ) {
         super();
         this.commandId = commandId;
@@ -668,7 +684,9 @@ class AcpProcessSession implements AcpClientHandler {
         imagePrompt: false,
         listSessions: false,
         loadSession: false,
+        promptQueueing: false,
         resumeSession: false,
+        steering: false,
         unstableForkSession: false,
     };
     #commands: readonly SessionCommand[] = [];
@@ -802,6 +820,25 @@ class AcpProcessSession implements AcpClientHandler {
             async (runtime) => await runtime.#initializeAgent(options.signal),
         );
 
+    static readonly startSessionForkAtTurn = async (
+        options: AcpPrepareOptions,
+        sourceNativeSessionId: string,
+        forkPoint: AcpSessionForkPoint,
+        getObserver: () => AcpSessionObserver,
+        store: AcpSessionStore,
+    ): Promise<AcpProcessSession> =>
+        await AcpProcessSession.#start(
+            options,
+            getObserver,
+            store,
+            async (runtime) =>
+                await runtime.initialize(
+                    options.signal,
+                    { kind: "fork", nativeSessionId: sourceNativeSessionId },
+                    forkPoint,
+                ),
+        );
+
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>
         this.#agentId === agentId &&
         this.#cwd === cwd &&
@@ -879,8 +916,7 @@ class AcpProcessSession implements AcpClientHandler {
                 "unsupported_acp_protocol",
             );
         }
-        const capabilities = initialized.agentCapabilities ?? {};
-        this.#capabilities = normalizeAcpCapabilities(capabilities);
+        this.#capabilities = normalizeAcpCapabilities(initialized);
         this.#agentName = truncate(initialized.agentInfo?.title ?? initialized.agentInfo?.name ?? this.#agentId, 255);
         this.#agentVersion = truncate(
             this.#verifiedAgentVersion.length > 0 ? this.#verifiedAgentVersion : (initialized.agentInfo?.version ?? ""),
@@ -888,7 +924,11 @@ class AcpProcessSession implements AcpClientHandler {
         );
     }
 
-    readonly initialize = async (signal: AbortSignal, origin?: NativeSessionOrigin): Promise<void> => {
+    readonly initialize = async (
+        signal: AbortSignal,
+        origin?: NativeSessionOrigin,
+        forkPoint?: AcpSessionForkPoint,
+    ): Promise<void> => {
         await this.#initializeAgent(signal);
         let stored =
             origin?.kind === "import"
@@ -923,6 +963,13 @@ class AcpProcessSession implements AcpClientHandler {
                     "native_session_unsupported",
                 );
             }
+            if (this.#additionalDirectories.length > 0 && !this.#capabilities.additionalDirectories) {
+                throw new AcpExecutionError(
+                    "This Agent cannot restore additional working directories",
+                    {},
+                    "native_session_unsupported",
+                );
+            }
             const forked = await this.race(
                 this.#connection.agent.request(
                     methods.agent.session.fork,
@@ -931,6 +978,22 @@ class AcpProcessSession implements AcpClientHandler {
                         cwd: this.#cwd,
                         additionalDirectories: [...this.#additionalDirectories],
                         mcpServers: [],
+                        ...(forkPoint === undefined
+                            ? {}
+                            : {
+                                  _meta: {
+                                      jetbrains: {
+                                          air: {
+                                              fork: {
+                                                  version: 1,
+                                                  messageFingerprint: forkPoint.messageFingerprint,
+                                                  messageId: forkPoint.messageId,
+                                                  messageOccurrence: forkPoint.messageOccurrence,
+                                              },
+                                          },
+                                      },
+                                  },
+                              }),
                     },
                     { cancellationSignal: signal },
                 ),
@@ -1149,10 +1212,7 @@ class AcpProcessSession implements AcpClientHandler {
         return this.#configOptions;
     };
 
-    readonly prompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> => {
-        if (this.#turn.running) {
-            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
-        }
+    readonly buildPrompt = (options: AcpPromptContentOptions): ContentBlock[] => {
         if (options.images.length > 0 && !this.#capabilities.imagePrompt) {
             throw new AcpExecutionError(
                 "The selected agent does not accept image prompts",
@@ -1204,6 +1264,14 @@ class AcpProcessSession implements AcpClientHandler {
         if (prompt.length === 0) {
             throw new AcpExecutionError("A prompt must contain text or an attachment", {}, "empty_prompt");
         }
+        return prompt;
+    };
+
+    readonly prompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> => {
+        if (this.#turn.running) {
+            throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
+        }
+        const prompt = this.buildPrompt(options);
         this.#store.write(
             new AcpStoredSession(
                 this.#mobiusSessionId,
@@ -1261,6 +1329,55 @@ class AcpProcessSession implements AcpClientHandler {
         } finally {
             this.#turn = new IdleAcpTurn();
         }
+    };
+
+    readonly steer = async (options: AcpSteerOptions): Promise<string> => {
+        if (!this.#capabilities.steering) {
+            throw new AcpExecutionError(
+                "The selected agent does not support mid-turn steering",
+                {},
+                "steering_unsupported",
+            );
+        }
+        if (!this.#turn.running || this.#turn.commandId !== options.targetCommandId) {
+            throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
+        }
+        const prompt = this.buildPrompt(options);
+        const response: unknown = await this.race(
+            this.#connection.agent.request("_session/steering", {
+                _meta: { steering: { idleBehavior: "promptRequired" } },
+                prompt,
+                sessionId: this.#nativeSessionId,
+            }),
+            "ACP agent exited during steering",
+            options.signal,
+        );
+        if (!isRecord(response)) {
+            throw new AcpExecutionError(
+                "ACP agent returned an invalid steering response",
+                {},
+                "acp_invalid_steering_response",
+            );
+        }
+        const outcome = response["outcome"];
+        if (outcome === "injected" || outcome === "startedNewTurn") {
+            return outcome;
+        }
+        if (outcome === "promptRequired") {
+            throw new AcpExecutionError(
+                "The target turn finished before steering could be injected",
+                {},
+                "steering_target_unavailable",
+            );
+        }
+        if (outcome === "failed") {
+            throw new AcpExecutionError("The Agent could not inject steering", {}, "steering_failed");
+        }
+        throw new AcpExecutionError(
+            "ACP agent returned an invalid steering response",
+            {},
+            "acp_invalid_steering_response",
+        );
     };
 
     readonly cancel = async (): Promise<void> => {
@@ -1535,7 +1652,7 @@ class AcpProcessSession implements AcpClientHandler {
                     );
                 } else {
                     await this.#turn.activities.finishNarrative();
-                    await this.#turn.onText(update.content.text);
+                    await this.#turn.onText(update.content.text, truncate(update.messageId ?? "", 255));
                 }
             } else {
                 await this.#turn.activities.finishNarrative();
@@ -1773,6 +1890,7 @@ class AcpProcessSession implements AcpClientHandler {
 }
 
 export class AcpSessionManager {
+    readonly #activeCommandIds = new Map<string, string>();
     readonly #nativeOperations = new Set<string>();
     readonly #nativeBrowserObserver = new NullAcpSessionObserver();
     readonly #nativeBrowserPreparing = new Map<string, Promise<AcpProcessSession>>();
@@ -1843,6 +1961,30 @@ export class AcpSessionManager {
         const operation = (async () => {
             try {
                 const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store);
+                this.#sessions.set(options.sessionId, runtime);
+                return runtime;
+            } finally {
+                this.#preparing.delete(options.sessionId);
+            }
+        })();
+        this.#preparing.set(options.sessionId, operation);
+        return await operation;
+    }
+
+    async #startSessionForkAtTurnPreparation(
+        options: AcpPrepareOptions,
+        sourceNativeSessionId: string,
+        forkPoint: AcpSessionForkPoint,
+    ): Promise<AcpProcessSession> {
+        const operation = (async () => {
+            try {
+                const runtime = await AcpProcessSession.startSessionForkAtTurn(
+                    options,
+                    sourceNativeSessionId,
+                    forkPoint,
+                    () => this.#observer,
+                    this.#store,
+                );
                 this.#sessions.set(options.sessionId, runtime);
                 return runtime;
             } finally {
@@ -2048,6 +2190,49 @@ export class AcpSessionManager {
         }
     };
 
+    readonly steerPrompt = async (options: AcpSteerOptions): Promise<string> => {
+        if (this.#activeCommandIds.get(options.sessionId) !== options.targetCommandId) {
+            throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
+        }
+        const pending = this.#preparing.get(options.sessionId);
+        if (pending !== undefined) {
+            await pending;
+        }
+        if (this.#activeCommandIds.get(options.sessionId) !== options.targetCommandId) {
+            throw new AcpExecutionError("The target turn is no longer active", {}, "steering_target_unavailable");
+        }
+        const runtime = this.#sessions.get(options.sessionId);
+        if (runtime === undefined || !runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+            throw new AcpExecutionError(
+                "The target turn execution context is unavailable",
+                {},
+                "steering_target_unavailable",
+            );
+        }
+        const deadlineController = new AbortController();
+        const deadline = setTimeout(
+            () =>
+                deadlineController.abort(
+                    new AcpExecutionError("The steering request exceeded its deadline", {}, "steering_timeout"),
+                ),
+            options.agent.promptTimeoutMilliseconds,
+        );
+        deadline.unref();
+        try {
+            return await runtime.steer({
+                ...options,
+                signal: AbortSignal.any([options.signal, deadlineController.signal]),
+            });
+        } catch (error) {
+            if (error instanceof AcpExecutionError) {
+                throw error;
+            }
+            throw new AcpExecutionError("ACP agent steering failed", { cause: error }, "steering_failed");
+        } finally {
+            clearTimeout(deadline);
+        }
+    };
+
     readonly runPrompt = async (options: AcpTurnOptions): Promise<AcpPromptResult> => {
         const stored = this.#store.read(options.sessionId);
         if (
@@ -2075,6 +2260,7 @@ export class AcpSessionManager {
             signal: AbortSignal.any([options.signal, deadlineController.signal]),
         };
         this.#activeSessionIds.add(options.sessionId);
+        this.#activeCommandIds.set(options.sessionId, options.commandId);
         try {
             if (this.#cancellationRequests.has(options.sessionId)) {
                 return { stopReason: "cancelled" };
@@ -2114,6 +2300,9 @@ export class AcpSessionManager {
         } finally {
             clearTimeout(deadline);
             this.#activeSessionIds.delete(options.sessionId);
+            if (this.#activeCommandIds.get(options.sessionId) === options.commandId) {
+                this.#activeCommandIds.delete(options.sessionId);
+            }
             this.#cancellationRequests.delete(options.sessionId);
         }
     };
@@ -2265,6 +2454,85 @@ export class AcpSessionManager {
                     sessionId: options.sessionId,
                     prepared: runtime.prepared(),
                     history,
+                };
+            } catch (error) {
+                this.#sessions.delete(options.sessionId);
+                this.#store.remove(options.sessionId);
+                await runtime.closeProcess();
+                throw error;
+            } finally {
+                this.#nativeOperations.delete(openedKey);
+            }
+        } finally {
+            this.#nativeOperations.delete(key);
+        }
+    };
+
+    readonly forkSessionAtTurn = async (
+        options: AcpPrepareOptions,
+        sourceSessionId: string,
+        forkPoint: AcpSessionForkPoint,
+    ) => {
+        if (sourceSessionId === options.sessionId) {
+            throw new AcpExecutionError(
+                "The fork destination must be a new conversation",
+                {},
+                "session_identity_mismatch",
+            );
+        }
+        const source = this.#store.read(sourceSessionId);
+        if (!(source instanceof FoundAcpStoredSession) || !source.session.prompted) {
+            throw new AcpExecutionError(
+                "The source conversation has no resumable native Agent session",
+                {},
+                "native_session_not_found",
+            );
+        }
+        if (
+            source.session.agentId !== options.agent.id ||
+            source.session.cwd !== options.cwd ||
+            !arraysEqual(source.session.additionalDirectories, options.additionalDirectories)
+        ) {
+            throw new AcpExecutionError(
+                "The source conversation execution target does not match the fork request",
+                {},
+                "native_session_target_changed",
+            );
+        }
+        const key = `${options.agent.id}:${source.session.nativeSessionId}`;
+        const linked = this.#store.findNative(options.agent.id, source.session.nativeSessionId);
+        if (
+            this.#nativeOperations.has(key) ||
+            linked.some((entry) => this.#activeSessionIds.has(entry.sessionId) || this.#preparing.has(entry.sessionId))
+        ) {
+            throw new AcpExecutionError(
+                "Wait for the source conversation's running operation to finish",
+                {},
+                "session_busy",
+            );
+        }
+        if (
+            this.#sessions.has(options.sessionId) ||
+            this.#preparing.has(options.sessionId) ||
+            this.#store.read(options.sessionId) instanceof FoundAcpStoredSession ||
+            this.#store.read(options.sessionId) instanceof DeletedAcpStoredSession
+        ) {
+            throw new AcpExecutionError("The destination conversation already exists", {}, "session_identity_mismatch");
+        }
+        this.#nativeOperations.add(key);
+        try {
+            const runtime = await this.#startSessionForkAtTurnPreparation(
+                options,
+                source.session.nativeSessionId,
+                forkPoint,
+            );
+            const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
+            this.#nativeOperations.add(openedKey);
+            try {
+                return {
+                    history: await runtime.loadHistory(options.signal),
+                    prepared: runtime.prepared(),
+                    sessionId: options.sessionId,
                 };
             } catch (error) {
                 this.#sessions.delete(options.sessionId);

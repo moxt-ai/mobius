@@ -22,15 +22,18 @@ import {
     MobiusRecordingPolicy,
     type MobiusSession,
     MobiusSucceededTurnState,
+    type MobiusTurn,
     MobiusTurnCompletedEvent,
     MobiusTurnFailedEvent,
     MobiusTurnStartedEvent,
     mobiusApiUrl,
     type NativeSessionCommand,
     type NativeSessionResult,
+    type NativeSessionTurnForkRequest,
     type PromptResource,
     type SessionConfigOption,
     type SessionConfigUpdatedEvent,
+    SessionPromptDisposition,
     type SessionReadyEvent,
     StaticMobiusCredentialProvider,
     type WorkspaceEntriesEvent,
@@ -59,7 +62,13 @@ import {
     RecordedActivity,
     RequestedAgentInstallationState,
 } from "@/domain/channel";
-import { DeletedSessionState, OfflineRuntimeState, OnlineRuntimeState, UnavailableRuntimeState } from "@/domain/chat";
+import {
+    type Conversation,
+    DeletedSessionState,
+    OfflineRuntimeState,
+    OnlineRuntimeState,
+    UnavailableRuntimeState,
+} from "@/domain/chat";
 import { readChannelConnection, readProjectRuntimeConnection } from "@/services/pairing-api";
 import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
@@ -248,6 +257,10 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
 }
 
 abstract class TransportConnection {
+    abstract readonly forkSessionTurn: (
+        command: NativeSessionTurnForkRequest,
+        signal: AbortSignal,
+    ) => Promise<NativeSessionResult>;
     abstract readonly nativeSession: (
         command: NativeSessionCommand,
         signal: AbortSignal,
@@ -267,10 +280,12 @@ abstract class TransportConnection {
     abstract readonly permission: (request: PermissionResponseRequest) => Promise<void>;
     abstract readonly prepare: (request: SessionPrepareRequest, signal: AbortSignal) => Promise<SessionReadyEvent>;
     abstract readonly prompt: (request: PromptRequest) => Promise<PromptResult>;
+    abstract readonly steerQueuedTurn: (request: CancelRequest) => Promise<void>;
     abstract readonly installAgent: (request: AgentInstallRequest) => Promise<void>;
 }
 
 class DisconnectedTransport extends TransportConnection {
+    readonly forkSessionTurn = (): Promise<NativeSessionResult> => this.notInitialized();
     readonly nativeSession = (): Promise<NativeSessionResult> => this.notInitialized();
     readonly cancelAgentInstallation = (): Promise<void> => this.notInitialized();
     readonly cancel = (): Promise<void> =>
@@ -292,6 +307,8 @@ class DisconnectedTransport extends TransportConnection {
 
     readonly prompt = (): Promise<PromptResult> => this.notInitialized();
 
+    readonly steerQueuedTurn = (): Promise<void> => this.notInitialized();
+
     private readonly notInitialized = <T>(): Promise<T> =>
         Promise.reject(new MobiusChannelError("transport_not_initialized", "The channel transport is not initialized"));
 }
@@ -304,7 +321,7 @@ class ConnectedTransport extends TransportConnection {
     readonly #promptControllers = new Set<AbortController>();
     readonly #publicCommandIds = new Set<string>();
     readonly #serviceClients: Promise<BrowserServiceClients>;
-    readonly #turnIds = new Map<string, string>();
+    readonly #turnIds = new Map<string, Promise<MobiusTurn>>();
 
     constructor(connection: ChannelConnection, onActivity: () => void) {
         super();
@@ -421,18 +438,39 @@ class ConnectedTransport extends TransportConnection {
         return await client.manageNativeSession(command, signal);
     };
 
+    readonly forkSessionTurn = async (
+        command: NativeSessionTurnForkRequest,
+        signal: AbortSignal,
+    ): Promise<NativeSessionResult> => {
+        signal.throwIfAborted();
+        const client = await this.#client;
+        signal.throwIfAborted();
+        return await client.forkSessionTurn(command, signal);
+    };
+
     readonly cancel = async (request: CancelRequest): Promise<void> => {
         const clients = await this.#serviceClients;
-        const turnId = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
-        if (turnId === undefined) {
+        const turn = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
+        if (turn === undefined) {
             throw new MobiusChannelError("turn_not_found", "The active Turn is not available for cancellation");
         }
+        const accepted = await turn;
         await clients.scoped.turns.cancel(
             request.sessionId,
-            turnId,
+            accepted.turnId,
             { idempotencyKey: `cancel-${crypto.randomUUID()}` },
             AbortSignal.timeout(20_000),
         );
+    };
+
+    readonly steerQueuedTurn = async (request: CancelRequest): Promise<void> => {
+        const clients = await this.#serviceClients;
+        const turn = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
+        if (turn === undefined) {
+            throw new MobiusChannelError("turn_not_found", "The queued Turn is no longer available for steering");
+        }
+        const accepted = await turn;
+        await clients.scoped.turns.steer(request.sessionId, accepted.turnId, AbortSignal.timeout(20_000));
     };
 
     readonly cancelAgentInstallation = async (request: AgentInstallCancelRequest): Promise<void> => {
@@ -551,18 +589,32 @@ class ConnectedTransport extends TransportConnection {
 
     readonly prompt = async (request: PromptRequest): Promise<PromptResult> => {
         const controller = new AbortController();
+        const sessionId = request.sessionId ?? crypto.randomUUID();
+        const commandId = request.commandId ?? crypto.randomUUID();
+        const submission = Promise.withResolvers<MobiusTurn>();
+        void submission.promise.catch(() => undefined);
+        const turnKey = this.turnKey(sessionId, commandId);
+        this.#turnIds.set(turnKey, submission.promise);
         this.#promptControllers.add(controller);
         try {
-            return await this.runPrompt(request, controller.signal);
+            return await this.runPrompt(request, sessionId, commandId, submission, controller.signal);
+        } catch (error) {
+            submission.reject(error);
+            throw error;
         } finally {
             this.#promptControllers.delete(controller);
+            this.#turnIds.delete(turnKey);
         }
     };
 
-    private readonly runPrompt = async (request: PromptRequest, signal: AbortSignal): Promise<PromptResult> => {
+    private readonly runPrompt = async (
+        request: PromptRequest,
+        sessionId: string,
+        commandId: string,
+        submission: PromiseWithResolvers<MobiusTurn>,
+        signal: AbortSignal,
+    ): Promise<PromptResult> => {
         const clients = await this.#serviceClients;
-        const sessionId = request.sessionId ?? crypto.randomUUID();
-        const commandId = request.commandId ?? crypto.randomUUID();
         await this.ensureSession(clients.scoped, request, sessionId, signal);
         const attachments = await this.uploadAttachments(clients.scoped, sessionId, request, signal);
         let attemptId = "";
@@ -631,7 +683,6 @@ class ConnectedTransport extends TransportConnection {
             signal,
         );
         this.#publicCommandIds.add(commandId);
-        let acceptedTurnId = "";
         try {
             const accepted = await clients.scoped.turns.submit(
                 sessionId,
@@ -639,14 +690,15 @@ class ConnectedTransport extends TransportConnection {
                     additionalDirectoryIds: request.additionalDirectoryIds ?? [],
                     artifactIds: attachments.artifactIds,
                     content: request.prompt,
+                    disposition: request.disposition ?? SessionPromptDisposition.Reject,
                     idempotencyKey: commandId,
                     images: [],
                     resources: attachments.resources ?? [],
+                    targetCommandId: request.targetCommandId ?? "",
                 },
                 signal,
             );
-            acceptedTurnId = accepted.turnId;
-            this.#turnIds.set(this.turnKey(sessionId, commandId), accepted.turnId);
+            submission.resolve(accepted);
             try {
                 await subscription.completed;
             } catch (streamError) {
@@ -673,9 +725,6 @@ class ConnectedTransport extends TransportConnection {
             return { sessionId, stopReason };
         } finally {
             subscription.close();
-            if (acceptedTurnId.length > 0) {
-                this.#turnIds.delete(this.turnKey(sessionId, commandId));
-            }
             this.#publicCommandIds.delete(commandId);
         }
     };
@@ -956,6 +1005,44 @@ export async function manageNativeSession(
     }
 }
 
+export async function forkConversationAtTurn(sourceCommandId: string): Promise<string> {
+    const store = useChatStore.getState();
+    const conversation = selectActiveConversation(store);
+    if (conversation.isRunning) {
+        store.setErrorMessage("session_busy: Wait for the running turn to finish before creating a fork.");
+        return "";
+    }
+    if (!conversation.session.isReady || !conversation.session.capabilities.unstableForkSession) {
+        store.setErrorMessage("native_session_unsupported: This Agent does not support session forking.");
+        return "";
+    }
+    const requestId = crypto.randomUUID();
+    try {
+        const result = await transport.forkSessionTurn(
+            {
+                additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
+                agentId: conversation.agentId,
+                bindingId: conversation.bindingId,
+                directoryId: conversation.directoryId,
+                kind: "native.session.turn-fork.request",
+                requestId,
+                sessionId: conversation.sessionId,
+                sourceCommandId,
+                targetSessionId: crypto.randomUUID(),
+            },
+            AbortSignal.timeout(90_000),
+        );
+        if (result.action !== "fork") {
+            throw new MobiusChannelError("invalid_protocol_message", "The Agent returned an invalid fork result");
+        }
+        useChatStore.getState().openNativeConversation(result);
+        return result.ready.sessionId;
+    } catch (error) {
+        useChatStore.getState().setErrorMessage(failureMessage(error));
+        return "";
+    }
+}
+
 export type SessionConfigurationResult =
     | { readonly kind: "applied" }
     | { readonly kind: "ignored" }
@@ -1063,22 +1150,17 @@ export async function respondToElicitation(request: ElicitationResponseRequest):
     }
 }
 
-export async function sendPrompt(prompt: string): Promise<void> {
-    const normalizedPrompt = prompt.trim();
-    await prepareActiveSession();
+async function sendObservedPrompt(
+    conversation: Conversation,
+    prompt: string,
+    disposition: string,
+    targetCommandId: string,
+): Promise<void> {
     const initialStore = useChatStore.getState();
-    const conversation = selectActiveConversation(initialStore);
-    const hasAttachments = conversation.draftImages.length > 0 || conversation.draftResources.length > 0;
-    if (
-        (normalizedPrompt.length === 0 && !hasAttachments) ||
-        conversation.isRunning ||
-        !initialStore.runtime.canSend ||
-        !conversation.session.isReady
-    ) {
-        return;
-    }
-
-    const turn = initialStore.beginTurn(normalizedPrompt);
+    const turn =
+        disposition === SessionPromptDisposition.Queue
+            ? initialStore.beginQueuedTurn(prompt)
+            : initialStore.beginTurn(prompt);
     let attemptId = "Pending";
 
     try {
@@ -1088,6 +1170,7 @@ export async function sendPrompt(prompt: string): Promise<void> {
             bindingId: conversation.bindingId,
             commandId: turn.commandId,
             directoryId: conversation.directoryId,
+            disposition,
             images: conversation.draftImages,
             observer: {
                 onActivity: (activity) => {
@@ -1120,13 +1203,93 @@ export async function sendPrompt(prompt: string): Promise<void> {
                     useChatStore.getState().startAgentTurn(turn, startedAttemptId);
                 },
             },
-            prompt: normalizedPrompt,
+            prompt,
             resources: conversation.draftResources,
             sessionId: turn.sessionId,
+            targetCommandId,
         });
         useChatStore.getState().completeTurn(turn, attemptId, result.stopReason);
     } catch (error) {
         useChatStore.getState().failTurn(turn, failureMessage(error));
+    }
+}
+
+async function sendSteeringPrompt(conversation: Conversation, prompt: string, targetCommandId: string): Promise<void> {
+    const turn = useChatStore.getState().beginSteering(prompt);
+    try {
+        await transport.prompt({
+            additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
+            agentId: turn.agentId,
+            bindingId: conversation.bindingId,
+            commandId: turn.commandId,
+            directoryId: conversation.directoryId,
+            disposition: SessionPromptDisposition.Steer,
+            images: conversation.draftImages,
+            prompt,
+            resources: conversation.draftResources,
+            sessionId: turn.sessionId,
+            targetCommandId,
+        });
+        useChatStore.getState().completeSteering(turn);
+    } catch (error) {
+        useChatStore.getState().failSteering(turn, failureMessage(error));
+    }
+}
+
+export async function sendPrompt(prompt: string, disposition: string = SessionPromptDisposition.Reject): Promise<void> {
+    const normalizedPrompt = prompt.trim();
+    await prepareActiveSession();
+    const initialStore = useChatStore.getState();
+    const conversation = selectActiveConversation(initialStore);
+    const hasAttachments = conversation.draftImages.length > 0 || conversation.draftResources.length > 0;
+    if (
+        (normalizedPrompt.length === 0 && !hasAttachments) ||
+        !initialStore.runtime.canSend ||
+        !conversation.session.isReady
+    ) {
+        return;
+    }
+
+    let effectiveDisposition = disposition;
+    let targetCommandId = "";
+    if (conversation.isRunning) {
+        if (
+            (effectiveDisposition === SessionPromptDisposition.Steer && !conversation.session.capabilities.steering) ||
+            effectiveDisposition === SessionPromptDisposition.Reject
+        ) {
+            initialStore.setErrorMessage(
+                "prompt_follow_up_unsupported: This Agent cannot accept the selected follow-up while it is working.",
+            );
+            return;
+        }
+        targetCommandId = conversation.runningTurn().commandId;
+    } else {
+        effectiveDisposition = SessionPromptDisposition.Reject;
+    }
+
+    if (effectiveDisposition === SessionPromptDisposition.Steer) {
+        await sendSteeringPrompt(conversation, normalizedPrompt, targetCommandId);
+        return;
+    }
+    await sendObservedPrompt(conversation, normalizedPrompt, effectiveDisposition, targetCommandId);
+}
+
+export async function steerQueuedPrompt(commandId: string): Promise<void> {
+    const initialStore = useChatStore.getState();
+    const conversation = selectActiveConversation(initialStore);
+    if (!conversation.isRunning || !conversation.session.capabilities.steering) {
+        return;
+    }
+    try {
+        const turn = initialStore.beginQueuedSteering(commandId);
+        try {
+            await transport.steerQueuedTurn({ commandId: turn.commandId, sessionId: turn.sessionId });
+            useChatStore.getState().completeSteering(turn);
+        } catch (error) {
+            useChatStore.getState().failQueuedSteering(turn, failureMessage(error));
+        }
+    } catch (error) {
+        initialStore.setErrorMessage(failureMessage(error));
     }
 }
 

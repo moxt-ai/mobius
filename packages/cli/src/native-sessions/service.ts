@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { basename } from "node:path";
 import type {
     NativeSessionCommand,
     NativeSessionEntry,
     NativeSessionResult,
+    NativeSessionTurnForkCommand,
     SessionReadyEvent,
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
@@ -272,6 +274,78 @@ export class NativeSessionService {
             targetSessionId: command.targetSessionId,
             title: target.info.title ?? "Untitled session",
             history: opened.history,
+        };
+    };
+
+    readonly executeTurnFork = async (
+        command: NativeSessionTurnForkCommand,
+        signal: AbortSignal,
+    ): Promise<NativeSessionResult> => {
+        signal.throwIfAborted();
+        const cwd = await this.#directories.resolve(this.#config.bindingId, command.directoryId, signal);
+        const additionalDirectories: string[] = [];
+        const additionalEntries: WorkspaceEntry[] = [];
+        const resolvedPaths = new Set<string>([cwd]);
+        for (const directoryId of command.additionalDirectoryIds) {
+            const path = await this.#directories.resolve(this.#config.bindingId, directoryId, signal);
+            if (resolvedPaths.has(path)) {
+                throw new LocalAuthorizationError("Workspace directories must resolve to distinct locations");
+            }
+            resolvedPaths.add(path);
+            additionalDirectories.push(path);
+            additionalEntries.push({ directoryId, name: basename(path) });
+        }
+        const listing = await this.#directories.list(this.#config.bindingId, command.directoryId, signal);
+        const opened = await this.#sessions.forkSessionAtTurn(
+            {
+                additionalDirectories,
+                agent: this.#config.catalog.find(command.agentId),
+                cwd,
+                sessionId: command.targetSessionId,
+                signal,
+            },
+            command.sessionId,
+            {
+                messageFingerprint: command.messageFingerprint,
+                messageId: command.messageId,
+                messageOccurrence: command.messageOccurrence,
+            },
+        );
+        signal.throwIfAborted();
+        const ready: SessionReadyEvent = {
+            additionalDirectories: additionalEntries,
+            agentId: command.agentId,
+            agentName: opened.prepared.agentName,
+            agentVersion: opened.prepared.agentVersion,
+            capabilities: opened.prepared.capabilities,
+            commands: opened.prepared.commands,
+            configOptions: opened.prepared.configOptions,
+            directoryId: command.directoryId,
+            directoryLabel: listing.directoryLabel,
+            kind: "session.ready",
+            requestId: command.requestId,
+            restored: true,
+            sessionId: opened.sessionId,
+        };
+        this.#audit.record({
+            commandId: command.requestId,
+            details: {
+                agentId: command.agentId,
+                messageId: command.messageId,
+                sourceCommandId: command.sourceCommandId,
+            },
+            event: "native_session_turn_forked",
+            sessionId: command.sessionId,
+        });
+        return {
+            action: "fork",
+            history: opened.history,
+            kind: "native.session.result",
+            ready,
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+            targetSessionId: command.targetSessionId,
+            title: command.title,
         };
     };
 

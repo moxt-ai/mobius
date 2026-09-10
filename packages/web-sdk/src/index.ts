@@ -12,6 +12,7 @@ export type {
     NativeSessionCommand,
     NativeSessionEntry,
     NativeSessionResult,
+    NativeSessionTurnForkRequest,
     PromptImage,
     PromptResource,
     SessionCapabilities,
@@ -57,6 +58,7 @@ export {
     parseMobiusApiPrefix,
     parseNativeHistoryText,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 export * from "./bot-owner-resources.ts";
 export * from "./bot-resources.ts";

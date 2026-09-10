@@ -85,6 +85,9 @@ export class SqliteSessionRuntime
     readonly acceptTurnCancellation: SessionCommandGateway["acceptTurnCancellation"] = (...parameters) =>
         this.#commands.acceptTurnCancellation(...parameters);
 
+    readonly promoteQueuedTurnToSteering: SessionCommandGateway["promoteQueuedTurnToSteering"] = (...parameters) =>
+        this.#commands.promoteQueuedTurnToSteering(...parameters);
+
     readonly commitEvent: SessionCommandGateway["commitEvent"] = async (...parameters) => {
         const result = await this.#commands.commitEvent(...parameters);
         if (!result.duplicate) {

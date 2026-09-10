@@ -15,6 +15,7 @@ import {
     RequiredBotCompletionDeliveryPolicy,
     SESSION_PROMPT_KIND,
     type SessionPromptCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
@@ -487,11 +488,13 @@ export class BotSessionService {
             bindingId: sessionBindingId,
             commandId: submission.clientMessageId,
             directoryId: workspaceRef,
+            disposition: SessionPromptDisposition.Reject,
             images: decodePromptImagesValue(submission.images),
             kind: SESSION_PROMPT_KIND,
             prompt: submission.prompt,
             resources: decodePromptResourcesValue(submission.resources),
             sessionId,
+            targetCommandId: "",
         };
         const encodedOrdinaryCommand = encodeSessionPromptCommand(ordinaryCommand);
         const requestDigest = await sha256(

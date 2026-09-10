@@ -9,6 +9,8 @@ import {
     decodeAgentContentEvent,
     decodeAgentInstallRequestCommand,
     decodeNativeSessionHistory,
+    decodeNativeSessionTurnForkCommand,
+    decodeNativeSessionTurnForkRequest,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
     decodeSessionPermissionRequestedEvent,
@@ -18,6 +20,8 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentContentEvent,
     encodeAgentInstallRequestCommand,
+    encodeNativeSessionTurnForkCommand,
+    encodeNativeSessionTurnForkRequest,
     encodeSessionConfigureCommand,
     encodeSessionElicitationRequestedEvent,
     encodeSessionPermissionRequestedEvent,
@@ -42,6 +46,31 @@ import {
     WORKSPACE_LIST_KIND,
     type WorkspaceListCommand,
 } from "../src/index.ts";
+
+it("Given a completed Mobius turn, When the Host requests a fork and the Relay resolves its native anchor, Then both trust-boundary messages round-trip without conflating unresolved and authorized input", () => {
+    const request = {
+        additionalDirectoryIds: [],
+        agentId: "codex",
+        bindingId: "workspace",
+        directoryId: "default",
+        kind: "native.session.turn-fork.request",
+        requestId: "fork-request-1",
+        sessionId: "source-session",
+        sourceCommandId: "source-command",
+        targetSessionId: "target-session",
+    } as const;
+    expect(decodeNativeSessionTurnForkRequest(encodeNativeSessionTurnForkRequest(request))).toEqual(request);
+
+    const command = {
+        ...request,
+        kind: "native.session.turn-fork",
+        messageFingerprint: `sha256:${"a".repeat(64)}`,
+        messageId: "assistant-message-7",
+        messageOccurrence: 2,
+        title: "Source session",
+    } as const;
+    expect(decodeNativeSessionTurnForkCommand(encodeNativeSessionTurnForkCommand(command))).toEqual(command);
+});
 
 const modelOption: SessionConfigOption = {
     booleanValue: false,
@@ -255,7 +284,9 @@ describe("ACP session control protocol contract", () => {
                 imagePrompt: true,
                 listSessions: true,
                 loadSession: true,
+                promptQueueing: true,
                 resumeSession: true,
+                steering: true,
                 unstableForkSession: false,
             },
             commands: [],

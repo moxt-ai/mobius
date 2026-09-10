@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentMessageDeltaEvent,
     decodeAgentActivityEvent,
+    decodeAgentMessageDeltaEvent,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeHeartbeatEvent,
     decodeRuntimeLivenessReadyEvent,
@@ -37,6 +40,7 @@ import {
     type SessionCancelCommand,
     SessionEventRejectionCode,
     type SessionPromptCommand,
+    SessionPromptDisposition,
 } from "../src/index.ts";
 
 describe("reliable session event protocol", () => {
@@ -119,6 +123,7 @@ describe("session prompt protocol", () => {
             bindingId: "workspace",
             commandId: "command-1",
             directoryId: "default",
+            disposition: SessionPromptDisposition.Reject,
             images: [
                 {
                     data: "aW1hZ2U=",
@@ -138,9 +143,38 @@ describe("session prompt protocol", () => {
                 },
             ],
             sessionId: "session-1",
+            targetCommandId: "",
         };
 
         expect(decodeSessionPromptCommand(encodeSessionPromptCommand(command))).toEqual(command);
+    });
+
+    it("Given a running Turn identity, When a follow-up crosses the protocol boundary, Then queue and steer intent remain explicit", () => {
+        const queued = decodeSessionPromptCommand(
+            JSON.stringify({
+                additionalDirectoryIds: [],
+                agentId: "claude-code",
+                bindingId: "workspace",
+                commandId: "command-2",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Queue,
+                images: [],
+                kind: SESSION_PROMPT_KIND,
+                prompt: "continue after this",
+                resources: [],
+                sessionId: "session-1",
+                targetCommandId: "command-1",
+            }),
+        );
+        const steered = decodeSessionPromptCommand(
+            JSON.stringify({ ...queued, commandId: "command-3", disposition: SessionPromptDisposition.Steer }),
+        );
+
+        expect(queued.disposition).toBe(SessionPromptDisposition.Queue);
+        expect(steered).toMatchObject({
+            disposition: SessionPromptDisposition.Steer,
+            targetCommandId: "command-1",
+        });
     });
 
     it("Given a prompt contains a remote working directory, When it crosses the protocol boundary, Then the authority override is rejected", () => {
@@ -159,6 +193,20 @@ describe("session prompt protocol", () => {
         });
 
         expect(() => decodeSessionPromptCommand(encoded)).toThrowError(ProtocolMessageError);
+    });
+});
+
+describe("agent message protocol", () => {
+    it("Given an Agent emits a native message anchor, When its text crosses the durable event boundary, Then the anchor remains available for turn forking", () => {
+        const event: AgentMessageDeltaEvent = {
+            commandId: "command-1",
+            kind: AGENT_MESSAGE_DELTA_KIND,
+            messageId: "agent-message-1",
+            sessionId: "session-1",
+            text: "done",
+        };
+
+        expect(decodeAgentMessageDeltaEvent(JSON.stringify(event))).toEqual(event);
     });
 });
 
