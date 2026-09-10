@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import { decodeSessionEventEnvelope, SESSION_EVENT_ACK_KIND } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +15,38 @@ afterEach(async () => {
 });
 
 describe("durable daemon session event outbox", () => {
+    it("Given one Session fills the durable replay backlog, When another Session becomes ready, Then the next bounded batch serves both event sources", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-fairness-"));
+        createdDirectories.push(directory);
+        const outbox = new SessionEventOutbox(join(directory, "audit.sqlite"));
+        for (let sequence = 1; sequence <= 10; sequence += 1) {
+            outbox.enqueue("noisy-session", JSON.stringify({ kind: "agent.activity", sequence }), "attempt-a");
+        }
+        outbox.enqueue("fresh-session", JSON.stringify({ kind: "session.ready" }));
+        outbox.close();
+
+        const database = new DatabaseSync(join(directory, "audit.sqlite"));
+        database.exec("UPDATE relay_session_event_outbox SET source_key = ''");
+        database.close();
+
+        const restarted = new SessionEventOutbox(join(directory, "audit.sqlite"));
+
+        const batch = restarted.pendingBatch(4).map((encoded) => decodeSessionEventEnvelope(encoded));
+
+        expect(
+            batch.map((event) => ({
+                sessionId: event.sessionId,
+                sourceSeq: event.source.sourceSeq,
+            })),
+        ).toEqual([
+            { sessionId: "noisy-session", sourceSeq: "1" },
+            { sessionId: "fresh-session", sourceSeq: "1" },
+            { sessionId: "noisy-session", sourceSeq: "2" },
+            { sessionId: "noisy-session", sourceSeq: "3" },
+        ]);
+        restarted.close();
+    });
+
     it("Given unacknowledged ordered events, When the daemon restarts and acknowledges one, Then only the remaining envelope is retransmitted without a new event identity", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-"));
         createdDirectories.push(directory);

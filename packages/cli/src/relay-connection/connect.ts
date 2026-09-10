@@ -6,10 +6,17 @@ const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 
 class RelayConnectionError extends Error {
     readonly code: string;
+    readonly diagnosticDetails: Readonly<Record<string, string>>;
 
-    constructor(code: string, message: string, options: ErrorOptions = {}) {
+    constructor(
+        code: string,
+        message: string,
+        diagnosticDetails: Readonly<Record<string, string>> = {},
+        options: ErrorOptions = {},
+    ) {
         super(message, options);
         this.code = code;
+        this.diagnosticDetails = diagnosticDetails;
         this.name = "RelayConnectionError";
     }
 }
@@ -50,16 +57,34 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
         };
         const onAbort = (): void => {
             fail(
-                new RelayConnectionError("relay_connection_cancelled", "Relay connection was cancelled", {
-                    cause: signal.reason,
+                new RelayConnectionError(
+                    "relay_connection_cancelled",
+                    "Relay connection was cancelled",
+                    {
+                        cancellation: "requested",
+                    },
+                    { cause: signal.reason },
+                ),
+            );
+        };
+        const onClose = (event: CloseEvent): void => {
+            fail(
+                new RelayConnectionError("relay_connection_closed", "Relay connection closed before it was ready", {
+                    closeCode: event.code.toString(),
+                    closeReason: event.reason,
                 }),
             );
         };
-        const onClose = (): void => {
-            fail(new RelayConnectionError("relay_connection_closed", "Relay connection closed before it was ready"));
-        };
-        const onError = (): void => {
-            fail(new RelayConnectionError("relay_connection_failed", "Relay connection failed"));
+        const onError = (event: Event): void => {
+            const cause = Reflect.get(event, "error");
+            fail(
+                new RelayConnectionError(
+                    "relay_connection_failed",
+                    "Relay connection failed",
+                    {},
+                    { cause: cause ?? event },
+                ),
+            );
         };
         const onOpen = (): void => {
             if (finished) {
@@ -70,7 +95,11 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
             resolve(socket);
         };
         function onTimeout(): void {
-            fail(new RelayConnectionError("relay_connection_timeout", "Relay connection timed out"));
+            fail(
+                new RelayConnectionError("relay_connection_timeout", "Relay connection timed out", {
+                    timeoutMilliseconds: CONNECTION_TIMEOUT_MILLISECONDS.toString(),
+                }),
+            );
         }
 
         signal.addEventListener("abort", onAbort, { once: true });

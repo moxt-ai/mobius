@@ -19,6 +19,7 @@ import {
     encodeBotExecutionBindingApprovedEvent,
     encodeBotSessionPromptCommand,
     encodeSessionConfigureCommand,
+    encodeSessionEventAcknowledgement,
     encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
     NoBotCompletionDeliveryPolicy,
@@ -26,6 +27,8 @@ import {
     SESSION_COMPLETED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
     SESSION_PREPARE_KIND,
     SESSION_READY_KIND,
@@ -61,10 +64,13 @@ function readPort(server: Server): number {
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
+    #eventSequence = 0;
     readonly #messages: string[] = [];
     readonly #resolvers: Array<(message: string) => void> = [];
+    readonly #socket: Duplex;
 
     constructor(socket: Duplex) {
+        this.#socket = socket;
         socket.on("data", (chunk: Buffer) => {
             this.#buffered = Buffer.concat([this.#buffered, chunk]);
             this.decode();
@@ -94,13 +100,32 @@ class ClientFrames {
             if (this.#buffered.byteLength < frameLength) {
                 return;
             }
+            const opcode = this.#buffered.readUInt8(0) & 0x0f;
             const mask = this.#buffered.subarray(headerLength, headerLength + 4);
             const payload = Buffer.from(this.#buffered.subarray(headerLength + 4, frameLength));
             this.#buffered = this.#buffered.subarray(frameLength);
             for (let index = 0; index < payload.byteLength; index += 1) {
                 payload.writeUInt8(payload.readUInt8(index) ^ mask.readUInt8(index % 4), index);
             }
+            if (opcode !== 1) {
+                continue;
+            }
             const message = payload.toString("utf8");
+            if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
+                const envelope = decodeSessionEventEnvelope(message);
+                this.#eventSequence += 1;
+                writeServerTextFrame(
+                    this.#socket,
+                    encodeSessionEventAcknowledgement({
+                        cursor: `bot-cursor-${this.#eventSequence.toString()}`,
+                        duplicate: false,
+                        eventId: envelope.eventId,
+                        kind: SESSION_EVENT_ACK_KIND,
+                        sequence: this.#eventSequence.toString(),
+                        sessionId: envelope.sessionId,
+                    }),
+                );
+            }
             const resolve = this.#resolvers.shift();
             if (resolve === undefined) {
                 this.#messages.push(message);

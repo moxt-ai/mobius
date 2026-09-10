@@ -39,7 +39,7 @@ class FinishedRelayLivenessState extends RelayLivenessState {}
 
 export interface RelayLivenessTransport {
     readonly send: (message: string) => void;
-    readonly unresponsive: () => void;
+    readonly unresponsive: (heartbeatId: string, timeoutMilliseconds: number) => void;
 }
 
 export class RelayConnectionLiveness {
@@ -100,9 +100,10 @@ export class RelayConnectionLiveness {
         if (!(this.#state instanceof AwaitingHeartbeatAckState)) {
             throw new Error("Heartbeat timeout occurred in an invalid state");
         }
+        const heartbeatId = this.#state.heartbeatId;
         this.#state.timeout.cancel();
         this.#state = new FinishedRelayLivenessState();
-        this.#transport.unresponsive();
+        this.#transport.unresponsive(heartbeatId, HEARTBEAT_ACK_TIMEOUT_MILLISECONDS);
     };
 
     readonly #sendHeartbeat = (): void => {

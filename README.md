@@ -208,6 +208,19 @@ restart a previously paired daemon, use the channel identifier shown in its URL:
 npx --yes @moxt-ai/mobius start --channel <channel-id>
 ```
 
+Every daemon WebSocket attempt has a process-local, monotonically increasing
+connection epoch. The CLI prints structured `Mobius relay diagnostic` records
+for open, close, heartbeat-timeout, socket/proxy failure, and catalog-publication
+failure outcomes. The same records are stored in the local daemon SQLite
+`audit_events` table as `relay_connection_opened`, `relay_connection_closed`,
+`relay_heartbeat_timed_out`, `relay_connection_failed`, and
+`agent_catalog_publish_failed`. Close records include the code, reason, and
+source; failure records include sanitized error chains and whether the Relay was
+reached directly or through the configured environment proxy. Diagnostics retain
+origins only and never record Relay query credentials or proxy credentials.
+Healthy sockets are not rotated on a fixed timer; negotiated heartbeat deadlines
+recover connections that actually become unresponsive.
+
 Mobius does not bundle the supported Agent CLIs or their platform binaries.
 Pairing and every saved-channel start discover each Agent's direct ACP command or
 CLI-plus-adapter pair, run bounded version probes, and complete an ACP initialize
@@ -300,6 +313,10 @@ agent. When provided by that agent, the Web chat exposes session mode, model,
 reasoning effort, boolean options such as fast mode, context-window usage and
 cost, slash commands, permission requests, form or URL elicitation, image and
 embedded-resource prompts, rich agent content, and structured tool details.
+Rapid snapshots for one activity are coalesced before they enter the durable
+Relay outbox: the first snapshot and terminal state are immediate, while only the
+latest intermediate snapshot is emitted in each 100-millisecond window. Final
+activity content is preserved.
 Unsupported controls are omitted instead of being simulated by Mobius.
 In particular, Pi does not advertise ACP filesystem delegation, terminal
 delegation, or MCP passthrough while `pi-acp@0.0.33` does not implement them.

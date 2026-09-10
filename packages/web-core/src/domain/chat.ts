@@ -495,6 +495,13 @@ export class ConnectingRuntimeState extends RuntimeConnectionState {
     readonly label = "Connecting";
 }
 
+export class ReconnectingRuntimeState extends RuntimeConnectionState {
+    readonly appearance = "connecting";
+    readonly canSend = false;
+    readonly description = "Reconnecting the browser to the Mobius relay…";
+    readonly label = "Reconnecting";
+}
+
 export class OnlineRuntimeState extends RuntimeConnectionState {
     readonly appearance = "online";
     readonly canSend = true;

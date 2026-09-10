@@ -67,6 +67,7 @@ import {
     DeletedSessionState,
     OfflineRuntimeState,
     OnlineRuntimeState,
+    ReconnectingRuntimeState,
     UnavailableRuntimeState,
 } from "@/domain/chat";
 import { readChannelConnection, readProjectRuntimeConnection } from "@/services/pairing-api";
@@ -386,11 +387,17 @@ class ConnectedTransport extends TransportConnection {
             onProtocolError: (error) => {
                 useChatStore.getState().setErrorMessage(`${error.code}: ${error.message}`);
             },
+            onReconnecting: () => {
+                useChatStore.getState().setRuntime(new ReconnectingRuntimeState());
+            },
             onStatus: (online) => {
                 useChatStore.getState().setRuntime(online ? new OnlineRuntimeState() : new OfflineRuntimeState());
                 if (online) {
                     void this.#refreshAgentCatalog();
                 }
+            },
+            onUnavailable: () => {
+                useChatStore.getState().setRuntime(new UnavailableRuntimeState());
             },
             onReady: (event) => {
                 if (!this.#preparingRequestIds.has(event.requestId)) {

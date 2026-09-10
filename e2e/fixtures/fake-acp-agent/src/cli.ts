@@ -893,6 +893,21 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     sessionUpdate: "agent_thought_chunk",
                 },
             });
+            if (prompt === "stream verbose activity") {
+                for (let index = 0; index < 64; index += 1) {
+                    await context.client.notify(acp.methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: {
+                                text: ` step-${index.toString()}`,
+                                type: "text",
+                            },
+                            messageId: `reasoning-${turnNumber.toString()}`,
+                            sessionUpdate: "agent_thought_chunk",
+                        },
+                    });
+                }
+            }
             if (prompt === "wait until cancelled") {
                 await waitForAbort(cancellation.signal);
                 return { stopReason: "cancelled" };

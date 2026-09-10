@@ -9,10 +9,15 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+    AGENT_ACTIVITY_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
+    decodeAgentActivityEvent,
+    decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
+    encodeSessionEventAcknowledgement,
     encodeSessionEventRejection,
     encodeSessionInfoUpdatedEvent,
     encodeSessionPromptCommand,
@@ -21,6 +26,9 @@ import {
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    SESSION_COMPLETED_KIND,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_PROMPT_KIND,
@@ -176,6 +184,37 @@ function readClientFrame(socket: Duplex): Promise<ClientWebSocketFrame> {
     });
 }
 
+function observeClientFrames(socket: Duplex, observe: (frame: ClientWebSocketFrame) => void): () => void {
+    let buffered = Buffer.alloc(0);
+    const handleData = (chunk: Buffer): void => {
+        buffered = Buffer.concat([buffered, chunk]);
+        while (buffered.byteLength >= 6) {
+            const encodedLength = buffered.readUInt8(1) & 0x7f;
+            if (encodedLength === 127) {
+                throw new Error("Test relay received an oversized client frame");
+            }
+            const headerLength = encodedLength === 126 ? 4 : 2;
+            if (buffered.byteLength < headerLength + 4) {
+                return;
+            }
+            const payloadLength = encodedLength === 126 ? buffered.readUInt16BE(2) : encodedLength;
+            const frameLength = headerLength + 4 + payloadLength;
+            if (buffered.byteLength < frameLength) {
+                return;
+            }
+            const mask = buffered.subarray(headerLength, headerLength + 4);
+            const payload = Buffer.from(buffered.subarray(headerLength + 4, frameLength));
+            for (let index = 0; index < payload.byteLength; index += 1) {
+                payload.writeUInt8(payload.readUInt8(index) ^ mask.readUInt8(index % 4), index);
+            }
+            observe(new ClientWebSocketFrame(buffered.readUInt8(0) & 0x0f, payload.toString("utf8")));
+            buffered = buffered.subarray(frameLength);
+        }
+    };
+    socket.on("data", handleData);
+    return () => socket.removeListener("data", handleData);
+}
+
 function writeServerTextFrame(socket: Duplex, text: string): void {
     const payload = Buffer.from(text, "utf8");
     if (payload.byteLength > 65_535) {
@@ -186,6 +225,14 @@ function writeServerTextFrame(socket: Duplex, text: string): void {
             ? Buffer.from([0x81, payload.byteLength])
             : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
     socket.write(Buffer.concat([header, payload]));
+}
+
+function writeServerCloseFrame(socket: Duplex, code: number, reason: string): void {
+    const reasonPayload = Buffer.from(reason, "utf8");
+    const payload = Buffer.allocUnsafe(reasonPayload.byteLength + 2);
+    payload.writeUInt16BE(code, 0);
+    reasonPayload.copy(payload, 2);
+    socket.write(Buffer.concat([Buffer.from([0x88, payload.byteLength]), payload]));
 }
 
 function respondToClientClose(socket: Duplex): void {
@@ -199,6 +246,171 @@ function respondToClientClose(socket: Duplex): void {
 describe("daemon relay connection liveness", () => {
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("Given one Session fills the reconnect backlog, When the daemon reconnects, Then replay stays bounded and a fresh Session is served in the first batch", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-replay-window-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url === `${MOBIUS_API_PREFIX}/channels/replay-channel/catalog`) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const daemonSockets: Duplex[] = [];
+        const observedFrames: ClientWebSocketFrame[] = [];
+        const removeObservers: Array<() => void> = [];
+        let resolveFirstBatch = (): void => undefined;
+        let resolveSecondBatch = (): void => undefined;
+        const firstBatch = new Promise<void>((resolve) => {
+            resolveFirstBatch = resolve;
+        });
+        const secondBatch = new Promise<void>((resolve) => {
+            resolveSecondBatch = resolve;
+        });
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            removeObservers.push(
+                observeClientFrames(socket, (frame) => {
+                    if (frame.opcode !== 1) {
+                        return;
+                    }
+                    observedFrames.push(frame);
+                    if (observedFrames.length >= 4) {
+                        resolveFirstBatch();
+                    }
+                    if (observedFrames.length >= 8) {
+                        resolveSecondBatch();
+                    }
+                }),
+            );
+            respondToClientClose(socket);
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
+        for (let sequence = 1; sequence <= 10; sequence += 1) {
+            seededOutbox.enqueue(
+                "noisy-session",
+                JSON.stringify({ kind: "agent.activity", sequence }),
+                "noisy-attempt",
+            );
+        }
+        seededOutbox.enqueue("fresh-session", JSON.stringify({ kind: "session.ready" }));
+        seededOutbox.close();
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            auditDatabasePath,
+            channelId: "replay-channel",
+            relayUrl: new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/replay-channel/daemon`),
+        });
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            await firstBatch;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(observedFrames).toHaveLength(4);
+            const firstEnvelopes = observedFrames.map((frame) => decodeSessionEventEnvelope(frame.text));
+            expect(firstEnvelopes.map((event) => event.sessionId)).toEqual([
+                "noisy-session",
+                "fresh-session",
+                "noisy-session",
+                "noisy-session",
+            ]);
+            const socket = daemonSockets[0];
+            if (socket === undefined) {
+                throw new Error("Test relay did not retain the daemon connection");
+            }
+            for (const [index, envelope] of firstEnvelopes.entries()) {
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionEventAcknowledgement({
+                        cursor: `cursor-${index.toString()}`,
+                        duplicate: false,
+                        eventId: envelope.eventId,
+                        kind: SESSION_EVENT_ACK_KIND,
+                        sequence: (index + 1).toString(),
+                        sessionId: envelope.sessionId,
+                    }),
+                );
+            }
+            await secondBatch;
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            expect(observedFrames).toHaveLength(8);
+
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                expect(
+                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
+                ).toMatchObject({ count: 7 });
+            } finally {
+                database.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const removeObserver of removeObservers) {
+                removeObserver();
+            }
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
     });
 
     it("Given a deleted Session event is durably queued, When the Relay rejects it and sends another command, Then the daemon quarantines the event and remains on the same connection", async () => {
@@ -501,9 +713,8 @@ describe("daemon relay connection liveness", () => {
 
             const unacknowledgedHeartbeat = readClientFrame(firstSocket);
             await vi.advanceTimersByTimeAsync(20_000);
-            expect(decodeRuntimeHeartbeatEvent((await unacknowledgedHeartbeat).text).heartbeatId).not.toBe(
-                firstHeartbeat.heartbeatId,
-            );
+            const secondHeartbeat = decodeRuntimeHeartbeatEvent((await unacknowledgedHeartbeat).text);
+            expect(secondHeartbeat.heartbeatId).not.toBe(firstHeartbeat.heartbeatId);
 
             const refreshedConnection = waitForUpgrade();
             await vi.advanceTimersByTimeAsync(10_000);
@@ -514,6 +725,56 @@ describe("daemon relay connection liveness", () => {
                 throw new Error("Test relay did not observe the refreshed connection");
             }
             expect((await refreshedFrame).opcode).toBe(1);
+
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const rows = database
+                    .prepare(
+                        `SELECT event, details_json
+                         FROM audit_events
+                         WHERE event IN (
+                           'relay_connection_opened',
+                           'relay_connection_closed',
+                           'relay_heartbeat_timed_out'
+                         )
+                         ORDER BY id`,
+                    )
+                    .all();
+                expect(
+                    rows.map((row) => ({
+                        details: JSON.parse(String(Reflect.get(row, "details_json"))),
+                        event: Reflect.get(row, "event"),
+                    })),
+                ).toEqual([
+                    {
+                        details: expect.objectContaining({ connectionEpoch: "1", proxyRoute: "direct" }),
+                        event: "relay_connection_opened",
+                    },
+                    {
+                        details: expect.objectContaining({
+                            connectionEpoch: "1",
+                            heartbeatId: secondHeartbeat.heartbeatId,
+                            timeoutMilliseconds: "10000",
+                        }),
+                        event: "relay_heartbeat_timed_out",
+                    },
+                    {
+                        details: expect.objectContaining({
+                            closeCode: "4001",
+                            closeReason: "Relay liveness check timed out",
+                            connectionEpoch: "1",
+                            source: "heartbeat_timeout",
+                        }),
+                        event: "relay_connection_closed",
+                    },
+                    {
+                        details: expect.objectContaining({ connectionEpoch: "2", proxyRoute: "direct" }),
+                        event: "relay_connection_opened",
+                    },
+                ]);
+            } finally {
+                database.close();
+            }
         } finally {
             cancellation.abort();
             await vi.runAllTimersAsync();
@@ -541,7 +802,331 @@ describe("daemon relay connection liveness", () => {
         }
     });
 
-    it("Given the Agent catalog endpoint is temporarily unavailable, When the daemon starts and later refreshes an idle connection, Then its relay connection remains available", async () => {
+    it("Given the Relay closes a daemon socket, When the daemon reconnects, Then the audit log preserves both connection epochs and the close code and reason", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-close-audit-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/close-audit-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const daemonSockets: Duplex[] = [];
+        const reconnectedFrames: Array<Promise<ClientWebSocketFrame>> = [];
+        const upgradeWaiters: Array<() => void> = [];
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            respondToClientClose(socket);
+            if (daemonSockets.length === 2) {
+                reconnectedFrames.push(readClientFrame(socket));
+                writeServerTextFrame(
+                    socket,
+                    encodeWorkspaceListCommand({
+                        bindingId: "workspace",
+                        directoryId: "default",
+                        kind: WORKSPACE_LIST_KIND,
+                        requestId: "after-relay-maintenance",
+                    }),
+                );
+            }
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            auditDatabasePath,
+            channelId: "close-audit-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/close-audit-channel/daemon`,
+            ),
+        });
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await firstConnection;
+            const firstSocket = daemonSockets[0];
+            if (firstSocket === undefined) {
+                throw new Error("Test relay did not retain the first daemon connection");
+            }
+
+            const secondConnection = waitForUpgrade();
+            writeServerCloseFrame(firstSocket, 1012, "Relay maintenance");
+            (await timer.waitForTask(500)).run();
+            await secondConnection;
+            const reconnectedFrame = reconnectedFrames[0];
+            if (reconnectedFrame === undefined) {
+                throw new Error("Test relay did not observe a response on the second daemon connection");
+            }
+            expect(decodeMessageKind((await reconnectedFrame).text)).toBe(WORKSPACE_ENTRIES_KIND);
+
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const rows = database
+                    .prepare(
+                        `SELECT event, details_json
+                         FROM audit_events
+                         WHERE event IN ('relay_connection_opened', 'relay_connection_closed')
+                         ORDER BY id`,
+                    )
+                    .all();
+                expect(
+                    rows.map((row) => ({
+                        details: JSON.parse(String(Reflect.get(row, "details_json"))),
+                        event: Reflect.get(row, "event"),
+                    })),
+                ).toEqual([
+                    {
+                        details: expect.objectContaining({ connectionEpoch: "1" }),
+                        event: "relay_connection_opened",
+                    },
+                    {
+                        details: expect.objectContaining({
+                            closeCode: "1012",
+                            closeReason: "Relay maintenance",
+                            connectionEpoch: "1",
+                            source: "relay",
+                        }),
+                        event: "relay_connection_closed",
+                    },
+                    {
+                        details: expect.objectContaining({ connectionEpoch: "2" }),
+                        event: "relay_connection_opened",
+                    },
+                ]);
+            } finally {
+                database.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an Agent emits many snapshots for one activity, When the daemon records the turn, Then it coalesces intermediate snapshots and preserves the final activity", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-activity-coalescing-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/activity-coalescing-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const activities: Array<ReturnType<typeof decodeAgentActivityEvent>> = [];
+        let agentText = "";
+        let removeObserver = (): void => undefined;
+        let eventSequence = 0;
+        let resolveCompleted = (): void => undefined;
+        const completed = new Promise<void>((resolve) => {
+            resolveCompleted = resolve;
+        });
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            removeObserver = observeClientFrames(socket, (frame) => {
+                if (frame.opcode !== 1 || decodeMessageKind(frame.text) !== SESSION_EVENT_KIND) {
+                    return;
+                }
+                const envelope = decodeSessionEventEnvelope(frame.text);
+                eventSequence += 1;
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionEventAcknowledgement({
+                        cursor: `activity-cursor-${eventSequence.toString()}`,
+                        duplicate: false,
+                        eventId: envelope.eventId,
+                        kind: SESSION_EVENT_ACK_KIND,
+                        sequence: eventSequence.toString(),
+                        sessionId: envelope.sessionId,
+                    }),
+                );
+                const kind = decodeMessageKind(envelope.payload);
+                if (kind === AGENT_ACTIVITY_KIND) {
+                    activities.push(decodeAgentActivityEvent(envelope.payload));
+                    return;
+                }
+                if (kind === AGENT_MESSAGE_DELTA_KIND) {
+                    agentText += decodeAgentMessageDeltaEvent(envelope.payload).text;
+                    return;
+                }
+                if (kind === SESSION_COMPLETED_KIND) {
+                    resolveCompleted();
+                }
+            });
+            respondToClientClose(socket);
+            writeServerTextFrame(
+                socket,
+                encodeSessionPromptCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    commandId: "activity-coalescing-command",
+                    directoryId: "default",
+                    disposition: "reject",
+                    images: [],
+                    kind: SESSION_PROMPT_KIND,
+                    prompt: "stream verbose activity",
+                    resources: [],
+                    sessionId: "activity-coalescing-session",
+                    targetCommandId: "",
+                }),
+            );
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        const config = createDaemonConfig(
+            {
+                defaultWorkspace,
+                auditDatabasePath,
+                channelId: "activity-coalescing-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/activity-coalescing-channel/daemon`,
+                ),
+            },
+            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
+        );
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await completed;
+            const reasoning = activities.filter((activity) => activity.activityType === "reasoning");
+            expect(activities).toHaveLength(6);
+            expect(reasoning).toHaveLength(2);
+            expect(reasoning.map((activity) => activity.status)).toEqual(["running", "completed"]);
+            expect(reasoning.at(-1)?.output).toContain("step-63");
+            expect(agentText).toBe("Echo from ACP: stream verbose activity");
+        } finally {
+            cancellation.abort();
+            await daemon;
+            removeObserver();
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a healthy idle daemon connection, When twenty minutes pass, Then the same relay connection remains available", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-liveness-"));
         const defaultWorkspace = join(stateDirectory, "workspace");
         await mkdir(defaultWorkspace);
@@ -565,6 +1150,7 @@ describe("daemon relay connection liveness", () => {
             response.end();
         });
         const sockets = new Set<Duplex>();
+        const daemonSockets: Duplex[] = [];
         const upgradeWaiters: Array<() => void> = [];
         const requestedUrls: string[] = [];
         const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
@@ -576,6 +1162,7 @@ describe("daemon relay connection liveness", () => {
             socket.on("error", () => undefined);
         });
         relay.on("upgrade", (request, socket) => {
+            daemonSockets.push(socket);
             requestedUrls.push(request.url ?? "");
             const key = request.headers["sec-websocket-key"];
             if (typeof key !== "string") {
@@ -642,23 +1229,28 @@ describe("daemon relay connection liveness", () => {
             expect(decodeMessageKind((await firstResponse).text)).toBe(WORKSPACE_ENTRIES_KIND);
             expect(connectionCount).toBe(1);
 
-            const refreshedConnection = waitForUpgrade();
             await vi.advanceTimersByTimeAsync(20 * 60 * 1_000);
             await vi.advanceTimersByTimeAsync(500);
-            await refreshedConnection;
-            const refreshedResponse = clientFrames[1];
-            if (refreshedResponse === undefined) {
-                throw new Error("Test relay did not observe the refreshed daemon");
+            const socket = daemonSockets[0];
+            if (socket === undefined) {
+                throw new Error("Test relay did not retain the daemon connection");
             }
-            expect(decodeMessageKind((await refreshedResponse).text)).toBe(WORKSPACE_ENTRIES_KIND);
+            const response = readClientFrame(socket);
+            writeServerTextFrame(
+                socket,
+                encodeWorkspaceListCommand({
+                    bindingId: "workspace",
+                    directoryId: "default",
+                    kind: WORKSPACE_LIST_KIND,
+                    requestId: "after-twenty-minutes",
+                }),
+            );
+            expect(decodeMessageKind((await response).text)).toBe(WORKSPACE_ENTRIES_KIND);
 
             expect({ catalogRequestCount, connectionCount, requestedUrls }).toEqual({
                 catalogRequestCount: 2,
-                connectionCount: 2,
-                requestedUrls: [
-                    `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`,
-                    `${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`,
-                ],
+                connectionCount: 1,
+                requestedUrls: [`${MOBIUS_API_PREFIX}/channels/liveness-channel/daemon?liveness=1`],
             });
         } finally {
             cancellation.abort();

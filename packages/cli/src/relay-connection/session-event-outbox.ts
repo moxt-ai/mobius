@@ -41,6 +41,7 @@ export class SessionEventOutbox {
         ordinal INTEGER PRIMARY KEY AUTOINCREMENT,
         event_id TEXT NOT NULL UNIQUE,
         session_id TEXT NOT NULL,
+        source_key TEXT NOT NULL,
         envelope_json TEXT NOT NULL
       ) STRICT;
       CREATE INDEX IF NOT EXISTS relay_session_event_outbox_order
@@ -67,6 +68,27 @@ export class SessionEventOutbox {
           state IN ('dispatching', 'running', 'succeeded', 'failed', 'cancelled')
         )
       ) STRICT;
+    `);
+        const outboxColumns = this.#database.prepare("PRAGMA table_info(relay_session_event_outbox)").all();
+        const hasSourceKey = outboxColumns.some(
+            (column) => typeof column === "object" && column !== null && Reflect.get(column, "name") === "source_key",
+        );
+        if (!hasSourceKey) {
+            this.#database.exec(`
+        ALTER TABLE relay_session_event_outbox
+          ADD COLUMN source_key TEXT NOT NULL DEFAULT '';
+      `);
+        }
+        this.#database.exec(`
+      UPDATE relay_session_event_outbox
+      SET source_key = CASE json_extract(envelope_json, '$.source.kind')
+        WHEN 'attempt' THEN
+          'attempt:' || session_id || ':' || json_extract(envelope_json, '$.source.attemptId')
+        ELSE 'runtime:' || session_id
+      END
+      WHERE source_key = '';
+      CREATE INDEX IF NOT EXISTS relay_session_event_outbox_source_order
+        ON relay_session_event_outbox(source_key, ordinal);
     `);
     }
 
@@ -142,14 +164,13 @@ export class SessionEventOutbox {
         return state === "succeeded" || state === "failed" || state === "cancelled";
     };
 
-    readonly acknowledge = (acknowledgement: SessionEventAcknowledgement): void => {
+    readonly acknowledge = (acknowledgement: SessionEventAcknowledgement): boolean =>
         this.#database
             .prepare(
                 `DELETE FROM relay_session_event_outbox
          WHERE event_id = ? AND session_id = ?`,
             )
-            .run(acknowledgement.eventId, acknowledgement.sessionId);
-    };
+            .run(acknowledgement.eventId, acknowledgement.sessionId).changes === 1;
 
     readonly quarantine = (rejection: SessionEventRejection): boolean => {
         this.#database.exec("BEGIN IMMEDIATE");
@@ -232,10 +253,10 @@ export class SessionEventOutbox {
             this.#database
                 .prepare(
                     `INSERT INTO relay_session_event_outbox (
-             event_id, session_id, envelope_json
-           ) VALUES (?, ?, ?)`,
+             event_id, session_id, source_key, envelope_json
+           ) VALUES (?, ?, ?, ?)`,
                 )
-                .run(envelope.eventId, envelope.sessionId, encoded);
+                .run(envelope.eventId, envelope.sessionId, sourceKey, encoded);
             this.#database.exec("COMMIT");
             return encoded;
         } catch (error) {
@@ -253,6 +274,31 @@ export class SessionEventOutbox {
             )
             .all()
             .map(readPendingEnvelope);
+
+    readonly pendingBatch = (limit: number): readonly string[] => {
+        if (!Number.isSafeInteger(limit) || limit < 1) {
+            throw new Error("Session event replay batch limit must be a positive integer");
+        }
+        return this.#database
+            .prepare(
+                `WITH ranked_events AS (
+                   SELECT ordinal,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY source_key
+                            ORDER BY ordinal
+                          ) AS source_position
+                   FROM relay_session_event_outbox
+                 )
+                 SELECT outbox.envelope_json
+                 FROM ranked_events AS ranked
+                 INNER JOIN relay_session_event_outbox AS outbox
+                   ON outbox.ordinal = ranked.ordinal
+                 ORDER BY ranked.source_position, outbox.ordinal
+                 LIMIT ?`,
+            )
+            .all(limit)
+            .map(readPendingEnvelope);
+    };
 }
 
 function isDaemonExecutionState(value: unknown): value is DaemonExecutionState {

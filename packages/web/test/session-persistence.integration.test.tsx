@@ -157,6 +157,9 @@ describe.sequential("Session persistence boundaries", () => {
             vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
             await environment.evictRuntime(paired.channelId);
             await paired.daemon.waitForClose();
+            await vi.advanceTimersByTimeAsync(0);
+            expect(screen.getByRole("status", { name: "Reconnecting" })).toBeDefined();
+            expect(screen.queryByRole("status", { name: "Runtime offline" })).toBeNull();
             reconnectedDaemon = await paired.reconnectDaemon();
             await vi.advanceTimersByTimeAsync(10_000);
             vi.useRealTimers();

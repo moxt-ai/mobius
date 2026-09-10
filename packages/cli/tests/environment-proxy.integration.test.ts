@@ -128,7 +128,8 @@ describe("CLI environment proxy", () => {
         const previousLowerNoProxy = process.env["no_proxy"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousPath = process.env["PATH"];
-        const proxyUrl = `http://127.0.0.1:${readPort(proxyServer)}`;
+        const proxyOrigin = `http://127.0.0.1:${readPort(proxyServer)}`;
+        const proxyUrl = proxyOrigin.replace("http://", "http://mobius:proxy-secret@");
 
         process.env["HTTP_PROXY"] = proxyUrl;
         process.env["HTTPS_PROXY"] = proxyUrl;
@@ -142,7 +143,9 @@ describe("CLI environment proxy", () => {
         try {
             const { pairMobiusRuntime } = await import("../src/runtime.ts");
             const { connectRelay } = await import("../src/relay-connection/connect.ts");
-            const { environmentProxyDispatcher } = await import("../src/network/environment-proxy.ts");
+            const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
+                "../src/network/environment-proxy.ts"
+            );
 
             const pairingPort = readPort(pairingServer);
             await pairMobiusRuntime(
@@ -156,6 +159,10 @@ describe("CLI environment proxy", () => {
             );
 
             const relayPort = readPort(relayServer);
+            expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({
+                proxyOrigin,
+                proxyRoute: "proxy",
+            });
             const socket = await connectRelay(
                 new URL(`ws://127.0.0.1:${relayPort}/daemon`),
                 AbortSignal.timeout(2_000),

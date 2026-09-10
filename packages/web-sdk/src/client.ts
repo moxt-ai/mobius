@@ -139,7 +139,9 @@ export interface ConnectMobiusClientOptions {
     readonly onPermissionResolved?: (event: SessionPermissionResolvedEvent) => void;
     readonly onProtocolError?: (error: MobiusClientError) => void;
     readonly onReady?: (event: SessionReadyEvent) => void;
+    readonly onReconnecting?: () => void;
     readonly onStatus?: (online: boolean) => void;
+    readonly onUnavailable?: () => void;
     readonly onUsage?: (event: SessionUsageUpdatedEvent) => void;
     readonly onWorkspace?: (event: WorkspaceEntriesEvent) => void;
     readonly relayUrl: string;
@@ -879,8 +881,12 @@ export class MobiusClient {
         this.#socket.close(1000, "Host closed");
     };
 
-    readonly #handleClose = (): void => {
-        this.#onStatus(false);
+    readonly #handleClose = (event: ReconnectingCloseEvent): void => {
+        if (shouldReconnectAfterClose(event)) {
+            this.#options.onReconnecting?.();
+            return;
+        }
+        this.#options.onUnavailable?.();
     };
 
     readonly #handleChannelMessage = (event: MessageEvent<unknown>): void => {

@@ -35,6 +35,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventEnvelope,
     decodeSessionEventRejection,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
@@ -100,6 +101,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { fetch, type MessageEvent, WebSocket } from "undici";
 
+import type { AcpActivity } from "./acp/activity.ts";
 import { AcpExecutionError, AcpSessionManager, type AcpSessionObserver } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
@@ -129,13 +131,14 @@ import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
+import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
-const RELAY_CONNECTION_REFRESH_MILLISECONDS = 20 * 60 * 1_000;
+const AGENT_ACTIVITY_COALESCING_MILLISECONDS = 100;
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
@@ -144,65 +147,6 @@ function botIpcSocketPath(): string {
         return `\\\\.\\pipe\\mobius-bot-${randomUUID()}`;
     }
     return join("/tmp", `mobius-bot-${randomUUID()}.sock`);
-}
-
-abstract class RelayConnectionRefreshState {}
-
-class ScheduledRelayConnectionRefreshState extends RelayConnectionRefreshState {}
-
-class DueRelayConnectionRefreshState extends RelayConnectionRefreshState {}
-
-class FinishedRelayConnectionRefreshState extends RelayConnectionRefreshState {}
-
-class RelayConnectionRefresh {
-    readonly #isSafe: () => boolean;
-    readonly #refresh: () => void;
-    readonly #scheduledTask: DaemonScheduledTask;
-    #state: RelayConnectionRefreshState = new ScheduledRelayConnectionRefreshState();
-
-    constructor(timer: DaemonTimer, isSafe: () => boolean, refresh: () => void) {
-        this.#isSafe = isSafe;
-        this.#refresh = refresh;
-        this.#scheduledTask = timer.schedule(this.#request, RELAY_CONNECTION_REFRESH_MILLISECONDS);
-    }
-
-    readonly afterTurnFinished = (): void => {
-        if (this.#state instanceof DueRelayConnectionRefreshState) {
-            this.#request();
-            return;
-        }
-        if (
-            this.#state instanceof ScheduledRelayConnectionRefreshState ||
-            this.#state instanceof FinishedRelayConnectionRefreshState
-        ) {
-            return;
-        }
-        throw new Error("Unknown relay connection refresh state");
-    };
-
-    readonly close = (): void => {
-        this.#scheduledTask.cancel();
-        this.#state = new FinishedRelayConnectionRefreshState();
-    };
-
-    readonly #request = (): void => {
-        if (this.#state instanceof FinishedRelayConnectionRefreshState) {
-            return;
-        }
-        if (
-            !(this.#state instanceof ScheduledRelayConnectionRefreshState) &&
-            !(this.#state instanceof DueRelayConnectionRefreshState)
-        ) {
-            throw new Error("Unknown relay connection refresh state");
-        }
-        if (!this.#isSafe()) {
-            this.#state = new DueRelayConnectionRefreshState();
-            return;
-        }
-        this.#state = new FinishedRelayConnectionRefreshState();
-        this.#scheduledTask.cancel();
-        this.#refresh();
-    };
 }
 
 class DaemonAcpObserver implements AcpSessionObserver {
@@ -530,12 +474,14 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
 
 abstract class DaemonSessionEventConnectionState {
     abstract readonly disconnect: (socket: WebSocket) => DaemonSessionEventConnectionState;
-    abstract readonly send: (message: string) => void;
+    abstract readonly matches: (socket: WebSocket) => boolean;
+    abstract readonly send: (message: string) => boolean;
 }
 
 class DisconnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
     readonly disconnect = (): DaemonSessionEventConnectionState => this;
-    readonly send = (): void => undefined;
+    readonly matches = (): boolean => false;
+    readonly send = (): boolean => false;
 }
 
 class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
@@ -549,19 +495,27 @@ class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState
     readonly disconnect = (socket: WebSocket): DaemonSessionEventConnectionState =>
         socket === this.#socket ? new DisconnectedDaemonSessionEventState() : this;
 
-    readonly send = (message: string): void => {
-        if (this.#socket.readyState === WebSocket.OPEN) {
-            try {
-                this.#socket.send(message);
-            } catch {
-                // The durable outbox retains the event for the replacement connection.
-            }
+    readonly matches = (socket: WebSocket): boolean => socket === this.#socket;
+
+    readonly send = (message: string): boolean => {
+        if (this.#socket.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+        try {
+            this.#socket.send(message);
+            return true;
+        } catch {
+            // The durable outbox retains the event for the replacement connection.
+            return false;
         }
     };
 }
 
+const SESSION_EVENT_REPLAY_WINDOW = 4;
+
 class DaemonSessionEventPublisher {
     readonly #outbox: SessionEventOutbox;
+    readonly #inFlightEventIds = new Set<string>();
     #connection: DaemonSessionEventConnectionState = new DisconnectedDaemonSessionEventState();
 
     constructor(outbox: SessionEventOutbox) {
@@ -569,24 +523,145 @@ class DaemonSessionEventPublisher {
     }
 
     readonly connect = (socket: WebSocket): void => {
-        const connection = new ConnectedDaemonSessionEventState(socket);
-        this.#connection = connection;
-        for (const pending of this.#outbox.pending()) {
-            connection.send(pending);
-        }
+        this.#connection = new ConnectedDaemonSessionEventState(socket);
+        this.#inFlightEventIds.clear();
+        this.#publishNextBatch();
     };
 
     readonly disconnect = (socket: WebSocket): void => {
+        if (!this.#connection.matches(socket)) {
+            return;
+        }
         this.#connection = this.#connection.disconnect(socket);
+        this.#inFlightEventIds.clear();
     };
 
     readonly recordAttempt = (sessionId: string, payload: string, attemptId: string): void => {
-        this.#connection.send(this.#outbox.enqueue(sessionId, payload, attemptId));
+        this.#outbox.enqueue(sessionId, payload, attemptId);
+        this.#publishNextBatch();
     };
 
     readonly recordRuntime = (sessionId: string, payload: string): void => {
-        this.#connection.send(this.#outbox.enqueue(sessionId, payload));
+        this.#outbox.enqueue(sessionId, payload);
+        this.#publishNextBatch();
     };
+
+    readonly acknowledge = (acknowledgement: Parameters<SessionEventOutbox["acknowledge"]>[0]): void => {
+        if (!this.#outbox.acknowledge(acknowledgement)) {
+            return;
+        }
+        this.#inFlightEventIds.delete(acknowledgement.eventId);
+        this.#publishNextBatch();
+    };
+
+    readonly quarantine = (rejection: Parameters<SessionEventOutbox["quarantine"]>[0]): boolean => {
+        const quarantined = this.#outbox.quarantine(rejection);
+        if (!quarantined) {
+            return false;
+        }
+        this.#inFlightEventIds.delete(rejection.eventId);
+        this.#publishNextBatch();
+        return true;
+    };
+
+    readonly #publishNextBatch = (): void => {
+        if (this.#inFlightEventIds.size > 0) {
+            return;
+        }
+        const batch = this.#outbox.pendingBatch(SESSION_EVENT_REPLAY_WINDOW);
+        for (const encoded of batch) {
+            const envelope = decodeSessionEventEnvelope(encoded);
+            if (!this.#connection.send(encoded)) {
+                this.#inFlightEventIds.clear();
+                return;
+            }
+            this.#inFlightEventIds.add(envelope.eventId);
+        }
+    };
+}
+
+class CoalescingDaemonActivityPublisher {
+    readonly #pending = new Map<string, AcpActivity>();
+    readonly #publish: (activity: AcpActivity) => void;
+    readonly #publishedActivityIds = new Set<string>();
+    readonly #scheduled = new Map<string, DaemonScheduledTask>();
+    readonly #timer: DaemonTimer;
+
+    constructor(timer: DaemonTimer, publish: (activity: AcpActivity) => void) {
+        this.#publish = publish;
+        this.#timer = timer;
+    }
+
+    readonly flush = (): void => {
+        const activities = [...this.#pending.values()].sort((left, right) => left.sequence - right.sequence);
+        for (const task of this.#scheduled.values()) {
+            task.cancel();
+        }
+        this.#pending.clear();
+        this.#scheduled.clear();
+        for (const activity of activities) {
+            this.#publish(activity);
+        }
+    };
+
+    readonly record = (activity: AcpActivity): Promise<void> => {
+        if (activity.status !== "pending" && activity.status !== "running") {
+            this.#discardPending(activity.activityId);
+            this.#publishedActivityIds.add(activity.activityId);
+            this.#publish(activity);
+            return Promise.resolve();
+        }
+        if (!this.#publishedActivityIds.has(activity.activityId)) {
+            this.#publishedActivityIds.add(activity.activityId);
+            this.#publish(activity);
+            return Promise.resolve();
+        }
+        this.#pending.set(activity.activityId, activity);
+        if (!this.#scheduled.has(activity.activityId)) {
+            this.#scheduled.set(
+                activity.activityId,
+                this.#timer.schedule(
+                    () => this.#flushActivity(activity.activityId),
+                    AGENT_ACTIVITY_COALESCING_MILLISECONDS,
+                ),
+            );
+        }
+        return Promise.resolve();
+    };
+
+    readonly #discardPending = (activityId: string): void => {
+        this.#scheduled.get(activityId)?.cancel();
+        this.#scheduled.delete(activityId);
+        this.#pending.delete(activityId);
+    };
+
+    readonly #flushActivity = (activityId: string): void => {
+        const activity = this.#pending.get(activityId);
+        this.#discardPending(activityId);
+        if (activity !== undefined) {
+            this.#publish(activity);
+        }
+    };
+}
+
+function encodeDaemonActivity(command: DaemonTurnCommand, activity: AcpActivity): string {
+    return encodeAgentActivityEvent({
+        activityId: activity.activityId,
+        activityType: activity.activityType,
+        commandId: command.commandId,
+        content: activity.content,
+        detail: activity.detail,
+        input: activity.input,
+        kind: AGENT_ACTIVITY_KIND,
+        locations: activity.locations,
+        name: activity.name,
+        output: activity.output,
+        sequence: activity.sequence,
+        sessionId: command.sessionId,
+        status: activity.status,
+        title: activity.title,
+        toolKind: activity.toolKind,
+    });
 }
 
 function reportFailure(
@@ -833,8 +908,12 @@ async function executePrompt(
     audit: AuditStore,
     sessions: AcpSessionManager,
     attemptId: string,
+    timer: DaemonTimer,
     signal: AbortSignal,
 ): Promise<void> {
+    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
+        publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
+    });
     try {
         const resolved = await resolveSessionDirectories(
             directories,
@@ -894,30 +973,7 @@ async function executePrompt(
                 cwd: resolved.cwd,
                 disposition: command.disposition,
                 images: attachments.images,
-                onActivity: (activity) => {
-                    publisher.recordAttempt(
-                        command.sessionId,
-                        encodeAgentActivityEvent({
-                            activityId: activity.activityId,
-                            activityType: activity.activityType,
-                            commandId: command.commandId,
-                            content: activity.content,
-                            detail: activity.detail,
-                            input: activity.input,
-                            kind: AGENT_ACTIVITY_KIND,
-                            locations: activity.locations,
-                            name: activity.name,
-                            output: activity.output,
-                            sequence: activity.sequence,
-                            sessionId: command.sessionId,
-                            status: activity.status,
-                            title: activity.title,
-                            toolKind: activity.toolKind,
-                        }),
-                        attemptId,
-                    );
-                    return Promise.resolve();
-                },
+                onActivity: activities.record,
                 onText: (text, messageId) => {
                     publisher.recordAttempt(
                         command.sessionId,
@@ -941,6 +997,7 @@ async function executePrompt(
             stopReason = result.stopReason;
         }
 
+        activities.flush();
         publisher.recordAttempt(
             command.sessionId,
             encodeSessionCompletedEvent({
@@ -958,6 +1015,7 @@ async function executePrompt(
             sessionId: command.sessionId,
         });
     } catch (error) {
+        activities.flush();
         audit.record({
             commandId: command.commandId,
             event: "session_failed",
@@ -1017,8 +1075,12 @@ async function executeBotPrompt(
     applicator: EmbeddedBotContextApplicator,
     ipc: BotOutboundIpcServer,
     attemptId: string,
+    timer: DaemonTimer,
     signal: AbortSignal,
 ): Promise<void> {
+    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
+        publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
+    });
     try {
         const deadline = Date.parse(command.executionDeadlineAt);
         const remaining = deadline - Date.now();
@@ -1107,30 +1169,7 @@ async function executeBotPrompt(
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
-                onActivity: (activity) => {
-                    publisher.recordAttempt(
-                        command.sessionId,
-                        encodeAgentActivityEvent({
-                            activityId: activity.activityId,
-                            activityType: activity.activityType,
-                            commandId: command.commandId,
-                            content: activity.content,
-                            detail: activity.detail,
-                            input: activity.input,
-                            kind: AGENT_ACTIVITY_KIND,
-                            locations: activity.locations,
-                            name: activity.name,
-                            output: activity.output,
-                            sequence: activity.sequence,
-                            sessionId: command.sessionId,
-                            status: activity.status,
-                            title: activity.title,
-                            toolKind: activity.toolKind,
-                        }),
-                        attemptId,
-                    );
-                    return Promise.resolve();
-                },
+                onActivity: activities.record,
                 onText: (text, messageId) => {
                     publisher.recordAttempt(
                         command.sessionId,
@@ -1150,6 +1189,7 @@ async function executeBotPrompt(
                 sessionId: command.sessionId,
                 signal: executionSignal,
             });
+            activities.flush();
             publisher.recordAttempt(
                 command.sessionId,
                 encodeSessionCompletedEvent({
@@ -1174,6 +1214,7 @@ async function executeBotPrompt(
             lease.release();
         }
     } catch (error) {
+        activities.flush();
         const failure =
             Date.parse(command.executionDeadlineAt) <= Date.now()
                 ? new LocalBotAuthorizationError("turn_expired", "The Bot execution deadline has expired", {
@@ -1225,17 +1266,18 @@ function waitForRelayRetry(signal: AbortSignal, timer: DaemonTimer): Promise<voi
 
 async function publishAgentCatalogUntilAvailable(
     config: DaemonConfig,
+    diagnostics: RelayConnectionDiagnostics,
     signal: AbortSignal,
     timer: DaemonTimer,
 ): Promise<void> {
     try {
         await publishAgentCatalog(config, signal);
         return;
-    } catch {
+    } catch (error) {
         if (signal.aborted) {
             return;
         }
-        console.warn("Mobius daemon is waiting to publish its Agent catalog");
+        diagnostics.catalogFailed(error);
     }
 
     while (!signal.aborted) {
@@ -1267,6 +1309,8 @@ async function runRelayConnection(
     ipc: BotOutboundIpcServer,
     activeTurns: Map<string, ActiveDaemonTurn>,
     activeAttemptIds: Map<string, string>,
+    connectionEpoch: number,
+    diagnostics: RelayConnectionDiagnostics,
     onConnected: () => void,
     signal: AbortSignal,
     timer: DaemonTimer,
@@ -1275,6 +1319,7 @@ async function runRelayConnection(
     relayUrl.searchParams.set("liveness", "1");
     const socket = await connectRelay(relayUrl, signal);
     const reconnectingTurns = [...activeTurns.values()];
+    diagnostics.connectionOpened(connectionEpoch);
     onConnected();
     const connectionController = new AbortController();
     const nativeRequests = new Map<
@@ -1293,7 +1338,6 @@ async function runRelayConnection(
             let finished = false;
 
             const cleanup = (): void => {
-                connectionRefresh.close();
                 connectionLiveness.close();
                 signal.removeEventListener("abort", stop);
                 socket.removeEventListener("close", handleClose);
@@ -1313,67 +1357,75 @@ async function runRelayConnection(
                 resolve();
             };
 
-            const rejectConnection = (): void => {
+            const rejectConnection = (failure: Error): void => {
                 if (finished) {
                     return;
                 }
                 finished = true;
                 cleanup();
-                reject(new Error("Relay WebSocket failed"));
+                reject(failure);
             };
 
             const stop = (): void => {
+                diagnostics.connectionClosed(connectionEpoch, 1000, "Daemon stopped", "daemon_stop");
                 closeRelaySocket(socket, 1000, "Daemon stopped");
                 resolveConnection();
             };
 
-            const refreshConnection = (): void => {
-                closeRelaySocket(socket, 1000, "Refreshing idle relay connection");
-                resolveConnection();
+            const failAndClose = (failure: Error, code: number, reason: string, source: string): void => {
+                diagnostics.connectionFailed(connectionEpoch, failure, source);
+                diagnostics.connectionClosed(connectionEpoch, code, reason, source);
+                closeRelaySocket(socket, code, reason);
+                rejectConnection(failure);
             };
 
             const connectionLiveness = new RelayConnectionLiveness(timer, {
                 send: (message) => send(socket, message),
-                unresponsive: () => {
+                unresponsive: (heartbeatId, timeoutMilliseconds) => {
+                    diagnostics.heartbeatTimedOut(connectionEpoch, heartbeatId, timeoutMilliseconds);
+                    diagnostics.connectionClosed(
+                        connectionEpoch,
+                        4001,
+                        "Relay liveness check timed out",
+                        "heartbeat_timeout",
+                    );
                     closeRelaySocket(socket, 4001, "Relay liveness check timed out");
                     resolveConnection();
                 },
             });
 
-            const connectionRefresh = new RelayConnectionRefresh(
-                timer,
-                () => activeTurns.size === 0,
-                refreshConnection,
-            );
-
             signal.addEventListener("abort", stop, { once: true });
-            const handleClose = (): void => {
+            const handleClose = (event: CloseEvent): void => {
+                diagnostics.connectionClosed(connectionEpoch, event.code, event.reason, "relay");
                 resolveConnection();
             };
-            const handleError = (): void => {
+            const handleError = (event: Event): void => {
                 if (signal.aborted) {
                     resolveConnection();
                     return;
                 }
-                rejectConnection();
+                const cause = Reflect.get(event, "error");
+                const failure = new Error("Relay WebSocket emitted an error", { cause: cause ?? event });
+                diagnostics.connectionFailed(connectionEpoch, failure, "socket_error");
+                diagnostics.connectionClosed(connectionEpoch, 1006, "WebSocket error", "socket_error");
+                rejectConnection(failure);
             };
             const handleMessage = (event: MessageEvent<unknown>): void => {
                 const encoded: unknown = event.data;
                 if (typeof encoded !== "string") {
-                    closeRelaySocket(socket, 4003, "Text message required");
-                    rejectConnection();
+                    failAndClose(new Error("Relay sent a non-text message"), 4003, "Text message required", "protocol");
                     return;
                 }
 
                 try {
                     const kind = decodeMessageKind(encoded);
                     if (kind === SESSION_EVENT_ACK_KIND) {
-                        outbox.acknowledge(decodeSessionEventAcknowledgement(encoded));
+                        publisher.acknowledge(decodeSessionEventAcknowledgement(encoded));
                         return;
                     }
                     if (kind === SESSION_EVENT_REJECTED_KIND) {
                         const rejection = decodeSessionEventRejection(encoded);
-                        if (outbox.quarantine(rejection)) {
+                        if (publisher.quarantine(rejection)) {
                             audit.record({
                                 commandId: rejection.eventId,
                                 details: { code: rejection.code },
@@ -1783,6 +1835,7 @@ async function runRelayConnection(
                             applicator,
                             ipc,
                             receipt.attemptId,
+                            timer,
                             turn.signal,
                         )
                             .catch((error: unknown) => {
@@ -1794,7 +1847,6 @@ async function runRelayConnection(
                                     activeAttemptIds.delete(command.sessionId);
                                 }
                                 turn.finish();
-                                connectionRefresh.afterTurnFinished();
                             });
                         return;
                     }
@@ -1825,6 +1877,7 @@ async function runRelayConnection(
                         audit,
                         sessions,
                         receipt.attemptId,
+                        timer,
                         turn.signal,
                     )
                         .catch((error: unknown) => {
@@ -1836,12 +1889,15 @@ async function runRelayConnection(
                                 activeAttemptIds.delete(command.sessionId);
                             }
                             turn.finish();
-                            connectionRefresh.afterTurnFinished();
                         });
                 } catch (error) {
                     console.error("Mobius daemon rejected a message", error);
-                    closeRelaySocket(socket, 4008, "Invalid protocol message");
-                    rejectConnection();
+                    failAndClose(
+                        new Error("Relay sent an invalid protocol message", { cause: error }),
+                        4008,
+                        "Invalid protocol message",
+                        "protocol",
+                    );
                 }
             };
             socket.addEventListener("close", handleClose);
@@ -1853,21 +1909,18 @@ async function runRelayConnection(
                         return;
                     }
                     publisher.connect(socket);
-                    void Promise.all(reconnectingTurns.map((turn) => turn.completion)).then(
-                        connectionRefresh.afterTurnFinished,
-                    );
                 },
                 (error: unknown) => {
                     if (finished) {
                         return;
                     }
                     console.error("Mobius daemon could not reconcile active Agent turns", error);
-                    closeRelaySocket(
-                        socket,
+                    failAndClose(
+                        new Error("Active Agent turn reconciliation failed", { cause: error }),
                         ACTIVE_TURN_RECONCILIATION_CLOSE_CODE,
                         "Active Agent turn reconciliation failed",
+                        "reconciliation",
                     );
-                    rejectConnection();
                 },
             );
 
@@ -1918,6 +1971,7 @@ export async function runDaemon(
     const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore);
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
+    const diagnostics = new RelayConnectionDiagnostics(audit, config.channelId, config.relayUrl);
     const nativeSessions = new NativeSessionService(config, directories, sessions, audit);
     const installations = new AgentInstallationManager(
         specifications,
@@ -1925,7 +1979,7 @@ export async function runDaemon(
         installationObserver,
         installationAudit,
     );
-    let retryAnnounced = false;
+    let connectionEpoch = 0;
     let connectionAnnounced = false;
     const announceConnection = (): void => {
         if (connectionAnnounced) {
@@ -1938,11 +1992,12 @@ export async function runDaemon(
             `${styleText(["bold", "yellow"], `Reconnect this channel later:\n  ${reconnectCommand}`)}\n\n`,
         );
     };
-    const catalogPublication = publishAgentCatalogUntilAvailable(config, signal, timer);
+    const catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
 
     try {
         await ipc.listen(signal);
         while (!signal.aborted) {
+            connectionEpoch += 1;
             try {
                 await runRelayConnection(
                     config,
@@ -1960,19 +2015,17 @@ export async function runDaemon(
                     ipc,
                     activeTurns,
                     activeAttemptIds,
+                    connectionEpoch,
+                    diagnostics,
                     announceConnection,
                     signal,
                     timer,
                 );
-                retryAnnounced = false;
-            } catch {
+            } catch (error) {
                 if (signal.aborted) {
                     return;
                 }
-                if (!retryAnnounced) {
-                    console.warn("Mobius daemon is waiting for the relay");
-                    retryAnnounced = true;
-                }
+                diagnostics.connectionFailed(connectionEpoch, error, "connection");
             }
 
             await waitForRelayRetry(signal, timer);

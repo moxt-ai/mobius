@@ -191,18 +191,24 @@ describe("browser relay connection", () => {
 
         vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
         vi.setSystemTime(new Date("2026-09-07T00:00:00.000Z"));
-        const statuses = new ValueFeed<boolean>();
+        const statuses: boolean[] = [];
+        const nextStatus = new ValueFeed<boolean>();
+        const reconnecting = new ValueFeed<string>();
         let client: MobiusClient | undefined;
 
         try {
             const connecting = connectMobiusClient({
-                onStatus: statuses.push,
+                onReconnecting: () => reconnecting.push("reconnecting"),
+                onStatus: (online) => {
+                    statuses.push(online);
+                    nextStatus.push(online);
+                },
                 relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
             });
             await vi.advanceTimersByTimeAsync(0);
             client = await connecting;
             const firstSocket = await connections.next();
-            expect(await statuses.next()).toBe(true);
+            expect(await nextStatus.next()).toBe(true);
 
             const interruptedPrompt = client.prompt({
                 agentId: "codex",
@@ -211,21 +217,27 @@ describe("browser relay connection", () => {
                 prompt: "Do not replay this command",
                 sessionId: "session-1",
             });
+            const interruptedResult = interruptedPrompt.then(
+                () => new Error("Interrupted prompt unexpectedly completed"),
+                (error: unknown) => error,
+            );
             const firstFrame = await clientFrames.next();
             expect(firstFrame.opcode).toBe(1);
             expect(decodeMessageKind(firstFrame.text)).toBe(SESSION_PROMPT_KIND);
             expect(decodeSessionPromptCommand(firstFrame.text).commandId).toBe("interrupted-command");
 
             closeServerSocket(firstSocket);
-            expect(await statuses.next()).toBe(false);
-            await expect(interruptedPrompt).rejects.toMatchObject({
+            expect(await reconnecting.next()).toBe("reconnecting");
+            expect(statuses).toEqual([true]);
+            expect(await interruptedResult).toMatchObject({
                 code: "connection_closed",
             });
 
             const reconnectedSocket = connections.next();
             await vi.advanceTimersByTimeAsync(10_000);
             expect(await reconnectedSocket).not.toBe(firstSocket);
-            expect(await statuses.next()).toBe(true);
+            expect(await nextStatus.next()).toBe(true);
+            expect(statuses).toEqual([true, true]);
 
             const workspaceResult = client.listWorkspace(
                 {
