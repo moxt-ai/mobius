@@ -859,7 +859,7 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given an Agent records Markdown reasoning and structured tool output, When the completed steps are expanded, Then the details read as formatted work instead of raw protocol text", async () => {
+    it("Given an Agent records Markdown reasoning and a described shell tool, When the completed steps are expanded, Then the shell step uses its description and the details read as formatted work", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -916,6 +916,15 @@ describe.sequential("Agent interaction boundaries", () => {
                     toolKind: "think",
                 }),
             );
+            const shellCommand = "cd /workspace && sed -n '1,80p' package.json";
+            const toolInput = JSON.stringify(
+                {
+                    command: shellCommand,
+                    description: "Read workspace manifest",
+                },
+                null,
+                2,
+            );
             const formattedOutput = ["{", '  "name": "mobius-workspace"', "}", ""].join("\n");
             const toolOutput = JSON.stringify({ exit_code: 0, formatted_output: formattedOutput }, null, 2);
             await paired.daemon.sendSessionEvent(
@@ -927,20 +936,20 @@ describe.sequential("Agent interaction boundaries", () => {
                     content: [],
                     detail: {
                         content: [],
-                        input: "",
+                        input: toolInput,
                         kind: "recorded",
                         output: toolOutput,
                     },
-                    input: "",
+                    input: toolInput,
                     kind: "agent.activity",
-                    locations: ["package.json"],
-                    name: "read_file",
+                    locations: [],
+                    name: "exec",
                     output: toolOutput,
                     sequence: 1,
                     sessionId: prompt.sessionId,
                     status: "completed",
-                    title: "Read workspace manifest",
-                    toolKind: "read",
+                    title: shellCommand,
+                    toolKind: "execute",
                 }),
             );
             await paired.daemon.sendSessionEvent(
@@ -988,7 +997,10 @@ describe.sequential("Agent interaction boundaries", () => {
             if (!(toolSummary instanceof HTMLElement)) {
                 throw new Error("Expected a tool step summary");
             }
+            expect(toolSummary.textContent).toContain("Read workspace manifest");
+            expect(toolSummary.textContent).not.toContain(shellCommand);
             fireEvent.click(toolSummary);
+            expect(toolStep?.textContent).toContain(shellCommand);
             expect(agentMessage.textContent).toContain('"name": "mobius-workspace"');
             expect(agentMessage.textContent).not.toContain("formatted_output");
             expect(agentMessage.textContent).not.toContain("\\n");

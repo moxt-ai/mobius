@@ -5,6 +5,31 @@ export interface ActivityDisclosurePresentation {
     readonly label: string;
 }
 
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function describeAgentActivity(activity: RecordedActivity): string {
+    if (activity.activityType !== "tool" || activity.toolKind !== "execute") {
+        return activity.title;
+    }
+    let input: unknown;
+    try {
+        input = JSON.parse(activity.input);
+    } catch {
+        return activity.title;
+    }
+    if (!isRecord(input)) {
+        return activity.title;
+    }
+    const { description } = input;
+    if (typeof description !== "string") {
+        return activity.title;
+    }
+    const normalized = description.trim();
+    return normalized.length > 0 ? normalized.slice(0, 500) : activity.title;
+}
+
 export function describeAgentActivities(
     activities: readonly RecordedActivity[],
     streaming: boolean,

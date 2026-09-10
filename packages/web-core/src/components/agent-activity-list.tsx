@@ -20,7 +20,7 @@ import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
 import type { ChannelConnection, RecordedActivity } from "@/domain/channel";
 import { cn } from "@/lib/utils";
-import { describeAgentActivities } from "@/services/activity-presentation";
+import { describeAgentActivities, describeAgentActivity } from "@/services/activity-presentation";
 import { type ActivityDetailResult, readToolCallDetail } from "@/services/pairing-api";
 
 type ActivityDetailLoadState =
@@ -320,13 +320,14 @@ function ActivityLine({
         activity.content.length > 0 ||
         activity.detailAvailability !== "inline";
     const loadedDetail = detailLoad.kind === "loaded" ? detailLoad.detail : null;
+    const title = describeAgentActivity(activity);
     const summary = (
         <span className="flex min-w-0 flex-1 items-center gap-2">
             <span className={cn("shrink-0 text-copy-tertiary", activity.status === "failed" && "text-destructive")}>
                 {activityIcon(activity)}
             </span>
-            <span className="min-w-0 flex-1 truncate text-copy-secondary" title={activity.title}>
-                {activity.title}
+            <span className="min-w-0 flex-1 truncate text-copy-secondary" title={title}>
+                {title}
             </span>
             {activity.name.length > 0 && (
                 <code className="hidden max-w-32 truncate rounded bg-black/[0.035] px-1.5 py-0.5 font-mono text-[10px] text-copy-tertiary sm:block">
