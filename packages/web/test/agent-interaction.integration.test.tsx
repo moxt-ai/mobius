@@ -135,6 +135,42 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given a conversation has started, When its Agent becomes immutable, Then the composer presents the Agent as locked instead of selectable", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+
+            expect(
+                await screen.findByRole("button", {
+                    name: "Agent or Bot for this conversation",
+                }),
+            ).toBeTruthy();
+
+            await completeRenderedPrompt(paired.daemon, "Keep this Agent", "This conversation now has an Agent.");
+
+            expect(
+                screen.queryByRole("button", {
+                    name: "Agent or Bot for this conversation",
+                }),
+            ).toBeNull();
+            expect(
+                screen.getByRole("status", {
+                    name: "Codex, locked for this conversation",
+                }).textContent,
+            ).toContain("Codex");
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a persisted response snapshot overlaps a streaming delta, When background synchronization and live delivery reconcile, Then the response renders the text once", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

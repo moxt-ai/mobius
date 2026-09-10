@@ -1,5 +1,5 @@
 import { MobiusApiError, type MobiusBot } from "@moxt-ai/mobius-sdk";
-import { Check, ChevronDown, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, ChevronDown, LoaderCircle, LockKeyhole, RefreshCw } from "lucide-react";
 import { type KeyboardEvent, useEffect, useId, useRef, useState } from "react";
 
 import { AgentProductIcon } from "@/components/agent-product-icon";
@@ -112,6 +112,13 @@ export function AgentPicker() {
         return () => controller.abort();
     }, [open]);
 
+    useEffect(() => {
+        if (locked) {
+            setOpen(false);
+            setLaunch(new IdleBotConversationLaunchState());
+        }
+    }, [locked]);
+
     const openBotsTab = (): void => {
         setSelectedTab(new BotsTargetTab());
         setLaunch(new IdleBotConversationLaunchState());
@@ -157,46 +164,59 @@ export function AgentPicker() {
 
     return (
         <div className="relative shrink-0" ref={wrapperRef}>
-            <button
-                aria-controls={pickerId}
-                aria-expanded={open}
-                aria-haspopup="dialog"
-                aria-label="Agent or Bot for this conversation"
-                className={cn(
-                    "inline-flex h-11 w-11 min-w-0 shrink-0 items-center justify-center gap-0 rounded-full border-0 bg-transparent px-0 text-xs font-medium text-muted-foreground shadow-none outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-black/[0.04] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 disabled:cursor-default disabled:opacity-100 lg:h-9 lg:w-auto lg:max-w-[180px] lg:justify-between lg:gap-2 lg:bg-black/[0.035] lg:px-2.5",
-                    locked && "max-sm:hidden",
-                )}
-                disabled={locked}
-                onClick={() => {
-                    const nextOpen = !open;
-                    setOpen(nextOpen);
-                    setLaunch(new IdleBotConversationLaunchState());
-                    if (nextOpen && selectedTab instanceof BotsTargetTab) {
-                        void refreshBots();
-                    }
-                }}
-                ref={triggerRef}
-                title={locked ? "Start a new chat to choose another target" : "Choose a local Agent or Bot"}
-                type="button"
-            >
-                <span className="flex min-w-0 items-center gap-0 lg:gap-2">
+            {locked ? (
+                <span
+                    aria-label={`${conversation.agentLabel}, locked for this conversation`}
+                    className="hidden h-11 min-w-0 shrink-0 items-center gap-2 rounded-full border-[0.5px] border-black/[0.06] bg-black/[0.02] px-2.5 text-xs font-medium text-muted-foreground sm:inline-flex lg:h-9 lg:max-w-[180px]"
+                    role="status"
+                    title="Start a new chat to choose another Agent or Bot"
+                >
                     <AgentProductIcon
                         agentId={conversation.agentId}
                         agentLabel={conversation.agentLabel}
                         className="size-[18px] rounded-[5px]"
                     />
-                    <span className="sr-only lg:not-sr-only lg:truncate">{conversation.agentLabel}</span>
+                    <span className="hidden min-w-0 truncate lg:block">{conversation.agentLabel}</span>
+                    <LockKeyhole aria-hidden="true" className="size-3.5 shrink-0 text-copy-tertiary" />
                 </span>
-                <ChevronDown
-                    aria-hidden="true"
-                    className={cn(
-                        "hidden size-3.5 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none lg:block",
-                        open && "rotate-180",
-                    )}
-                />
-            </button>
+            ) : (
+                <button
+                    aria-controls={pickerId}
+                    aria-expanded={open}
+                    aria-haspopup="dialog"
+                    aria-label="Agent or Bot for this conversation"
+                    className="inline-flex h-11 w-11 min-w-0 shrink-0 items-center justify-center gap-0 rounded-full border-0 bg-transparent px-0 text-xs font-medium text-muted-foreground shadow-none outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-black/[0.04] hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/70 lg:h-9 lg:w-auto lg:max-w-[180px] lg:justify-between lg:gap-2 lg:bg-black/[0.035] lg:px-2.5"
+                    onClick={() => {
+                        const nextOpen = !open;
+                        setOpen(nextOpen);
+                        setLaunch(new IdleBotConversationLaunchState());
+                        if (nextOpen && selectedTab instanceof BotsTargetTab) {
+                            void refreshBots();
+                        }
+                    }}
+                    ref={triggerRef}
+                    title="Choose a local Agent or Bot"
+                    type="button"
+                >
+                    <span className="flex min-w-0 items-center gap-0 lg:gap-2">
+                        <AgentProductIcon
+                            agentId={conversation.agentId}
+                            agentLabel={conversation.agentLabel}
+                            className="size-[18px] rounded-[5px]"
+                        />
+                        <span className="sr-only lg:not-sr-only lg:truncate">{conversation.agentLabel}</span>
+                    </span>
+                    <ChevronDown
+                        aria-hidden="true"
+                        className={cn(
+                            "hidden size-3.5 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none lg:block",
+                            open && "rotate-180",
+                        )}
+                    />
+                </button>
+            )}
 
-            {open && (
+            {open && !locked && (
                 <section
                     aria-label="Choose conversation target"
                     className="fixed right-3 bottom-[calc(env(safe-area-inset-bottom)+72px)] left-3 z-50 overflow-hidden rounded-xl border-[0.5px] border-black/10 bg-white shadow-[0_14px_42px_rgba(0,0,0,0.16)] lg:absolute lg:right-auto lg:bottom-[calc(100%+8px)] lg:left-0 lg:w-80"
