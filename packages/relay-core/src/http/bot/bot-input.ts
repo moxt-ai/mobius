@@ -4,7 +4,6 @@ import {
     RequiredBotCompletionDeliveryPolicy,
 } from "@moxt-ai/mobius-protocol";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
-import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
 import type { NewBotConversation, NewBotMessage } from "../../service/bot/bot-service.ts";
 
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -26,6 +25,14 @@ function exact(value: Readonly<Record<string, unknown>>, fields: readonly string
     if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
         throw new BotApiError("invalid_request", "The request fields are invalid", "invalid-input");
     }
+}
+
+export function exactBody(
+    value: Readonly<Record<string, unknown>>,
+    fields: readonly string[],
+): Readonly<Record<string, unknown>> {
+    exact(value, fields);
+    return value;
 }
 
 export interface ConversationConfigurationInput {
@@ -183,38 +190,6 @@ export function messageRequest(value: Readonly<Record<string, unknown>>): NewBot
         text: string(value, "text", 100_000),
         resourceRefs: identifiers(value, "resourceRefs", 16),
     };
-}
-export async function requestBody(
-    request: Request,
-    fields?: readonly string[],
-): Promise<Readonly<Record<string, unknown>>> {
-    let encoded: string;
-    try {
-        encoded = await readBoundedUtf8Body(request, 256 * 1024);
-    } catch (cause) {
-        if (cause instanceof RequestBodyError) {
-            throw new BotApiError(
-                "invalid_request",
-                cause.code === "body_too_large" ? "The request body is too large" : "The request body is invalid",
-                cause.code === "body_too_large" ? "input-too-large" : "invalid-input",
-                { cause },
-            );
-        }
-        throw cause;
-    }
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new BotApiError("invalid_request", "The request body is not valid JSON", "invalid-input", { cause });
-    }
-    if (!isRecord(value)) {
-        throw new BotApiError("invalid_request", "The request body must be an object", "invalid-input");
-    }
-    if (fields !== undefined) {
-        exact(value, fields);
-    }
-    return value;
 }
 export function bearer(request: Request): string {
     const header = request.headers.get("authorization") ?? "";

@@ -70,6 +70,7 @@ export {
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
 } from "./entity/do/session.ts";
+export { type HttpError, isHttpError } from "./entity/http-error.ts";
 export {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
     type AgentDescriptor,

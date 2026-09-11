@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import {
-    PairingDirectoryError,
     validateAgentCatalog,
     validateAgents,
     validateDisplayName,
@@ -8,29 +7,34 @@ import {
     validateInstallableAgents,
     validatePairingCode,
 } from "../../entity/pairing/pairing.ts";
-import {
-    assertExactKeys,
-    bearerToken,
-    directoryError,
-    parseJsonBody,
-    preserveCancellation,
-    readString,
-} from "../../infra/relay-http.ts";
+import { bearerToken, readString } from "../../infra/relay-http.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
+import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { directoryErrorMiddleware, pairingTimeoutMiddleware } from "../middleware/relay-error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
-
-const PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
 export function createProjectRuntimePairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
-        .post("/runtime-pairings/:pairingId/redeem", async (context) => {
-            const request = context.req.raw;
-            const signal = AbortSignal.any([
-                request.signal,
-                AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
-            ]);
-            try {
-                const body = await parseJsonBody(request);
-                assertExactKeys(body, ["agents", "installableAgents", "machineName", "pairingCode", "workspaceName"]);
+        .onError(rethrowHonoError)
+        .use("*", directoryErrorMiddleware)
+        .use("/runtime-pairings/:pairingId/redeem", pairingTimeoutMiddleware("Runtime pairing redemption timed out"))
+        .use("/projects/:projectId/runtime-pairings", pairingTimeoutMiddleware("Runtime pairing creation timed out"))
+        .use(
+            "/projects/:projectId/runtime-pairings/:pairingId",
+            pairingTimeoutMiddleware("Runtime pairing lookup timed out"),
+        )
+        .use("/projects/:projectId/runtimes/:runtimeId", pairingTimeoutMiddleware("Runtime revocation timed out"))
+        .post(
+            "/runtime-pairings/:pairingId/redeem",
+            bodyParser<RelayHttpEnvironment>([
+                "agents",
+                "installableAgents",
+                "machineName",
+                "pairingCode",
+                "workspaceName",
+            ]),
+            async (context) => {
+                const body = context.req.valid("json");
                 const agents = validateAgents(body["agents"]);
                 const installableAgents = validateInstallableAgents(body["installableAgents"]);
                 validateAgentCatalog(agents, installableAgents);
@@ -41,130 +45,65 @@ export function createProjectRuntimePairingRoutes() {
                     validateDisplayName(body["workspaceName"], "workspace_name"),
                     agents,
                     installableAgents,
-                    signal,
+                    context.var.signal,
                 );
                 return context.json({
                     channelId: redeemed.channelId,
                     runtimeCredential: redeemed.daemonToken,
                     runtimeId: redeemed.runtimeId,
                 });
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                if (signal.aborted) {
-                    return directoryError(
-                        new PairingDirectoryError("pairing_timeout", "Runtime pairing redemption timed out", {
-                            cause: error,
-                        }),
-                    );
-                }
-                return directoryError(error);
-            }
-        })
+            },
+        )
         .get("/runtimes/connect", async (context) => {
             const request = context.req.raw;
-            try {
-                return await context.env.services.channels.acceptRuntime(bearerToken(request), request, request.signal);
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                return directoryError(error);
-            }
+            return await context.env.services.channels.acceptRuntime(bearerToken(request), request, request.signal);
         })
-        .post("/projects/:projectId/runtime-pairings", async (context) => {
-            const request = context.req.raw;
-            const signal = AbortSignal.any([
-                request.signal,
-                AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
-            ]);
-            try {
-                const body = await parseJsonBody(request);
-                assertExactKeys(body, ["idempotencyKey"]);
+        .post(
+            "/projects/:projectId/runtime-pairings",
+            bodyParser<RelayHttpEnvironment>(["idempotencyKey"]),
+            async (context) => {
+                const request = context.req.raw;
+                const body = context.req.valid("json");
                 return context.json(
                     await context.env.services.runtimePairings.createProjectRuntimePairing(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
                         bearerToken(request),
                         validateIdentifier(readString(body, "idempotencyKey"), "idempotency_key"),
-                        signal,
+                        context.var.signal,
                     ),
                     201,
                 );
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                if (signal.aborted) {
-                    return directoryError(
-                        new PairingDirectoryError("pairing_timeout", "Runtime pairing creation timed out", {
-                            cause: error,
-                        }),
-                    );
-                }
-                return directoryError(error);
-            }
-        })
+            },
+        )
         .get("/projects/:projectId/runtime-pairings/:pairingId", async (context) => {
             const request = context.req.raw;
-            const signal = AbortSignal.any([
-                request.signal,
-                AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
-            ]);
-            try {
-                return context.json(
-                    await context.env.services.runtimePairings.readProjectRuntimePairing(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        validateIdentifier(context.req.param("pairingId"), "pairing_id"),
-                        bearerToken(request),
-                        signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                if (signal.aborted) {
-                    return directoryError(
-                        new PairingDirectoryError("pairing_timeout", "Runtime pairing lookup timed out", {
-                            cause: error,
-                        }),
-                    );
-                }
-                return directoryError(error);
-            }
+            return context.json(
+                await context.env.services.runtimePairings.readProjectRuntimePairing(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("pairingId"), "pairing_id"),
+                    bearerToken(request),
+                    context.var.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/runtimes/:runtimeId/host", async (context) => {
             const request = context.req.raw;
-            try {
-                return await context.env.services.runtimePairings.acceptProjectOwnerRuntimeHost(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    context.req.query("token") ?? "",
-                    request,
-                    request.signal,
-                );
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                return directoryError(error);
-            }
+            return await context.env.services.runtimePairings.acceptProjectOwnerRuntimeHost(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                context.req.query("token") ?? "",
+                request,
+                request.signal,
+            );
         })
         .delete("/projects/:projectId/runtimes/:runtimeId", async (context) => {
             const request = context.req.raw;
-            const signal = AbortSignal.any([
-                request.signal,
-                AbortSignal.timeout(PROJECT_RUNTIME_OPERATION_TIMEOUT_MILLISECONDS),
-            ]);
-            try {
-                await context.env.services.runtimePairings.revokeProjectRuntime(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
-                    bearerToken(request),
-                    signal,
-                );
-                return new Response(null, { status: 204 });
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                if (signal.aborted) {
-                    return directoryError(
-                        new PairingDirectoryError("pairing_timeout", "Runtime revocation timed out", {
-                            cause: error,
-                        }),
-                    );
-                }
-                return directoryError(error);
-            }
+            await context.env.services.runtimePairings.revokeProjectRuntime(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                bearerToken(request),
+                context.var.signal,
+            );
+            return new Response(null, { status: 204 });
         });
 }

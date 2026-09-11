@@ -30,14 +30,14 @@ import {
     MAX_IMPORT_BODY_LENGTH,
     optionalCursor,
     pageLimit,
-    parseJsonBody,
-    preserveCancellation,
     readInteger,
     readString,
     reconciliationOutcome,
-    sessionError,
 } from "../../infra/relay-http.ts";
 import { isRecord } from "../../service/do/session-codec.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
+import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { sessionErrorMiddleware } from "../middleware/relay-error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 function readIdentifierArray(
@@ -95,27 +95,24 @@ function readTargetCommandId(body: Readonly<Record<string, unknown>>, dispositio
 
 export function createSessionRoutes() {
     return new Hono<RelayHttpEnvironment>()
-
+        .onError(rethrowHonoError)
+        .use("*", sessionErrorMiddleware)
         .get("/projects/:projectId/runtimes", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json({
-                    runtimes: await useCases.listRuntimes(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        context.req.raw.signal,
-                    ),
-                });
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json({
+                runtimes: await useCases.listRuntimes(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    context.req.raw.signal,
+                ),
+            });
         })
-        .post("/projects/:projectId/browser-credentials", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["expiresInSeconds"]);
+        .post(
+            "/projects/:projectId/browser-credentials",
+            bodyParser<RelayHttpEnvironment>(["expiresInSeconds"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 const lifetimeMilliseconds = readInteger(body, "expiresInSeconds") * 1_000;
                 if (
                     lifetimeMilliseconds < MIN_BROWSER_CREDENTIAL_LIFETIME_MILLISECONDS ||
@@ -132,66 +129,49 @@ export function createSessionRoutes() {
                     ),
                     201,
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .delete("/projects/:projectId/browser-credentials/:credentialId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                await useCases.revokeBrowserCredential(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
-                    validateIdentifier(context.req.param("credentialId"), "credential_id"),
-                    bearerToken(context.req.raw),
-                    context.req.raw.signal,
-                );
-                return new Response(null, { status: 204 });
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            await useCases.revokeBrowserCredential(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                validateIdentifier(context.req.param("credentialId"), "credential_id"),
+                bearerToken(context.req.raw),
+                context.req.raw.signal,
+            );
+            return new Response(null, { status: 204 });
         })
-        .post("/projects/:projectId/sessions", async (context) => {
+        .post("/projects/:projectId/sessions", bodyParser<RelayHttpEnvironment>(), async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.createSession(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        createRequest(await parseJsonBody(context.req.raw)),
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                    201,
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.createSession(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    createRequest(context.req.valid("json")),
+                    context.env.gateways.nowEpochMilliseconds(),
+                    context.req.raw.signal,
+                ),
+                201,
+            );
         })
         .get("/projects/:projectId/sessions", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.listSessions(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        optionalCursor(context.req.query("cursor")),
-                        pageLimit(context.req.query("limit")),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.listSessions(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    optionalCursor(context.req.query("cursor")),
+                    pageLimit(context.req.query("limit")),
+                    context.req.raw.signal,
+                ),
+            );
         })
-        .post("/projects/:projectId/session-imports", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw, MAX_IMPORT_BODY_LENGTH);
-                assertExactKeys(body, ["formatVersion", "session", "targetBinding"]);
+        .post(
+            "/projects/:projectId/session-imports",
+            bodyParser<RelayHttpEnvironment>(["formatVersion", "session", "targetBinding"], MAX_IMPORT_BODY_LENGTH),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 if (readString(body, "formatVersion", 32) !== MOBIUS_SESSION_EXPORT_FORMAT_VERSION) {
                     throw new PairingDirectoryError(
                         "invalid_request",
@@ -226,32 +206,25 @@ export function createSessionRoutes() {
                     ),
                     201,
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .get("/projects/:projectId/sessions/:sessionId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readSession(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readSession(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
-        .put("/projects/:projectId/sessions/:sessionId/binding", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["agentRef", "bindingId", "configRevision", "runtimeId", "workspaceRef"]);
+        .put(
+            "/projects/:projectId/sessions/:sessionId/binding",
+            bodyParser<RelayHttpEnvironment>(["agentRef", "bindingId", "configRevision", "runtimeId", "workspaceRef"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 return context.json(
                     await useCases.setDefaultBinding(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
@@ -268,80 +241,68 @@ export function createSessionRoutes() {
                         context.req.raw.signal,
                     ),
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .get("/projects/:projectId/sessions/:sessionId/turns/:turnId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readTurn(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(context.req.param("turnId"), "turn_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readTurn(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    validateIdentifier(context.req.param("turnId"), "turn_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
-        .post("/projects/:projectId/sessions/:sessionId/turns", async (context) => {
+        .post("/projects/:projectId/sessions/:sessionId/turns", bodyParser<RelayHttpEnvironment>(), async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                const legacyFields = [
-                    "additionalDirectoryIds",
-                    "artifactIds",
-                    "content",
-                    "idempotencyKey",
-                    "images",
-                    "resources",
-                ];
-                const hasDisposition = body["disposition"] !== undefined;
-                const hasTargetCommandId = body["targetCommandId"] !== undefined;
-                assertExactKeys(
-                    body,
-                    hasDisposition && hasTargetCommandId
-                        ? [...legacyFields, "disposition", "targetCommandId"]
-                        : legacyFields,
-                );
-                const additionalDirectoryIds = readIdentifierArray(body, "additionalDirectoryIds", 16, "directory_id");
-                const artifactIds = readIdentifierArray(body, "artifactIds", 16, "artifact_id");
-                const disposition = readPromptDisposition(body);
-                const targetCommandId = readTargetCommandId(body, disposition);
-                return context.json(
-                    await useCases.submitTurn(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(readString(body, "idempotencyKey"), "idempotency_key"),
-                        readString(body, "content", 100_000, true),
-                        disposition,
-                        targetCommandId,
-                        additionalDirectoryIds,
-                        decodePromptImagesValue(body["images"]),
-                        decodePromptResourcesValue(body["resources"]),
-                        artifactIds,
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                    202,
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            const body = context.req.valid("json");
+            const legacyFields = [
+                "additionalDirectoryIds",
+                "artifactIds",
+                "content",
+                "idempotencyKey",
+                "images",
+                "resources",
+            ];
+            const hasDisposition = body["disposition"] !== undefined;
+            const hasTargetCommandId = body["targetCommandId"] !== undefined;
+            assertExactKeys(
+                body,
+                hasDisposition && hasTargetCommandId
+                    ? [...legacyFields, "disposition", "targetCommandId"]
+                    : legacyFields,
+            );
+            const additionalDirectoryIds = readIdentifierArray(body, "additionalDirectoryIds", 16, "directory_id");
+            const artifactIds = readIdentifierArray(body, "artifactIds", 16, "artifact_id");
+            const disposition = readPromptDisposition(body);
+            const targetCommandId = readTargetCommandId(body, disposition);
+            return context.json(
+                await useCases.submitTurn(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    validateIdentifier(readString(body, "idempotencyKey"), "idempotency_key"),
+                    readString(body, "content", 100_000, true),
+                    disposition,
+                    targetCommandId,
+                    additionalDirectoryIds,
+                    decodePromptImagesValue(body["images"]),
+                    decodePromptResourcesValue(body["resources"]),
+                    artifactIds,
+                    context.env.gateways.nowEpochMilliseconds(),
+                    context.req.raw.signal,
+                ),
+                202,
+            );
         })
-        .post("/projects/:projectId/sessions/:sessionId/artifacts/uploads", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["byteLength", "mediaType", "name", "sha256"]);
+        .post(
+            "/projects/:projectId/sessions/:sessionId/artifacts/uploads",
+            bodyParser<RelayHttpEnvironment>(["byteLength", "mediaType", "name", "sha256"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 return context.json(
                     await useCases.createArtifactUpload(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
@@ -358,104 +319,87 @@ export function createSessionRoutes() {
                     ),
                     201,
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .put("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
-                const lease = await useCases.authorizeArtifactUpload(
-                    projectId,
-                    bearerToken(context.req.raw),
-                    validateIdentifier(context.req.param("sessionId"), "session_id"),
-                    validateIdentifier(context.req.param("artifactId"), "artifact_id"),
-                    context.req.header("x-mobius-upload-token") ?? "",
-                    context.env.gateways.nowEpochMilliseconds(),
-                    context.req.raw.signal,
+            const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
+            const lease = await useCases.authorizeArtifactUpload(
+                projectId,
+                bearerToken(context.req.raw),
+                validateIdentifier(context.req.param("sessionId"), "session_id"),
+                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
+                context.req.header("x-mobius-upload-token") ?? "",
+                context.env.gateways.nowEpochMilliseconds(),
+                context.req.raw.signal,
+            );
+            if (context.req.header("content-type") !== lease.artifact.mediaType) {
+                throw new SessionRuntimeError(
+                    "artifact_content_mismatch",
+                    "The artifact media type does not match its authorization",
                 );
-                if (context.req.header("content-type") !== lease.artifact.mediaType) {
+            }
+            let bytes: Uint8Array;
+            try {
+                bytes = await readBoundedBytesBody(context.req.raw, lease.artifact.byteLength);
+            } catch (cause) {
+                if (cause instanceof RequestBodyError) {
                     throw new SessionRuntimeError(
                         "artifact_content_mismatch",
-                        "The artifact media type does not match its authorization",
+                        "The artifact body does not match its authorization",
+                        { cause },
                     );
                 }
-                let bytes: Uint8Array;
-                try {
-                    bytes = await readBoundedBytesBody(context.req.raw, lease.artifact.byteLength);
-                } catch (cause) {
-                    if (cause instanceof RequestBodyError) {
-                        throw new SessionRuntimeError(
-                            "artifact_content_mismatch",
-                            "The artifact body does not match its authorization",
-                            { cause },
-                        );
-                    }
-                    throw cause;
-                }
-                return context.json(
-                    await useCases.completeArtifactUpload(
-                        projectId,
-                        bearerToken(context.req.raw),
-                        lease,
-                        bytes,
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
+                throw cause;
             }
+            return context.json(
+                await useCases.completeArtifactUpload(
+                    projectId,
+                    bearerToken(context.req.raw),
+                    lease,
+                    bytes,
+                    context.env.gateways.nowEpochMilliseconds(),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readArtifact(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(context.req.param("artifactId"), "artifact_id"),
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
-        .get("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const content = await useCases.readArtifactContent(
+            return context.json(
+                await useCases.readArtifact(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     bearerToken(context.req.raw),
                     validateIdentifier(context.req.param("sessionId"), "session_id"),
                     validateIdentifier(context.req.param("artifactId"), "artifact_id"),
+                    context.env.gateways.nowEpochMilliseconds(),
                     context.req.raw.signal,
-                );
-                return new Response(Uint8Array.from(content.bytes), {
-                    headers: {
-                        "content-length": content.bytes.byteLength.toString(),
-                        "content-type": content.artifact.mediaType,
-                        "x-mobius-artifact-id": content.artifact.artifactId,
-                        "x-mobius-sha256": content.artifact.sha256,
-                    },
-                });
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+                ),
+            );
         })
-        .post("/projects/:projectId/sessions/:sessionId/turns/:turnId/cancel", async (context) => {
+        .get("/projects/:projectId/sessions/:sessionId/artifacts/:artifactId/content", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["idempotencyKey"]);
+            const content = await useCases.readArtifactContent(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                bearerToken(context.req.raw),
+                validateIdentifier(context.req.param("sessionId"), "session_id"),
+                validateIdentifier(context.req.param("artifactId"), "artifact_id"),
+                context.req.raw.signal,
+            );
+            return new Response(Uint8Array.from(content.bytes), {
+                headers: {
+                    "content-length": content.bytes.byteLength.toString(),
+                    "content-type": content.artifact.mediaType,
+                    "x-mobius-artifact-id": content.artifact.artifactId,
+                    "x-mobius-sha256": content.artifact.sha256,
+                },
+            });
+        })
+        .post(
+            "/projects/:projectId/sessions/:sessionId/turns/:turnId/cancel",
+            bodyParser<RelayHttpEnvironment>(["idempotencyKey"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 return context.json(
                     await useCases.cancelTurn(
                         validateIdentifier(context.req.param("projectId"), "project_id"),
@@ -468,16 +412,14 @@ export function createSessionRoutes() {
                     ),
                     202,
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
-        .put("/projects/:projectId/sessions/:sessionId/turns/:turnId/disposition", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["disposition"]);
+            },
+        )
+        .put(
+            "/projects/:projectId/sessions/:sessionId/turns/:turnId/disposition",
+            bodyParser<RelayHttpEnvironment>(["disposition"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 if (readPromptDisposition(body) !== SessionPromptDisposition.Steer) {
                     throw new PairingDirectoryError(
                         "invalid_request",
@@ -494,65 +436,49 @@ export function createSessionRoutes() {
                         context.req.raw.signal,
                     ),
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .get("/projects/:projectId/sessions/:sessionId/attempts/:attemptId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readAttempt(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(context.req.param("attemptId"), "attempt_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readAttempt(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    validateIdentifier(context.req.param("attemptId"), "attempt_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/interactions", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json({
-                    interactions: await useCases.readPendingInteractions(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.req.raw.signal,
-                    ),
-                });
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json({
+                interactions: await useCases.readPendingInteractions(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.raw.signal,
+                ),
+            });
         })
         .get("/projects/:projectId/sessions/:sessionId/interactions/:interactionId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readInteraction(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(context.req.param("interactionId"), "interaction_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readInteraction(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    validateIdentifier(context.req.param("interactionId"), "interaction_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
-        .post("/projects/:projectId/sessions/:sessionId/interactions/:interactionId/responses", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
+        .post(
+            "/projects/:projectId/sessions/:sessionId/interactions/:interactionId/responses",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
@@ -619,134 +545,102 @@ export function createSessionRoutes() {
                     );
                 }
                 throw new PairingDirectoryError("invalid_request", "The Interaction response kind is invalid");
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        })
+            },
+        )
         .get("/projects/:projectId/sessions/:sessionId/messages", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readMessages(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        optionalCursor(context.req.query("cursor")),
-                        pageLimit(context.req.query("limit")),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readMessages(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    optionalCursor(context.req.query("cursor")),
+                    pageLimit(context.req.query("limit")),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/events", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                if (
-                    context.req
-                        .header("accept")
-                        ?.split(",")
-                        .some((value) => value.trim().split(";", 1)[0] === "text/event-stream") === true
-                ) {
-                    return await useCases.openEventStream(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.req.query("cursor") ?? "",
-                        context.req.raw.signal,
-                    );
-                }
-                return context.json(
-                    await useCases.readEvents(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        optionalCursor(context.req.query("cursor")),
-                        pageLimit(context.req.query("limit")),
-                        context.req.raw.signal,
-                    ),
+            if (
+                context.req
+                    .header("accept")
+                    ?.split(",")
+                    .some((value) => value.trim().split(";", 1)[0] === "text/event-stream") === true
+            ) {
+                return await useCases.openEventStream(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.query("cursor") ?? "",
+                    context.req.raw.signal,
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
             }
+            return context.json(
+                await useCases.readEvents(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    optionalCursor(context.req.query("cursor")),
+                    pageLimit(context.req.query("limit")),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/attempts/:attemptId/tool-calls/:toolCallId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readToolCallDetail(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        validateIdentifier(context.req.param("attemptId"), "attempt_id"),
-                        validateIdentifier(context.req.param("toolCallId"), "tool_call_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readToolCallDetail(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    validateIdentifier(context.req.param("attemptId"), "attempt_id"),
+                    validateIdentifier(context.req.param("toolCallId"), "tool_call_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/native-history", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.readNativeHistory(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.readNativeHistory(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.raw.signal,
+                ),
+            );
         })
         .get("/projects/:projectId/sessions/:sessionId/export", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json({
-                    formatVersion: MOBIUS_SESSION_EXPORT_FORMAT_VERSION,
-                    session: await useCases.exportSession(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.req.raw.signal,
-                    ),
-                });
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json({
+                formatVersion: MOBIUS_SESSION_EXPORT_FORMAT_VERSION,
+                session: await useCases.exportSession(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.req.raw.signal,
+                ),
+            });
         })
         .delete("/projects/:projectId/sessions/:sessionId", async (context) => {
             const useCases = context.env.services.sessions;
-            try {
-                return context.json(
-                    await useCases.deleteSession(
-                        validateIdentifier(context.req.param("projectId"), "project_id"),
-                        bearerToken(context.req.raw),
-                        validateIdentifier(context.req.param("sessionId"), "session_id"),
-                        context.env.gateways.nowEpochMilliseconds(),
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
+            return context.json(
+                await useCases.deleteSession(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    bearerToken(context.req.raw),
+                    validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    context.env.gateways.nowEpochMilliseconds(),
+                    context.req.raw.signal,
+                ),
+            );
         })
-        .post("/channels/:channelId/sessions/:sessionId/attempts/:attemptId/reconciliation", async (context) => {
-            const useCases = context.env.services.sessions;
-            try {
-                const body = await parseJsonBody(context.req.raw);
-                assertExactKeys(body, ["outcome"]);
+        .post(
+            "/channels/:channelId/sessions/:sessionId/attempts/:attemptId/reconciliation",
+            bodyParser<RelayHttpEnvironment>(["outcome"]),
+            async (context) => {
+                const useCases = context.env.services.sessions;
+                const body = context.req.valid("json");
                 return context.json(
                     await useCases.reconcileAttempt(
                         validateIdentifier(context.req.param("channelId"), "channel_id"),
@@ -758,9 +652,6 @@ export function createSessionRoutes() {
                         context.req.raw.signal,
                     ),
                 );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return sessionError(error);
-            }
-        });
+            },
+        );
 }

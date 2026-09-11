@@ -8,20 +8,23 @@ import {
     ProjectPermission,
 } from "../../entity/authentication/project-authentication.ts";
 import type { ProjectAuthenticationService } from "../../service/authentication/project-authentication-service.ts";
-import { botErrorResponse } from "../bot/bot-error-response.ts";
 import {
     actorReference,
     bearer,
     boolean,
+    exactBody,
     externalCredential,
     identifier,
     integer,
     pageLimit,
     pathIdentifier,
     positiveInteger,
-    requestBody,
     string,
 } from "../bot/bot-input.ts";
+import { botBodyParser } from "../middleware/bot-body-parser.ts";
+import { botErrorMiddleware } from "../middleware/bot-error-middleware.ts";
+import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { requestTimeoutMiddleware } from "../middleware/request-timeout-middleware.ts";
 
 interface LegacyAuthenticationHttpEnvironment {
     readonly Bindings: {
@@ -30,22 +33,20 @@ interface LegacyAuthenticationHttpEnvironment {
             readonly projectAuthentication: ProjectAuthenticationService;
         };
     };
-    readonly Variables: { readonly signal: AbortSignal };
+    readonly Variables: {
+        readonly body: Readonly<Record<string, unknown>>;
+        readonly signal: AbortSignal;
+    };
 }
 
 export function createLegacyAuthenticationApplication() {
     return new Hono<LegacyAuthenticationHttpEnvironment>({ strict: false })
         .basePath(`${MOBIUS_API_PREFIX}/v1`)
-        .use("*", async (c, next) => {
-            c.set("signal", AbortSignal.any([c.req.raw.signal, AbortSignal.timeout(15_000)]));
-            await next();
-        })
-        .onError((error, c) => {
-            c.req.raw.signal.throwIfAborted();
-            return botErrorResponse(error);
-        })
-        .post("/auth/exchanges/:providerId", async (c) => {
-            const value = await requestBody(c.req.raw, ["expiresInSeconds", "projectId"]);
+        .onError(rethrowHonoError)
+        .use("*", botErrorMiddleware<LegacyAuthenticationHttpEnvironment>())
+        .use("*", requestTimeoutMiddleware<LegacyAuthenticationHttpEnvironment>(15_000))
+        .post("/auth/exchanges/:providerId", botBodyParser<LegacyAuthenticationHttpEnvironment>(), async (c) => {
+            const value = exactBody(c.var.body, ["expiresInSeconds", "projectId"]);
             const issued = await c.env.services.projectAuthentication.exchangeExternalIdentity(
                 pathIdentifier(c.req.param("providerId")),
                 externalCredential(c.req.raw),
@@ -75,7 +76,7 @@ export function createLegacyAuthenticationApplication() {
             );
             return c.json(await c.env.services.projectAuthentication.listApplications(access, c.var.signal));
         })
-        .post("/projects/:projectId/applications", async (c) => {
+        .post("/projects/:projectId/applications", botBodyParser<LegacyAuthenticationHttpEnvironment>(), async (c) => {
             const access = await c.env.services.projectAuthentication.authorizeProject(
                 pathIdentifier(c.req.param("projectId")),
                 bearer(c.req.raw),
@@ -83,7 +84,7 @@ export function createLegacyAuthenticationApplication() {
                 actorReference(c.req.raw),
                 c.var.signal,
             );
-            const value = await requestBody(c.req.raw, ["name", "permissions"]);
+            const value = exactBody(c.var.body, ["name", "permissions"]);
             return c.json(
                 await c.env.services.projectAuthentication.createApplication(
                     access,
@@ -94,75 +95,91 @@ export function createLegacyAuthenticationApplication() {
                 201,
             );
         })
-        .post("/project-applications/:applicationId/credentials", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["expiresInSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.issueApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("applicationId")),
-                    positiveInteger(value, "expiresInSeconds") * 1_000,
+        .post(
+            "/project-applications/:applicationId/credentials",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.ApplicationsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-applications/:applicationId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeApplication(
-                    access,
-                    pathIdentifier(c.req.param("applicationId")),
+                );
+                const value = exactBody(c.var.body, ["expiresInSeconds"]);
+                return c.json(
+                    await c.env.services.projectAuthentication.issueApplicationCredential(
+                        access,
+                        pathIdentifier(c.req.param("applicationId")),
+                        positiveInteger(value, "expiresInSeconds") * 1_000,
+                        c.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post(
+            "/project-applications/:applicationId/revoke",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.ApplicationsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-            );
-        })
-        .post("/project-application-credentials/:credentialId/rotate", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["expiresInSeconds", "overlapSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.rotateApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    positiveInteger(value, "expiresInSeconds") * 1_000,
-                    integer(value, "overlapSeconds") * 1_000,
+                );
+                exactBody(c.var.body, []);
+                return c.json(
+                    await c.env.services.projectAuthentication.revokeApplication(
+                        access,
+                        pathIdentifier(c.req.param("applicationId")),
+                        c.var.signal,
+                    ),
+                );
+            },
+        )
+        .post(
+            "/project-application-credentials/:credentialId/rotate",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.ApplicationsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-application-credentials/:credentialId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.ApplicationsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeApplicationCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
+                );
+                const value = exactBody(c.var.body, ["expiresInSeconds", "overlapSeconds"]);
+                return c.json(
+                    await c.env.services.projectAuthentication.rotateApplicationCredential(
+                        access,
+                        pathIdentifier(c.req.param("credentialId")),
+                        positiveInteger(value, "expiresInSeconds") * 1_000,
+                        integer(value, "overlapSeconds") * 1_000,
+                        c.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post(
+            "/project-application-credentials/:credentialId/revoke",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.ApplicationsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-            );
-        })
+                );
+                exactBody(c.var.body, []);
+                return c.json(
+                    await c.env.services.projectAuthentication.revokeApplicationCredential(
+                        access,
+                        pathIdentifier(c.req.param("credentialId")),
+                        c.var.signal,
+                    ),
+                );
+            },
+        )
         .get("/projects/:projectId/external-identity-bindings", async (c) => {
             const access = await c.env.services.projectAuthentication.authorizeProject(
                 pathIdentifier(c.req.param("projectId")),
@@ -175,39 +192,43 @@ export function createLegacyAuthenticationApplication() {
                 await c.env.services.projectAuthentication.listExternalIdentityBindings(access, c.var.signal),
             );
         })
-        .post("/projects/:projectId/external-identity-bindings", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorizeProject(
-                pathIdentifier(c.req.param("projectId")),
-                bearer(c.req.raw),
-                ProjectPermission.IdentityBindingsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, [
-                "externalCredential",
-                "permissions",
-                "providerId",
-                "revokeOwnerCredential",
-            ]);
-            const revokeOwnerCredential = boolean(value, "revokeOwnerCredential");
-            const identity = await c.env.services.externalIdentityAuthenticator.authenticate(
-                new ExternalIdentityCredential(
-                    identifier(value, "providerId"),
-                    string(value, "externalCredential", 16 * 1_024),
-                ),
-                c.var.signal,
-            );
-            return c.json(
-                await c.env.services.projectAuthentication.attachExternalIdentity(
-                    access,
-                    identity,
-                    decodeProjectPermissions(value["permissions"]),
-                    revokeOwnerCredential,
+        .post(
+            "/projects/:projectId/external-identity-bindings",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorizeProject(
+                    pathIdentifier(c.req.param("projectId")),
+                    bearer(c.req.raw),
+                    ProjectPermission.IdentityBindingsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-                201,
-            );
-        })
+                );
+                const value = exactBody(c.var.body, [
+                    "externalCredential",
+                    "permissions",
+                    "providerId",
+                    "revokeOwnerCredential",
+                ]);
+                const revokeOwnerCredential = boolean(value, "revokeOwnerCredential");
+                const identity = await c.env.services.externalIdentityAuthenticator.authenticate(
+                    new ExternalIdentityCredential(
+                        identifier(value, "providerId"),
+                        string(value, "externalCredential", 16 * 1_024),
+                    ),
+                    c.var.signal,
+                );
+                return c.json(
+                    await c.env.services.projectAuthentication.attachExternalIdentity(
+                        access,
+                        identity,
+                        decodeProjectPermissions(value["permissions"]),
+                        revokeOwnerCredential,
+                        c.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
         .delete("/projects/:projectId/external-identity-bindings/:bindingId", async (c) => {
             const access = await c.env.services.projectAuthentication.authorizeProject(
                 pathIdentifier(c.req.param("projectId")),
@@ -234,40 +255,48 @@ export function createLegacyAuthenticationApplication() {
             );
             return c.json(await c.env.services.projectAuthentication.listOwnerCredentials(access, c.var.signal));
         })
-        .post("/project-owner-credentials/:credentialId/rotate", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.OwnerCredentialsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            const value = await requestBody(c.req.raw, ["overlapSeconds"]);
-            return c.json(
-                await c.env.services.projectAuthentication.rotateOwnerCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
-                    integer(value, "overlapSeconds") * 1_000,
+        .post(
+            "/project-owner-credentials/:credentialId/rotate",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.OwnerCredentialsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/project-owner-credentials/:credentialId/revoke", async (c) => {
-            const access = await c.env.services.projectAuthentication.authorize(
-                decodeProjectCredential(bearer(c.req.raw)),
-                ProjectPermission.OwnerCredentialsManage,
-                actorReference(c.req.raw),
-                c.var.signal,
-            );
-            await requestBody(c.req.raw, []);
-            return c.json(
-                await c.env.services.projectAuthentication.revokeOwnerCredential(
-                    access,
-                    pathIdentifier(c.req.param("credentialId")),
+                );
+                const value = exactBody(c.var.body, ["overlapSeconds"]);
+                return c.json(
+                    await c.env.services.projectAuthentication.rotateOwnerCredential(
+                        access,
+                        pathIdentifier(c.req.param("credentialId")),
+                        integer(value, "overlapSeconds") * 1_000,
+                        c.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post(
+            "/project-owner-credentials/:credentialId/revoke",
+            botBodyParser<LegacyAuthenticationHttpEnvironment>(),
+            async (c) => {
+                const access = await c.env.services.projectAuthentication.authorize(
+                    decodeProjectCredential(bearer(c.req.raw)),
+                    ProjectPermission.OwnerCredentialsManage,
+                    actorReference(c.req.raw),
                     c.var.signal,
-                ),
-            );
-        })
+                );
+                exactBody(c.var.body, []);
+                return c.json(
+                    await c.env.services.projectAuthentication.revokeOwnerCredential(
+                        access,
+                        pathIdentifier(c.req.param("credentialId")),
+                        c.var.signal,
+                    ),
+                );
+            },
+        )
         .get("/projects/:projectId/authentication-audit-events", async (c) => {
             const access = await c.env.services.projectAuthentication.authorizeProject(
                 pathIdentifier(c.req.param("projectId")),

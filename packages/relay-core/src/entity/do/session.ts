@@ -12,6 +12,7 @@ import type {
     SessionPromptCommand,
     Turn,
 } from "@moxt-ai/mobius-protocol";
+import type { HttpError } from "../http-error.ts";
 
 export class SessionQuotaPolicy {
     readonly activeSessionsPerProject: number;
@@ -530,12 +531,58 @@ export interface SessionExport {
     readonly session: SessionSummary;
 }
 
-export class SessionRuntimeError extends Error {
+function sessionRuntimeErrorStatus(code: string): number {
+    if (
+        code === "session_not_found" ||
+        code === "artifact_not_found" ||
+        code === "interaction_not_found" ||
+        code === "pending_work_not_found"
+    ) {
+        return 404;
+    }
+    if (code === "session_access_denied" || code === "artifact_upload_unauthorized") {
+        return 403;
+    }
+    if (code === "session_deleted" || code === "cursor_expired" || code === "artifact_upload_expired") {
+        return 410;
+    }
+    if (code === "session_quota_exceeded") {
+        return 429;
+    }
+    if (
+        code === "session_busy" ||
+        code === "session_conflict" ||
+        code === "idempotency_conflict" ||
+        code === "interaction_conflict" ||
+        code === "event_source_conflict" ||
+        code === "artifact_upload_closed" ||
+        code === "artifact_not_ready"
+    ) {
+        return 409;
+    }
+    if (code === "content_too_large") {
+        return 413;
+    }
+    if (
+        code === "invalid_cursor" ||
+        code === "invalid_export" ||
+        code === "invalid_page_size" ||
+        code === "invalid_request" ||
+        code === "artifact_content_mismatch"
+    ) {
+        return 400;
+    }
+    return 503;
+}
+
+export class SessionRuntimeError extends Error implements HttpError {
     readonly code: string;
+    readonly httpStatus: number;
 
     constructor(code: string, message: string, options: ErrorOptions = {}) {
         super(message, options);
         this.code = code;
+        this.httpStatus = sessionRuntimeErrorStatus(code);
         this.name = "SessionRuntimeError";
     }
 }

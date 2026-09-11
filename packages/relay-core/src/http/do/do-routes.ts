@@ -18,9 +18,9 @@ import {
     CreateSessionRequest,
     ProjectScope,
     SessionRecordingPolicy,
-    SessionRuntimeError,
     UploadingArtifactDescriptor,
 } from "../../entity/do/session.ts";
+import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
 import type { BotSessionService } from "../../service/do/bot-session-service.ts";
 import type { DoService } from "../../service/do/do-service.ts";
@@ -28,15 +28,15 @@ import type { SqliteSessionRuntime } from "../../service/do/sqlite-session-runti
 
 const MAX_INTERNAL_BODY_LENGTH = 96 * 1024 * 1024;
 
-class InternalRequestError extends Error {
+class InternalRequestError extends Error implements HttpError {
     readonly code: string;
-    readonly status: number;
+    readonly httpStatus: number;
 
-    constructor(code: string, message: string, status = 400, options: ErrorOptions = {}) {
+    constructor(code: string, message: string, httpStatus = 400, options: ErrorOptions = {}) {
         super(message, options);
         this.code = code;
+        this.httpStatus = httpStatus;
         this.name = "InternalRequestError";
-        this.status = status;
     }
 }
 
@@ -330,36 +330,8 @@ function operationFromPath(pathname: string): string {
     return segments[2] ?? "";
 }
 
-function errorResponse(error: SessionRuntimeError | InternalRequestError): Response {
-    if (error instanceof InternalRequestError) {
-        return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status });
-    }
-    const status =
-        error.code === "session_not_found" || error.code === "artifact_not_found"
-            ? 404
-            : error.code === "session_access_denied" || error.code === "artifact_upload_unauthorized"
-              ? 403
-              : error.code === "session_deleted" ||
-                  error.code === "cursor_expired" ||
-                  error.code === "artifact_upload_expired"
-                ? 410
-                : error.code === "session_quota_exceeded"
-                  ? 429
-                  : error.code === "session_busy" ||
-                      error.code === "session_conflict" ||
-                      error.code === "artifact_upload_closed" ||
-                      error.code === "artifact_not_ready"
-                    ? 409
-                    : error.code === "content_too_large"
-                      ? 413
-                      : error.code === "invalid_cursor" ||
-                          error.code === "invalid_export" ||
-                          error.code === "invalid_page_size" ||
-                          error.code === "invalid_request" ||
-                          error.code === "artifact_content_mismatch"
-                        ? 400
-                        : 503;
-    return Response.json({ error: { code: error.code, message: error.message } }, { status });
+function errorResponse(error: Error & HttpError): Response {
+    return Response.json({ error: { code: error.code, message: error.message } }, { status: error.httpStatus });
 }
 
 class DoRoutes {
@@ -926,7 +898,7 @@ class DoRoutes {
             if (request.signal.aborted) {
                 throw error;
             }
-            if (error instanceof SessionRuntimeError || error instanceof InternalRequestError) {
+            if (isHttpError(error)) {
                 await this.#operations.recoverFromFailure(error, request.signal);
                 return errorResponse(error);
             }

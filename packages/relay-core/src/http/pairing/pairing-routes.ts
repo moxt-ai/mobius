@@ -1,6 +1,5 @@
 import { Hono } from "hono";
 import {
-    PairingDirectoryError,
     validateAgentCatalog,
     validateAgents,
     validateDisplayName,
@@ -8,73 +7,69 @@ import {
     validateInstallableAgents,
     validatePairingCode,
 } from "../../entity/pairing/pairing.ts";
-import { assertExactKeys, directoryError, parseJsonBody, preserveCancellation } from "../../infra/relay-http.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
+import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { directoryErrorMiddleware, pairingTimeoutMiddleware } from "../middleware/relay-error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createPairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
+        .onError(rethrowHonoError)
+        .use("*", directoryErrorMiddleware)
+        .use("/", pairingTimeoutMiddleware("Pairing creation timed out"))
         .post("/", async (context) => {
             const request = context.req.raw;
-            const signal = AbortSignal.any([request.signal, AbortSignal.timeout(15_000)]);
-            try {
-                return context.json(await context.env.services.createPairing(request, signal), 201);
-            } catch (error) {
-                preserveCancellation(request.signal, error);
-                if (signal.aborted) {
-                    return directoryError(
-                        new PairingDirectoryError("pairing_timeout", "Pairing creation timed out", { cause: error }),
-                    );
-                }
-                return directoryError(error);
-            }
+            return context.json(await context.env.services.createPairing(request, context.var.signal), 201);
         })
         .route("/", createPairingClaimRoutes())
         .get("/:pairingId", async (context) => {
             const pairings = context.env.services.pairings;
-            try {
-                return context.json(
-                    await pairings.readPairingStatus(
-                        validateIdentifier(context.req.param("pairingId"), "pairing_id"),
-                        context.req.query("token") ?? "",
-                        context.req.raw.signal,
-                    ),
-                );
-            } catch (error) {
-                preserveCancellation(context.req.raw.signal, error);
-                return directoryError(error);
-            }
+            return context.json(
+                await pairings.readPairingStatus(
+                    validateIdentifier(context.req.param("pairingId"), "pairing_id"),
+                    context.req.query("token") ?? "",
+                    context.req.raw.signal,
+                ),
+            );
         });
 }
 
 export function createPairingClaimRoutes() {
-    return new Hono<RelayHttpEnvironment>().post("/claim", async (context) => {
-        const pairings = context.env.services.pairings;
-        try {
-            const body = await parseJsonBody(context.req.raw);
-            assertExactKeys(body, ["agents", "installableAgents", "machineName", "pairingCode", "workspaceName"]);
-            const {
-                agents: agentsValue,
-                installableAgents: installableAgentsValue,
-                machineName,
-                pairingCode,
-                workspaceName,
-            } = body;
-            const agents = validateAgents(agentsValue);
-            const installableAgents = validateInstallableAgents(installableAgentsValue);
-            validateAgentCatalog(agents, installableAgents);
-            return context.json(
-                await pairings.claimPairing(
-                    validatePairingCode(pairingCode),
-                    validateDisplayName(machineName, "machine_name"),
-                    validateDisplayName(workspaceName, "workspace_name"),
-                    agents,
-                    installableAgents,
-                    context.req.raw.signal,
-                ),
-            );
-        } catch (error) {
-            preserveCancellation(context.req.raw.signal, error);
-            return directoryError(error);
-        }
-    });
+    return new Hono<RelayHttpEnvironment>()
+        .onError(rethrowHonoError)
+        .use("*", directoryErrorMiddleware)
+        .post(
+            "/claim",
+            bodyParser<RelayHttpEnvironment>([
+                "agents",
+                "installableAgents",
+                "machineName",
+                "pairingCode",
+                "workspaceName",
+            ]),
+            async (context) => {
+                const pairings = context.env.services.pairings;
+                const body = context.req.valid("json");
+                const {
+                    agents: agentsValue,
+                    installableAgents: installableAgentsValue,
+                    machineName,
+                    pairingCode,
+                    workspaceName,
+                } = body;
+                const agents = validateAgents(agentsValue);
+                const installableAgents = validateInstallableAgents(installableAgentsValue);
+                validateAgentCatalog(agents, installableAgents);
+                return context.json(
+                    await pairings.claimPairing(
+                        validatePairingCode(pairingCode),
+                        validateDisplayName(machineName, "machine_name"),
+                        validateDisplayName(workspaceName, "workspace_name"),
+                        agents,
+                        installableAgents,
+                        context.req.raw.signal,
+                    ),
+                );
+            },
+        );
 }
