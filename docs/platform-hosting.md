@@ -68,6 +68,17 @@ The command applies both remote D1 migration streams before publishing the
 Worker. A migration failure stops deployment. It never migrates or deploys the
 Standalone Worker.
 
+CI deploys staging and production using the `mobius-relay-production` GitHub
+environment. Its `CLOUDFLARE_API_TOKEN` must retain account access for Worker
+uploads, D1 migrations, R2 bindings, and custom domains, plus Zone Read and
+Workers Routes Edit access to both `paradev.biz` and `paraflow.biz`. A token
+that can upload a Worker can still fail when Wrangler reads or updates routes.
+
+The checked-in Platform configuration is authoritative for CI deployments.
+Platform CI omits Wrangler's `--strict` option so Workers bootstrapped through
+the script API can be updated from the repository. Such deployments replace
+remote code and configuration with the checked-in version.
+
 For local development, apply both migration directories through the package's
 Vitest harness or Wrangler local D1, then run:
 

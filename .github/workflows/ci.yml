@@ -182,7 +182,6 @@ jobs:
           pnpm wrangler deploy \
             --config packages/relay-cloudflare-platform/wrangler.jsonc \
             --env "${{ matrix.environment }}" \
-            --strict \
             --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
       - name: Verify Platform health
