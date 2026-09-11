@@ -118,7 +118,7 @@ async function main(): Promise<void> {
     await mkdir(runtimeStatePath, { recursive: true });
     await mkdir(demoWorkspace, { recursive: true });
 
-    for (const binding of ["DIRECTORY_DATABASE", "PLATFORM_DIRECTORY_DATABASE"]) {
+    for (const binding of ["D1_SHARD_APAC_01", "PLATFORM_DIRECTORY_DATABASE"]) {
         await runFinite(
             [
                 "--filter",

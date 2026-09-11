@@ -14,18 +14,35 @@ const worktreeEnvironment = readWorktreeEnvironment();
 
 interface WranglerTarget {
     readonly configDirectory: string;
-    readonly migrationBindings: readonly string[];
+    readonly migrationBindings: (environment: string | undefined) => readonly string[];
     readonly packageName: string;
 }
 
 const standaloneTarget: WranglerTarget = {
     configDirectory: resolve(repositoryRoot, "packages/relay-cloudflare-standalone"),
-    migrationBindings: [DIRECTORY_DATABASE_BINDING],
+    migrationBindings: () => [DIRECTORY_DATABASE_BINDING],
     packageName: "@moxt-ai/mobius-relay-cloudflare-standalone",
 };
 const platformTarget: WranglerTarget = {
     configDirectory: resolve(repositoryRoot, "packages/relay-cloudflare-platform"),
-    migrationBindings: [DIRECTORY_DATABASE_BINDING, PLATFORM_DIRECTORY_DATABASE_BINDING],
+    migrationBindings: (environment) => {
+        switch (environment) {
+            case undefined:
+                return ["D1_SHARD_APAC_01", PLATFORM_DIRECTORY_DATABASE_BINDING];
+            case "staging":
+                return ["D1_SHARD_APAC_01", "D1_SHARD_WNAM_01", PLATFORM_DIRECTORY_DATABASE_BINDING];
+            case "production":
+                return [
+                    "D1_SHARD_APAC_01",
+                    "D1_SHARD_APAC_02",
+                    "D1_SHARD_WNAM_01",
+                    "D1_SHARD_WNAM_02",
+                    PLATFORM_DIRECTORY_DATABASE_BINDING,
+                ];
+            default:
+                throw new Error("Unsupported Platform migration environment");
+        }
+    },
     packageName: "@moxt-ai/mobius-relay-cloudflare-platform",
 };
 const platformConfigSuffix = "packages/relay-cloudflare-platform/wrangler.jsonc";
@@ -191,7 +208,11 @@ async function applyD1Migrations(
         "--profile",
     ]);
     const temporaryOptions = hasArgument(wranglerArguments, "--temporary") ? ["--temporary"] : [];
-    for (const binding of target.migrationBindings) {
+    const environmentOptions = selectWranglerOptions(wranglerArguments, ["--env"]);
+    const environment = environmentOptions[0]?.startsWith("--env=")
+        ? environmentOptions[0].slice("--env=".length)
+        : environmentOptions[1];
+    for (const binding of target.migrationBindings(environment)) {
         await runPnpm(
             [
                 "--filter",

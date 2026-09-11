@@ -63,12 +63,14 @@
                 {
                     "binding": "D1_SHARD_APAC_01",
                     "database_name": "mobius-cloud-staging-apac-01",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "76a58022-7ee3-4faf-9cc2-db458231cd2e",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
                 {
                     "binding": "D1_SHARD_WNAM_01",
                     "database_name": "mobius-cloud-staging-wnam-01",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "bbdd94bf-f098-409a-b8d9-2bdbf6d2eda7",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
@@ -107,24 +109,28 @@
                 {
                     "binding": "D1_SHARD_APAC_01",
                     "database_name": "mobius-cloud-production-apac-01",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "9ba3f0bb-59f4-4a43-bf51-2a2317e75d01",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
                 {
                     "binding": "D1_SHARD_APAC_02",
                     "database_name": "mobius-cloud-production-apac-02",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "c20de4d5-4d9b-4ed2-b11f-fd660124de2d",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
                 {
                     "binding": "D1_SHARD_WNAM_01",
                     "database_name": "mobius-cloud-production-wnam-01",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "5e809606-9770-48ae-9c38-046903b0daa8",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
                 {
                     "binding": "D1_SHARD_WNAM_02",
                     "database_name": "mobius-cloud-production-wnam-02",
+                    "migrations_table": "mobius_migrations",
                     "database_id": "67c6aacd-29d1-4e0b-ae87-5a45d4ff69e3",
                     "migrations_dir": "../relay-cloudflare/migrations/d1"
                 },
