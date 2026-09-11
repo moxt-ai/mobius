@@ -11,7 +11,8 @@ import {
     sessionQuotaFromEnvironment,
 } from "@moxt-ai/mobius-relay-cloudflare";
 import { createDurableObjectDependencies } from "@moxt-ai/mobius-relay-core";
-import { PlatformDatabaseResolver, PlatformTenantShardingDirectory } from "./infrastructure.ts";
+import { PlatformTenantShardingDirectory } from "./infra/platform-tenant-sharding-directory.ts";
+import { PlatformDatabaseResolver } from "./storage/platform-database-resolver.ts";
 
 interface PlatformDurableObjectEnvironment extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;

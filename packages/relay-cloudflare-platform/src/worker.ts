@@ -14,17 +14,21 @@ import {
     createRelayDependencies,
     PairingDirectoryError,
 } from "@moxt-ai/mobius-relay-core";
-import { D1ConversationAccess } from "./conversation-access.ts";
-import { createConversationApplication } from "./conversation-routes.ts";
-import { ConversationStreamRegistry } from "./conversation-streams.ts";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
-import { PlatformDatabaseResolver, PlatformTenantShardingDirectory } from "./infrastructure.ts";
+import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
+import { createConversationApplication } from "./http/conversation-routes.ts";
+import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
-} from "./platform-authentication-environment.ts";
-import { D1PlatformControlPlane, type PlatformAuthenticationConfiguration } from "./platform-control-plane.ts";
-import { createPlatformControlApplication } from "./platform-routes.ts";
+} from "./infra/platform-authentication-environment.ts";
+import { PlatformTenantShardingDirectory } from "./infra/platform-tenant-sharding-directory.ts";
+import { ConversationAccessService } from "./service/conversation-access-service.ts";
+import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
+import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
+import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
+import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
+import { PlatformDatabaseResolver } from "./storage/platform-database-resolver.ts";
 
 export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
@@ -105,10 +109,12 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
     const conversationStreams = new ConversationStreamRegistry();
     return {
         fetch: async (request, environment) => {
-            const control = new D1PlatformControlPlane(
-                environment.PLATFORM_DIRECTORY_DATABASE,
+            const control = new PlatformControlPlaneService(
+                new PlatformControlPlaneStorage(
+                    environment.PLATFORM_DIRECTORY_DATABASE,
+                    environment.DIRECTORY_DATABASE,
+                ),
                 authentication,
-                environment.DIRECTORY_DATABASE,
             );
             const pathname = new URL(request.url).pathname;
             if (isControlPath(pathname) && !isConversationPath(pathname)) {
@@ -158,9 +164,11 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                     throw new Error("Platform Bot services are unavailable");
                 }
                 return await conversationApplication.fetch(request, {
-                    access: new D1ConversationAccess(
-                        environment.PLATFORM_DIRECTORY_DATABASE,
-                        environment.DIRECTORY_DATABASE,
+                    access: new ConversationAccessService(
+                        new ConversationAccessStorage(
+                            environment.PLATFORM_DIRECTORY_DATABASE,
+                            environment.DIRECTORY_DATABASE,
+                        ),
                         control,
                     ),
                     allowedOrigins: authentication.allowedOrigins,
@@ -198,7 +206,7 @@ const worker = {
     },
 };
 
-export { platformAuthenticationFromEnvironment } from "./platform-authentication-environment.ts";
-export { PlatformAuthenticationConfiguration } from "./platform-control-plane.ts";
+export { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
+export { platformAuthenticationFromEnvironment } from "./infra/platform-authentication-environment.ts";
 export { BotConnectionActor, PlatformSessionRelay, RuntimeRelay };
 export default worker;

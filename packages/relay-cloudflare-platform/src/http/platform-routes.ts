@@ -1,13 +1,14 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { PairingDirectoryError, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
-import { type D1PlatformControlPlane, PlatformControlPlaneError } from "./platform-control-plane.ts";
+import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import type { PlatformControlPlaneService } from "../service/platform-control-plane-service.ts";
 
 const MAXIMUM_BODY_BYTES = 128 * 1_024;
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
 interface PlatformHttpEnvironment {
-    readonly Bindings: { readonly control: D1PlatformControlPlane };
+    readonly Bindings: { readonly control: PlatformControlPlaneService };
     readonly Variables: { readonly signal: AbortSignal };
 }
 

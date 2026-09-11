@@ -5,7 +5,6 @@ import {
     decodeProjectCredential,
     decodeProjectPermissions,
     ExpiringProjectAccessLifetime,
-    type ExternalIdentityAuthenticator,
     ExternalIdentityCredential,
     type ExternalIdentityProjectGrant,
     hashSecret,
@@ -21,6 +20,23 @@ import {
     type VerifiedExternalIdentity,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
+import {
+    hasControlCharacters,
+    PlatformAppCredentialAccess,
+    type PlatformAuthenticationConfiguration,
+    PlatformControlPlaneError,
+    PlatformDeveloperAccess,
+} from "../entity/platform-control-plane.ts";
+import type {
+    AppRow,
+    AuditRow,
+    CredentialRow,
+    PlatformAppCredentialInsert,
+    PlatformAuditRecord,
+    ProjectRow,
+    TenantRow,
+} from "../entity/platform-records.ts";
+import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 
 const DEFAULT_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const MINIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
@@ -52,84 +68,6 @@ const PLATFORM_SERVER_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object
     ]),
 ]);
 
-interface TenantRow {
-    readonly created_at: number;
-    readonly deleted_at: unknown;
-    readonly display_name: string;
-    readonly lifecycle: string;
-    readonly quotas_json: string;
-    readonly suspended_at: unknown;
-    readonly tenant_id: string;
-    readonly updated_at: number;
-}
-
-interface AppRow {
-    readonly app_id: string;
-    readonly created_at: number;
-    readonly default_credential_id: unknown;
-    readonly deleted_at: unknown;
-    readonly display_name: string;
-    readonly lifecycle: string;
-    readonly suspended_at: unknown;
-    readonly tenant_id: string;
-    readonly updated_at: number;
-}
-
-interface ProjectRow {
-    readonly app_id: string;
-    readonly client_reference: string;
-    readonly created_at: number;
-    readonly deleted_at: unknown;
-    readonly display_name: string;
-    readonly idempotency_key: string;
-    readonly lifecycle: string;
-    readonly project_id: string;
-    readonly request_digest: string;
-    readonly suspended_at: unknown;
-    readonly tenant_id: string;
-    readonly updated_at: number;
-}
-
-interface CredentialRow {
-    readonly all_projects: number;
-    readonly app_id: string;
-    readonly app_lifecycle: string;
-    readonly credential_id: string;
-    readonly expires_at: number;
-    readonly issued_at: number;
-    readonly last_used_at: number;
-    readonly overlap_ends_at: unknown;
-    readonly permissions_json: string;
-    readonly public_credential_id: string;
-    readonly replaced_by_credential_id: unknown;
-    readonly revision: number;
-    readonly revoked_at: unknown;
-    readonly secret_digest: string;
-    readonly tenant_id: string;
-    readonly tenant_lifecycle: string;
-}
-
-interface MembershipRow {
-    readonly membership_id: string;
-    readonly role: string;
-    readonly tenant_id: string;
-}
-
-interface AuditRow {
-    readonly action: string;
-    readonly actor_id: string;
-    readonly actor_kind: string;
-    readonly actor_ref: string;
-    readonly app_id: string;
-    readonly audit_id: string;
-    readonly details_json: string;
-    readonly outcome: string;
-    readonly project_id: string;
-    readonly recorded_at: number;
-    readonly subject_id: string;
-    readonly tenant_id: string;
-}
-
 class TenantQuotas {
     readonly activeApps: number;
     readonly activeProjects: number;
@@ -152,74 +90,6 @@ class TenantQuotas {
         this.activeApps = activeApps;
         this.activeProjects = activeProjects;
         this.activeSessions = activeSessions;
-    }
-}
-
-export class PlatformControlPlaneError extends Error {
-    readonly code: string;
-    readonly status: number;
-
-    constructor(code: string, message: string, status: number, options: ErrorOptions = {}) {
-        super(message, options);
-        this.code = code;
-        this.name = "PlatformControlPlaneError";
-        this.status = status;
-    }
-}
-
-export class PlatformAuthenticationConfiguration {
-    readonly allowedOrigins: ReadonlySet<string>;
-    readonly developerAuthenticator: ExternalIdentityAuthenticator;
-    readonly operatorSubjects: ReadonlySet<string>;
-
-    constructor(
-        developerAuthenticator: ExternalIdentityAuthenticator,
-        operatorSubjects: ReadonlySet<string>,
-        allowedOrigins: ReadonlySet<string> = new Set(),
-    ) {
-        if ([...operatorSubjects].some((subject) => !validSubject(subject))) {
-            throw new PlatformControlPlaneError(
-                "platform_configuration_invalid",
-                "A Platform operator subject is invalid",
-                500,
-            );
-        }
-        if ([...allowedOrigins].some((origin) => !validOrigin(origin))) {
-            throw new PlatformControlPlaneError(
-                "platform_configuration_invalid",
-                "A Platform browser origin is invalid",
-                500,
-            );
-        }
-        this.allowedOrigins = new Set(allowedOrigins);
-        this.developerAuthenticator = developerAuthenticator;
-        this.operatorSubjects = new Set(operatorSubjects);
-    }
-}
-
-export class PlatformDeveloperAccess {
-    readonly identity: VerifiedExternalIdentity;
-    readonly membershipId: string;
-    readonly role: string;
-    readonly tenantId: string;
-
-    constructor(identity: VerifiedExternalIdentity, membershipId: string, tenantId: string, role: string) {
-        this.identity = identity;
-        this.membershipId = membershipId;
-        this.tenantId = tenantId;
-        this.role = role;
-    }
-}
-
-export class PlatformAppCredentialAccess {
-    readonly appId: string;
-    readonly credentialRevision: number;
-    readonly project: ProjectAccessContext;
-
-    constructor(appId: string, credentialRevision: number, project: ProjectAccessContext) {
-        this.appId = appId;
-        this.credentialRevision = credentialRevision;
-        this.project = project;
     }
 }
 
@@ -266,40 +136,18 @@ class CreatedAppCredential {
         publicCredentialId: this.publicCredentialId,
         revision: this.revision,
     });
-}
 
-function validSubject(value: string): boolean {
-    return value.length > 0 && value.length <= 256 && !hasControlCharacters(value);
-}
-
-function validOrigin(value: string): boolean {
-    if (value.length === 0 || value.length > 2_048 || value === "*") {
-        return false;
-    }
-    try {
-        const parsed = new URL(value);
-        return (
-            (parsed.protocol === "https:" || parsed.protocol === "http:") &&
-            parsed.origin === value &&
-            parsed.username.length === 0 &&
-            parsed.password.length === 0 &&
-            parsed.pathname === "/" &&
-            parsed.search.length === 0 &&
-            parsed.hash.length === 0
-        );
-    } catch {
-        return false;
-    }
-}
-
-function hasControlCharacters(value: string): boolean {
-    for (const character of value) {
-        const codePoint = character.codePointAt(0) ?? 0;
-        if (codePoint <= 31 || codePoint === 127) {
-            return true;
-        }
-    }
-    return false;
+    readonly storageRecord = (allProjects: boolean): PlatformAppCredentialInsert => ({
+        allProjects,
+        appId: this.appId,
+        credentialId: this.credentialId,
+        expiresAt: this.expiresAt,
+        issuedAt: this.issuedAt,
+        permissionsJson: JSON.stringify(permissionValues(this.permissions)),
+        publicCredentialId: this.publicCredentialId,
+        revision: this.revision,
+        secretDigest: this.digest,
+    });
 }
 
 function displayName(value: string): string {
@@ -528,19 +376,13 @@ async function requestDigest(display: string, clientReference: string): Promise<
     return await hashSecret(JSON.stringify({ clientReference, displayName: display }));
 }
 
-export class D1PlatformControlPlane implements ProjectAuthenticationService, SessionQuotaPolicyProvider {
+export class PlatformControlPlaneService implements ProjectAuthenticationService, SessionQuotaPolicyProvider {
     readonly #authentication: PlatformAuthenticationConfiguration;
-    readonly #database: D1Database;
-    readonly #projectDatabase: D1Database;
+    readonly #storage: PlatformControlPlaneStorage;
 
-    constructor(
-        database: D1Database,
-        authentication: PlatformAuthenticationConfiguration,
-        projectDatabase: D1Database,
-    ) {
-        this.#database = database;
+    constructor(storage: PlatformControlPlaneStorage, authentication: PlatformAuthenticationConfiguration) {
+        this.#storage = storage;
         this.#authentication = authentication;
-        this.#projectDatabase = projectDatabase;
     }
 
     readonly authenticateDeveloper = async (
@@ -586,22 +428,27 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         const membershipId = `pdm_${createRandomToken(18)}`;
         const normalizedDisplayName = displayName(requestedDisplayName);
         const quotas = JSON.stringify(tenantQuotas(requestedQuotas));
-        const results = await this.#database.batch([
-            this.#database
-                .prepare(
-                    `INSERT INTO platform_tenants (
-                       tenant_id, display_name, lifecycle, quotas_json, created_at, updated_at
-                     ) VALUES (?, ?, 'active', ?, ?, ?)`,
-                )
-                .bind(tenantId, normalizedDisplayName, quotas, now, now),
-            this.#database
-                .prepare(
-                    `INSERT INTO platform_developer_memberships (
-                       membership_id, provider_id, issuer, subject, tenant_id, role, created_at
-                     ) VALUES (?, ?, ?, ?, ?, 'owner', ?)`,
-                )
-                .bind(membershipId, identity.providerId, identity.issuer, identity.subject, tenantId, now),
-            this.auditStatement(
+        const tenant: TenantRow = {
+            created_at: now,
+            deleted_at: null,
+            display_name: normalizedDisplayName,
+            lifecycle: "active",
+            quotas_json: quotas,
+            suspended_at: null,
+            tenant_id: tenantId,
+            updated_at: now,
+        };
+        const created = await this.#storage.createTenant(
+            tenant,
+            {
+                createdAt: now,
+                issuer: identity.issuer,
+                membershipId,
+                providerId: identity.providerId,
+                subject: identity.subject,
+                tenantId,
+            },
+            this.auditRecord(
                 tenantId,
                 "",
                 "",
@@ -614,21 +461,12 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
                 {},
                 now,
             ),
-        ]);
-        signal.throwIfAborted();
-        if (results.some((result) => result.meta.changes !== 1)) {
+            signal,
+        );
+        if (!created) {
             throw new PlatformControlPlaneError("platform_write_failed", "The Tenant could not be created", 503);
         }
-        return tenantResource({
-            created_at: now,
-            deleted_at: null,
-            display_name: normalizedDisplayName,
-            lifecycle: "active",
-            quotas_json: quotas,
-            suspended_at: null,
-            tenant_id: tenantId,
-            updated_at: now,
-        });
+        return tenantResource(tenant);
     };
 
     readonly requireTenantDeveloper = async (
@@ -638,18 +476,13 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     ): Promise<PlatformDeveloperAccess> => {
         signal.throwIfAborted();
         const normalizedTenantId = validateIdentifier(tenantId, "tenant_id");
-        const membership = await this.#database
-            .prepare(
-                `SELECT memberships.membership_id, memberships.tenant_id, memberships.role
-                   FROM platform_developer_memberships AS memberships
-                   JOIN platform_tenants AS tenants ON tenants.tenant_id = memberships.tenant_id
-                  WHERE memberships.provider_id = ? AND memberships.issuer = ? AND memberships.subject = ?
-                    AND memberships.tenant_id = ? AND memberships.revoked_at IS NULL
-                    AND tenants.lifecycle = 'active'`,
-            )
-            .bind(identity.providerId, identity.issuer, identity.subject, normalizedTenantId)
-            .first<MembershipRow>();
-        signal.throwIfAborted();
+        const membership = await this.#storage.readDeveloperMembership(
+            identity.providerId,
+            identity.issuer,
+            identity.subject,
+            normalizedTenantId,
+            signal,
+        );
         if (membership === null) {
             throw new PlatformControlPlaneError(
                 "tenant_access_denied",
@@ -663,15 +496,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
         const tenantId = scope.storageLocator.resolveHostingPlacement();
         const tenant = await this.readTenant(tenantId, signal);
-        const project = await this.#database
-            .prepare(
-                `SELECT app_id FROM platform_projects
-                  WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'active'`,
-            )
-            .bind(tenantId, scope.projectId)
-            .first<{ readonly app_id: string }>();
-        signal.throwIfAborted();
-        if (project === null) {
+        const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
+        if (appId === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
         }
         const quota = quotasFromRow(tenant);
@@ -685,32 +511,27 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         signal: AbortSignal,
     ): Promise<void> => {
         const tenantId = scope.storageLocator.resolveHostingPlacement();
-        const project = await this.#database
-            .prepare(
-                `SELECT app_id FROM platform_projects
-                  WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'active'`,
-            )
-            .bind(tenantId, scope.projectId)
-            .first<{ readonly app_id: string }>();
-        signal.throwIfAborted();
-        if (project === null) {
+        const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
+        if (appId === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
         }
-        const result = await this.auditStatement(
-            tenantId,
-            project.app_id,
-            scope.projectId,
-            "platform_system",
-            "session-quota",
-            "",
-            "quota.denied",
-            sessionId,
-            "denied",
-            { limit: policy.activeSessionsPerTenant, resource: "session" },
-            Date.now(),
-        ).run();
-        signal.throwIfAborted();
-        if (result.meta.changes !== 1) {
+        const recorded = await this.#storage.recordAudit(
+            this.auditRecord(
+                tenantId,
+                appId,
+                scope.projectId,
+                "platform_system",
+                "session-quota",
+                "",
+                "quota.denied",
+                sessionId,
+                "denied",
+                { limit: policy.activeSessionsPerTenant, resource: "session" },
+                Date.now(),
+            ),
+            signal,
+        );
+        if (!recorded) {
             throw new PlatformControlPlaneError("platform_write_failed", "The quota denial could not be audited", 503);
         }
     };
@@ -735,15 +556,11 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         const now = Date.now();
         const tenant = await this.readTenant(access.tenantId, signal);
         const quota = quotasFromRow(tenant);
-        const usage = await this.#database
-            .prepare("SELECT COUNT(*) AS active_count FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active'")
-            .bind(access.tenantId)
-            .first<{ readonly active_count: number }>();
-        signal.throwIfAborted();
-        if (usage === null || !Number.isSafeInteger(usage.active_count) || usage.active_count < 0) {
+        const usage = await this.#storage.countActiveApps(access.tenantId, signal);
+        if (!Number.isSafeInteger(usage) || usage < 0) {
             throw new PlatformControlPlaneError("platform_record_invalid", "The Tenant App usage is invalid", 500);
         }
-        if (usage.active_count >= quota.activeApps) {
+        if (usage >= quota.activeApps) {
             await this.recordQuotaDenial(access, "app", access.tenantId, quota.activeApps, signal);
             throw new PlatformControlPlaneError(
                 "tenant_app_quota_exceeded",
@@ -760,41 +577,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             now,
             DEFAULT_APP_CREDENTIAL_LIFETIME_MILLISECONDS,
         );
-        const results = await this.#database.batch([
-            this.#database
-                .prepare(
-                    `INSERT INTO platform_apps (
-                       app_id, tenant_id, display_name, lifecycle, default_credential_id, created_at, updated_at
-                     ) SELECT ?, ?, ?, 'active', ?, ?, ?
-                       WHERE (SELECT COUNT(*) FROM platform_apps
-                               WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
-                )
-                .bind(
-                    appId,
-                    access.tenantId,
-                    normalizedDisplayName,
-                    created.credentialId,
-                    now,
-                    now,
-                    access.tenantId,
-                    quota.activeApps,
-                ),
-            this.credentialInsertStatement(created, true),
-            this.auditCreatedAppStatement(access, appId, now),
-        ]);
-        signal.throwIfAborted();
-        if (results[0]?.meta.changes !== 1) {
-            await this.recordQuotaDenial(access, "app", access.tenantId, quota.activeApps, signal);
-            throw new PlatformControlPlaneError(
-                "tenant_app_quota_exceeded",
-                "The Tenant active App quota is exhausted",
-                429,
-            );
-        }
-        if (results.slice(1).some((result) => result.meta.changes !== 1)) {
-            throw new PlatformControlPlaneError("platform_write_failed", "The App could not be created", 503);
-        }
-        const app = appResource({
+        const appRow: AppRow = {
             app_id: appId,
             created_at: now,
             default_credential_id: created.credentialId,
@@ -804,7 +587,38 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             suspended_at: null,
             tenant_id: access.tenantId,
             updated_at: now,
-        });
+        };
+        const stored = await this.#storage.createApp(
+            appRow,
+            created.storageRecord(true),
+            quota.activeApps,
+            this.auditRecord(
+                access.tenantId,
+                appId,
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "app.created",
+                appId,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!stored.appCreated) {
+            await this.recordQuotaDenial(access, "app", access.tenantId, quota.activeApps, signal);
+            throw new PlatformControlPlaneError(
+                "tenant_app_quota_exceeded",
+                "The Tenant active App quota is exhausted",
+                429,
+            );
+        }
+        if (!stored.relatedRecordsCreated) {
+            throw new PlatformControlPlaneError("platform_write_failed", "The App could not be created", 503);
+        }
+        const app = appResource(appRow);
         return { ...app, defaultCredential: created.resource() };
     };
 
@@ -828,11 +642,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         const normalizedDisplayName = displayName(requestedDisplayName);
         const digest = await requestDigest(normalizedDisplayName, clientReference);
         signal.throwIfAborted();
-        const existing = await this.#database
-            .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
-            .bind(app.app_id, normalizedIdempotencyKey)
-            .first<ProjectRow>();
-        signal.throwIfAborted();
+        const existing = await this.#storage.readProjectByIdempotencyKey(app.app_id, normalizedIdempotencyKey, signal);
         if (existing !== null) {
             if (existing.request_digest !== digest) {
                 throw new PlatformControlPlaneError(
@@ -845,17 +655,11 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         }
         const tenant = await this.readTenant(access.tenantId, signal);
         const quota = quotasFromRow(tenant);
-        const usage = await this.#database
-            .prepare(
-                "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
-            )
-            .bind(access.tenantId)
-            .first<{ readonly active_count: number }>();
-        signal.throwIfAborted();
-        if (usage === null || !Number.isSafeInteger(usage.active_count) || usage.active_count < 0) {
+        const usage = await this.#storage.countActiveProjects(access.tenantId, signal);
+        if (!Number.isSafeInteger(usage) || usage < 0) {
             throw new PlatformControlPlaneError("platform_record_invalid", "The Tenant Project usage is invalid", 500);
         }
-        if (usage.active_count >= quota.activeProjects) {
+        if (usage >= quota.activeProjects) {
             await this.recordQuotaDenial(access, "project", app.app_id, quota.activeProjects, signal);
             throw new PlatformControlPlaneError(
                 "tenant_project_quota_exceeded",
@@ -865,52 +669,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         }
         const now = Date.now();
         const projectId = `prj_${createRandomToken(18)}`;
-        const results = await this.#database.batch([
-            this.#database
-                .prepare(
-                    `INSERT INTO platform_projects (
-                   project_id, tenant_id, app_id, display_name, client_reference,
-                   idempotency_key, request_digest, lifecycle, created_at, updated_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?
-                   WHERE (SELECT COUNT(*) FROM platform_projects
-                           WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
-                )
-                .bind(
-                    projectId,
-                    app.tenant_id,
-                    app.app_id,
-                    normalizedDisplayName,
-                    clientReference,
-                    normalizedIdempotencyKey,
-                    digest,
-                    now,
-                    now,
-                    access.tenantId,
-                    quota.activeProjects,
-                ),
-            this.auditCreatedProjectStatement(access, app.app_id, projectId, now),
-        ]);
-        signal.throwIfAborted();
-        if (results[0]?.meta.changes !== 1) {
-            const duplicate = await this.#database
-                .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
-                .bind(app.app_id, normalizedIdempotencyKey)
-                .first<ProjectRow>();
-            signal.throwIfAborted();
-            if (duplicate !== null && duplicate.request_digest === digest) {
-                return projectResource(duplicate);
-            }
-            await this.recordQuotaDenial(access, "project", app.app_id, quota.activeProjects, signal);
-            throw new PlatformControlPlaneError(
-                "tenant_project_quota_exceeded",
-                "The Tenant active Project quota is exhausted",
-                429,
-            );
-        }
-        if (results.slice(1).some((result) => result.meta.changes !== 1)) {
-            throw new PlatformControlPlaneError("platform_write_failed", "The Project could not be created", 503);
-        }
-        return projectResource({
+        const project: ProjectRow = {
             app_id: app.app_id,
             client_reference: clientReference,
             created_at: now,
@@ -923,17 +682,50 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             suspended_at: null,
             tenant_id: app.tenant_id,
             updated_at: now,
-        });
+        };
+        const stored = await this.#storage.createProject(
+            project,
+            quota.activeProjects,
+            this.auditRecord(
+                access.tenantId,
+                app.app_id,
+                projectId,
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "project.created",
+                projectId,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!stored.projectCreated) {
+            const duplicate = await this.#storage.readProjectByIdempotencyKey(
+                app.app_id,
+                normalizedIdempotencyKey,
+                signal,
+            );
+            if (duplicate !== null && duplicate.request_digest === digest) {
+                return projectResource(duplicate);
+            }
+            await this.recordQuotaDenial(access, "project", app.app_id, quota.activeProjects, signal);
+            throw new PlatformControlPlaneError(
+                "tenant_project_quota_exceeded",
+                "The Tenant active Project quota is exhausted",
+                429,
+            );
+        }
+        if (!stored.auditRecorded) {
+            throw new PlatformControlPlaneError("platform_write_failed", "The Project could not be created", 503);
+        }
+        return projectResource(project);
     };
 
     readonly listApps = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<object> => {
-        signal.throwIfAborted();
-        const rows = await this.#database
-            .prepare("SELECT * FROM platform_apps WHERE tenant_id = ? ORDER BY created_at, app_id")
-            .bind(access.tenantId)
-            .all<AppRow>();
-        signal.throwIfAborted();
-        return { apps: rows.results.map(appResource) };
+        const rows = await this.#storage.listApps(access.tenantId, signal);
+        return { apps: rows.map(appResource) };
     };
 
     readonly listProjects = async (
@@ -945,12 +737,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         if (access.tenantId !== app.tenant_id) {
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
-        const rows = await this.#database
-            .prepare("SELECT * FROM platform_projects WHERE app_id = ? ORDER BY created_at, project_id")
-            .bind(app.app_id)
-            .all<ProjectRow>();
-        signal.throwIfAborted();
-        return { projects: rows.results.map(projectResource) };
+        const rows = await this.#storage.listProjects(app.app_id, signal);
+        return { projects: rows.map(projectResource) };
     };
 
     readonly readAppResource = async (
@@ -984,32 +772,9 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     readonly readTenantUsage = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<object> => {
         signal.throwIfAborted();
         const tenant = await this.readTenant(access.tenantId, signal);
-        const [apps, projects, sessions] = await Promise.all([
-            this.#database
-                .prepare(
-                    "SELECT COUNT(*) AS active_count FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active'",
-                )
-                .bind(access.tenantId)
-                .first<{ readonly active_count: number }>(),
-            this.#database
-                .prepare(
-                    "SELECT COUNT(*) AS active_count FROM platform_projects WHERE tenant_id = ? AND lifecycle = 'active'",
-                )
-                .bind(access.tenantId)
-                .first<{ readonly active_count: number }>(),
-            this.#projectDatabase
-                .prepare("SELECT COUNT(*) AS active_count FROM session_quota_reservations WHERE tenant_id = ?")
-                .bind(access.tenantId)
-                .first<{ readonly active_count: number }>(),
-        ]);
-        signal.throwIfAborted();
-        if (apps === null || projects === null || sessions === null) {
-            throw new PlatformControlPlaneError("platform_record_invalid", "The Tenant usage is unavailable", 500);
-        }
+        const usage = await this.#storage.readTenantUsage(access.tenantId, signal);
         return {
-            activeApps: apps.active_count,
-            activeProjects: projects.active_count,
-            activeSessions: sessions.active_count,
+            ...usage,
             quotas: quotasFromRow(tenant),
             tenantId: access.tenantId,
         };
@@ -1024,17 +789,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
             throw new PlatformControlPlaneError("invalid_request", "The audit page size is invalid", 400);
         }
-        const rows = await this.#database
-            .prepare(
-                `SELECT * FROM platform_audit_events
-                  WHERE tenant_id = ?
-                  ORDER BY recorded_at DESC, audit_id DESC
-                  LIMIT ?`,
-            )
-            .bind(access.tenantId, limit)
-            .all<AuditRow>();
-        signal.throwIfAborted();
-        return { events: rows.results.map(auditResource) };
+        const rows = await this.#storage.listTenantAuditEvents(access.tenantId, limit, signal);
+        return { events: rows.map(auditResource) };
     };
 
     readonly issueAppCredential = async (
@@ -1060,19 +816,10 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             now,
             lifetimeMilliseconds(expiresInSeconds),
         );
-        const statements = [this.credentialInsertStatement(created, normalizedProjectIds.length === 0)];
-        for (const projectId of normalizedProjectIds) {
-            statements.push(
-                this.#database
-                    .prepare(
-                        `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                         VALUES (?, ?, ?)`,
-                    )
-                    .bind(created.credentialId, projectId, now),
-            );
-        }
-        statements.push(
-            this.auditStatement(
+        const issued = await this.#storage.issueAppCredential(
+            created.storageRecord(normalizedProjectIds.length === 0),
+            normalizedProjectIds,
+            this.auditRecord(
                 access.tenantId,
                 app.app_id,
                 "",
@@ -1085,10 +832,9 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
                 { projectIds: normalizedProjectIds },
                 now,
             ),
+            signal,
         );
-        const results = await this.#database.batch(statements);
-        signal.throwIfAborted();
-        if (results.some((result) => result.meta.changes !== 1)) {
+        if (!issued) {
             throw new PlatformControlPlaneError("platform_write_failed", "The AppCredential could not be issued", 503);
         }
         return created.resource();
@@ -1115,22 +861,11 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             lifetimeMilliseconds(expiresInSeconds),
         );
         const overlapEndsAt = now + overlapMilliseconds(overlapSeconds);
-        const statements = [
-            this.credentialInsertStatement(created, source.all_projects === 1),
-            this.#database
-                .prepare(
-                    `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
-                     SELECT ?, project_id, ? FROM platform_app_credential_projects WHERE credential_id = ?`,
-                )
-                .bind(created.credentialId, now, source.credential_id),
-            this.#database
-                .prepare(
-                    `UPDATE platform_app_credentials
-                        SET replaced_by_credential_id = ?, overlap_ends_at = ?
-                      WHERE credential_id = ? AND revoked_at IS NULL AND replaced_by_credential_id IS NULL`,
-                )
-                .bind(created.credentialId, overlapEndsAt, source.credential_id),
-            this.auditStatement(
+        const rotated = await this.#storage.rotateAppCredential(
+            created.storageRecord(source.all_projects === 1),
+            source.credential_id,
+            overlapEndsAt,
+            this.auditRecord(
                 app.tenant_id,
                 app.app_id,
                 "",
@@ -1143,10 +878,9 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
                 { replacementCredentialId: created.credentialId },
                 now,
             ),
-        ];
-        const results = await this.#database.batch(statements);
-        signal.throwIfAborted();
-        if (results[0]?.meta.changes !== 1 || results[2]?.meta.changes !== 1 || results[3]?.meta.changes !== 1) {
+            signal,
+        );
+        if (!rotated.credentialInserted || !rotated.sourceRotated || !rotated.auditRecorded) {
             throw new PlatformControlPlaneError(
                 "app_credential_rotation_conflict",
                 "The AppCredential was already rotated or revoked",
@@ -1171,18 +905,10 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         const app = await this.readApp(source.app_id, signal);
         const access = await this.requireTenantDeveloper(identity, app.tenant_id, signal);
         const now = Date.now();
-        const results = await this.#database.batch([
-            this.#database
-                .prepare(
-                    "UPDATE platform_app_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
-                )
-                .bind(now, normalizedCredentialId),
-            this.#database
-                .prepare(
-                    "UPDATE conversation_access_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE parent_credential_id = ?",
-                )
-                .bind(now, normalizedCredentialId),
-            this.auditStatement(
+        const revoked = await this.#storage.revokeAppCredential(
+            normalizedCredentialId,
+            now,
+            this.auditRecord(
                 app.tenant_id,
                 app.app_id,
                 "",
@@ -1195,9 +921,9 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
                 {},
                 now,
             ),
-        ]);
-        signal.throwIfAborted();
-        if (results[0]?.meta.changes !== 1 || results[2]?.meta.changes !== 1) {
+            signal,
+        );
+        if (!revoked.credentialRevoked || !revoked.auditRecorded) {
             throw new PlatformControlPlaneError("app_credential_not_found", "The AppCredential was not found", 404);
         }
         return { credentialId: normalizedCredentialId, revokedAt: iso(now) };
@@ -1274,20 +1000,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         _actorRef: string,
         signal: AbortSignal,
     ): Promise<ProjectAccessContext> => {
-        const project = await this.#database
-            .prepare(
-                `SELECT project_id, tenant_id, app_id, lifecycle
-                   FROM platform_projects
-                  WHERE project_id = ? AND app_id = ? AND tenant_id = ?`,
-            )
-            .bind(projectId, row.app_id, row.tenant_id)
-            .first<{
-                readonly app_id: string;
-                readonly lifecycle: string;
-                readonly project_id: string;
-                readonly tenant_id: string;
-            }>();
-        signal.throwIfAborted();
+        const project = await this.#storage.readProjectScope(projectId, row.app_id, row.tenant_id, signal);
         if (project === null || project.lifecycle !== "active") {
             throw new ProjectAuthenticationError(
                 "project_access_denied",
@@ -1295,14 +1008,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             );
         }
         if (row.all_projects !== 1) {
-            const scope = await this.#database
-                .prepare(
-                    "SELECT 1 AS present FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?",
-                )
-                .bind(row.credential_id, projectId)
-                .first<{ readonly present: number }>();
-            signal.throwIfAborted();
-            if (scope === null) {
+            const hasProject = await this.#storage.credentialHasProject(row.credential_id, projectId, signal);
+            if (!hasProject) {
                 throw new ProjectAuthenticationError(
                     "project_access_denied",
                     "The AppCredential is not authorized for this Project",
@@ -1317,16 +1024,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
             );
         }
         const now = Date.now();
-        const updated = await this.#database
-            .prepare(
-                `UPDATE platform_app_credentials SET last_used_at = ?
-                  WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?
-                    AND (replaced_by_credential_id IS NULL OR overlap_ends_at > ?)`,
-            )
-            .bind(now, row.credential_id, now, now)
-            .run();
-        signal.throwIfAborted();
-        if (updated.meta.changes !== 1) {
+        const updated = await this.#storage.touchCredential(row.credential_id, now, signal);
+        if (!updated) {
             throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
         }
         return new ProjectAccessContext(
@@ -1354,18 +1053,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         if (credential.scheme !== ProjectCredentialScheme.Application) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
-        const row = await this.#database
-            .prepare(
-                `SELECT credentials.*, apps.tenant_id,
-                        apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
-                   FROM platform_app_credentials AS credentials
-                   JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-                   JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
-                  WHERE credentials.public_credential_id = ?`,
-            )
-            .bind(credential.publicCredentialId)
-            .first<CredentialRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readCredentialByPublicId(credential.publicCredentialId, signal);
         if (row === null) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
@@ -1389,23 +1077,11 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     };
 
     private readonly allowedProjects = async (row: CredentialRow, signal: AbortSignal): Promise<readonly string[]> => {
-        const result =
+        const projects =
             row.all_projects === 1
-                ? await this.#database
-                      .prepare("SELECT project_id FROM platform_projects WHERE app_id = ? AND lifecycle = 'active'")
-                      .bind(row.app_id)
-                      .all<{ readonly project_id: string }>()
-                : await this.#database
-                      .prepare(
-                          `SELECT projects.project_id
-                             FROM platform_app_credential_projects AS scopes
-                             JOIN platform_projects AS projects ON projects.project_id = scopes.project_id
-                            WHERE scopes.credential_id = ? AND projects.lifecycle = 'active'`,
-                      )
-                      .bind(row.credential_id)
-                      .all<{ readonly project_id: string }>();
-        signal.throwIfAborted();
-        return Object.freeze(result.results.map((project) => project.project_id));
+                ? await this.#storage.listActiveProjectIds(row.app_id, signal)
+                : await this.#storage.listScopedActiveProjectIds(row.credential_id, signal);
+        return Object.freeze(projects);
     };
 
     private readonly createCredential = async (
@@ -1431,46 +1107,16 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         );
     };
 
-    private readonly credentialInsertStatement = (
-        created: CreatedAppCredential,
-        allProjects: boolean,
-    ): D1PreparedStatement =>
-        this.#database
-            .prepare(
-                `INSERT INTO platform_app_credentials (
-                   credential_id, public_credential_id, app_id, secret_digest, permissions_json,
-                   all_projects, revision, issued_at, expires_at, last_used_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-                   WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
-            )
-            .bind(
-                created.credentialId,
-                created.publicCredentialId,
-                created.appId,
-                created.digest,
-                JSON.stringify(permissionValues(created.permissions)),
-                allProjects ? 1 : 0,
-                created.revision,
-                created.issuedAt,
-                created.expiresAt,
-                created.issuedAt,
-                created.appId,
-            );
-
     private readonly nextCredentialRevision = async (appId: string, signal: AbortSignal): Promise<number> => {
-        const row = await this.#database
-            .prepare("SELECT COALESCE(MAX(revision), 0) + 1 AS revision FROM platform_app_credentials WHERE app_id = ?")
-            .bind(appId)
-            .first<{ readonly revision: number }>();
-        signal.throwIfAborted();
-        if (row === null || !Number.isSafeInteger(row.revision) || row.revision < 1) {
+        const revision = await this.#storage.nextCredentialRevision(appId, signal);
+        if (revision === null || !Number.isSafeInteger(revision) || revision < 1) {
             throw new PlatformControlPlaneError(
                 "platform_record_invalid",
                 "The AppCredential revision is invalid",
                 500,
             );
         }
-        return row.revision;
+        return revision;
     };
 
     private readonly validateProjectScope = async (
@@ -1487,12 +1133,8 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         }
         const normalized = projectIds.map((projectId) => validateIdentifier(projectId, "project_id"));
         for (const projectId of normalized) {
-            const row = await this.#database
-                .prepare("SELECT 1 AS present FROM platform_projects WHERE project_id = ? AND app_id = ?")
-                .bind(projectId, appId)
-                .first<{ readonly present: number }>();
-            signal.throwIfAborted();
-            if (row === null) {
+            const belongsToApp = await this.#storage.projectBelongsToApp(projectId, appId, signal);
+            if (!belongsToApp) {
                 throw new PlatformControlPlaneError(
                     "app_credential_scope_invalid",
                     "The AppCredential scope contains a Project outside this App",
@@ -1504,11 +1146,7 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     };
 
     private readonly readApp = async (appId: string, signal: AbortSignal): Promise<AppRow> => {
-        const row = await this.#database
-            .prepare("SELECT * FROM platform_apps WHERE app_id = ?")
-            .bind(validateIdentifier(appId, "app_id"))
-            .first<AppRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readApp(validateIdentifier(appId, "app_id"), signal);
         if (row === null) {
             throw new PlatformControlPlaneError("app_not_found", "The App was not found", 404);
         }
@@ -1516,56 +1154,12 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
     };
 
     private readonly readTenant = async (tenantId: string, signal: AbortSignal): Promise<TenantRow> => {
-        const row = await this.#database
-            .prepare("SELECT * FROM platform_tenants WHERE tenant_id = ?")
-            .bind(validateIdentifier(tenantId, "tenant_id"))
-            .first<TenantRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readTenant(validateIdentifier(tenantId, "tenant_id"), signal);
         if (row === null || row.lifecycle !== "active") {
             throw new PlatformControlPlaneError("tenant_not_found", "The Tenant was not found", 404);
         }
         return row;
     };
-
-    private readonly auditCreatedAppStatement = (
-        access: PlatformDeveloperAccess,
-        appId: string,
-        now: number,
-    ): D1PreparedStatement =>
-        this.#database
-            .prepare(
-                `INSERT INTO platform_audit_events (
-                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
-                   actor_ref, action, subject_id, outcome, details_json, recorded_at
-                 ) SELECT ?, ?, ?, '', 'platform_developer', ?, '', 'app.created', ?, 'succeeded', '{}', ?
-                   WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
-            )
-            .bind(`pae_${createRandomToken(18)}`, access.tenantId, appId, access.identity.subject, appId, now, appId);
-
-    private readonly auditCreatedProjectStatement = (
-        access: PlatformDeveloperAccess,
-        appId: string,
-        projectId: string,
-        now: number,
-    ): D1PreparedStatement =>
-        this.#database
-            .prepare(
-                `INSERT INTO platform_audit_events (
-                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
-                   actor_ref, action, subject_id, outcome, details_json, recorded_at
-                 ) SELECT ?, ?, ?, ?, 'platform_developer', ?, '', 'project.created', ?, 'succeeded', '{}', ?
-                   WHERE EXISTS (SELECT 1 FROM platform_projects WHERE project_id = ?)`,
-            )
-            .bind(
-                `pae_${createRandomToken(18)}`,
-                access.tenantId,
-                appId,
-                projectId,
-                access.identity.subject,
-                projectId,
-                now,
-                projectId,
-            );
 
     private readonly recordQuotaDenial = async (
         access: PlatformDeveloperAccess,
@@ -1574,45 +1168,36 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         limit: number,
         signal: AbortSignal,
     ): Promise<void> => {
-        const result = await this.auditStatement(
-            access.tenantId,
-            resource === "app" ? "" : subjectId,
-            "",
-            "platform_developer",
-            access.identity.subject,
-            "",
-            "quota.denied",
-            subjectId,
-            "denied",
-            { limit, resource },
-            Date.now(),
-        ).run();
-        signal.throwIfAborted();
-        if (result.meta.changes !== 1) {
+        const recorded = await this.#storage.recordAudit(
+            this.auditRecord(
+                access.tenantId,
+                resource === "app" ? "" : subjectId,
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "quota.denied",
+                subjectId,
+                "denied",
+                { limit, resource },
+                Date.now(),
+            ),
+            signal,
+        );
+        if (!recorded) {
             throw new PlatformControlPlaneError("platform_write_failed", "The quota denial could not be audited", 503);
         }
     };
 
     private readonly readCredentialById = async (credentialId: string, signal: AbortSignal): Promise<CredentialRow> => {
-        const row = await this.#database
-            .prepare(
-                `SELECT credentials.*, apps.tenant_id,
-                        apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
-                   FROM platform_app_credentials AS credentials
-                   JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
-                   JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
-                  WHERE credentials.credential_id = ?`,
-            )
-            .bind(credentialId)
-            .first<CredentialRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readCredentialById(credentialId, signal);
         if (row === null) {
             throw new PlatformControlPlaneError("app_credential_not_found", "The AppCredential was not found", 404);
         }
         return row;
     };
 
-    private readonly auditStatement = (
+    private readonly auditRecord = (
         tenantId: string,
         appId: string,
         projectId: string,
@@ -1624,28 +1209,20 @@ export class D1PlatformControlPlane implements ProjectAuthenticationService, Ses
         outcome: string,
         details: Readonly<Record<string, unknown>>,
         now: number,
-    ): D1PreparedStatement =>
-        this.#database
-            .prepare(
-                `INSERT INTO platform_audit_events (
-                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
-                   actor_ref, action, subject_id, outcome, details_json, recorded_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .bind(
-                `pae_${createRandomToken(18)}`,
-                tenantId,
-                appId,
-                projectId,
-                actorKind,
-                actorId,
-                actorReference(actorRef),
-                action,
-                subjectId,
-                outcome,
-                JSON.stringify(details),
-                now,
-            );
+    ): PlatformAuditRecord => ({
+        action,
+        actorId,
+        actorKind,
+        actorRef: actorReference(actorRef),
+        appId,
+        auditId: `pae_${createRandomToken(18)}`,
+        detailsJson: JSON.stringify(details),
+        outcome,
+        projectId,
+        recordedAt: now,
+        subjectId,
+        tenantId,
+    });
 
     private readonly unsupportedLegacyOperation = (): never => {
         throw new ProjectAuthenticationError(

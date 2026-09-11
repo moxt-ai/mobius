@@ -144,6 +144,9 @@ importers:
       hono:
         specifier: ^4.13.5
         version: 4.13.5
+      valibot:
+        specifier: 1.4.2
+        version: 1.4.2(typescript@7.0.2)
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.1.4

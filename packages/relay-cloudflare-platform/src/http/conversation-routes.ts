@@ -19,9 +19,9 @@ import {
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
-import type { D1ConversationAccess } from "./conversation-access.ts";
-import type { ConversationStreamRegistry } from "./conversation-streams.ts";
-import { PlatformControlPlaneError } from "./platform-control-plane.ts";
+import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import type { ConversationAccessService } from "../service/conversation-access-service.ts";
+import type { ConversationStreamRegistry } from "../service/conversation-stream-service.ts";
 
 const MAXIMUM_BODY_BYTES = 128 * 1_024;
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
@@ -38,7 +38,7 @@ const BROWSER_CORS_HEADERS = new Set(["authorization", "content-type", "x-mobius
 const BROWSER_CORS_METHODS = new Set(["GET", "POST", "PUT"]);
 
 interface ConversationHttpBindings {
-    readonly access: D1ConversationAccess;
+    readonly access: ConversationAccessService;
     readonly allowedOrigins: ReadonlySet<string>;
     readonly bots: BotService;
     readonly nowEpochMilliseconds: () => number;

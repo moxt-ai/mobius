@@ -17,59 +17,19 @@ import {
     ProjectScope,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
-import { type D1PlatformControlPlane, PlatformControlPlaneError } from "./platform-control-plane.ts";
+import type {
+    ConversationCredentialInsert,
+    ConversationCredentialRow,
+    ConversationDirectoryRow,
+    ConversationMessageRow,
+} from "../entity/conversation-records.ts";
+import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import type { ConversationAccessStorage } from "../storage/conversation-access-storage.ts";
+import type { PlatformControlPlaneService } from "./platform-control-plane-service.ts";
 
 const MINIMUM_LIFETIME_MILLISECONDS = 60 * 1_000;
 const MAXIMUM_LIFETIME_MILLISECONDS = 60 * 60 * 1_000;
 const CREDENTIAL_PATTERN = /^mconv_([a-zA-Z0-9_-]{22})_([a-zA-Z0-9_-]{43})$/;
-
-interface ConversationCredentialRow {
-    readonly actor_ref: string;
-    readonly app_id: string;
-    readonly app_lifecycle: string;
-    readonly conversation_id: string;
-    readonly credential_id: string;
-    readonly expires_at: number;
-    readonly parent_credential_id: string;
-    readonly parent_credential_revision: number;
-    readonly parent_expires_at: number;
-    readonly parent_overlap_ends_at: unknown;
-    readonly parent_replaced_by_credential_id: unknown;
-    readonly parent_revoked_at: unknown;
-    readonly parent_revision: number;
-    readonly permissions_json: string;
-    readonly project_id: string;
-    readonly project_lifecycle: string;
-    readonly public_credential_id: string;
-    readonly revoked_at: unknown;
-    readonly secret_digest: string;
-    readonly session_id: string;
-    readonly tenant_id: string;
-    readonly tenant_lifecycle: string;
-}
-
-interface ConversationDirectoryRow {
-    readonly conversation_id: string;
-    readonly project_id: string;
-    readonly session_id: string;
-    readonly tenant_id: string;
-}
-
-interface ConversationMessageRow {
-    readonly actor_ref: string;
-    readonly artifact_ids_json: string;
-    readonly content: string;
-    readonly conversation_id: string;
-    readonly created_at: number;
-    readonly credential_id: string;
-    readonly idempotency_key: string;
-    readonly images_json: string;
-    readonly message_id: string;
-    readonly project_id: string;
-    readonly request_digest: string;
-    readonly resources_json: string;
-    readonly session_id: string;
-}
 
 export class ConversationAcceptedMessage {
     readonly actorRef: string;
@@ -219,6 +179,10 @@ function decodedArtifactIds(encoded: string): readonly string[] {
     );
 }
 
+function recordValue(record: Readonly<Record<string, unknown>>, key: string): unknown {
+    return record[key];
+}
+
 function messageCursor(cursor: string): ConversationMessageCursor {
     try {
         if (!/^[A-Za-z0-9_-]{1,512}$/.test(cursor)) {
@@ -238,8 +202,8 @@ function messageCursor(cursor: string): ConversationMessageCursor {
         ) {
             throw new Error("Invalid cursor shape");
         }
-        const createdAt = record["createdAt"];
-        const messageId = record["messageId"];
+        const createdAt = recordValue(record, "createdAt");
+        const messageId = recordValue(record, "messageId");
         if (typeof createdAt !== "number" || typeof messageId !== "string") {
             throw new Error("Invalid cursor fields");
         }
@@ -276,14 +240,12 @@ function messageResource(row: ConversationMessageRow): ConversationAcceptedMessa
     return new ConversationAcceptedMessage(row, images, resources, decodedArtifactIds(row.artifact_ids_json));
 }
 
-export class D1ConversationAccess implements ConversationAccessAuthorizer {
-    readonly #control: D1PlatformControlPlane;
-    readonly #platformDatabase: D1Database;
-    readonly #projectDatabase: D1Database;
+export class ConversationAccessService implements ConversationAccessAuthorizer {
+    readonly #control: PlatformControlPlaneService;
+    readonly #storage: ConversationAccessStorage;
 
-    constructor(platformDatabase: D1Database, projectDatabase: D1Database, control: D1PlatformControlPlane) {
-        this.#platformDatabase = platformDatabase;
-        this.#projectDatabase = projectDatabase;
+    constructor(storage: ConversationAccessStorage, control: PlatformControlPlaneService) {
+        this.#storage = storage;
         this.#control = control;
     }
 
@@ -318,23 +280,13 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
                 );
             }
         }
-        const directory = await this.#projectDatabase
-            .prepare(
-                `SELECT conversations.conversation_id, conversations.session_id,
-                        bots.tenant_id, bots.project_id
-                   FROM bot_conversations AS conversations
-                   JOIN bots ON bots.bot_id = conversations.bot_id
-                  WHERE conversations.conversation_id = ? AND conversations.session_id = ?
-                    AND bots.tenant_id = ? AND bots.project_id = ?`,
-            )
-            .bind(
-                normalizedConversationId,
-                normalizedSessionId,
-                access.project.scope.storageLocator.resolveHostingPlacement(),
-                access.project.scope.projectId,
-            )
-            .first<ConversationDirectoryRow>();
-        signal.throwIfAborted();
+        const directory = await this.#storage.readConversationDirectory(
+            normalizedConversationId,
+            normalizedSessionId,
+            access.project.scope.storageLocator.resolveHostingPlacement(),
+            access.project.scope.projectId,
+            signal,
+        );
         if (directory === null) {
             throw new PlatformControlPlaneError(
                 "conversation_not_found",
@@ -364,18 +316,7 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
     ): Promise<object> => {
         signal.throwIfAborted();
         const normalizedConversationId = validateIdentifier(conversationId, "conversation_id");
-        const directory = await this.#projectDatabase
-            .prepare(
-                `SELECT conversations.conversation_id, conversations.session_id,
-                        bots.tenant_id, bots.project_id
-                   FROM bot_conversations AS conversations
-                   JOIN bots ON bots.bot_id = conversations.bot_id
-                  WHERE conversations.conversation_id = ? AND conversations.lifecycle = 'active'
-                    AND bots.lifecycle = 'active'`,
-            )
-            .bind(normalizedConversationId)
-            .first<ConversationDirectoryRow>();
-        signal.throwIfAborted();
+        const directory = await this.#storage.readActiveConversationDirectory(normalizedConversationId, signal);
         if (directory === null) {
             throw new PlatformControlPlaneError("conversation_not_found", "The Conversation was not found", 404);
         }
@@ -445,16 +386,8 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
             lifetime(expiresInSeconds),
         );
         const now = Date.now();
-        const results = await this.#platformDatabase.batch([
-            replacement.statement,
-            this.#platformDatabase
-                .prepare(
-                    "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
-                )
-                .bind(now, source.credential_id),
-        ]);
-        signal.throwIfAborted();
-        if (results.some((result) => result.meta.changes !== 1)) {
+        const rotated = await this.#storage.rotateCredential(replacement.record, source.credential_id, now, signal);
+        if (!rotated) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_rotation_conflict",
                 "The Conversation credential was already rotated or revoked",
@@ -482,14 +415,8 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
             );
         }
         const now = Date.now();
-        const result = await this.#platformDatabase
-            .prepare(
-                "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
-            )
-            .bind(now, source.credential_id)
-            .run();
-        signal.throwIfAborted();
-        if (result.meta.changes !== 1) {
+        const revoked = await this.#storage.revokeCredential(source.credential_id, now, signal);
+        if (!revoked) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_not_found",
                 "The Conversation credential was not found",
@@ -513,27 +440,7 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
                 "The Conversation credential is invalid",
             );
         }
-        const row = await this.#platformDatabase
-            .prepare(
-                `SELECT access.*, parent.revision AS parent_revision,
-                        parent.expires_at AS parent_expires_at,
-                        parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
-                        parent.overlap_ends_at AS parent_overlap_ends_at,
-                        parent.revoked_at AS parent_revoked_at,
-                        apps.lifecycle AS app_lifecycle,
-                        projects.lifecycle AS project_lifecycle,
-                        tenants.lifecycle AS tenant_lifecycle
-                   FROM conversation_access_credentials AS access
-                   JOIN platform_app_credentials AS parent
-                     ON parent.credential_id = access.parent_credential_id
-                   JOIN platform_apps AS apps ON apps.app_id = access.app_id
-                   JOIN platform_projects AS projects ON projects.project_id = access.project_id
-                   JOIN platform_tenants AS tenants ON tenants.tenant_id = access.tenant_id
-                  WHERE access.public_credential_id = ?`,
-            )
-            .bind(publicCredentialId)
-            .first<ConversationCredentialRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
         if (row === null || !constantTimeEqual(await hashSecret(credential), row.secret_digest)) {
             throw new ConversationAccessError(
                 "conversation_credential_invalid",
@@ -565,15 +472,8 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
                 "The Conversation credential does not grant this operation",
             );
         }
-        const touched = await this.#platformDatabase
-            .prepare(
-                `UPDATE conversation_access_credentials SET last_used_at = ?
-                  WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?`,
-            )
-            .bind(now, row.credential_id, now)
-            .run();
-        signal.throwIfAborted();
-        if (touched.meta.changes !== 1) {
+        const touched = await this.#storage.touchCredential(row.credential_id, now, signal);
+        if (!touched) {
             throw new ConversationAccessError(
                 "conversation_credential_revoked",
                 "The Conversation credential is no longer active",
@@ -608,39 +508,30 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
             JSON.stringify({ artifactIds: normalizedArtifactIds, content, images, resources }),
         );
         const messageId = `msg_${createRandomToken(18)}`;
-        const result = await this.#platformDatabase
-            .prepare(
-                `INSERT OR IGNORE INTO platform_conversation_messages (
-                   message_id, credential_id, project_id, conversation_id, session_id,
-                   actor_ref, idempotency_key, request_digest, content, images_json,
-                   resources_json, artifact_ids_json, created_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .bind(
-                messageId,
-                access.credentialId,
-                access.scope.projectId,
-                access.conversationId,
-                access.sessionId,
-                access.actorReference,
-                normalizedIdempotencyKey,
-                requestDigest,
+        const changes = await this.#storage.insertMessage(
+            {
+                actorRef: access.actorReference,
+                artifactIdsJson: JSON.stringify(normalizedArtifactIds),
                 content,
-                JSON.stringify(images),
-                JSON.stringify(resources),
-                JSON.stringify(normalizedArtifactIds),
-                now,
-            )
-            .run();
-        signal.throwIfAborted();
-        const row = await this.#platformDatabase
-            .prepare(
-                `SELECT * FROM platform_conversation_messages
-                  WHERE project_id = ? AND session_id = ? AND idempotency_key = ?`,
-            )
-            .bind(access.scope.projectId, access.sessionId, normalizedIdempotencyKey)
-            .first<ConversationMessageRow>();
-        signal.throwIfAborted();
+                conversationId: access.conversationId,
+                createdAt: now,
+                credentialId: access.credentialId,
+                idempotencyKey: normalizedIdempotencyKey,
+                imagesJson: JSON.stringify(images),
+                messageId,
+                projectId: access.scope.projectId,
+                requestDigest,
+                resourcesJson: JSON.stringify(resources),
+                sessionId: access.sessionId,
+            },
+            signal,
+        );
+        const row = await this.#storage.readMessageByIdempotencyKey(
+            access.scope.projectId,
+            access.sessionId,
+            normalizedIdempotencyKey,
+            signal,
+        );
         if (row === null) {
             throw new PlatformControlPlaneError(
                 "platform_write_failed",
@@ -659,7 +550,7 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
                 409,
             );
         }
-        if (result.meta.changes !== 0 && result.meta.changes !== 1) {
+        if (changes !== 0 && changes !== 1) {
             throw new PlatformControlPlaneError(
                 "platform_write_failed",
                 "The Conversation message could not be accepted",
@@ -676,21 +567,14 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
     ): Promise<ConversationAcceptedMessage> => {
         signal.throwIfAborted();
         access.require(ConversationPermission.Read);
-        const row = await this.#platformDatabase
-            .prepare(
-                `SELECT * FROM platform_conversation_messages
-                  WHERE message_id = ? AND project_id = ? AND conversation_id = ? AND session_id = ?
-                    AND actor_ref = ?`,
-            )
-            .bind(
-                validateIdentifier(messageId, "message_id"),
-                access.scope.projectId,
-                access.conversationId,
-                access.sessionId,
-                access.actorReference,
-            )
-            .first<ConversationMessageRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readMessage(
+            validateIdentifier(messageId, "message_id"),
+            access.scope.projectId,
+            access.conversationId,
+            access.sessionId,
+            access.actorReference,
+            signal,
+        );
         if (row === null) {
             throw new PlatformControlPlaneError("message_not_found", "The Conversation message was not found", 404);
         }
@@ -709,31 +593,20 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
             throw new PlatformControlPlaneError("invalid_page_size", "The message page size is invalid", 400);
         }
         const decoded = requestedCursor.length === 0 ? null : messageCursor(requestedCursor);
-        const rows = await this.#platformDatabase
-            .prepare(
-                `SELECT * FROM platform_conversation_messages
-                  WHERE project_id = ? AND conversation_id = ? AND session_id = ?
-                    AND (? IS NULL OR created_at < ? OR (created_at = ? AND message_id < ?))
-                  ORDER BY created_at DESC, message_id DESC
-                  LIMIT ?`,
-            )
-            .bind(
-                access.scope.projectId,
-                access.conversationId,
-                access.sessionId,
-                decoded?.createdAt ?? null,
-                decoded?.createdAt ?? null,
-                decoded?.createdAt ?? null,
-                decoded?.messageId ?? null,
-                limit + 1,
-            )
-            .all<ConversationMessageRow>();
-        signal.throwIfAborted();
-        const pageRows = rows.results.slice(0, limit);
+        const rows = await this.#storage.listMessages(
+            access.scope.projectId,
+            access.conversationId,
+            access.sessionId,
+            decoded?.createdAt ?? null,
+            decoded?.messageId ?? null,
+            limit + 1,
+            signal,
+        );
+        const pageRows = rows.slice(0, limit);
         const last = pageRows.at(-1);
         return {
             acceptedMessages: pageRows.map(messageResource),
-            nextCursor: rows.results.length > limit && last !== undefined ? encodedMessageCursor(last) : null,
+            nextCursor: rows.length > limit && last !== undefined ? encodedMessageCursor(last) : null,
         };
     };
 
@@ -756,9 +629,8 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
             permissions,
             lifetimeMilliseconds,
         );
-        const result = await created.statement.run();
-        signal.throwIfAborted();
-        if (result.meta.changes !== 1) {
+        const inserted = await this.#storage.insertCredential(created.record, signal);
+        if (!inserted) {
             throw new PlatformControlPlaneError(
                 "platform_write_failed",
                 "The Conversation credential could not be issued",
@@ -769,7 +641,7 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
     };
 
     private readonly requirePermissions = (
-        access: Awaited<ReturnType<D1PlatformControlPlane["authorizePlatformCredential"]>>,
+        access: Awaited<ReturnType<PlatformControlPlaneService["authorizePlatformCredential"]>>,
         permissions: ReadonlySet<ConversationPermission>,
     ): void => {
         for (const permission of permissions) {
@@ -797,7 +669,25 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
         const credentialId = `cac_${publicCredentialId}`;
         const credential = `mconv_${publicCredentialId}_${createRandomToken(32)}`;
         const expiresAt = now + lifetimeMilliseconds;
+        const permissionList = permissionValues(permissions);
+        const record: ConversationCredentialInsert = {
+            actorRef,
+            appId,
+            conversationId: directory.conversation_id,
+            credentialId,
+            expiresAt,
+            issuedAt: now,
+            parentCredentialId,
+            parentCredentialRevision,
+            permissionsJson: JSON.stringify(permissionList),
+            projectId: directory.project_id,
+            publicCredentialId,
+            secretDigest: await hashSecret(credential),
+            sessionId: directory.session_id,
+            tenantId: directory.tenant_id,
+        };
         return {
+            record,
             resource: {
                 actorRef,
                 appId,
@@ -806,37 +696,11 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
                 credentialId,
                 expiresAt: new Date(expiresAt).toISOString(),
                 issuedAt: new Date(now).toISOString(),
-                permissions: permissionValues(permissions),
+                permissions: permissionList,
                 projectId: directory.project_id,
                 sessionId: directory.session_id,
                 tenantId: directory.tenant_id,
             },
-            statement: this.#platformDatabase
-                .prepare(
-                    `INSERT INTO conversation_access_credentials (
-                       credential_id, public_credential_id, parent_credential_id,
-                       parent_credential_revision, tenant_id, app_id, project_id,
-                       conversation_id, session_id, actor_ref, permissions_json,
-                       secret_digest, issued_at, expires_at, last_used_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .bind(
-                    credentialId,
-                    publicCredentialId,
-                    parentCredentialId,
-                    parentCredentialRevision,
-                    directory.tenant_id,
-                    appId,
-                    directory.project_id,
-                    directory.conversation_id,
-                    directory.session_id,
-                    actorRef,
-                    JSON.stringify(permissionValues(permissions)),
-                    await hashSecret(credential),
-                    now,
-                    expiresAt,
-                    now,
-                ),
         };
     };
 
@@ -844,27 +708,7 @@ export class D1ConversationAccess implements ConversationAccessAuthorizer {
         credentialId: string,
         signal: AbortSignal,
     ): Promise<ConversationCredentialRow> => {
-        const row = await this.#platformDatabase
-            .prepare(
-                `SELECT access.*, parent.revision AS parent_revision,
-                        parent.expires_at AS parent_expires_at,
-                        parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
-                        parent.overlap_ends_at AS parent_overlap_ends_at,
-                        parent.revoked_at AS parent_revoked_at,
-                        apps.lifecycle AS app_lifecycle,
-                        projects.lifecycle AS project_lifecycle,
-                        tenants.lifecycle AS tenant_lifecycle
-                   FROM conversation_access_credentials AS access
-                   JOIN platform_app_credentials AS parent
-                     ON parent.credential_id = access.parent_credential_id
-                   JOIN platform_apps AS apps ON apps.app_id = access.app_id
-                   JOIN platform_projects AS projects ON projects.project_id = access.project_id
-                   JOIN platform_tenants AS tenants ON tenants.tenant_id = access.tenant_id
-                  WHERE access.credential_id = ?`,
-            )
-            .bind(credentialId)
-            .first<ConversationCredentialRow>();
-        signal.throwIfAborted();
+        const row = await this.#storage.readCredentialById(credentialId, signal);
         if (row === null || row.revoked_at !== null) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_not_found",

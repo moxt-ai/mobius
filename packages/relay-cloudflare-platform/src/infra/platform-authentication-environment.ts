@@ -5,7 +5,7 @@ import {
     ProjectAuthenticationError,
     RegisteredExternalIdentityAuthenticator,
 } from "@moxt-ai/mobius-relay-core";
-import { PlatformAuthenticationConfiguration } from "./platform-control-plane.ts";
+import { PlatformAuthenticationConfiguration } from "../entity/platform-control-plane.ts";
 
 const DEFAULT_ALLOWED_ALGORITHMS = Object.freeze(["RS256"]);
 const DEFAULT_SAFE_METADATA_CLAIMS = Object.freeze(["email", "name"]);

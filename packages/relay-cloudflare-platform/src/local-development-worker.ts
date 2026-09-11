@@ -5,7 +5,7 @@ import {
     VerifiedExternalIdentity,
 } from "@moxt-ai/mobius-relay-core";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
-import { PlatformAuthenticationConfiguration } from "./platform-control-plane.ts";
+import { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { createPlatformWorker, type PlatformRelayBindings, type PlatformWorker } from "./worker.ts";
 
 interface LocalDevelopmentBindings extends PlatformRelayBindings {

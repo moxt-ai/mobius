@@ -17,7 +17,8 @@
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare": "workspace:*",
-        "hono": "^4.13.5"
+        "hono": "^4.13.5",
+        "valibot": "1.4.2"
     },
     "devDependencies": {
         "@cloudflare/vitest-plugin": "^1.1.4",
