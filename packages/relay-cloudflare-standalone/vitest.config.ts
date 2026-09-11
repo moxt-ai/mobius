@@ -15,6 +15,15 @@ export default defineConfig(async () => {
             cloudflareTest({
                 wrangler: { configPath: wranglerConfigPath },
                 miniflare: {
+                    outboundService: "test-oidc-provider",
+                    workers: [
+                        {
+                            name: "test-oidc-provider",
+                            modules: true,
+                            scriptPath: fileURLToPath(new URL("./test/fixtures/oidc-provider.js", import.meta.url)),
+                            compatibilityDate: "2026-09-03",
+                        },
+                    ],
                     bindings: {
                         PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: "100000",
                         PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT: "100000",

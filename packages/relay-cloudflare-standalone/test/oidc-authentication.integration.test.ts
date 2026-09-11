@@ -69,12 +69,12 @@ async function jwt(
     return `${signingInput}.${base64Url(new Uint8Array(signature))}`;
 }
 
-function configuration(): OidcProviderConfiguration {
+function configuration(jwksPath = "/.well-known/jwks.json"): OidcProviderConfiguration {
     return new OidcProviderConfiguration(
         "clerk",
         "https://identity.example.test",
         "mobius-relay",
-        new URL("https://identity.example.test/.well-known/jwks.json"),
+        new URL(jwksPath, "https://identity.example.test"),
         ["RS256"],
         ["email", "name"],
         300_000,
@@ -105,6 +105,36 @@ afterEach(() => {
 });
 
 describe.sequential("OIDC external identity authentication", () => {
+    it("Given an issuer serving signing keys over HTTP, When a Worker authenticates its signed token, Then the identity is verified and redirected key endpoints are rejected", async () => {
+        const key = await rsaKey("http-key");
+        const signal = AbortSignal.timeout(5_000);
+        const published = await fetch("https://identity.example.test/.well-known/jwks.json", {
+            method: "PUT",
+            body: JSON.stringify({ keys: [key.jwk] }),
+            signal,
+        });
+        expect(published.status).toBe(204);
+        const nowSeconds = Math.floor(Date.now() / 1_000);
+        const credential = new ExternalIdentityCredential(
+            "clerk",
+            await jwt(key.privateKey, "http-key", {
+                aud: "mobius-relay",
+                exp: nowSeconds + 600,
+                iat: nowSeconds,
+                iss: "https://identity.example.test",
+                sub: "http-developer",
+            }),
+        );
+        await expect(
+            new OidcExternalIdentityAuthenticator(configuration()).authenticate(credential, signal),
+        ).resolves.toMatchObject({ subject: "http-developer", providerId: "clerk" });
+        await expect(
+            errorCode(
+                new OidcExternalIdentityAuthenticator(configuration("/redirect")).authenticate(credential, signal),
+            ),
+        ).resolves.toBe("external_provider_unavailable");
+    });
+
     it("Given a configured issuer with cached keys, When a valid key rotates, Then signed identities remain bounded to issuer, audience, lifetime, algorithm, and subject", async () => {
         const first = await rsaKey("key-1");
         const second = await rsaKey("key-2");

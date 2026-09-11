@@ -268,7 +268,8 @@ export class FetchOidcJwksSource implements OidcJwksSource {
         try {
             response = await fetch(jwksUrl, {
                 headers: { accept: "application/json" },
-                redirect: "error",
+                // Workers supports manual redirects; the response check below rejects every 3xx.
+                redirect: "manual",
                 signal,
             });
         } catch (cause) {
