@@ -5,5 +5,4 @@ export interface BotGrantCredential {
     readonly label: string;
     readonly project_id: string;
     readonly scopes_json: string;
-    readonly tenant_id: string;
 }

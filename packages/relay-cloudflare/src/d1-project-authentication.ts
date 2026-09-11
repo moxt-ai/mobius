@@ -43,7 +43,6 @@ interface CapabilityCredentialRow {
     readonly revoked_at: unknown;
     readonly source: string;
     readonly source_status: string;
-    readonly tenant_id: string;
 }
 
 interface ApplicationCredentialRow {
@@ -357,7 +356,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 new ExternalIdentityProjectGrant(
                     row.binding_id,
                     row.grant_id,
-                    new ProjectScope(row.tenant_id, row.project_id),
+                    new ProjectScope(row.project_id),
                     permissionsFromRow(row.permissions_json),
                 ),
         );
@@ -402,7 +401,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 credentialId,
                 publicCredentialId,
                 grant.grantId,
-                grant.scope.storageLocator.resolveHostingPlacement(),
+                grant.scope.projectId,
                 grant.scope.projectId,
                 await hashSecret(credential),
                 encodedPermissions(grant.permissions),
@@ -476,7 +475,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     applicationId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     name,
                     encodedPermissions(permissions),
@@ -522,7 +521,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE tenant_id = ? AND project_id = ?
                   ORDER BY created_at DESC, application_id DESC`,
             )
-            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.scope.projectId, access.scope.projectId)
             .all<ApplicationRow>();
         const resources: object[] = [];
         for (const application of applications.results) {
@@ -586,7 +585,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     AND applications.tenant_id = ? AND applications.project_id = ?
                     AND applications.lifecycle = 'active'`,
             )
-            .bind(normalizedCredentialId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(normalizedCredentialId, access.scope.projectId, access.scope.projectId)
             .first<ApplicationRow>();
         signal.throwIfAborted();
         if (application === null) {
@@ -627,7 +626,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     now,
                     normalizedCredentialId,
                     application.application_id,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                 ),
             this.#database
@@ -656,7 +655,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -702,12 +701,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                          WHERE tenant_id = ? AND project_id = ?
                       )`,
                 )
-                .bind(
-                    now,
-                    normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedCredentialId, access.scope.projectId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -726,7 +720,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -734,7 +728,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedCredentialId,
                     now,
                     normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                 ),
         ]);
@@ -763,13 +757,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                         SET lifecycle = 'revoked', revoked_at = COALESCE(revoked_at, ?), updated_at = ?
                       WHERE application_id = ? AND tenant_id = ? AND project_id = ?`,
                 )
-                .bind(
-                    now,
-                    now,
-                    normalizedApplicationId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, now, normalizedApplicationId, access.scope.projectId, access.scope.projectId),
             this.#database
                 .prepare(
                     `UPDATE project_application_credentials
@@ -780,12 +768,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                            WHERE tenant_id = ? AND project_id = ?
                         )`,
                 )
-                .bind(
-                    now,
-                    normalizedApplicationId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedApplicationId, access.scope.projectId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -800,7 +783,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -808,7 +791,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedApplicationId,
                     now,
                     normalizedApplicationId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                 ),
         ]);
@@ -900,7 +883,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 .bind(
                     grantId,
                     bindingId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     encodedPermissions(permissions),
                     access.actor.kind.value,
@@ -913,14 +896,9 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 this.#database
                     .prepare(
                         `UPDATE project_owner_credentials SET revoked_at = COALESCE(revoked_at, ?)
-                          WHERE credential_id = ? AND tenant_id = ? AND project_id = ?`,
+                          WHERE credential_id = ? AND project_id = ?`,
                     )
-                    .bind(
-                        now,
-                        access.credentialId,
-                        access.scope.storageLocator.resolveHostingPlacement(),
-                        access.scope.projectId,
-                    ),
+                    .bind(now, access.credentialId, access.scope.projectId),
             );
             statements.push(
                 this.#database
@@ -928,16 +906,10 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                         `UPDATE channel_host_credentials SET revoked_at = COALESCE(revoked_at, ?)
                           WHERE credential_id = ? AND channel_id IN (
                             SELECT source_channel_id FROM project_owner_credentials
-                             WHERE credential_id = ? AND tenant_id = ? AND project_id = ?
+                             WHERE credential_id = ? AND project_id = ?
                           )`,
                     )
-                    .bind(
-                        now,
-                        access.credentialId,
-                        access.credentialId,
-                        access.scope.storageLocator.resolveHostingPlacement(),
-                        access.scope.projectId,
-                    ),
+                    .bind(now, access.credentialId, access.credentialId, access.scope.projectId),
             );
         }
         statements.push(
@@ -1004,13 +976,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                       WHERE bindings.provider_id = ? AND bindings.issuer = ? AND bindings.subject = ?
                         AND grants.tenant_id = ? AND grants.project_id = ? AND grants.revoked_at IS NULL`,
                 )
-                .bind(
-                    identity.providerId,
-                    identity.issuer,
-                    identity.subject,
-                    scope.storageLocator.resolveHostingPlacement(),
-                    scope.projectId,
-                )
+                .bind(identity.providerId, identity.issuer, identity.subject, scope.projectId, scope.projectId)
                 .first<{ readonly grant_id: string }>();
             signal.throwIfAborted();
             if (conflict !== null) {
@@ -1044,7 +1010,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE grants.tenant_id = ? AND grants.project_id = ? AND grants.revoked_at IS NULL
                   ORDER BY grants.created_at DESC, grants.grant_id DESC`,
             )
-            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.scope.projectId, access.scope.projectId)
             .all<ExternalBindingRow>();
         signal.throwIfAborted();
         return { bindings: rows.results.map(externalBindingResource) };
@@ -1066,12 +1032,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                       WHERE binding_id = ? AND tenant_id = ? AND project_id = ?
                         AND revoked_at IS NULL`,
                 )
-                .bind(
-                    now,
-                    normalizedBindingId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedBindingId, access.scope.projectId, access.scope.projectId),
             this.#database
                 .prepare(
                     `UPDATE mobius_access_credentials SET revoked_at = COALESCE(revoked_at, ?)
@@ -1080,12 +1041,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                          WHERE binding_id = ? AND tenant_id = ? AND project_id = ?
                       ) AND revoked_at IS NULL`,
                 )
-                .bind(
-                    now,
-                    normalizedBindingId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedBindingId, access.scope.projectId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -1100,7 +1056,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1108,7 +1064,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedBindingId,
                     now,
                     normalizedBindingId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                 ),
         ]);
@@ -1129,10 +1085,10 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 `SELECT credential_id, source_channel_id, created_at, last_used_at,
                         replaced_by_credential_id, overlap_ends_at, revoked_at
                    FROM project_owner_credentials
-                  WHERE tenant_id = ? AND project_id = ?
+                  WHERE project_id = ?
                   ORDER BY created_at DESC, credential_id DESC`,
             )
-            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.scope.projectId)
             .all<OwnerCredentialRow>();
         signal.throwIfAborted();
         return {
@@ -1170,10 +1126,10 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 `SELECT credential_id, source_channel_id, created_at, last_used_at,
                         replaced_by_credential_id, overlap_ends_at, revoked_at
                    FROM project_owner_credentials
-                  WHERE credential_id = ? AND tenant_id = ? AND project_id = ?
+                  WHERE credential_id = ? AND project_id = ?
                     AND revoked_at IS NULL AND replaced_by_credential_id IS NULL`,
             )
-            .bind(normalizedCredentialId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(normalizedCredentialId, access.scope.projectId)
             .first<OwnerCredentialRow>();
         signal.throwIfAborted();
         if (source === null) {
@@ -1192,24 +1148,22 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             this.#database
                 .prepare(
                     `INSERT INTO project_owner_credentials (
-                       credential_id, tenant_id, project_id, token_hash, source_channel_id,
+                       credential_id, project_id, token_hash, source_channel_id,
                        created_at, last_used_at
                      )
-                     SELECT ?, ?, ?, ?, source.source_channel_id, ?, ?
+                     SELECT ?, ?, ?, source.source_channel_id, ?, ?
                      FROM project_owner_credentials AS source
                      WHERE source.credential_id = ?
-                       AND source.tenant_id = ? AND source.project_id = ?
+                       AND source.project_id = ?
                        AND source.revoked_at IS NULL AND source.replaced_by_credential_id IS NULL`,
                 )
                 .bind(
                     replacementId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
                     access.scope.projectId,
                     digest,
                     now,
                     now,
                     normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
                     access.scope.projectId,
                 ),
             this.#database
@@ -1264,7 +1218,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1308,29 +1262,18 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             this.#database
                 .prepare(
                     `UPDATE project_owner_credentials SET revoked_at = COALESCE(revoked_at, ?)
-                      WHERE credential_id = ? AND tenant_id = ? AND project_id = ?`,
+                      WHERE credential_id = ? AND project_id = ?`,
                 )
-                .bind(
-                    now,
-                    normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedCredentialId, access.scope.projectId),
             this.#database
                 .prepare(
                     `UPDATE channel_host_credentials SET revoked_at = COALESCE(revoked_at, ?)
                       WHERE credential_id = ? AND channel_id IN (
                         SELECT source_channel_id FROM project_owner_credentials
-                         WHERE credential_id = ? AND tenant_id = ? AND project_id = ?
+                         WHERE credential_id = ? AND project_id = ?
                       )`,
                 )
-                .bind(
-                    now,
-                    normalizedCredentialId,
-                    normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
-                    access.scope.projectId,
-                ),
+                .bind(now, normalizedCredentialId, normalizedCredentialId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -1340,12 +1283,12 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                      SELECT ?, ?, ?, ?, ?, '', ?, ?, 'succeeded', '{}', ?
                      WHERE EXISTS (
                        SELECT 1 FROM project_owner_credentials
-                        WHERE credential_id = ? AND tenant_id = ? AND project_id = ?
+                        WHERE credential_id = ? AND project_id = ?
                      )`,
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.storageLocator.resolveHostingPlacement(),
+                    access.scope.projectId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1353,7 +1296,6 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedCredentialId,
                     now,
                     normalizedCredentialId,
-                    access.scope.storageLocator.resolveHostingPlacement(),
                     access.scope.projectId,
                 ),
         ]);
@@ -1389,7 +1331,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE tenant_id = ? AND project_id = ?
                   ORDER BY recorded_at DESC, audit_id DESC LIMIT ?`,
             )
-            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId, limit)
+            .bind(access.scope.projectId, access.scope.projectId, limit)
             .all<Readonly<Record<string, unknown>>>();
         signal.throwIfAborted();
         return {
@@ -1418,7 +1360,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(
-                `SELECT 'owner' AS source, credential_id, tenant_id, project_id,
+                `SELECT 'owner' AS source, credential_id, project_id,
                         'accountless_owner' AS actor_kind, credential_id AS actor_id,
                         NULL AS expires_at, revoked_at, replaced_by_credential_id,
                         overlap_ends_at, 'active' AS source_status
@@ -1426,7 +1368,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE token_hash = ?
                  UNION ALL
                  SELECT 'linked' AS source, credentials.credential_id,
-                        channels.tenant_id, channels.project_id,
+                        channels.project_id,
                         'browser_access' AS actor_kind,
                         credentials.credential_id AS actor_id, NULL AS expires_at,
                         credentials.revoked_at, credentials.replaced_by_credential_id,
@@ -1435,7 +1377,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                    INNER JOIN pairing_channels AS channels ON channels.channel_id = credentials.channel_id
                   WHERE credentials.token_hash = ? AND credentials.authority = 'linked'
                  UNION ALL
-                 SELECT 'browser' AS source, credential_id, tenant_id, project_id,
+                 SELECT 'browser' AS source, credential_id, project_id,
                         'browser_access' AS actor_kind, credential_id AS actor_id, expires_at,
                         revoked_at, NULL AS replaced_by_credential_id,
                         NULL AS overlap_ends_at, 'active' AS source_status
@@ -1466,7 +1408,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 ? new ExpiringProjectAccessLifetime(row.expires_at)
                 : new PerpetualProjectAccessLifetime();
         const access = new ProjectAccessContext(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             new Set(row.source === "owner" ? PROJECT_PERMISSIONS : INTERACTIVE_PROJECT_PERMISSIONS),
             new AuditActor(kind, row.actor_id),
             row.credential_id,
@@ -1520,7 +1462,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             throw new ProjectAuthenticationError("credential_expired", "The Project application credential expired");
         }
         const access = new ProjectAccessContext(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             permissionsFromRow(row.permissions_json),
             new AuditActor(AuditActorKind.Application, row.application_id),
             row.credential_id,
@@ -1564,7 +1506,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             throw new ProjectAuthenticationError("credential_expired", "The Mobius access credential expired");
         }
         const access = new ProjectAccessContext(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             permissionsFromRow(row.permissions_json),
             new AuditActor(AuditActorKind.ExternalIdentity, row.grant_id),
             row.credential_id,
@@ -1683,11 +1625,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 `SELECT * FROM project_applications
                   WHERE application_id = ? AND tenant_id = ? AND project_id = ? AND lifecycle = 'active'`,
             )
-            .bind(
-                validateIdentifier(applicationId, "application_id"),
-                scope.storageLocator.resolveHostingPlacement(),
-                scope.projectId,
-            )
+            .bind(validateIdentifier(applicationId, "application_id"), scope.projectId, scope.projectId)
             .first<ApplicationRow>();
         signal.throwIfAborted();
         if (row === null) {
@@ -1802,7 +1740,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             )
             .bind(
                 `aae_${createRandomToken(18)}`,
-                scope.storageLocator.resolveHostingPlacement(),
+                scope.projectId,
                 scope.projectId,
                 actor.kind.value,
                 actor.actorId,

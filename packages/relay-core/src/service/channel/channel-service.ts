@@ -85,7 +85,7 @@ export class ChannelService {
         signal: AbortSignal,
     ) => {
         const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
-        const scope = new ProjectScope(access.tenantId, access.projectId);
+        const scope = new ProjectScope(access.projectId);
         const runtimeId = await this.#sessionQueries.readCommandRuntime(scope, sessionId, commandId, signal);
         if (runtimeId !== access.runtimeId) {
             throw new SessionRuntimeError("session_access_denied", "The Turn is bound to another Runtime");

@@ -353,6 +353,10 @@ export interface MobiusCreatePlatformProjectRequest {
     readonly clientReference: string;
     readonly displayName: string;
     readonly idempotencyKey: string;
+    readonly placement: {
+        readonly d1ShardId: string;
+        readonly r2BucketId: string;
+    };
 }
 
 export interface MobiusIssueAppCredentialRequest {
@@ -504,6 +508,13 @@ export class MobiusPlatformDeveloperClient {
                         clientReference: requestedIdentifier(request.clientReference, "Project client reference"),
                         displayName: requestedDisplayName(request.displayName),
                         idempotencyKey: requestedIdentifier(request.idempotencyKey, "Project idempotency key"),
+                        placement: {
+                            d1ShardId: requestedIdentifier(request.placement.d1ShardId, "Project D1 shard identifier"),
+                            r2BucketId: requestedIdentifier(
+                                request.placement.r2BucketId,
+                                "Project R2 bucket identifier",
+                            ),
+                        },
                     },
                     signal,
                 ),

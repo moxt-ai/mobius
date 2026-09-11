@@ -10,6 +10,11 @@ export { DurableObjectSqlDatabase } from "./durable-object-sql-database.ts";
 export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
 export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 export { SessionRelay } from "./durable-objects/session-relay.ts";
+export type {
+    ProjectStorageContext,
+    ProjectStorageDirectory,
+    ProjectStoragePlacement,
+} from "./project-storage-directory.ts";
 export {
     type PublicProjectBootstrapEnvironment,
     PublicProjectBootstrapPolicy,
@@ -22,8 +27,3 @@ export {
     sessionArchiveByteLimitFromEnvironment,
     sessionQuotaFromEnvironment,
 } from "./session-configuration.ts";
-export type {
-    TenantContext,
-    TenantShardingDirectory,
-    TenantShardResolution,
-} from "./tenant-sharding-directory.ts";

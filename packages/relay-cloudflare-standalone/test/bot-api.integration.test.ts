@@ -802,31 +802,6 @@ describe.sequential("Provider-neutral Bot API", () => {
             daemon.socket.close();
         }
     });
-    it("Given a standalone tenant with a paired project, When projects and bots are listed without a login token, Then the configured tenant's project and bot are returned", async () => {
-        const pairing = await pairRuntime();
-        const bot = await createBot(pairing, "Standalone discovery");
-        const projects = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects`);
-        expect(projects.status).toBe(200);
-        expect(await projects.json()).toMatchObject({
-            projects: expect.arrayContaining([{ projectId: pairing.projectId, displayName: "mobius" }]),
-        });
-        const bots = await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots`,
-        );
-        expect(bots.status).toBe(200);
-        expect(await bots.json()).toMatchObject({
-            bots: [{ botId: bot.botId, displayName: "Standalone discovery", lifecycle: "draft" }],
-        });
-        const statusUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/status`;
-        expect(await (await exports.default.fetch(statusUrl)).json()).toEqual({ status: "offline" });
-        const daemon = await openDaemon(pairing);
-        try {
-            expect(await (await exports.default.fetch(statusUrl)).json()).toEqual({ status: "connected" });
-        } finally {
-            daemon.socket.close();
-        }
-    });
-
     it("Given an owner manages an active Bot, When its owner directories and lifecycle controls are used, Then Web-safe resources remain durable and locally sensitive binding details stay private", async () => {
         const pairing = await pairRuntime();
         const daemon = await openDaemon(pairing);

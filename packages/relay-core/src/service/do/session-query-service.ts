@@ -273,7 +273,6 @@ export class SessionQueryService {
                     ? encodeCursor({
                           projectId: scope.projectId,
                           sessionId: rowString(last, "session_id"),
-                          tenantId: scope.storageLocator.resolveHostingPlacement(),
                           updatedAt: rowNumber(last, "updated_at"),
                       })
                     : null,
@@ -348,7 +347,6 @@ export class SessionQueryService {
                           createdAt: rowNumber(last, "created_at"),
                           projectId: scope.projectId,
                           sessionId,
-                          tenantId: scope.storageLocator.resolveHostingPlacement(),
                       })
                     : null,
         };

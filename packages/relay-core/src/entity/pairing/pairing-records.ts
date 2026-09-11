@@ -1,13 +1,11 @@
 interface PairingScopeRow {
     readonly channel_id: string;
     readonly runtime_id: string;
-    readonly tenant_id: string;
     readonly project_id: string;
 }
 
 export interface ProjectOwnerRow {
     readonly credential_id: string;
-    readonly tenant_id: string;
     readonly project_id: string;
 }
 
@@ -38,7 +36,6 @@ export interface RuntimePairingRow extends PairingScopeRow {
 
 export interface RuntimePairingAudit {
     readonly auditId: string;
-    readonly tenantId: string;
     readonly projectId: string;
     readonly pairingId: string;
     readonly runtimeId: string;

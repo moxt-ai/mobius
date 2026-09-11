@@ -27,7 +27,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
     ) => {
         const row = await this.#database
             .prepare(`SELECT grants.bot_id, grants.audience, grants.label,
-            grants.scopes_json, grants.expires_at, bots.tenant_id, bots.project_id
+            grants.scopes_json, grants.expires_at, bots.project_id
             FROM bot_connection_grants AS grants INNER JOIN bots ON bots.bot_id = grants.bot_id
             WHERE grants.grant_id = ? AND grants.secret_digest = ? AND grants.audience = ?
             AND grants.consumed_at IS NULL AND grants.expires_at > ?`)
@@ -41,23 +41,18 @@ export class BotCredentialStorage implements BotCredentialRecords {
         (await this.#database.prepare("SELECT 1 AS present FROM bots WHERE bot_id = ?").bind(botId).first(signal)) !==
         null;
 
-    readonly botExistsInProject: BotCredentialRecords["botExistsInProject"] = async (
-        botId,
-        tenantId,
-        projectId,
-        signal,
-    ) =>
+    readonly botExistsInProject: BotCredentialRecords["botExistsInProject"] = async (botId, projectId, signal) =>
         (await this.#database
-            .prepare("SELECT 1 AS present FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?")
-            .bind(botId, tenantId, projectId)
+            .prepare("SELECT 1 AS present FROM bots WHERE bot_id = ? AND project_id = ?")
+            .bind(botId, projectId)
             .first(signal)) !== null;
 
     readonly readBotProjectScope: BotCredentialRecords["readBotProjectScope"] = async (botId, signal) => {
         const row = await this.#database
-            .prepare("SELECT tenant_id, project_id FROM bots WHERE bot_id = ?")
+            .prepare("SELECT project_id FROM bots WHERE bot_id = ?")
             .bind(botId)
             .first<BotProjectScopeRecord>(signal);
-        return row === null ? new MissingBotProjectScope() : new FoundBotProjectScope(row.tenant_id, row.project_id);
+        return row === null ? new MissingBotProjectScope() : new FoundBotProjectScope(row.project_id);
     };
 
     readonly readConversationProjectScope: BotCredentialRecords["readConversationProjectScope"] = async (
@@ -66,7 +61,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
     ) => {
         const row = await this.#database
             .prepare(
-                `SELECT conversations.bot_id, conversations.session_id, bots.tenant_id, bots.project_id
+                `SELECT conversations.bot_id, conversations.session_id, bots.project_id
                    FROM bot_conversations AS conversations
                    INNER JOIN bots ON bots.bot_id = conversations.bot_id
                   WHERE conversations.conversation_id = ?`,
@@ -75,7 +70,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
             .first<BotConversationScopeRecord>(signal);
         return row === null
             ? new MissingBotConversationScope()
-            : new FoundBotConversationScope(row.tenant_id, row.project_id, row.bot_id, row.session_id);
+            : new FoundBotConversationScope(row.project_id, row.bot_id, row.session_id);
     };
 
     readonly readConnector: BotCredentialRecords["readConnector"] = (connectionId, digest, now, signal) =>
@@ -83,7 +78,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
             .prepare(
                 `SELECT connections.connection_id, connections.bot_id, connections.connector_principal_id,
                     connections.audience, connections.scopes_json, credentials.credential_id,
-                    credentials.expires_at, bots.tenant_id, bots.project_id
+                    credentials.expires_at, bots.project_id
              FROM bot_connections AS connections
              JOIN bot_connection_credentials AS credentials ON credentials.connection_id = connections.connection_id
              JOIN bots ON bots.bot_id = connections.bot_id
@@ -140,21 +135,21 @@ export class BotCredentialStorage implements BotCredentialRecords {
                 `SELECT 'project' AS plane, NULL AS connection_id
                    FROM bots
                    INNER JOIN project_owner_credentials AS credentials
-                     ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
+                      ON credentials.project_id = bots.project_id
                   WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.revoked_at IS NULL
                     AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)
                  UNION ALL
                  SELECT 'project' AS plane, NULL AS connection_id
                    FROM bots
                    INNER JOIN project_browser_credentials AS credentials
-                     ON credentials.tenant_id = bots.tenant_id AND credentials.project_id = bots.project_id
+                      ON credentials.project_id = bots.project_id
                   WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.revoked_at IS NULL
                     AND credentials.expires_at > ?
                  UNION ALL
                  SELECT 'project' AS plane, NULL AS connection_id
                    FROM bots
                    INNER JOIN pairing_channels AS channels
-                     ON channels.tenant_id = bots.tenant_id AND channels.project_id = bots.project_id
+                      ON channels.project_id = bots.project_id
                    INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
                   WHERE bots.bot_id = ? AND credentials.token_hash = ? AND credentials.authority = 'linked'
                     AND credentials.revoked_at IS NULL AND channels.status = 'paired'
@@ -177,7 +172,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
                 `SELECT executions.execution_id, executions.bot_id, executions.conversation_id, executions.turn_id,
                     executions.session_id, executions.behavior_revision_id, executions.binding_id,
                     executions.binding_revision, executions.runtime_id, executions.capability_id,
-                    bots.tenant_id, bots.project_id, bots.lifecycle AS bot_lifecycle,
+                    bots.project_id, bots.lifecycle AS bot_lifecycle,
                     channels.channel_id, channels.pairing_id, bindings.local_grant_id
              FROM bot_execution_directory AS executions
              JOIN bots ON bots.bot_id = executions.bot_id
@@ -185,7 +180,7 @@ export class BotCredentialStorage implements BotCredentialRecords {
                ON bindings.binding_id = executions.binding_id AND bindings.bot_id = executions.bot_id
               AND bindings.binding_revision = executions.binding_revision
              JOIN pairing_channels AS channels
-               ON channels.tenant_id = bots.tenant_id AND channels.project_id = bots.project_id
+                ON channels.project_id = bots.project_id
               AND channels.runtime_id = executions.runtime_id
              WHERE executions.execution_id = ? AND channels.daemon_token_hash = ?
                AND channels.status = 'paired' AND bindings.lifecycle = 'approved'`,

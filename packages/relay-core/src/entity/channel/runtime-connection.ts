@@ -5,7 +5,6 @@ export interface RuntimeConnectionIdentity {
 }
 
 export interface RuntimeDisconnect extends RuntimeConnectionIdentity {
-    readonly tenantId: string;
     readonly projectId: string;
     readonly disconnectedAt: number;
     readonly progress:

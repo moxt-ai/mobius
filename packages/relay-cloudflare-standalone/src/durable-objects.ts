@@ -14,18 +14,19 @@ import {
 import { createDurableObjectDependencies } from "@moxt-ai/mobius-relay-core";
 import { SingleBucketResolver } from "./bucket-resolver.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
-import { StandaloneTenantShardingDirectory } from "./tenant-sharding-directory.ts";
+import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
 
 interface RelayEnvironment extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
+    readonly MOBIUS_TENANT_ID?: string;
     readonly SESSION_RELAY: DurableObjectNamespace;
     readonly SESSION_ARCHIVES?: R2Bucket;
 }
 
 function createContext(state: DurableObjectState, environment: RelayEnvironment) {
     const databases = new SingleDatabaseResolver(environment.DIRECTORY_DATABASE);
-    const tenants = new StandaloneTenantShardingDirectory();
+    const tenants = new StandaloneProjectStorageDirectory();
     const quota = sessionQuotaFromEnvironment(environment);
     return createDurableObjectDependencies({
         doDatabase: new DurableObjectSqlDatabase(state.storage),
@@ -39,8 +40,11 @@ function createContext(state: DurableObjectState, environment: RelayEnvironment)
                   },
         gateways: {
             databaseResolver: databases,
-            tenantShardingDirectory: tenants,
-            sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY),
+            projectStorageDirectory: tenants,
+            sessionTransport: new CloudflareSessionTransport(
+                environment.SESSION_RELAY,
+                environment.MOBIUS_TENANT_ID ?? "standalone",
+            ),
             connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
             peers: new CloudflareChannelPeers(state),
             schedule: async (timestamp, signal) => {

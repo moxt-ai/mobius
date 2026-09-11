@@ -1,11 +1,43 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { PairingDirectoryError, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
 import type { PlatformControlPlaneService } from "../service/platform-control-plane-service.ts";
 
-const MAXIMUM_BODY_BYTES = 128 * 1_024;
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
+
+const requiredString = v.pipe(v.string(), v.minLength(1));
+const safeInteger = v.pipe(v.number(), v.safeInteger());
+const createTenantBody = v.strictObject({
+    displayName: requiredString,
+    quotas: v.optional(
+        v.strictObject({
+            activeApps: v.number(),
+            activeProjects: v.number(),
+            activeSessions: v.number(),
+        }),
+    ),
+});
+const createAppBody = v.strictObject({ displayName: requiredString, tenantId: requiredString });
+const createTenantAppBody = v.strictObject({ displayName: requiredString });
+const createProjectBody = v.strictObject({
+    displayName: requiredString,
+    idempotencyKey: requiredString,
+    clientReference: v.optional(v.string(), ""),
+    placement: v.strictObject({
+        d1ShardId: requiredString,
+        r2BucketId: requiredString,
+    }),
+});
+const issueCredentialBody = v.strictObject({
+    expiresInSeconds: safeInteger,
+    permissions: v.array(v.string()),
+    projectIds: v.array(v.string()),
+});
+const rotateCredentialBody = v.strictObject({ expiresInSeconds: safeInteger, overlapSeconds: safeInteger });
+const emptyBody = v.strictObject({});
 
 interface PlatformHttpEnvironment {
     readonly Bindings: { readonly control: PlatformControlPlaneService };
@@ -23,70 +55,6 @@ function errorResponse(error: unknown): Response {
         { error: { code: "platform_internal_error", message: "The Platform request could not be completed" } },
         { status: 500 },
     );
-}
-
-async function body(request: Request, allowedKeys: readonly string[]): Promise<Readonly<Record<string, unknown>>> {
-    const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (contentType !== "application/json") {
-        throw new PlatformControlPlaneError("invalid_request", "A JSON request body is required", 400);
-    }
-    const declaredLength = request.headers.get("content-length");
-    if (declaredLength !== null && Number(declaredLength) > MAXIMUM_BODY_BYTES) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
-    }
-    const encoded = await request.text();
-    if (new TextEncoder().encode(encoded).byteLength > MAXIMUM_BODY_BYTES) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
-    }
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is invalid", 400, { cause });
-    }
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is invalid", 400);
-    }
-    const result = Object.freeze(Object.fromEntries(Object.entries(value)));
-    if (Object.keys(result).some((key) => !allowedKeys.includes(key))) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body contains an unsupported field", 400);
-    }
-    return result;
-}
-
-function string(value: Readonly<Record<string, unknown>>, key: string, allowEmpty = false): string {
-    const field = value[key];
-    if (typeof field !== "string" || (!allowEmpty && field.length === 0)) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function optionalString(value: Readonly<Record<string, unknown>>, key: string): string {
-    const field = value[key];
-    if (field === undefined) {
-        return "";
-    }
-    if (typeof field !== "string") {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function integer(value: Readonly<Record<string, unknown>>, key: string): number {
-    const field = value[key];
-    if (typeof field !== "number" || !Number.isSafeInteger(field)) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function stringArray(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
-    const field = value[key];
-    if (!Array.isArray(field) || field.some((entry) => typeof entry !== "string")) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return Object.freeze(field.filter((entry) => typeof entry === "string"));
 }
 
 function path(value: string): string {
@@ -142,16 +110,11 @@ export function createPlatformControlApplication() {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(await context.env.control.readPlatformConfiguration(identity, context.var.signal));
         })
-        .post("/v1/platform/tenants", async (context) => {
-            const value = await body(context.req.raw, ["displayName", "quotas"]);
+        .post("/v1/platform/tenants", bodyParser(createTenantBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(
-                await context.env.control.createTenant(
-                    identity,
-                    string(value, "displayName"),
-                    value["quotas"],
-                    context.var.signal,
-                ),
+                await context.env.control.createTenant(identity, value.displayName, value.quotas, context.var.signal),
                 201,
             );
         })
@@ -179,16 +142,16 @@ export function createPlatformControlApplication() {
                 ),
             );
         })
-        .post("/v1/apps", async (context) => {
-            const value = await body(context.req.raw, ["displayName", "tenantId"]);
+        .post("/v1/apps", bodyParser(createAppBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const access = await context.env.control.requireTenantDeveloper(
                 identity,
-                path(string(value, "tenantId")),
+                path(value.tenantId),
                 context.var.signal,
             );
             return context.json(
-                await context.env.control.createApp(access, string(value, "displayName"), context.var.signal),
+                await context.env.control.createApp(access, value.displayName, context.var.signal),
                 201,
             );
         })
@@ -211,8 +174,8 @@ export function createPlatformControlApplication() {
             );
             return context.json(await context.env.control.listProjects(result.access, result.app, context.var.signal));
         })
-        .post("/v1/apps/:appId/projects", async (context) => {
-            const value = await body(context.req.raw, ["clientReference", "displayName", "idempotencyKey"]);
+        .post("/v1/apps/:appId/projects", bodyParser(createProjectBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const result = await context.env.control.requireAppDeveloper(
                 identity,
@@ -223,16 +186,17 @@ export function createPlatformControlApplication() {
                 await context.env.control.createProject(
                     result.access,
                     result.app,
-                    string(value, "displayName"),
-                    string(value, "idempotencyKey"),
-                    optionalString(value, "clientReference"),
+                    value.displayName,
+                    value.idempotencyKey,
+                    value.clientReference,
+                    value.placement,
                     context.var.signal,
                 ),
                 201,
             );
         })
-        .post("/v1/apps/:appId/credentials", async (context) => {
-            const value = await body(context.req.raw, ["expiresInSeconds", "permissions", "projectIds"]);
+        .post("/v1/apps/:appId/credentials", bodyParser(issueCredentialBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const result = await context.env.control.requireAppDeveloper(
                 identity,
@@ -243,9 +207,9 @@ export function createPlatformControlApplication() {
                 await context.env.control.issueAppCredential(
                     result.access,
                     result.app,
-                    value["permissions"],
-                    stringArray(value, "projectIds"),
-                    integer(value, "expiresInSeconds"),
+                    value.permissions,
+                    value.projectIds,
+                    value.expiresInSeconds,
                     context.var.signal,
                 ),
                 201,
@@ -260,8 +224,8 @@ export function createPlatformControlApplication() {
             );
             return context.json(await context.env.control.listApps(access, context.var.signal));
         })
-        .post("/v1/platform/tenants/:tenantId/apps", async (context) => {
-            const value = await body(context.req.raw, ["displayName"]);
+        .post("/v1/platform/tenants/:tenantId/apps", bodyParser(createTenantAppBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const access = await context.env.control.requireTenantDeveloper(
                 identity,
@@ -269,7 +233,7 @@ export function createPlatformControlApplication() {
                 context.var.signal,
             );
             return context.json(
-                await context.env.control.createApp(access, string(value, "displayName"), context.var.signal),
+                await context.env.control.createApp(access, value.displayName, context.var.signal),
                 201,
             );
         })
@@ -282,8 +246,8 @@ export function createPlatformControlApplication() {
             );
             return context.json(await context.env.control.listProjects(result.access, result.app, context.var.signal));
         })
-        .post("/v1/platform/apps/:appId/projects", async (context) => {
-            const value = await body(context.req.raw, ["clientReference", "displayName", "idempotencyKey"]);
+        .post("/v1/platform/apps/:appId/projects", bodyParser(createProjectBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const result = await context.env.control.requireAppDeveloper(
                 identity,
@@ -294,16 +258,17 @@ export function createPlatformControlApplication() {
                 await context.env.control.createProject(
                     result.access,
                     result.app,
-                    string(value, "displayName"),
-                    string(value, "idempotencyKey"),
-                    optionalString(value, "clientReference"),
+                    value.displayName,
+                    value.idempotencyKey,
+                    value.clientReference,
+                    value.placement,
                     context.var.signal,
                 ),
                 201,
             );
         })
-        .post("/v1/platform/apps/:appId/credentials", async (context) => {
-            const value = await body(context.req.raw, ["expiresInSeconds", "permissions", "projectIds"]);
+        .post("/v1/platform/apps/:appId/credentials", bodyParser(issueCredentialBody), async (context) => {
+            const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const result = await context.env.control.requireAppDeveloper(
                 identity,
@@ -314,30 +279,33 @@ export function createPlatformControlApplication() {
                 await context.env.control.issueAppCredential(
                     result.access,
                     result.app,
-                    value["permissions"],
-                    stringArray(value, "projectIds"),
-                    integer(value, "expiresInSeconds"),
+                    value.permissions,
+                    value.projectIds,
+                    value.expiresInSeconds,
                     context.var.signal,
                 ),
                 201,
             );
         })
-        .post("/v1/platform/app-credentials/:credentialId/rotate", async (context) => {
-            const value = await body(context.req.raw, ["expiresInSeconds", "overlapSeconds"]);
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            return context.json(
-                await context.env.control.rotateAppCredential(
-                    identity,
-                    path(context.req.param("credentialId")),
-                    integer(value, "expiresInSeconds"),
-                    integer(value, "overlapSeconds"),
-                    context.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/v1/platform/app-credentials/:credentialId/revoke", async (context) => {
-            await body(context.req.raw, []);
+        .post(
+            "/v1/platform/app-credentials/:credentialId/rotate",
+            bodyParser(rotateCredentialBody),
+            async (context) => {
+                const value = context.req.valid("json");
+                const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+                return context.json(
+                    await context.env.control.rotateAppCredential(
+                        identity,
+                        path(context.req.param("credentialId")),
+                        value.expiresInSeconds,
+                        value.overlapSeconds,
+                        context.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post("/v1/platform/app-credentials/:credentialId/revoke", bodyParser(emptyBody), async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(
                 await context.env.control.revokeAppCredential(

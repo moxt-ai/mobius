@@ -27,7 +27,7 @@
     ],
     "d1_databases": [
         {
-            "binding": "DIRECTORY_DATABASE",
+            "binding": "D1_SHARD_APAC_01",
             "migrations_dir": "../relay-cloudflare/migrations/d1"
         },
         {
@@ -35,6 +35,7 @@
             "migrations_dir": "migrations/d1"
         }
     ],
+    "r2_buckets": [{ "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-local-apac-objects" }],
     "vars": {
         "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[]",
         "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
@@ -45,5 +46,109 @@
     },
     "observability": {
         "enabled": true
+    },
+    "env": {
+        "staging": {
+            "name": "mobius-platform-staging",
+            "workers_dev": false,
+            "preview_urls": false,
+            "routes": [{ "pattern": "mobius-platform.paradev.biz", "custom_domain": true }],
+            "durable_objects": {
+                "bindings": [
+                    { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
+                    { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
+                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" }
+                ]
+            },
+            "d1_databases": [
+                {
+                    "binding": "D1_SHARD_APAC_01",
+                    "database_name": "mobius-cloud-staging-apac-01",
+                    "database_id": "76a58022-7ee3-4faf-9cc2-db458231cd2e",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "D1_SHARD_WNAM_01",
+                    "database_name": "mobius-cloud-staging-wnam-01",
+                    "database_id": "bbdd94bf-f098-409a-b8d9-2bdbf6d2eda7",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "PLATFORM_DIRECTORY_DATABASE",
+                    "database_name": "mobius-platform-staging-control-plane",
+                    "database_id": "6bde27b8-3956-4151-9df2-9a774398ce70",
+                    "migrations_dir": "migrations/d1"
+                }
+            ],
+            "r2_buckets": [
+                { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-staging-apac-objects" },
+                { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
+            ],
+            "vars": {
+                "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[]",
+                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
+                "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
+                "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
+                "SESSION_ACTIVE_SESSIONS_PER_TENANT": "10000",
+                "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+            }
+        },
+        "production": {
+            "name": "mobius-platform-production",
+            "workers_dev": false,
+            "preview_urls": false,
+            "routes": [{ "pattern": "mobius-platform.paraflow.biz", "custom_domain": true }],
+            "durable_objects": {
+                "bindings": [
+                    { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
+                    { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
+                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" }
+                ]
+            },
+            "d1_databases": [
+                {
+                    "binding": "D1_SHARD_APAC_01",
+                    "database_name": "mobius-cloud-production-apac-01",
+                    "database_id": "9ba3f0bb-59f4-4a43-bf51-2a2317e75d01",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "D1_SHARD_APAC_02",
+                    "database_name": "mobius-cloud-production-apac-02",
+                    "database_id": "c20de4d5-4d9b-4ed2-b11f-fd660124de2d",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "D1_SHARD_WNAM_01",
+                    "database_name": "mobius-cloud-production-wnam-01",
+                    "database_id": "5e809606-9770-48ae-9c38-046903b0daa8",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "D1_SHARD_WNAM_02",
+                    "database_name": "mobius-cloud-production-wnam-02",
+                    "database_id": "67c6aacd-29d1-4e0b-ae87-5a45d4ff69e3",
+                    "migrations_dir": "../relay-cloudflare/migrations/d1"
+                },
+                {
+                    "binding": "PLATFORM_DIRECTORY_DATABASE",
+                    "database_name": "mobius-platform-production-control-plane",
+                    "database_id": "c0e2546c-ad98-4c7b-b6fd-091d860965d9",
+                    "migrations_dir": "migrations/d1"
+                }
+            ],
+            "r2_buckets": [
+                { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-production-apac-objects" },
+                { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
+            ],
+            "vars": {
+                "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[]",
+                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
+                "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
+                "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
+                "SESSION_ACTIVE_SESSIONS_PER_TENANT": "10000",
+                "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+            }
+        }
     }
 }

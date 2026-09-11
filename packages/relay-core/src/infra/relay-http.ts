@@ -164,8 +164,7 @@ export function directoryError(error: unknown): Response {
                                   ? 429
                                   : error.code === "public_project_bootstrap_rate_limited"
                                     ? 429
-                                    : error.code === "pairing_tenant_unavailable" ||
-                                        error.code === "directory_unavailable" ||
+                                    : error.code === "directory_unavailable" ||
                                         error.code === "runtime_disconnect_failed"
                                       ? 503
                                       : error.code === "workspace_required"

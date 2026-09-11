@@ -26,6 +26,8 @@ import {
     type PlatformAuthenticationConfiguration,
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
+    type PlatformProjectPlacement,
+    type PlatformProjectPlacementRegistry,
 } from "../entity/platform-control-plane.ts";
 import type {
     AppRow,
@@ -323,6 +325,11 @@ function projectResource(row: ProjectRow): object {
         deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
         displayName: row.display_name,
         lifecycle: row.lifecycle,
+        placement: {
+            d1ShardId: row.d1_shard_id,
+            r2BucketId: row.r2_bucket_id,
+            revision: row.placement_revision,
+        },
         projectId: row.project_id,
         suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
@@ -372,17 +379,27 @@ function constantTimeEqual(left: string, right: string): boolean {
     return mismatch === 0;
 }
 
-async function requestDigest(display: string, clientReference: string): Promise<string> {
-    return await hashSecret(JSON.stringify({ clientReference, displayName: display }));
+async function requestDigest(
+    display: string,
+    clientReference: string,
+    placement: PlatformProjectPlacement,
+): Promise<string> {
+    return await hashSecret(JSON.stringify({ clientReference, displayName: display, placement }));
 }
 
 export class PlatformControlPlaneService implements ProjectAuthenticationService, SessionQuotaPolicyProvider {
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
+    readonly #placements: PlatformProjectPlacementRegistry;
 
-    constructor(storage: PlatformControlPlaneStorage, authentication: PlatformAuthenticationConfiguration) {
+    constructor(
+        storage: PlatformControlPlaneStorage,
+        authentication: PlatformAuthenticationConfiguration,
+        placements: PlatformProjectPlacementRegistry,
+    ) {
         this.#storage = storage;
         this.#authentication = authentication;
+        this.#placements = placements;
     }
 
     readonly authenticateDeveloper = async (
@@ -494,14 +511,18 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
     };
 
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
-        const tenantId = scope.storageLocator.resolveHostingPlacement();
+        const placement = await this.#storage.readProjectStoragePlacement(scope.projectId, signal);
+        if (placement === null) {
+            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
+        }
+        const tenantId = placement.tenant_id;
         const tenant = await this.readTenant(tenantId, signal);
         const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
         if (appId === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
         }
         const quota = quotasFromRow(tenant);
-        return new SessionQuotaPolicy(quota.activeSessions, quota.activeSessions);
+        return new SessionQuotaPolicy(quota.activeSessions);
     };
 
     readonly recordSessionQuotaDenial = async (
@@ -510,7 +531,11 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
         policy: SessionQuotaPolicy,
         signal: AbortSignal,
     ): Promise<void> => {
-        const tenantId = scope.storageLocator.resolveHostingPlacement();
+        const placement = await this.#storage.readProjectStoragePlacement(scope.projectId, signal);
+        if (placement === null) {
+            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
+        }
+        const tenantId = placement.tenant_id;
         const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
         if (appId === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
@@ -526,7 +551,7 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
                 "quota.denied",
                 sessionId,
                 "denied",
-                { limit: policy.activeSessionsPerTenant, resource: "session" },
+                { limit: policy.activeSessionsPerProject, resource: "session" },
                 Date.now(),
             ),
             signal,
@@ -628,6 +653,7 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
         requestedDisplayName: string,
         idempotencyKey: string,
         requestedClientReference: string,
+        requestedPlacement: PlatformProjectPlacement,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
@@ -640,7 +666,18 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
             "client_reference",
         );
         const normalizedDisplayName = displayName(requestedDisplayName);
-        const digest = await requestDigest(normalizedDisplayName, clientReference);
+        const placement = {
+            d1ShardId: validateIdentifier(requestedPlacement.d1ShardId, "d1_shard_id"),
+            r2BucketId: validateIdentifier(requestedPlacement.r2BucketId, "r2_bucket_id"),
+        };
+        if (!this.#placements.supports(placement)) {
+            throw new PlatformControlPlaneError(
+                "storage_placement_unavailable",
+                "The storage placement is unavailable",
+                400,
+            );
+        }
+        const digest = await requestDigest(normalizedDisplayName, clientReference, placement);
         signal.throwIfAborted();
         const existing = await this.#storage.readProjectByIdempotencyKey(app.app_id, normalizedIdempotencyKey, signal);
         if (existing !== null) {
@@ -675,9 +712,12 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
             created_at: now,
             deleted_at: null,
             display_name: normalizedDisplayName,
+            d1_shard_id: placement.d1ShardId,
             idempotency_key: normalizedIdempotencyKey,
             lifecycle: "active",
             project_id: projectId,
+            placement_revision: 1,
+            r2_bucket_id: placement.r2BucketId,
             request_digest: digest,
             suspended_at: null,
             tenant_id: app.tenant_id,
@@ -990,7 +1030,7 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
             actorReference(actorRef),
             signal,
         );
-        return new PlatformAppCredentialAccess(row.app_id, row.revision, project);
+        return new PlatformAppCredentialAccess(row.tenant_id, row.app_id, row.revision, project);
     };
 
     private readonly authorizeCredentialForProject = async (
@@ -1029,7 +1069,7 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
             throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
         }
         return new ProjectAccessContext(
-            new ProjectScope(row.tenant_id, project.project_id),
+            new ProjectScope(project.project_id),
             granted,
             new AuditActor(AuditActorKind.Application, row.app_id),
             row.credential_id,

@@ -33,7 +33,6 @@ export type ArtifactCountRecord = Readonly<v.InferOutput<typeof ArtifactCountRec
 
 export const SessionRecordSchema = v.object({
     scope_key: v.string(),
-    tenant_id: v.string(),
     project_id: v.string(),
     session_id: v.string(),
     created_by: v.string(),

@@ -9,14 +9,14 @@ import { encodeBotSessionProvisioning } from "../entity/bot/bot-session-provisio
 import type { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase, SqlStatement } from "../infra/sql-database.ts";
-import type { TenantContext } from "../infra/tenant-sharding-directory.ts";
 
 export class BotConversationStorage {
     readonly #database: SqlDatabase;
 
-    constructor(tenant: TenantContext, databases: DatabaseResolver) {
-        this.#database = databases.resolve(tenant.tenantSharding);
+    constructor(project: ProjectStorageContext, databases: DatabaseResolver) {
+        this.#database = databases.resolve(project.storagePlacement);
     }
 
     readonly listForProject = async (access: ProjectBotAccess, signal: AbortSignal) => {
@@ -24,7 +24,7 @@ export class BotConversationStorage {
         const rows = await this.#database
             .prepare(`SELECT conversations.* FROM bot_conversations AS conversations
                 INNER JOIN bots ON bots.bot_id = conversations.bot_id
-                WHERE conversations.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                WHERE conversations.bot_id = ? AND bots.project_id = ?
                   AND (conversations.creator_kind <> 'owner'
                     OR EXISTS (SELECT 1 FROM bot_execution_directory AS executions
                         WHERE executions.conversation_id = conversations.conversation_id)
@@ -32,7 +32,7 @@ export class BotConversationStorage {
                         WHERE drafts.bot_id = conversations.bot_id
                           AND drafts.conversation_id = conversations.conversation_id))
                 ORDER BY conversations.created_at DESC, conversations.conversation_id DESC`)
-            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.botId, access.scope.projectId)
             .all<ConversationRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -106,19 +106,14 @@ export class BotConversationStorage {
                      ON conversations.conversation_id = outbox.subject_id
                     AND conversations.bot_id = outbox.bot_id
                    INNER JOIN bots ON bots.bot_id = conversations.bot_id
-                  WHERE bots.tenant_id = ? AND bots.project_id = ?
+                  WHERE bots.project_id = ?
                     AND outbox.runtime_id = ?
                     AND outbox.message_kind = 'conversation_provisioning'
                     AND outbox.state = 'pending'
                     AND conversations.lifecycle = 'provisioning'
                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT ?`,
             )
-            .bind(
-                scope.storageLocator.resolveHostingPlacement(),
-                scope.projectId,
-                validateIdentifier(runtimeId, "runtime_id"),
-                limit,
-            )
+            .bind(scope.projectId, validateIdentifier(runtimeId, "runtime_id"), limit)
             .all<ProvisioningOutboxRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -181,17 +176,11 @@ export class BotConversationStorage {
              FROM bot_execution_bindings AS bindings
              INNER JOIN bots ON bots.bot_id = bindings.bot_id
              LEFT JOIN pairing_channels AS channels ON channels.runtime_id = bindings.runtime_id
-               AND channels.tenant_id = bots.tenant_id AND channels.project_id = bots.project_id
+               AND channels.project_id = bots.project_id
              WHERE bindings.binding_id = ? AND bindings.bot_id = ? AND bindings.binding_revision = ?
-               AND bots.tenant_id = ? AND bots.project_id = ?`,
+               AND bots.project_id = ?`,
             )
-            .bind(
-                bindingId,
-                access.botId,
-                bindingRevision,
-                access.scope.storageLocator.resolveHostingPlacement(),
-                access.scope.projectId,
-            )
+            .bind(bindingId, access.botId, bindingRevision, access.scope.projectId)
             .first<{ readonly binding_lifecycle: string; readonly runtime_status: string | null }>(signal);
         signal.throwIfAborted();
         return row;
@@ -199,8 +188,8 @@ export class BotConversationStorage {
 
     readonly readBotLifecycle = async (access: BotConversationAuthorization, signal: AbortSignal) => {
         const bot = await this.#database
-            .prepare(`SELECT lifecycle FROM bots WHERE bot_id = ? AND tenant_id = ? AND project_id = ?`)
-            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .prepare(`SELECT lifecycle FROM bots WHERE bot_id = ? AND project_id = ?`)
+            .bind(access.botId, access.scope.projectId)
             .first<{ readonly lifecycle: string }>(signal);
         signal.throwIfAborted();
         return bot;
@@ -535,9 +524,9 @@ export class BotConversationStorage {
                     AND outbox.message_kind = 'conversation_provisioning'
                    INNER JOIN bots ON bots.bot_id = conversations.bot_id
                   WHERE conversations.conversation_id = ?
-                    AND bots.tenant_id = ? AND bots.project_id = ?`,
+                    AND bots.project_id = ?`,
             )
-            .bind(conversationId, scope.storageLocator.resolveHostingPlacement(), scope.projectId)
+            .bind(conversationId, scope.projectId)
             .first<ProvisioningOutboxRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -568,15 +557,14 @@ export class BotConversationStorage {
         this.#database
             .prepare(
                 `INSERT INTO bot_audit_events (
-                   audit_id, tenant_id, project_id, bot_id, actor_kind,
+                   audit_id, project_id, bot_id, actor_kind,
                    actor_id, action, subject_id, details_json, recorded_at
                  )
-                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                   WHERE changes() = 1`,
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,
@@ -602,10 +590,10 @@ export class BotConversationStorage {
         const result = await this.#database
             .prepare(
                 `INSERT INTO bot_audit_events (
-                   audit_id, tenant_id, project_id, bot_id, actor_kind,
+                   audit_id, project_id, bot_id, actor_kind,
                    actor_id, action, subject_id, details_json, recorded_at
                  )
-                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                   WHERE NOT EXISTS (
                     SELECT 1 FROM bot_audit_events
                      WHERE bot_id = ? AND action = ? AND subject_id = ?
@@ -613,7 +601,6 @@ export class BotConversationStorage {
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

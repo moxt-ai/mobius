@@ -679,7 +679,6 @@ const pendingWorkSchema = z
         projectId: identifierSchema,
         sessionId: identifierSchema,
         state: pendingWorkStateSchema,
-        tenantId: identifierSchema,
         workId: identifierSchema,
     })
     .readonly();
@@ -696,7 +695,6 @@ const commandReceiptSchema = z
         requestHash: digestSchema,
         resultId: identifierSchema,
         sessionId: identifierSchema,
-        tenantId: identifierSchema,
     })
     .readonly();
 

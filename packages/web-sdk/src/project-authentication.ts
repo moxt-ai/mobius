@@ -691,14 +691,12 @@ export class MobiusIssuedProjectAccessCredential {
     readonly expiresAt: string;
     readonly permissions: readonly string[];
     readonly projectId: string;
-    readonly tenantId: string;
 
     constructor(value: unknown) {
         const resource = record(value, "issued Mobius access credential");
         this.credential = credential(text(resource, "credential", "issued Mobius access credential"));
         this.credentialId = identifierField(resource, "credentialId", "issued Mobius access credential");
         this.projectId = identifierField(resource, "projectId", "issued Mobius access credential");
-        this.tenantId = identifierField(resource, "tenantId", "issued Mobius access credential");
         this.expiresAt = timestamp(resource, "expiresAt", "issued Mobius access credential");
         this.permissions = permissionList(resource["permissions"], "Mobius access credential permissions");
     }

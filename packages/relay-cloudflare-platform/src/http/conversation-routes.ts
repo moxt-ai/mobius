@@ -19,11 +19,12 @@ import {
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import { bodyParser } from "../middleware/body-parser.ts";
 import type { ConversationAccessService } from "../service/conversation-access-service.ts";
 import type { ConversationStreamRegistry } from "../service/conversation-stream-service.ts";
 
-const MAXIMUM_BODY_BYTES = 128 * 1_024;
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 const DEFAULT_PAGE_SIZE = 100;
 const MAXIMUM_PAGE_SIZE = 500;
@@ -129,77 +130,105 @@ function errorResponse(error: unknown): Response {
     );
 }
 
-async function body(request: Request, allowedKeys: readonly string[]): Promise<Readonly<Record<string, unknown>>> {
-    const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (contentType !== "application/json") {
-        throw new PlatformControlPlaneError("invalid_request", "A JSON request body is required", 400);
-    }
-    const declaredLength = request.headers.get("content-length");
-    if (declaredLength !== null && Number(declaredLength) > MAXIMUM_BODY_BYTES) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
-    }
-    const encoded = await request.text();
-    if (new TextEncoder().encode(encoded).byteLength > MAXIMUM_BODY_BYTES) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
-    }
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is invalid", 400, { cause });
-    }
-    if (typeof value !== "object" || value === null || Array.isArray(value)) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body is invalid", 400);
-    }
-    const result = Object.freeze(Object.fromEntries(Object.entries(value)));
-    if (Object.keys(result).some((key) => !allowedKeys.includes(key))) {
-        throw new PlatformControlPlaneError("invalid_request", "The request body contains an unsupported field", 400);
-    }
-    return result;
-}
-
-function string(value: Readonly<Record<string, unknown>>, key: string, maximum = 128, allowEmpty = false): string {
-    const field = value[key];
-    if (typeof field !== "string" || field.length > maximum || (!allowEmpty && field.length === 0)) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function integer(value: Readonly<Record<string, unknown>>, key: string): number {
-    const field = value[key];
-    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function boolean(value: Readonly<Record<string, unknown>>, key: string): boolean {
-    const field = value[key];
-    if (typeof field !== "boolean") {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return field;
-}
-
-function stringArray(
-    value: Readonly<Record<string, unknown>>,
-    key: string,
-    maximumLength: number,
-    identifierName: string,
-): readonly string[] {
-    const field = value[key];
-    if (!Array.isArray(field) || field.length > maximumLength || field.some((entry) => typeof entry !== "string")) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    const result = field
-        .filter((entry) => typeof entry === "string")
-        .map((entry) => validateIdentifier(entry, identifierName));
-    if (new Set(result).size !== result.length) {
-        throw new PlatformControlPlaneError("invalid_request", `The ${key} field is invalid`, 400);
-    }
-    return Object.freeze(result);
-}
+const nonemptyStringSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
+const nonnegativeIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+const idempotencyKeySchema = v.pipe(
+    nonemptyStringSchema,
+    v.transform((value) => validateIdentifier(value, "idempotency_key")),
+);
+const directoryIdsSchema = v.pipe(
+    v.array(v.string()),
+    v.maxLength(16),
+    v.transform((value) => value.map((entry) => validateIdentifier(entry, "directory_id"))),
+    v.check((value) => new Set(value).size === value.length),
+    v.transform((value) => Object.freeze(value)),
+);
+const artifactIdsSchema = v.pipe(
+    v.array(v.string()),
+    v.maxLength(16),
+    v.transform((value) => value.map((entry) => validateIdentifier(entry, "artifact_id"))),
+    v.check((value) => new Set(value).size === value.length),
+    v.transform((value) => Object.freeze(value)),
+);
+const promptImagesSchema = v.pipe(v.unknown(), v.transform(decodePromptImagesValue));
+const promptResourcesSchema = v.pipe(v.unknown(), v.transform(decodePromptResourcesValue));
+const credentialEntries = {
+    actorRef: v.pipe(v.string(), v.minLength(1), v.maxLength(200)),
+    expiresInSeconds: nonnegativeIntegerSchema,
+    permissions: v.array(v.string()),
+};
+const issueCredentialSchema = v.strictObject({
+    ...credentialEntries,
+    conversationId: v.pipe(
+        nonemptyStringSchema,
+        v.transform((value) => validateIdentifier(value, "conversation_id")),
+    ),
+    sessionId: v.pipe(
+        nonemptyStringSchema,
+        v.transform((value) => validateIdentifier(value, "session_id")),
+    ),
+});
+const issueConversationCredentialSchema = v.strictObject(credentialEntries);
+const rotateCredentialSchema = v.strictObject({ expiresInSeconds: nonnegativeIntegerSchema });
+const emptyBodySchema = v.strictObject({});
+const configurationSchema = v.strictObject({
+    additionalDirectoryIds: directoryIdsSchema,
+    booleanValue: v.boolean(),
+    configId: nonemptyStringSchema,
+    idempotencyKey: idempotencyKeySchema,
+    value: v.pipe(v.string(), v.maxLength(500)),
+    valueType: v.pipe(v.string(), v.minLength(1), v.maxLength(32)),
+});
+const messageEntries = {
+    artifactIds: artifactIdsSchema,
+    content: v.pipe(v.string(), v.maxLength(100_000)),
+    idempotencyKey: idempotencyKeySchema,
+    images: promptImagesSchema,
+    resources: promptResourcesSchema,
+};
+const messageSchema = v.strictObject(messageEntries);
+const turnSchema = v.union([
+    v.strictObject({
+        messageId: v.pipe(
+            nonemptyStringSchema,
+            v.transform((value) => validateIdentifier(value, "message_id")),
+        ),
+    }),
+    v.pipe(
+        v.strictObject({
+            ...messageEntries,
+            additionalDirectoryIds: directoryIdsSchema,
+            disposition: v.optional(v.literal(SessionPromptDisposition.Reject), SessionPromptDisposition.Reject),
+            images: v.unknown(),
+            resources: v.unknown(),
+            targetCommandId: v.optional(v.literal(""), ""),
+        }),
+        v.transform((value) => ({
+            ...value,
+            images: decodePromptImagesValue(value.images),
+            resources: decodePromptResourcesValue(value.resources),
+        })),
+    ),
+]);
+const cancelTurnSchema = v.strictObject({ idempotencyKey: idempotencyKeySchema });
+const interactionResponseSchema = v.variant("kind", [
+    v.strictObject({
+        kind: v.literal("permission"),
+        optionId: v.pipe(v.string(), v.minLength(1), v.maxLength(255)),
+        outcome: v.pipe(v.string(), v.minLength(1), v.maxLength(32)),
+    }),
+    v.strictObject({
+        kind: v.literal("elicitation"),
+        action: v.pipe(v.string(), v.minLength(1), v.maxLength(32)),
+        content: v.pipe(v.string(), v.minLength(1), v.maxLength(100_000)),
+    }),
+]);
+const artifactUploadSchema = v.strictObject({
+    byteLength: nonnegativeIntegerSchema,
+    mediaType: v.pipe(v.string(), v.minLength(1), v.maxLength(255)),
+    name: v.pipe(v.string(), v.minLength(1), v.maxLength(500)),
+    sha256: v.pipe(v.string(), v.length(64), v.regex(/^[a-f0-9]{64}$/)),
+});
 
 function bearer(request: Request): string {
     const authorization = request.headers.get("authorization") ?? "";
@@ -235,42 +264,6 @@ function pageLimit(value: unknown): number {
         throw new SessionRuntimeError("invalid_page_size", "The page size is invalid");
     }
     return result;
-}
-
-function sha256(value: Readonly<Record<string, unknown>>): string {
-    const digest = string(value, "sha256", 64);
-    if (!/^[a-f0-9]{64}$/.test(digest)) {
-        throw new PlatformControlPlaneError("invalid_request", "The sha256 field is invalid", 400);
-    }
-    return digest;
-}
-
-function disposition(value: Readonly<Record<string, unknown>>): string {
-    const requested = value["disposition"];
-    if (requested === undefined) {
-        return SessionPromptDisposition.Reject;
-    }
-    if (
-        requested !== SessionPromptDisposition.Reject &&
-        requested !== SessionPromptDisposition.Queue &&
-        requested !== SessionPromptDisposition.Steer
-    ) {
-        throw new PlatformControlPlaneError("invalid_request", "The disposition field is invalid", 400);
-    }
-    return requested;
-}
-
-function targetCommandId(value: Readonly<Record<string, unknown>>, requestedDisposition: string): string {
-    const field = value["targetCommandId"];
-    const requested = field === undefined ? "" : string(value, "targetCommandId", 128, true);
-    const normalized = requested.length === 0 ? "" : validateIdentifier(requested, "target_command_id");
-    if (
-        (requestedDisposition === SessionPromptDisposition.Reject && normalized.length > 0) ||
-        (requestedDisposition !== SessionPromptDisposition.Reject && normalized.length === 0)
-    ) {
-        throw new PlatformControlPlaneError("invalid_request", "The targetCommandId field is invalid", 400);
-    }
-    return normalized;
 }
 
 async function authorize(
@@ -347,88 +340,104 @@ export function createConversationApplication() {
             return context.res;
         })
         .onError((error) => errorResponse(error))
-        .post("/v1/platform/projects/:projectId/conversation-access-credentials", async (context) => {
-            const value = await body(context.req.raw, [
-                "actorRef",
-                "conversationId",
-                "expiresInSeconds",
-                "permissions",
-                "sessionId",
-            ]);
-            return context.json(
-                await context.env.access.issue(
-                    validateIdentifier(context.req.param("projectId"), "project_id"),
+        .post(
+            "/v1/platform/projects/:projectId/conversation-access-credentials",
+            bodyParser(issueCredentialSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                return context.json(
+                    await context.env.access.issue(
+                        validateIdentifier(context.req.param("projectId"), "project_id"),
+                        bearer(context.req.raw),
+                        value.conversationId,
+                        value.sessionId,
+                        value.actorRef,
+                        value.permissions,
+                        value.expiresInSeconds,
+                        context.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post(
+            "/v1/conversations/:conversationId/access-credentials",
+            bodyParser(issueConversationCredentialSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                return context.json(
+                    await context.env.access.issueForConversation(
+                        validateIdentifier(context.req.param("conversationId"), "conversation_id"),
+                        bearer(context.req.raw),
+                        value.actorRef,
+                        value.permissions,
+                        value.expiresInSeconds,
+                        context.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
+        .post(
+            "/v1/platform/conversation-access-credentials/:credentialId/rotate",
+            bodyParser(rotateCredentialSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
+                const replacement = await context.env.access.rotate(
+                    credentialId,
                     bearer(context.req.raw),
-                    validateIdentifier(string(value, "conversationId"), "conversation_id"),
-                    validateIdentifier(string(value, "sessionId"), "session_id"),
-                    string(value, "actorRef", 200),
-                    value["permissions"],
-                    integer(value, "expiresInSeconds"),
+                    value.expiresInSeconds,
                     context.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/v1/conversations/:conversationId/access-credentials", async (context) => {
-            const value = await body(context.req.raw, ["actorRef", "expiresInSeconds", "permissions"]);
-            return context.json(
-                await context.env.access.issueForConversation(
-                    validateIdentifier(context.req.param("conversationId"), "conversation_id"),
+                );
+                context.env.streams.revoke(credentialId);
+                return context.json(replacement, 201);
+            },
+        )
+        .post(
+            "/v1/platform/conversation-access-credentials/:credentialId/revoke",
+            bodyParser(emptyBodySchema),
+            async (context) => {
+                const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
+                const revocation = await context.env.access.revoke(
+                    credentialId,
                     bearer(context.req.raw),
-                    string(value, "actorRef", 200),
-                    value["permissions"],
-                    integer(value, "expiresInSeconds"),
                     context.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/v1/platform/conversation-access-credentials/:credentialId/rotate", async (context) => {
-            const value = await body(context.req.raw, ["expiresInSeconds"]);
-            const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
-            const replacement = await context.env.access.rotate(
-                credentialId,
-                bearer(context.req.raw),
-                integer(value, "expiresInSeconds"),
-                context.var.signal,
-            );
-            context.env.streams.revoke(credentialId);
-            return context.json(replacement, 201);
-        })
-        .post("/v1/platform/conversation-access-credentials/:credentialId/revoke", async (context) => {
-            await body(context.req.raw, []);
-            const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
-            const revocation = await context.env.access.revoke(
-                credentialId,
-                bearer(context.req.raw),
-                context.var.signal,
-            );
-            context.env.streams.revoke(credentialId);
-            return context.json(revocation);
-        })
-        .post("/v1/conversation-access-credentials/:credentialId/rotate", async (context) => {
-            const value = await body(context.req.raw, ["expiresInSeconds"]);
-            const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
-            const replacement = await context.env.access.rotate(
-                credentialId,
-                bearer(context.req.raw),
-                integer(value, "expiresInSeconds"),
-                context.var.signal,
-            );
-            context.env.streams.revoke(credentialId);
-            return context.json(replacement, 201);
-        })
-        .post("/v1/conversation-access-credentials/:credentialId/revoke", async (context) => {
-            await body(context.req.raw, []);
-            const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
-            const revocation = await context.env.access.revoke(
-                credentialId,
-                bearer(context.req.raw),
-                context.var.signal,
-            );
-            context.env.streams.revoke(credentialId);
-            return context.json(revocation);
-        })
+                );
+                context.env.streams.revoke(credentialId);
+                return context.json(revocation);
+            },
+        )
+        .post(
+            "/v1/conversation-access-credentials/:credentialId/rotate",
+            bodyParser(rotateCredentialSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
+                const replacement = await context.env.access.rotate(
+                    credentialId,
+                    bearer(context.req.raw),
+                    value.expiresInSeconds,
+                    context.var.signal,
+                );
+                context.env.streams.revoke(credentialId);
+                return context.json(replacement, 201);
+            },
+        )
+        .post(
+            "/v1/conversation-access-credentials/:credentialId/revoke",
+            bodyParser(emptyBodySchema),
+            async (context) => {
+                const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
+                const revocation = await context.env.access.revoke(
+                    credentialId,
+                    bearer(context.req.raw),
+                    context.var.signal,
+                );
+                context.env.streams.revoke(credentialId);
+                return context.json(revocation);
+            },
+        )
         .get("/v1/client/session", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json({
@@ -446,25 +455,18 @@ export function createConversationApplication() {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json(await context.env.sessions.readConversationConfiguration(access, context.var.signal));
         })
-        .post("/v1/client/session/configuration", async (context) => {
-            const value = await body(context.req.raw, [
-                "additionalDirectoryIds",
-                "booleanValue",
-                "configId",
-                "idempotencyKey",
-                "value",
-                "valueType",
-            ]);
+        .post("/v1/client/session/configuration", bodyParser(configurationSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.Configure, context.var.signal);
             return context.json(
                 await context.env.sessions.configureConversation(
                     access,
-                    validateIdentifier(string(value, "idempotencyKey"), "idempotency_key"),
-                    stringArray(value, "additionalDirectoryIds", 16, "directory_id"),
-                    string(value, "configId"),
-                    string(value, "value", 500, true),
-                    boolean(value, "booleanValue"),
-                    string(value, "valueType", 32),
+                    value.idempotencyKey,
+                    value.additionalDirectoryIds,
+                    value.configId,
+                    value.value,
+                    value.booleanValue,
+                    value.valueType,
                     context.env.nowEpochMilliseconds(),
                     context.var.signal,
                 ),
@@ -482,23 +484,17 @@ export function createConversationApplication() {
                 ),
             );
         })
-        .post("/v1/client/session/messages", async (context) => {
-            const value = await body(context.req.raw, [
-                "artifactIds",
-                "content",
-                "idempotencyKey",
-                "images",
-                "resources",
-            ]);
+        .post("/v1/client/session/messages", bodyParser(messageSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.MessageCreate, context.var.signal);
             return context.json(
                 await context.env.access.createMessage(
                     access,
-                    validateIdentifier(string(value, "idempotencyKey"), "idempotency_key"),
-                    string(value, "content", 100_000, true),
-                    decodePromptImagesValue(value["images"]),
-                    decodePromptResourcesValue(value["resources"]),
-                    stringArray(value, "artifactIds", 16, "artifact_id"),
+                    value.idempotencyKey,
+                    value.content,
+                    value.images,
+                    value.resources,
+                    value.artifactIds,
                     context.env.nowEpochMilliseconds(),
                     context.var.signal,
                 ),
@@ -559,32 +555,11 @@ export function createConversationApplication() {
                 ),
             );
         })
-        .post("/v1/client/session/turns", async (context) => {
-            const value = await body(context.req.raw, [
-                "additionalDirectoryIds",
-                "artifactIds",
-                "content",
-                "disposition",
-                "idempotencyKey",
-                "images",
-                "messageId",
-                "resources",
-                "targetCommandId",
-            ]);
+        .post("/v1/client/session/turns", bodyParser(turnSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.TurnCreate, context.var.signal);
-            if (value["messageId"] !== undefined) {
-                if (Object.keys(value).length !== 1) {
-                    throw new PlatformControlPlaneError(
-                        "invalid_request",
-                        "A stored message Turn cannot include inline prompt fields",
-                        400,
-                    );
-                }
-                const message = await context.env.access.readMessage(
-                    access,
-                    validateIdentifier(string(value, "messageId"), "message_id"),
-                    context.var.signal,
-                );
+            if ("messageId" in value) {
+                const message = await context.env.access.readMessage(access, value.messageId, context.var.signal);
                 const accepted = await context.env.bots.runConversationAccessMessage(
                     access,
                     message.messageId,
@@ -603,45 +578,35 @@ export function createConversationApplication() {
                 );
                 return context.json({ ...accepted, turn }, 202);
             }
-            const requestedDisposition = disposition(value);
-            if (requestedDisposition !== SessionPromptDisposition.Reject) {
-                throw new PlatformControlPlaneError(
-                    "invalid_request",
-                    "Platform Conversation turns do not support queue or steering targets",
-                    400,
-                );
-            }
-            targetCommandId(value, requestedDisposition);
             const accepted = await context.env.bots.submitConversationAccessMessage(
                 access,
-                validateIdentifier(string(value, "idempotencyKey"), "idempotency_key"),
-                string(value, "content", 100_000, true),
-                stringArray(value, "additionalDirectoryIds", 16, "directory_id"),
-                decodePromptImagesValue(value["images"]),
-                decodePromptResourcesValue(value["resources"]),
-                stringArray(value, "artifactIds", 16, "artifact_id"),
+                value.idempotencyKey,
+                value.content,
+                value.additionalDirectoryIds,
+                value.images,
+                value.resources,
+                value.artifactIds,
                 context.env.nowEpochMilliseconds(),
                 context.var.signal,
             );
             const turn = await context.env.sessions.readConversationTurn(access, accepted.turnId, context.var.signal);
             return context.json({ ...accepted, turn }, 202);
         })
-        .post("/v1/client/session/turns/:turnId/cancel", async (context) => {
-            const value = await body(context.req.raw, ["idempotencyKey"]);
+        .post("/v1/client/session/turns/:turnId/cancel", bodyParser(cancelTurnSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.TurnCancel, context.var.signal);
             return context.json(
                 await context.env.sessions.cancelConversationTurn(
                     access,
                     validateIdentifier(context.req.param("turnId"), "turn_id"),
-                    validateIdentifier(string(value, "idempotencyKey"), "idempotency_key"),
+                    value.idempotencyKey,
                     context.env.nowEpochMilliseconds(),
                     context.var.signal,
                 ),
                 202,
             );
         })
-        .post("/v1/client/session/turns/:turnId/promote", async (context) => {
-            await body(context.req.raw, []);
+        .post("/v1/client/session/turns/:turnId/promote", bodyParser(emptyBodySchema), async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.TurnCreate, context.var.signal);
             return context.json(
                 await context.env.sessions.promoteConversationTurnToSteering(
@@ -668,124 +633,108 @@ export function createConversationApplication() {
                 ),
             );
         })
-        .post("/v1/client/session/interactions/:interactionId/respond", async (context) => {
-            const value = await body(context.req.raw, ["action", "content", "kind", "optionId", "outcome"]);
-            const access = await authorize(
-                context.env,
-                context.req.raw,
-                Permission.InteractionRespond,
-                context.var.signal,
-            );
-            const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
-            const kind = string(value, "kind", 32);
-            if (kind === "permission") {
-                if (value["action"] !== undefined || value["content"] !== undefined) {
-                    throw new PlatformControlPlaneError("invalid_request", "The Interaction response is invalid", 400);
-                }
-                return context.json(
-                    await context.env.sessions.respondToConversationPermission(
-                        access,
-                        interactionId,
-                        string(value, "optionId", 255),
-                        string(value, "outcome", 32),
-                        context.env.nowEpochMilliseconds(),
-                        context.var.signal,
-                    ),
-                    202,
+        .post(
+            "/v1/client/session/interactions/:interactionId/respond",
+            bodyParser(interactionResponseSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                const access = await authorize(
+                    context.env,
+                    context.req.raw,
+                    Permission.InteractionRespond,
+                    context.var.signal,
                 );
-            }
-            if (kind === "elicitation") {
-                if (value["optionId"] !== undefined || value["outcome"] !== undefined) {
-                    throw new PlatformControlPlaneError("invalid_request", "The Interaction response is invalid", 400);
+                const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
+                if (value.kind === "permission") {
+                    return context.json(
+                        await context.env.sessions.respondToConversationPermission(
+                            access,
+                            interactionId,
+                            value.optionId,
+                            value.outcome,
+                            context.env.nowEpochMilliseconds(),
+                            context.var.signal,
+                        ),
+                        202,
+                    );
                 }
-                return context.json(
-                    await context.env.sessions.respondToConversationElicitation(
-                        access,
-                        interactionId,
-                        string(value, "action", 32),
-                        string(value, "content", 100_000),
-                        context.env.nowEpochMilliseconds(),
-                        context.var.signal,
-                    ),
-                    202,
-                );
-            }
-            throw new PlatformControlPlaneError("invalid_request", "The Interaction response kind is invalid", 400);
-        })
-        .post("/v1/client/session/interactions/:interactionId/response", async (context) => {
-            const value = await body(context.req.raw, ["action", "content", "kind", "optionId", "outcome"]);
-            const access = await authorize(
-                context.env,
-                context.req.raw,
-                Permission.InteractionRespond,
-                context.var.signal,
-            );
-            const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
-            const kind = string(value, "kind", 32);
-            if (kind === "permission") {
-                if (value["action"] !== undefined || value["content"] !== undefined) {
-                    throw new PlatformControlPlaneError("invalid_request", "The Interaction response is invalid", 400);
+                if (value.kind === "elicitation") {
+                    return context.json(
+                        await context.env.sessions.respondToConversationElicitation(
+                            access,
+                            interactionId,
+                            value.action,
+                            value.content,
+                            context.env.nowEpochMilliseconds(),
+                            context.var.signal,
+                        ),
+                        202,
+                    );
                 }
-                return context.json(
-                    await context.env.sessions.respondToConversationPermission(
-                        access,
-                        interactionId,
-                        string(value, "optionId", 255),
-                        string(value, "outcome", 32),
-                        context.env.nowEpochMilliseconds(),
-                        context.var.signal,
-                    ),
-                    202,
+                return value satisfies never;
+            },
+        )
+        .post(
+            "/v1/client/session/interactions/:interactionId/response",
+            bodyParser(interactionResponseSchema),
+            async (context) => {
+                const value = context.req.valid("json");
+                const access = await authorize(
+                    context.env,
+                    context.req.raw,
+                    Permission.InteractionRespond,
+                    context.var.signal,
                 );
-            }
-            if (kind === "elicitation") {
-                if (value["optionId"] !== undefined || value["outcome"] !== undefined) {
-                    throw new PlatformControlPlaneError("invalid_request", "The Interaction response is invalid", 400);
+                const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
+                if (value.kind === "permission") {
+                    return context.json(
+                        await context.env.sessions.respondToConversationPermission(
+                            access,
+                            interactionId,
+                            value.optionId,
+                            value.outcome,
+                            context.env.nowEpochMilliseconds(),
+                            context.var.signal,
+                        ),
+                        202,
+                    );
                 }
-                return context.json(
-                    await context.env.sessions.respondToConversationElicitation(
-                        access,
-                        interactionId,
-                        string(value, "action", 32),
-                        string(value, "content", 100_000),
-                        context.env.nowEpochMilliseconds(),
-                        context.var.signal,
-                    ),
-                    202,
-                );
-            }
-            throw new PlatformControlPlaneError("invalid_request", "The Interaction response kind is invalid", 400);
-        })
-        .post("/v1/client/session/artifacts/uploads", async (context) => {
-            const value = await body(context.req.raw, ["byteLength", "mediaType", "name", "sha256"]);
+                if (value.kind === "elicitation") {
+                    return context.json(
+                        await context.env.sessions.respondToConversationElicitation(
+                            access,
+                            interactionId,
+                            value.action,
+                            value.content,
+                            context.env.nowEpochMilliseconds(),
+                            context.var.signal,
+                        ),
+                        202,
+                    );
+                }
+                return value satisfies never;
+            },
+        )
+        .post("/v1/client/session/artifacts/uploads", bodyParser(artifactUploadSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.ArtifactWrite, context.var.signal);
             return context.json(
                 await context.env.sessions.createConversationArtifactUpload(
                     access,
-                    new CreateArtifactUploadRequest(
-                        string(value, "name", 500),
-                        string(value, "mediaType", 255),
-                        integer(value, "byteLength"),
-                        sha256(value),
-                    ),
+                    new CreateArtifactUploadRequest(value.name, value.mediaType, value.byteLength, value.sha256),
                     context.env.nowEpochMilliseconds(),
                     context.var.signal,
                 ),
                 201,
             );
         })
-        .post("/v1/client/session/artifacts", async (context) => {
-            const value = await body(context.req.raw, ["byteLength", "mediaType", "name", "sha256"]);
+        .post("/v1/client/session/artifacts", bodyParser(artifactUploadSchema), async (context) => {
+            const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.ArtifactWrite, context.var.signal);
             return context.json(
                 await context.env.sessions.createConversationArtifactUpload(
                     access,
-                    new CreateArtifactUploadRequest(
-                        string(value, "name", 500),
-                        string(value, "mediaType", 255),
-                        integer(value, "byteLength"),
-                        sha256(value),
-                    ),
+                    new CreateArtifactUploadRequest(value.name, value.mediaType, value.byteLength, value.sha256),
                     context.env.nowEpochMilliseconds(),
                     context.var.signal,
                 ),

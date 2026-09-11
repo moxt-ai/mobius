@@ -164,8 +164,9 @@ class PlatformWorkerTransport {
 function bindings(): PlatformRelayBindings {
     return {
         BOT_CONNECTIONS: env.BOT_CONNECTIONS,
-        DIRECTORY_DATABASE: env.DIRECTORY_DATABASE,
+        D1_SHARD_APAC_01: env.D1_SHARD_APAC_01,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
+        R2_BUCKET_APAC: env.R2_BUCKET_APAC,
         RUNTIME_RELAY: env.RUNTIME_RELAY,
         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
         SESSION_RELAY: env.SESSION_RELAY,
@@ -250,7 +251,11 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
     const project = await json(
         await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
-                body: JSON.stringify({ displayName: `Project ${label}`, idempotencyKey: `project-${label}` }),
+                body: JSON.stringify({
+                    displayName: `Project ${label}`,
+                    idempotencyKey: `project-${label}`,
+                    placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                }),
                 headers: developerHeaders(),
                 method: "POST",
             }),
@@ -437,6 +442,81 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it("Given invalid or oversized JSON, When a client posts to a Platform route, Then the request is rejected with a bounded body error", async () => {
+        const worker = createPlatformWorker(
+            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+        );
+        for (const path of [
+            "/v1/platform/app-credentials/credential-test/revoke",
+            "/v1/client/session/turns/turn-test/promote",
+        ]) {
+            for (const input of [
+                { body: "{", contentType: "application/json", status: 400 },
+                { body: "null", contentType: "application/json", status: 400 },
+                { body: "[]", contentType: "application/json", status: 400 },
+                { body: '{"extra":true}', contentType: "application/json", status: 400 },
+                { body: "{}", contentType: "text/plain", status: 400 },
+                {
+                    body: JSON.stringify({ extra: "é".repeat(128 * 1024) }),
+                    contentType: "application/json",
+                    status: 413,
+                },
+            ]) {
+                const response = await worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}${path}`, {
+                        method: "POST",
+                        headers: { "content-type": input.contentType },
+                        body: input.body,
+                    }),
+                    bindings(),
+                );
+                expect(response.status, `${path}: ${input.contentType}, ${input.body.slice(0, 40)}`).toBe(input.status);
+                await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
+            }
+        }
+    });
+
+    it("Given malformed Platform request fields, When a client submits JSON, Then the route rejects the body before authorizing an operation", async () => {
+        const worker = createPlatformWorker(
+            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+        );
+        for (const [path, body] of [
+            ["/v1/platform/tenants", { displayName: 12 }],
+            ["/v1/apps/app-test/projects", { displayName: "Project", idempotencyKey: false }],
+            ["/v1/apps/app-test/credentials", { expiresInSeconds: 10, permissions: [], projectIds: [12] }],
+            [
+                "/v1/client/session/configuration",
+                {
+                    additionalDirectoryIds: [],
+                    booleanValue: "false",
+                    configId: "mode",
+                    idempotencyKey: "key",
+                    value: "",
+                    valueType: "boolean",
+                },
+            ],
+            [
+                "/v1/client/session/artifacts",
+                { byteLength: -1, mediaType: "text/plain", name: "file.txt", sha256: "a".repeat(64) },
+            ],
+            [
+                "/v1/client/session/interactions/interaction-test/respond",
+                { kind: "permission", optionId: "allow", outcome: "selected", content: "extra" },
+            ],
+        ]) {
+            const response = await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}${path}`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify(body),
+                }),
+                bindings(),
+            );
+            expect(response.status).toBe(400);
+            await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
+        }
+    });
+
     it("Given a Platform deployment, When health, capabilities, and accountless bootstrap are requested, Then Platform is independently discoverable and public bootstrap is unavailable", async () => {
         const worker = createPlatformWorker(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
@@ -510,6 +590,7 @@ describe.sequential("Platform hosting boundary", () => {
             clientReference: "sdk-customer",
             displayName: "SDK project",
             idempotencyKey: "sdk-project",
+            placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
         };
         const project = await developer.createProject(app.appId, projectRequest, AbortSignal.timeout(5_000));
         const replay = await developer.createProject(app.appId, projectRequest, AbortSignal.timeout(5_000));
@@ -709,7 +790,11 @@ describe.sequential("Platform hosting boundary", () => {
         const [firstProjectResponse, secondProjectResponse] = await Promise.all([
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "Only project", idempotencyKey: "only-project" }),
+                    body: JSON.stringify({
+                        displayName: "Only project",
+                        idempotencyKey: "only-project",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -717,7 +802,11 @@ describe.sequential("Platform hosting boundary", () => {
             ),
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "Concurrent project", idempotencyKey: "concurrent-project" }),
+                    body: JSON.stringify({
+                        displayName: "Concurrent project",
+                        idempotencyKey: "concurrent-project",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -855,7 +944,11 @@ describe.sequential("Platform hosting boundary", () => {
         const projectOne = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "Workspace One", idempotencyKey: "workspace-one" }),
+                    body: JSON.stringify({
+                        displayName: "Workspace One",
+                        idempotencyKey: "workspace-one",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -866,7 +959,11 @@ describe.sequential("Platform hosting boundary", () => {
         const projectTwo = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "Workspace Two", idempotencyKey: "workspace-two" }),
+                    body: JSON.stringify({
+                        displayName: "Workspace Two",
+                        idempotencyKey: "workspace-two",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -943,7 +1040,11 @@ describe.sequential("Platform hosting boundary", () => {
         const firstProject = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "First", idempotencyKey: "first" }),
+                    body: JSON.stringify({
+                        displayName: "First",
+                        idempotencyKey: "first",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -954,7 +1055,11 @@ describe.sequential("Platform hosting boundary", () => {
         const secondProject = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
-                    body: JSON.stringify({ displayName: "Second", idempotencyKey: "second" }),
+                    body: JSON.stringify({
+                        displayName: "Second",
+                        idempotencyKey: "second",
+                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),

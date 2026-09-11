@@ -44,40 +44,16 @@ export function createBotApplication() {
             c.req.raw.signal.throwIfAborted();
             return botErrorResponse(error);
         })
-        .get("/projects", async (c) => {
-            const tenant = await c.env.services.bots.resolveTenant(c.req.raw, c.var.signal);
-            return c.json({ projects: await c.env.services.bots.listProjects(tenant, c.var.signal) });
-        })
-        .get("/projects/:projectId/bots", async (c) => {
-            if (c.req.raw.headers.has("authorization")) {
-                return c.json(
-                    await c.env.services.bots.listOwnedBots(
-                        pathIdentifier(c.req.param("projectId")),
-                        bearer(c.req.raw),
-                        actorReference(c.req.raw),
-                        c.var.signal,
-                    ),
-                );
-            }
-            const tenant = await c.env.services.bots.resolveTenant(c.req.raw, c.var.signal);
-            return c.json({
-                bots: await c.env.services.bots.listProjectBots(
-                    tenant,
+        .get("/projects/:projectId/bots", async (c) =>
+            c.json(
+                await c.env.services.bots.listOwnedBots(
                     pathIdentifier(c.req.param("projectId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
                     c.var.signal,
                 ),
-            });
-        })
-        .get("/projects/:projectId/status", async (c) => {
-            const tenant = await c.env.services.bots.resolveTenant(c.req.raw, c.var.signal);
-            return c.json(
-                await c.env.services.bots.readProjectStatus(
-                    tenant,
-                    pathIdentifier(c.req.param("projectId")),
-                    c.var.signal,
-                ),
-            );
-        })
+            ),
+        )
         .post("/projects/:projectId/bots", async (c) => {
             const value = await requestBody(c.req.raw, ["avatarRef", "description", "displayName"]);
             return c.json(

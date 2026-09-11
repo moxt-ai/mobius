@@ -15,60 +15,22 @@ import type {
 
 export class SessionQuotaPolicy {
     readonly activeSessionsPerProject: number;
-    readonly activeSessionsPerTenant: number;
 
-    constructor(activeSessionsPerTenant: number, activeSessionsPerProject: number) {
-        if (
-            !Number.isSafeInteger(activeSessionsPerTenant) ||
-            activeSessionsPerTenant < 1 ||
-            !Number.isSafeInteger(activeSessionsPerProject) ||
-            activeSessionsPerProject < 1 ||
-            activeSessionsPerProject > activeSessionsPerTenant
-        ) {
+    constructor(activeSessionsPerProject: number) {
+        if (!Number.isSafeInteger(activeSessionsPerProject) || activeSessionsPerProject < 1) {
             throw new TypeError("The session quota policy is invalid");
         }
         this.activeSessionsPerProject = activeSessionsPerProject;
-        this.activeSessionsPerTenant = activeSessionsPerTenant;
     }
 }
 
-export const DEFAULT_SESSION_QUOTA_POLICY = new SessionQuotaPolicy(10_000, 1_000);
-
-const PROJECT_STORAGE_LOCATOR_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
-
-export class ProjectStorageLocator {
-    readonly #placementKey: string;
-
-    private constructor(placementKey: string) {
-        if (!PROJECT_STORAGE_LOCATOR_PATTERN.test(placementKey)) {
-            throw new TypeError("The Project storage locator is invalid");
-        }
-        this.#placementKey = placementKey;
-    }
-
-    static readonly fromHostingPlacement = (placementKey: string): ProjectStorageLocator =>
-        new ProjectStorageLocator(placementKey);
-
-    readonly resolveHostingPlacement = (): string => this.#placementKey;
-
-    readonly toJSON = (): string => "[opaque-project-storage-locator]";
-}
+export const DEFAULT_SESSION_QUOTA_POLICY = new SessionQuotaPolicy(1_000);
 
 export class ProjectScope {
-    readonly #storageLocator: ProjectStorageLocator;
     readonly projectId: string;
 
-    get storageLocator(): ProjectStorageLocator {
-        return this.#storageLocator;
-    }
-
-    constructor(
-        hostingPlacement: string,
-        projectId: string,
-        storageLocator: ProjectStorageLocator = ProjectStorageLocator.fromHostingPlacement(hostingPlacement),
-    ) {
+    constructor(projectId: string) {
         this.projectId = projectId;
-        this.#storageLocator = storageLocator;
     }
 }
 
@@ -338,7 +300,7 @@ export interface SessionSummary {
     readonly runtimeId: string;
     readonly sessionId: string;
     readonly title: string;
-    readonly tenantId: string;
+
     readonly updatedAt: string;
 }
 

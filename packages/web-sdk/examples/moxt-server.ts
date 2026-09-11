@@ -68,6 +68,7 @@ export async function provisionMoxtPlatformProject(
             clientReference: options.projectClientReference,
             displayName: options.projectDisplayName,
             idempotencyKey: options.projectIdempotencyKey,
+            placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
         },
         signal,
     );

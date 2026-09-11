@@ -85,12 +85,7 @@ export class SessionService {
             ProjectPermission.ConversationCreate,
             signal,
         );
-        return await this.#sessionCommands.createSession(
-            new ProjectScope(access.tenantId, access.projectId),
-            request,
-            now,
-            signal,
-        );
+        return await this.#sessionCommands.createSession(new ProjectScope(access.projectId), request, now, signal);
     };
 
     readonly createBrowserCredential = (
@@ -115,12 +110,7 @@ export class SessionService {
                     new RuntimeDescriptor(
                         channel,
                         await this.#channelGateway.readRuntimeStatus(
-                            new VerifiedChannelAccess(
-                                channel.channelId,
-                                channel.runtimeId,
-                                channel.tenantId,
-                                channel.projectId,
-                            ),
+                            new VerifiedChannelAccess(channel.channelId, channel.runtimeId, channel.projectId),
                             signal,
                         ),
                     ),
@@ -158,7 +148,7 @@ export class SessionService {
             signal,
         );
         return await this.#sessionTransfers.importSession(
-            new ProjectScope(access.tenantId, access.projectId),
+            new ProjectScope(access.projectId),
             exported,
             targetBinding,
             now,
@@ -189,7 +179,7 @@ export class SessionService {
             signal,
         );
         return await this.#sessionCommands.setDefaultBinding(
-            new ProjectScope(access.tenantId, access.projectId),
+            new ProjectScope(access.projectId),
             sessionId,
             binding,
             now,
@@ -446,7 +436,7 @@ export class SessionService {
     ) => {
         const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
         return await this.#sessionCommands.reconcileAttempt(
-            new ProjectScope(access.tenantId, access.projectId),
+            new ProjectScope(access.projectId),
             access.runtimeId,
             sessionId,
             attemptId,

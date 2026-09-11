@@ -74,7 +74,6 @@ export class SessionLifecycleService {
         const result = this.#storage.createSession(
             {
                 scopeKey: key,
-                tenantId: scope.storageLocator.resolveHostingPlacement(),
                 projectId: scope.projectId,
                 sessionId: request.sessionId,
                 createdBy: request.createdBy,
@@ -93,13 +92,10 @@ export class SessionLifecycleService {
                 createdAt: now,
                 updatedAt: now,
             },
-            { tenant: this.#quota.activeSessionsPerTenant, project: this.#quota.activeSessionsPerProject },
+            { project: this.#quota.activeSessionsPerProject },
         );
         if (result === "quota-exceeded") {
-            throw new SessionRuntimeError(
-                "session_quota_exceeded",
-                "The tenant or project active session quota is exhausted",
-            );
+            throw new SessionRuntimeError("session_quota_exceeded", "The project active session quota is exhausted");
         }
         signal.throwIfAborted();
         return summaryFromRow(this.#store.requireSessionRow(scope, request.sessionId, true));

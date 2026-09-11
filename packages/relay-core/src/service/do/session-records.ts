@@ -60,9 +60,8 @@ export interface PreparedEvent {
 }
 
 export function scopeKey(scope: ProjectScope): string {
-    validateDomainIdentifier(scope.storageLocator.resolveHostingPlacement(), "tenant");
     validateDomainIdentifier(scope.projectId, "project");
-    return `${scope.storageLocator.resolveHostingPlacement()}:${scope.projectId}`;
+    return scope.projectId;
 }
 
 export function validateDomainIdentifier(value: string, field: string): string {
@@ -204,7 +203,6 @@ export function summaryFromRow(row: SessionRecord): SessionSummary {
         projectId: rowString(row, "project_id"),
         runtimeId: rowString(row, "runtime_id"),
         sessionId: rowString(row, "session_id"),
-        tenantId: rowString(row, "tenant_id"),
         title: rowString(row, "title"),
         updatedAt: new Date(rowNumber(row, "updated_at")).toISOString(),
     };
@@ -227,7 +225,6 @@ export function eventCursor(scope: ProjectScope, sessionId: string, sequence: nu
         projectId: scope.projectId,
         sequence,
         sessionId,
-        tenantId: scope.storageLocator.resolveHostingPlacement(),
     });
 }
 
@@ -582,7 +579,6 @@ export function pendingWorkFromRow(row: PendingWorkRecord, scope: ProjectScope):
         projectId: scope.projectId,
         sessionId: rowString(row, "session_id"),
         state: workState,
-        tenantId: scope.storageLocator.resolveHostingPlacement(),
         workId: rowString(row, "work_id"),
     };
 }

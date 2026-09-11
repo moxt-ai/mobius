@@ -122,15 +122,27 @@ export const ProjectRowSchema = v.object({
     created_at: nonNegativeInteger,
     deleted_at: v.nullable(nonNegativeInteger),
     display_name: v.string(),
+    d1_shard_id: v.string(),
     idempotency_key: v.string(),
     lifecycle,
     project_id: v.string(),
+    placement_revision: positiveInteger,
+    r2_bucket_id: v.string(),
     request_digest: v.string(),
     suspended_at: v.nullable(nonNegativeInteger),
     tenant_id: v.string(),
     updated_at: nonNegativeInteger,
 });
 export type ProjectRow = Readonly<v.InferOutput<typeof ProjectRowSchema>>;
+
+export const ProjectStoragePlacementRowSchema = v.object({
+    d1_shard_id: v.string(),
+    placement_revision: positiveInteger,
+    project_id: v.string(),
+    r2_bucket_id: v.string(),
+    tenant_id: v.string(),
+});
+export type ProjectStoragePlacementRow = Readonly<v.InferOutput<typeof ProjectStoragePlacementRowSchema>>;
 
 export const RecordPresenceRowSchema = v.object({ present: v.literal(1) });
 export type RecordPresenceRow = Readonly<v.InferOutput<typeof RecordPresenceRowSchema>>;

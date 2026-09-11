@@ -187,8 +187,8 @@ function readScope(value: Readonly<Record<string, unknown>>): ProjectScope {
     if (!isRecord(scope)) {
         throw new InternalRequestError("invalid_session_operation", "The project scope is invalid");
     }
-    assertExactKeys(scope, ["projectId", "tenantId"]);
-    return new ProjectScope(readString(scope, "tenantId"), readString(scope, "projectId"));
+    assertExactKeys(scope, ["projectId"]);
+    return new ProjectScope(readString(scope, "projectId"));
 }
 
 function readCreateRequest(value: Readonly<Record<string, unknown>>): CreateSessionRequest {
@@ -428,7 +428,6 @@ class DoRoutes {
                     remainingUses: permit.remainingUses,
                     runtimeId: permit.runtimeId,
                     sessionId: permit.sessionId,
-                    tenantId: permit.scope.storageLocator.resolveHostingPlacement(),
                     turnId: permit.turnId,
                 });
             }

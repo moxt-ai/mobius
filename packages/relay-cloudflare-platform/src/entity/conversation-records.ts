@@ -50,7 +50,6 @@ export const ConversationDirectoryRowSchema = v.object({
     conversation_id: v.string(),
     project_id: v.string(),
     session_id: v.string(),
-    tenant_id: v.string(),
 });
 export type ConversationDirectoryRow = Readonly<v.InferOutput<typeof ConversationDirectoryRowSchema>>;
 

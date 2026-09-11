@@ -1,4 +1,4 @@
-import { hashSecret, PairingDirectoryError, validateIdentifier } from "@moxt-ai/mobius-relay-core";
+import { hashSecret, PairingDirectoryError } from "@moxt-ai/mobius-relay-core";
 
 const DEFAULT_CLIENT_LIMIT = 10;
 const DEFAULT_TENANT_LIMIT = 100;
@@ -7,6 +7,7 @@ const MAXIMUM_LIMIT = 100_000;
 const MAXIMUM_WINDOW_MILLISECONDS = 24 * 60 * 60 * 1_000;
 
 export interface PublicProjectBootstrapEnvironment {
+    readonly MOBIUS_TENANT_ID?: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT?: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_ENABLED?: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT?: string;
@@ -91,11 +92,13 @@ export class PublicProjectBootstrapPolicy {
     readonly #database: D1Database;
     readonly #clientLimit: number;
     readonly #enabled: boolean;
+    readonly #tenantId: string;
     readonly #tenantLimit: number;
     readonly #windowMilliseconds: number;
 
     constructor(
         database: D1Database,
+        tenantId: string,
         enabled: boolean,
         clientLimit: number,
         tenantLimit: number,
@@ -115,18 +118,14 @@ export class PublicProjectBootstrapPolicy {
             throw new PairingDirectoryError("configuration_invalid", "The public Project bootstrap policy is invalid");
         }
         this.#database = database;
+        this.#tenantId = tenantId;
         this.#enabled = enabled;
         this.#clientLimit = clientLimit;
         this.#tenantLimit = tenantLimit;
         this.#windowMilliseconds = windowMilliseconds;
     }
 
-    readonly authorize = async (
-        tenantId: string,
-        clientFingerprint: string,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<void> => {
+    readonly authorize = async (clientFingerprint: string, now: number, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
         if (!this.#enabled) {
             throw new PairingDirectoryError(
@@ -134,13 +133,12 @@ export class PublicProjectBootstrapPolicy {
                 "Public accountless Project bootstrap is disabled",
             );
         }
-        const normalizedTenantId = validateIdentifier(tenantId, "tenant_id");
         const digest = await hashSecret(`public-bootstrap\u0000${normalizedClientFingerprint(clientFingerprint)}`);
         signal.throwIfAborted();
         const windowStartsAt = now - this.#windowMilliseconds;
         await this.#database
             .prepare(`DELETE FROM public_project_bootstrap_events WHERE tenant_id = ? AND created_at <= ?`)
-            .bind(normalizedTenantId, windowStartsAt)
+            .bind(this.#tenantId, windowStartsAt)
             .run();
         signal.throwIfAborted();
         const inserted = await this.#database
@@ -160,14 +158,14 @@ export class PublicProjectBootstrapPolicy {
             )
             .bind(
                 `pbe_${crypto.randomUUID()}`,
-                normalizedTenantId,
+                this.#tenantId,
                 digest,
                 now,
-                normalizedTenantId,
+                this.#tenantId,
                 digest,
                 windowStartsAt,
                 this.#clientLimit,
-                normalizedTenantId,
+                this.#tenantId,
                 windowStartsAt,
                 this.#tenantLimit,
             )
@@ -188,6 +186,7 @@ export function publicProjectBootstrapPolicyFromEnvironment(
 ): PublicProjectBootstrapPolicy {
     return new PublicProjectBootstrapPolicy(
         database,
+        environment.MOBIUS_TENANT_ID ?? "standalone",
         configurationEnabled(environment.PUBLIC_PROJECT_BOOTSTRAP_ENABLED),
         configurationInteger(
             environment.PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT,

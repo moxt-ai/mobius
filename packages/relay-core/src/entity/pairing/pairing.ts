@@ -73,7 +73,6 @@ export interface CreatedPairing {
     readonly pollToken: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
 }
 
 export class CreatedRuntimePairing {
@@ -120,7 +119,6 @@ export interface RedeemedChannelAccessGrant {
     readonly channelId: string;
     readonly hostToken: string;
     readonly projectId: string;
-    readonly tenantId: string;
 }
 
 export class LinkedChannelDevice {
@@ -139,21 +137,19 @@ export class VerifiedChannelAccess {
     readonly channelId: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
 
-    constructor(channelId: string, runtimeId: string, tenantId: string, projectId: string) {
+    constructor(channelId: string, runtimeId: string, projectId: string) {
         this.channelId = channelId;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
     }
 }
 
 export class ChannelHostCredential extends VerifiedChannelAccess {
     readonly credentialId: string;
 
-    constructor(channelId: string, runtimeId: string, tenantId: string, projectId: string, credentialId: string) {
-        super(channelId, runtimeId, tenantId, projectId);
+    constructor(channelId: string, runtimeId: string, projectId: string, credentialId: string) {
+        super(channelId, runtimeId, projectId);
         this.credentialId = credentialId;
     }
 }
@@ -165,7 +161,6 @@ export class ChannelDescriptor {
     readonly machineName: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(
@@ -173,7 +168,6 @@ export class ChannelDescriptor {
         channelId: string,
         machineName: string,
         workspaceName: string,
-        tenantId: string,
         projectId: string,
         runtimeId: string,
         installableAgents: readonly InstallableAgentDescriptor[] = [],
@@ -184,7 +178,6 @@ export class ChannelDescriptor {
         this.machineName = machineName;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
         this.workspaceName = workspaceName;
     }
 }
@@ -193,14 +186,12 @@ export class CreatedBrowserCredential {
     readonly credentialId: string;
     readonly expiresAt: string;
     readonly projectId: string;
-    readonly tenantId: string;
     readonly token: string;
 
-    constructor(credentialId: string, expiresAt: string, projectId: string, tenantId: string, token: string) {
+    constructor(credentialId: string, expiresAt: string, projectId: string, token: string) {
         this.credentialId = credentialId;
         this.expiresAt = expiresAt;
         this.projectId = projectId;
-        this.tenantId = tenantId;
         this.token = token;
     }
 }
@@ -238,7 +229,6 @@ export class PairedPairingStatus extends PairingStatus {
     readonly projectId: string;
     readonly runtimeId: string;
     readonly status = PairingLifecycle.Paired;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(
@@ -246,7 +236,6 @@ export class PairedPairingStatus extends PairingStatus {
         channelId: string,
         machineName: string,
         workspaceName: string,
-        tenantId: string,
         projectId: string,
         runtimeId: string,
         installableAgents: readonly InstallableAgentDescriptor[] = [],
@@ -258,7 +247,6 @@ export class PairedPairingStatus extends PairingStatus {
         this.machineName = machineName;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
         this.workspaceName = workspaceName;
     }
 }

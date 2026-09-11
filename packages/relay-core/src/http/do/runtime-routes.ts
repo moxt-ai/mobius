@@ -11,12 +11,11 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
         const request = c.req.raw;
         const channelId = request.headers.get("x-mobius-channel-id");
         const runtimeId = request.headers.get("x-mobius-runtime-id");
-        const tenantId = request.headers.get("x-mobius-tenant-id");
         const projectId = request.headers.get("x-mobius-project-id");
-        if (channelId === null || runtimeId === null || tenantId === null || projectId === null) {
+        if (channelId === null || runtimeId === null || projectId === null) {
             return unauthorized("Verified channel access is required");
         }
-        const scope = new ProjectScope(tenantId, projectId);
+        const scope = new ProjectScope(projectId);
         const url = new URL(request.url);
         const credentialId = request.headers.get("x-mobius-host-credential-id");
         if (request.method === "DELETE" && url.pathname.endsWith("/runtime/revoke")) {
@@ -78,10 +77,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             if (credentialId === null) {
                 return unauthorized("Verified host credential access is required");
             }
-            return runtime.acceptHost(
-                { role: "host", channelId, credentialId, runtimeId, tenantId, projectId },
-                request.signal,
-            );
+            return runtime.acceptHost({ role: "host", channelId, credentialId, runtimeId, projectId }, request.signal);
         }
         return new Response(null, { status: 404 });
     });

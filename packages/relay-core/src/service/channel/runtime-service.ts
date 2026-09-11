@@ -27,7 +27,6 @@ export type RuntimeSocketIdentity =
           readonly channelId: string;
           readonly credentialId: string;
           readonly runtimeId: string;
-          readonly tenantId: string;
           readonly projectId: string;
       }
     | {
@@ -35,7 +34,6 @@ export type RuntimeSocketIdentity =
           readonly connectionEpoch: number;
           readonly connectionId: string;
           readonly runtimeId: string;
-          readonly tenantId: string;
           readonly projectId: string;
       };
 
@@ -147,7 +145,6 @@ export class RuntimeService {
         if (previous.length > 0 && current !== null) {
             this.#cx.services.connections.saveDisconnect({
                 ...current,
-                tenantId: scope.storageLocator.resolveHostingPlacement(),
                 projectId: scope.projectId,
                 disconnectedAt: Date.now(),
                 progress: { kind: "listing" },
@@ -164,7 +161,6 @@ export class RuntimeService {
         const accepted = this.#cx.gateways.peers.accept({
             ...prepared.identity,
             role: "daemon",
-            tenantId: scope.storageLocator.resolveHostingPlacement(),
             projectId: scope.projectId,
         });
         this.#cx.services.connections.connected(prepared.identity, Date.now());
@@ -191,12 +187,7 @@ export class RuntimeService {
     ): Promise<Response> => {
         signal.throwIfAborted();
         const accepted = this.#cx.gateways.peers.accept(identity);
-        await this.attachHost(
-            identity.runtimeId,
-            new ProjectScope(identity.tenantId, identity.projectId),
-            accepted.socket,
-            signal,
-        );
+        await this.attachHost(identity.runtimeId, new ProjectScope(identity.projectId), accepted.socket, signal);
         return accepted.response;
     };
 
@@ -207,7 +198,6 @@ export class RuntimeService {
                 identity.channelId === channelId &&
                 identity.credentialId === credentialId &&
                 identity.runtimeId === runtimeId &&
-                identity.tenantId === scope.storageLocator.resolveHostingPlacement() &&
                 identity.projectId === scope.projectId
             ) {
                 socket.close(1008, "Channel access revoked");
@@ -234,22 +224,13 @@ export class RuntimeService {
         signal.throwIfAborted();
         this.#cx.services.connections.revoke(runtimeId, scope, Date.now());
         for (const accepting of this.#accepting) {
-            if (
-                accepting.runtimeId === runtimeId &&
-                accepting.scope.storageLocator.resolveHostingPlacement() ===
-                    scope.storageLocator.resolveHostingPlacement() &&
-                accepting.scope.projectId === scope.projectId
-            ) {
+            if (accepting.runtimeId === runtimeId && accepting.scope.projectId === scope.projectId) {
                 accepting.controller.abort(new DOMException("Runtime revoked", "AbortError"));
             }
         }
         const daemons: RuntimeSocket[] = [];
         for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
-            if (
-                identity.runtimeId !== runtimeId ||
-                identity.tenantId !== scope.storageLocator.resolveHostingPlacement() ||
-                identity.projectId !== scope.projectId
-            ) {
+            if (identity.runtimeId !== runtimeId || identity.projectId !== scope.projectId) {
                 continue;
             }
             if (identity.role === "daemon") {
@@ -264,7 +245,6 @@ export class RuntimeService {
             if (daemons.length > 0 && this.#cx.services.connections.pendingDisconnect() === null) {
                 this.#cx.services.connections.saveDisconnect({
                     ...current,
-                    tenantId: scope.storageLocator.resolveHostingPlacement(),
                     projectId: scope.projectId,
                     disconnectedAt: Date.now(),
                     progress: { kind: "listing" },
@@ -311,7 +291,7 @@ export class RuntimeService {
         if (identity.role === "daemon" && this.#cx.services.connections.isCurrent(identity)) {
             await this.#cx.services.recovery.reconcile(
                 identity.runtimeId,
-                new ProjectScope(identity.tenantId, identity.projectId),
+                new ProjectScope(identity.projectId),
                 signal,
             );
         }
@@ -324,7 +304,7 @@ export class RuntimeService {
         signal: AbortSignal,
     ): Promise<void> => {
         signal.throwIfAborted();
-        const scope = new ProjectScope(identity.tenantId, identity.projectId);
+        const scope = new ProjectScope(identity.projectId);
         if (identity.role === "host") {
             if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
                 socket.close(1008, "Channel access revoked");
@@ -428,7 +408,7 @@ export class RuntimeService {
             await this.#daemonMessageTail;
             signal.throwIfAborted();
             this.#cx.services.connections.disconnected(job, job.disconnectedAt);
-            const scope = new ProjectScope(job.tenantId, job.projectId);
+            const scope = new ProjectScope(job.projectId);
             let remaining: readonly string[];
             switch (job.progress.kind) {
                 case "listing":

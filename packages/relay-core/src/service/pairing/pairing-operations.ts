@@ -67,7 +67,7 @@ export interface PairingOperations {
         lifetimeMilliseconds: number,
         signal: AbortSignal,
     ) => Promise<CreatedBrowserCredential>;
-    readonly createPairing: (tenantId: string, signal: AbortSignal) => Promise<CreatedPairing>;
+    readonly createPairing: (signal: AbortSignal) => Promise<CreatedPairing>;
     readonly createProjectRuntimePairing: (
         projectId: string,
         token: string,

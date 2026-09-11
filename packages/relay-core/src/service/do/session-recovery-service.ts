@@ -2,7 +2,7 @@ import { BotApiError } from "../../entity/bot/bot-error.ts";
 import { BotOutboundAcceptance, type PendingBotOutbound } from "../../entity/bot/bot-session.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
 import type { BotConnectionGateway } from "../../gateway/bot-connection-gateway.ts";
-import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
+import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import type { BotTargetService } from "../bot/bot-target-service.ts";
 import type { BotSessionService } from "./bot-session-service.ts";
 import type { SqliteSessionRuntime } from "./sqlite-session-runtime.ts";
@@ -11,9 +11,9 @@ interface SessionRecoveryContext {
     readonly runtime: SqliteSessionRuntime;
     readonly bots: BotSessionService;
     readonly services: {
-        readonly forTenant: (tenant: TenantContext) => { readonly targets: BotTargetService };
+        readonly forProject: (project: ProjectStorageContext) => { readonly targets: BotTargetService };
     };
-    readonly tenants: TenantShardingDirectory;
+    readonly projects: ProjectStorageDirectory;
     readonly connections: BotConnectionGateway;
     readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
 }
@@ -63,11 +63,11 @@ export class SessionRecoveryService {
             signal.throwIfAborted();
             try {
                 const bindingId = this.#cx.runtime.readExecutionBinding(scope, sessionId, message.executionId);
-                const tenant = await this.#cx.tenants.resolveProject(scope.storageLocator, signal);
-                if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+                const project = await this.#cx.projects.resolve(scope.projectId, signal);
+                if (project.projectId !== scope.projectId) {
                     throw new BotApiError("bot_service_unavailable", "The Project placement is invalid", "unavailable");
                 }
-                const targets = this.#cx.services.forTenant(tenant).targets;
+                const targets = this.#cx.services.forProject(project).targets;
                 const route = await targets.authorizeOutboundTarget(
                     message.botId,
                     bindingId,

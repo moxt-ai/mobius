@@ -11,7 +11,6 @@ import {
     sessionQuotaFromEnvironment,
 } from "@moxt-ai/mobius-relay-cloudflare";
 import {
-    ConfiguredPairingTenantResolver,
     createBotApplication,
     createLegacyAuthenticationApplication,
     createMobiusApplication,
@@ -27,16 +26,14 @@ import {
 } from "@moxt-ai/mobius-relay-core";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
-import { StandaloneTenantShardingDirectory } from "./tenant-sharding-directory.ts";
+import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
 
 export interface RelayBindings extends LiteSessionConfigurationEnvironment, PublicProjectBootstrapEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly MOBIUS_TENANT_ID?: string;
     readonly DIRECTORY_DATABASE: D1Database;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }
-
 const application = createMobiusApplication();
 const botApplication = createBotApplication();
 const legacyAuthenticationApplication = createLegacyAuthenticationApplication();
@@ -199,13 +196,12 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
                 config: { quota: sessionQuotaFromEnvironment(environment) },
                 gateways: {
                     databaseResolver: new SingleDatabaseResolver(environment.DIRECTORY_DATABASE),
-                    tenantShardingDirectory: new StandaloneTenantShardingDirectory(),
+                    projectStorageDirectory: new StandaloneProjectStorageDirectory(),
                     runtimeRelay: environment.RUNTIME_RELAY,
                     sessionRelay: environment.SESSION_RELAY,
                 },
             };
             const channelRuntime = new CloudflareChannelRuntime(infrastructure);
-            const tenantResolver = new ConfiguredPairingTenantResolver(environment.MOBIUS_TENANT_ID);
             const cx = createRelayDependencies({
                 authentication: {
                     projects: authenticationRoutes.authorizer(projectAuthentication),
@@ -223,14 +219,16 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
                 gateways: {
                     channelGateway: channelRuntime,
                     nowEpochMilliseconds: () => Date.now(),
-                    pairingTenantResolver: tenantResolver,
                     publicProjectBootstrap: publicProjectBootstrapPolicyFromEnvironment(
                         environment.DIRECTORY_DATABASE,
                         environment,
                     ),
-                    sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY),
+                    sessionTransport: new CloudflareSessionTransport(
+                        environment.SESSION_RELAY,
+                        environment.MOBIUS_TENANT_ID ?? "standalone",
+                    ),
                 },
-                tenants: infrastructure.gateways.tenantShardingDirectory,
+                projects: infrastructure.gateways.projectStorageDirectory,
             });
             if (isVersionedSharedProjectPath(pathname)) {
                 return await authenticationRoutes.projectResponse(await application.fetch(request, cx));

@@ -4,7 +4,6 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
     database.exec(`
       CREATE TABLE IF NOT EXISTS sessions (
         scope_key TEXT NOT NULL,
-        tenant_id TEXT NOT NULL,
         project_id TEXT NOT NULL,
         session_id TEXT NOT NULL,
         created_by TEXT NOT NULL,

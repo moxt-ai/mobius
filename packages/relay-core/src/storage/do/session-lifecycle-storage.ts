@@ -6,26 +6,18 @@ export class SessionLifecycleStorage {
     readonly createSession = (
         input: Parameters<SessionLifecycleStorage["insertSession"]>[0],
         limits: {
-            readonly tenant: number;
             readonly project: number;
         },
     ): "created" | "quota-exceeded" =>
         this.#database.transaction(() => {
-            const tenant = decodeStorageRecord(
-                SessionCountSchema,
-                this.#database.query(
-                    "SELECT COUNT(*) AS active_sessions FROM sessions WHERE tenant_id = ? AND lifecycle <> 'deleted'",
-                    [input.tenantId],
-                )[0],
-            ).active_sessions;
             const project = decodeStorageRecord(
                 SessionCountSchema,
                 this.#database.query(
-                    "SELECT COUNT(*) AS active_sessions FROM sessions WHERE tenant_id = ? AND project_id = ? AND lifecycle <> 'deleted'",
-                    [input.tenantId, input.projectId],
+                    "SELECT COUNT(*) AS active_sessions FROM sessions WHERE project_id = ? AND lifecycle <> 'deleted'",
+                    [input.projectId],
                 )[0],
             ).active_sessions;
-            if (tenant >= limits.tenant || project >= limits.project) {
+            if (project >= limits.project) {
                 return "quota-exceeded";
             }
             this.insertSession(input);
@@ -49,7 +41,6 @@ export class SessionLifecycleStorage {
 
     readonly insertSession = (input: {
         readonly scopeKey: string;
-        readonly tenantId: string;
         readonly projectId: string;
         readonly sessionId: string;
         readonly createdBy: string;
@@ -70,15 +61,14 @@ export class SessionLifecycleStorage {
     }): { readonly changes: number } =>
         this.#database.run(
             `INSERT INTO sessions (
-         scope_key, tenant_id, project_id, session_id, created_by, runtime_id,
+         scope_key, project_id, session_id, created_by, runtime_id,
          agent_id, binding_id, directory_id, config_revision,
          binding_created_at, title, native_history_json, recording_level, retention_milliseconds,
          idempotency_retention_milliseconds, hot_event_limit,
          content_limit_bytes, lifecycle, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
             [
                 input.scopeKey,
-                input.tenantId,
                 input.projectId,
                 input.sessionId,
                 input.createdBy,

@@ -2,10 +2,11 @@ import type { D1Migration } from "cloudflare:test";
 
 interface PlatformDemoTestBindings {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly DIRECTORY_DATABASE: D1Database;
+    readonly D1_SHARD_APAC_01: D1Database;
     readonly MOBIUS_DEMO_ALLOWED_ORIGIN: string;
     readonly MOBIUS_DEMO_DEVELOPER_TOKEN: string;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
+    readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_ACTIVE_SESSIONS_PER_PROJECT: string;
     readonly SESSION_ACTIVE_SESSIONS_PER_TENANT: string;

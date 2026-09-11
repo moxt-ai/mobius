@@ -187,7 +187,6 @@ export class SessionTransferService {
                     requestHash: rowString(row, "request_hash"),
                     resultId: rowString(row, "result_id"),
                     sessionId,
-                    tenantId: scope.storageLocator.resolveHostingPlacement(),
                 });
             });
         const interactions = this.#storage

@@ -136,10 +136,7 @@ export class BotAuthorization {
             signal,
         );
         signal.throwIfAborted();
-        if (
-            access.scope.storageLocator.resolveHostingPlacement() !== scope.tenantId ||
-            access.scope.projectId !== scope.projectId
-        ) {
+        if (access.scope.projectId !== scope.projectId) {
             throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
         }
         return new ProjectBotAccess(access, normalizedBotId);
@@ -188,10 +185,7 @@ export class BotAuthorization {
             actorReference,
             signal,
         );
-        if (
-            access.scope.storageLocator.resolveHostingPlacement() !== scope.tenantId ||
-            access.scope.projectId !== scope.projectId
-        ) {
+        if (access.scope.projectId !== scope.projectId) {
             throw new BotApiError("bot_not_found", "The Conversation does not exist", "not-found");
         }
         return new ProjectConversationAccess(access, scope.botId, normalizedConversationId, scope.sessionId);
@@ -249,7 +243,7 @@ export class BotAuthorization {
             throw new BotApiError("credential_invalid", "The Bot connection credential is invalid", "unauthenticated");
         }
         return new BotConnectionAccess(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             row.bot_id,
             row.connection_id,
             row.credential_id,

@@ -14,7 +14,7 @@ import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
 import type { ContentPersistence, ImmutableContentStore } from "../infra/content-store.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
-import type { TenantContext, TenantShardingDirectory } from "../infra/tenant-sharding-directory.ts";
+import type { ProjectStorageContext, ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import { BotConversationService } from "../service/bot/bot-conversation-service.ts";
 import { BotDeliveryService } from "../service/bot/bot-delivery-service.ts";
 import { BotRuntimeService } from "../service/bot/bot-runtime-service.ts";
@@ -141,15 +141,15 @@ function createSessionRelayDependencies(cx: {
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
     readonly databases: DatabaseResolver;
-    readonly tenants: TenantShardingDirectory;
+    readonly projects: ProjectStorageDirectory;
     readonly connections: BotConnectionGateway;
     readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
 }) {
     const runtime = createSessionRuntime(cx);
     const bots = new BotSessionService(new BotSessionStorage(cx.database), runtime);
     const services = {
-        forTenant: (tenant: TenantContext) => {
-            return { targets: new BotTargetService(new BotConnectionStorage(tenant, cx.databases)) };
+        forProject: (project: ProjectStorageContext) => {
+            return { targets: new BotTargetService(new BotConnectionStorage(project, cx.databases)) };
         },
     };
     const recovery = new SessionRecoveryService({ ...cx, runtime, bots, services });
@@ -161,7 +161,7 @@ function createRuntimeRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
     readonly gateways: {
         readonly databaseResolver: DatabaseResolver;
-        readonly tenantShardingDirectory: TenantShardingDirectory;
+        readonly projectStorageDirectory: ProjectStorageDirectory;
         readonly sessions: SessionCommandGateway &
             SessionQueryGateway &
             Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
@@ -171,21 +171,21 @@ function createRuntimeRelayDependencies(cx: {
     };
 }) {
     const forProject = async (scope: ProjectScope, signal: AbortSignal) => {
-        const tenant = await cx.gateways.tenantShardingDirectory.resolveProject(scope.storageLocator, signal);
+        const project = await cx.gateways.projectStorageDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
-        if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+        if (project.projectId !== scope.projectId) {
             throw new Error("The Project placement is invalid");
         }
-        const database = cx.gateways.databaseResolver.resolve(tenant.tenantSharding);
-        const conversations = new BotConversationStorage(tenant, cx.gateways.databaseResolver);
+        const database = cx.gateways.databaseResolver.resolve(project.storagePlacement);
+        const conversations = new BotConversationStorage(project, cx.gateways.databaseResolver);
         const context = {
             bots: new BotRuntimeService({
                 services: {
-                    targets: new BotTargetService(new BotConnectionStorage(tenant, cx.gateways.databaseResolver)),
+                    targets: new BotTargetService(new BotConnectionStorage(project, cx.gateways.databaseResolver)),
                     conversations: new BotConversationService(conversations),
                 },
                 storages: {
-                    control: new BotControlStorage(tenant, cx.gateways.databaseResolver),
+                    control: new BotControlStorage(project, cx.gateways.databaseResolver),
                 },
             }),
             credentials: new ChannelCredentialService(new ChannelCredentialStorage(database)),
@@ -222,7 +222,7 @@ function createRuntimeRelayDependencies(cx: {
     };
     const credentials: Pick<ChannelCredentialService, "isActive"> = {
         isActive: async (identity, signal) => {
-            const scope = new ProjectScope(identity.tenantId, identity.projectId);
+            const scope = new ProjectScope(identity.projectId);
             return (await forProject(scope, signal)).credentials.isActive(identity, signal);
         },
     };
@@ -277,7 +277,7 @@ export function createDurableObjectDependencies(cx: {
         gateways: {
             transport: cx.gateways.sessionTransport,
             databaseResolver: cx.gateways.databaseResolver,
-            tenantShardingDirectory: cx.gateways.tenantShardingDirectory,
+            projectStorageDirectory: cx.gateways.projectStorageDirectory,
         },
     });
     const gateways = {
@@ -291,7 +291,7 @@ export function createDurableObjectDependencies(cx: {
         content: cx.content,
         quota: cx.quota,
         databases: cx.gateways.databaseResolver,
-        tenants: cx.gateways.tenantShardingDirectory,
+        projects: cx.gateways.projectStorageDirectory,
         connections: cx.gateways.connections,
         schedule: cx.gateways.schedule,
     });

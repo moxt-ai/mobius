@@ -19,22 +19,19 @@ and host signal handling outside the engine, and keep AppCredential, OIDC, and
 Conversation credential values out of its configuration. See [Embedded Mobius
 Runtime](./docs/runtime-sdk.md).
 
-## Pairing tenant ownership
+## Pairing scope ownership
 
-Pairing creation uses an existing tenant supplied by the host's `PairingTenantResolver`.
-Mobius does not generate a tenant per pairing. The resolver must derive ownership
-from verified identity or trusted deployment configuration, never a client-supplied
-tenant ID. Embedding applications supply this port to `createRelayDependencies`,
-which assembles the pairing service.
+Pairing is scoped to a Project only. Relay services never see a tenant: storage
+placement is resolved per Project by the host's `ProjectStorageDirectory`, and
+scoping keys are derived from `projectId` alone. Embedding applications supply
+the directory to `createRelayDependencies`, which assembles the pairing service.
 
-Standalone Workers configure `MOBIUS_TENANT_ID`; the supplied Wrangler profiles
-explicitly use `standalone`. Set it to the deployment's tenant ID when deploying.
+Cloudflare adapters own a fixed tenant label used only for Durable Object naming.
+Standalone Workers configure `MOBIUS_TENANT_ID` (the supplied Wrangler profiles
+use `standalone`); the Platform entry point uses the fixed `platform` label.
 The embedded `Pair` component requires `getPairingToken(signal)`. Authenticated
 hosts return their identity token; the standalone page explicitly returns `null`
-and relies on the server's configured tenant.
-Missing or invalid configuration rejects pairing creation with
-`pairing_tenant_unavailable` (503). Health and existing credential-based operations
-do not require creating a new tenant.
+and relies on the server's configured bootstrap policy.
 
 Bootstrap pairing creates a project, channel, runtime, and persistent project-owner
 credential. An authenticated project owner can add runtimes to that project;

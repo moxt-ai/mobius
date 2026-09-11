@@ -18,10 +18,10 @@ export class SessionRecoveryStorage {
 
     readonly list = () =>
         this.#database
-            .query(`SELECT tenant_id, project_id, session_id, lifecycle
+            .query(`SELECT project_id, session_id, lifecycle
         FROM sessions WHERE lifecycle <> 'deleted'`)
             .map((row) => ({
-                scope: new ProjectScope(text(row, "tenant_id"), text(row, "project_id")),
+                scope: new ProjectScope(text(row, "project_id")),
                 sessionId: text(row, "session_id"),
                 lifecycle: text(row, "lifecycle"),
             }));
@@ -30,7 +30,7 @@ export class SessionRecoveryStorage {
         const row = this.#database.query(
             `SELECT binding_id FROM bot_executions
             WHERE scope_key = ? AND session_id = ? AND execution_id = ?`,
-            [`${scope.storageLocator.resolveHostingPlacement()}:${scope.projectId}`, sessionId, executionId],
+            [scope.projectId, sessionId, executionId],
         )[0];
         if (row === undefined) {
             throw new SessionRuntimeError("session_storage_unavailable", "The Bot outbound execution is unavailable");

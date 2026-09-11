@@ -32,7 +32,6 @@ const EXECUTION_PERMIT_FIELDS = Object.freeze([
     "remainingUses",
     "runtimeId",
     "sessionId",
-    "tenantId",
     "turnId",
 ]);
 
@@ -84,13 +83,12 @@ function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): Exe
     if (keys.length !== EXECUTION_PERMIT_FIELDS.length || keys.some((key) => !EXECUTION_PERMIT_FIELDS.includes(key))) {
         throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit is invalid");
     }
-    const tenantId = text(value, "tenantId");
     const projectId = text(value, "projectId");
-    if (tenantId !== expectedScope.storageLocator.resolveHostingPlacement() || projectId !== expectedScope.projectId) {
+    if (projectId !== expectedScope.projectId) {
         throw new BotSessionRuntimeError("session_storage_unavailable", "The execution permit scope is invalid");
     }
     return new ExecutionPermit(
-        new ProjectScope(tenantId, projectId),
+        new ProjectScope(projectId),
         text(value, "capabilityId"),
         text(value, "executionId"),
         text(value, "botId"),
@@ -111,7 +109,6 @@ function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): Exe
 function infrastructureScope(scope: ProjectScope): Readonly<Record<string, string>> {
     return {
         projectId: scope.projectId,
-        tenantId: scope.storageLocator.resolveHostingPlacement(),
     };
 }
 

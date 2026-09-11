@@ -17,7 +17,6 @@ export interface BotConnectorCredential {
     readonly expires_at: number;
     readonly project_id: string;
     readonly scopes_json: string;
-    readonly tenant_id: string;
 }
 
 export interface BotRuntimeCredential {
@@ -35,7 +34,6 @@ export interface BotRuntimeCredential {
     readonly project_id: string;
     readonly runtime_id: string;
     readonly session_id: string;
-    readonly tenant_id: string;
     readonly turn_id: string;
 }
 
@@ -129,7 +127,7 @@ export class BotRuntimeExecutionAccess extends RuntimeAccessContext {
 
     constructor(row: BotRuntimeCredential) {
         super(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             row.runtime_id,
             row.channel_id,
             `daemon:${row.channel_id}`,

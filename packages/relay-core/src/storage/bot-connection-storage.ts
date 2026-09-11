@@ -3,8 +3,8 @@ import type { BotGrantCredential } from "../entity/bot/bot-grant.ts";
 import { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase, SqlStatement } from "../infra/sql-database.ts";
-import type { TenantContext } from "../infra/tenant-sharding-directory.ts";
 
 interface TargetRow {
     readonly alias: string;
@@ -41,8 +41,8 @@ interface TargetListRow extends TargetRow {
 export class BotConnectionStorage {
     readonly #database: SqlDatabase;
 
-    constructor(tenant: TenantContext, databases: DatabaseResolver) {
-        this.#database = databases.resolve(tenant.tenantSharding);
+    constructor(project: ProjectStorageContext, databases: DatabaseResolver) {
+        this.#database = databases.resolve(project.storagePlacement);
     }
 
     readonly listForProject = async (access: ProjectBotAccess, signal: AbortSignal) => {
@@ -51,18 +51,18 @@ export class BotConnectionStorage {
             this.#database
                 .prepare(`SELECT connections.* FROM bot_connections AS connections
                     INNER JOIN bots ON bots.bot_id = connections.bot_id
-                    WHERE connections.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                    WHERE connections.bot_id = ? AND bots.project_id = ?
                     ORDER BY connections.created_at DESC, connections.connection_id DESC`)
-                .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+                .bind(access.botId, access.scope.projectId)
                 .all<ConnectionListRow>(signal),
             this.#database
                 .prepare(`SELECT targets.*, connections.lifecycle AS connection_lifecycle
                     FROM bot_delivery_targets AS targets INNER JOIN bot_connections AS connections
                       ON connections.connection_id = targets.connection_id
                     INNER JOIN bots ON bots.bot_id = targets.bot_id
-                    WHERE targets.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                    WHERE targets.bot_id = ? AND bots.project_id = ?
                     ORDER BY targets.created_at DESC, targets.delivery_target_id DESC`)
-                .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+                .bind(access.botId, access.scope.projectId)
                 .all<TargetListRow>(signal),
         ]);
         signal.throwIfAborted();
@@ -120,14 +120,9 @@ export class BotConnectionStorage {
                 `SELECT connections.lifecycle, connections.lifecycle_revision
              FROM bot_connections AS connections INNER JOIN bots ON bots.bot_id = connections.bot_id
              WHERE connections.connection_id = ? AND connections.bot_id = ?
-               AND bots.tenant_id = ? AND bots.project_id = ?`,
+               AND bots.project_id = ?`,
             )
-            .bind(
-                connectionId,
-                access.botId,
-                access.scope.storageLocator.resolveHostingPlacement(),
-                access.scope.projectId,
-            )
+            .bind(connectionId, access.botId, access.scope.projectId)
             .first<{ readonly lifecycle: string; readonly lifecycle_revision: number }>(signal);
         signal.throwIfAborted();
         return row;
@@ -238,7 +233,7 @@ export class BotConnectionStorage {
                     )
                     .bind(now, connectionId, normalizedGrantId, grantDigest, audience, now),
                 this.audit(
-                    new ProjectScope(grant.tenant_id, grant.project_id),
+                    new ProjectScope(grant.project_id),
                     grant.bot_id,
                     "connector",
                     connectorPrincipalId,
@@ -552,15 +547,14 @@ export class BotConnectionStorage {
         this.#database
             .prepare(
                 `INSERT INTO bot_audit_events (
-                   audit_id, tenant_id, project_id, bot_id, actor_kind,
+                   audit_id, project_id, bot_id, actor_kind,
                    actor_id, action, subject_id, details_json, recorded_at
                  )
-                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                   WHERE changes() = 1`,
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

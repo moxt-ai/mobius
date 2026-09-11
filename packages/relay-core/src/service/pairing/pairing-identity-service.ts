@@ -2,8 +2,8 @@ import { RuntimeAccessContext } from "../../entity/authentication/project-authen
 import { ProjectScope } from "../../entity/do/session.ts";
 import { PairingDirectoryError, validateIdentifier } from "../../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
+import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
-import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
 import type { PairingIdentityStorage } from "../../storage/pairing-identity-storage.ts";
 
 function runtimeIdentityField(row: Readonly<Record<string, unknown>>, name: string): string {
@@ -16,23 +16,23 @@ function runtimeIdentityField(row: Readonly<Record<string, unknown>>, name: stri
 
 export class PairingIdentityService {
     readonly #storage: PairingIdentityStorage;
-    readonly #tenants: TenantShardingDirectory;
-    constructor(storage: PairingIdentityStorage, tenants: TenantShardingDirectory) {
+    readonly #projects: ProjectStorageDirectory;
+    constructor(storage: PairingIdentityStorage, projects: ProjectStorageDirectory) {
         this.#storage = storage;
-        this.#tenants = tenants;
+        this.#projects = projects;
     }
 
-    readonly authenticateTenant = async (
+    readonly authenticateProject = async (
         credential: PairingIdentityCredential,
         signal: AbortSignal,
-    ): Promise<TenantContext> => {
+    ): Promise<ProjectStorageContext> => {
         const identity = await this.authenticate(credential, signal);
-        const tenant = await this.#tenants.resolve(identity.tenantId, signal);
+        const project = await this.#projects.resolve(identity.projectId, signal);
         signal.throwIfAborted();
-        if (!this.#storage.matchesPlacement(identity.sourceId, tenant)) {
+        if (!this.#storage.matchesPlacement(identity.sourceId, project)) {
             throw new PairingDirectoryError("directory_unavailable", "Workspace storage is unavailable");
         }
-        return tenant;
+        return project;
     };
 
     readonly authenticateRuntime = async (tokenHash: string, signal: AbortSignal): Promise<RuntimeAccessContext> => {
@@ -43,18 +43,17 @@ export class PairingIdentityService {
             if (matches.length !== 1 || match === undefined) {
                 throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
             }
-            const tenantId = runtimeIdentityField(match.row, "tenant_id");
             const projectId = runtimeIdentityField(match.row, "project_id");
             const runtimeId = runtimeIdentityField(match.row, "runtime_id");
             const channelId = runtimeIdentityField(match.row, "channel_id");
             const pairingId = runtimeIdentityField(match.row, "pairing_id");
-            const tenant = await this.#tenants.resolve(tenantId, signal);
+            const project = await this.#projects.resolve(projectId, signal);
             signal.throwIfAborted();
-            if (!this.#storage.matchesPlacement(match.sourceId, tenant)) {
+            if (!this.#storage.matchesPlacement(match.sourceId, project)) {
                 throw new PairingDirectoryError("directory_unavailable", "Runtime storage is unavailable");
             }
             return new RuntimeAccessContext(
-                new ProjectScope(tenantId, projectId),
+                new ProjectScope(projectId),
                 runtimeId,
                 channelId,
                 `daemon:${channelId}`,
@@ -77,12 +76,12 @@ export class PairingIdentityService {
     private readonly authenticate = async (credential: PairingIdentityCredential, signal: AbortSignal) => {
         signal.throwIfAborted();
         try {
-            const matches: { readonly tenantId: string; readonly sourceId: string }[] = [];
+            const matches: { readonly projectId: string; readonly sourceId: string }[] = [];
             for (const { row, sourceId } of await this.#storage.find(credential, signal)) {
                 signal.throwIfAborted();
-                const tenantId = row["tenant_id"];
-                if (typeof tenantId !== "string") {
-                    throw new PairingDirectoryError("invalid_directory_record", "The tenant directory is invalid");
+                const projectId = row["project_id"];
+                if (typeof projectId !== "string") {
+                    throw new PairingDirectoryError("invalid_directory_record", "The Project directory is invalid");
                 }
                 if (credential.kind === "project") {
                     const revokedAt = row["revoked_at"];
@@ -91,7 +90,7 @@ export class PairingIdentityService {
                         (revokedAt !== null && (typeof revokedAt !== "number" || !Number.isSafeInteger(revokedAt))) ||
                         (expiresAt !== null && (typeof expiresAt !== "number" || !Number.isSafeInteger(expiresAt)))
                     ) {
-                        throw new PairingDirectoryError("invalid_directory_record", "The tenant directory is invalid");
+                        throw new PairingDirectoryError("invalid_directory_record", "The Project directory is invalid");
                     }
                     if (revokedAt !== null) {
                         throw new PairingDirectoryError("credential_revoked", "The browser credential was revoked");
@@ -100,7 +99,7 @@ export class PairingIdentityService {
                         throw new PairingDirectoryError("credential_expired", "The browser credential expired");
                     }
                 }
-                matches.push({ tenantId: validateIdentifier(tenantId, "tenant_id"), sourceId });
+                matches.push({ projectId: validateIdentifier(projectId, "project_id"), sourceId });
             }
             const match = matches[0];
             if (matches.length !== 1 || match === undefined) {
@@ -121,9 +120,9 @@ export class PairingIdentityService {
                 throw cause;
             }
             if (cause instanceof DatabaseError && cause.code === "database_timeout") {
-                throw new PairingDirectoryError("directory_timeout", "The tenant directory timed out", { cause });
+                throw new PairingDirectoryError("directory_timeout", "The Project directory timed out", { cause });
             }
-            throw new PairingDirectoryError("directory_unavailable", "The tenant directory is unavailable", { cause });
+            throw new PairingDirectoryError("directory_unavailable", "The Project directory is unavailable", { cause });
         }
     };
 }

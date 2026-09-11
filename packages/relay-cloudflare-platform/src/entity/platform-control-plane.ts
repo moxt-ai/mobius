@@ -61,15 +61,26 @@ export class PlatformDeveloperAccess {
 }
 
 export class PlatformAppCredentialAccess {
+    readonly tenantId: string;
     readonly appId: string;
     readonly credentialRevision: number;
     readonly project: ProjectAccessContext;
 
-    constructor(appId: string, credentialRevision: number, project: ProjectAccessContext) {
+    constructor(tenantId: string, appId: string, credentialRevision: number, project: ProjectAccessContext) {
+        this.tenantId = tenantId;
         this.appId = appId;
         this.credentialRevision = credentialRevision;
         this.project = project;
     }
+}
+
+export interface PlatformProjectPlacement {
+    readonly d1ShardId: string;
+    readonly r2BucketId: string;
+}
+
+export interface PlatformProjectPlacementRegistry {
+    readonly supports: (placement: PlatformProjectPlacement) => boolean;
 }
 
 export function hasControlCharacters(value: string): boolean {

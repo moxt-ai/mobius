@@ -8,7 +8,6 @@ import {
     sessionQuotaFromEnvironment,
 } from "@moxt-ai/mobius-relay-cloudflare";
 import {
-    ConfiguredPairingTenantResolver,
     createBotApplication,
     createPlatformMobiusApplication,
     createRelayDependencies,
@@ -22,18 +21,24 @@ import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
 } from "./infra/platform-authentication-environment.ts";
-import { PlatformTenantShardingDirectory } from "./infra/platform-tenant-sharding-directory.ts";
+import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
-import { PlatformDatabaseResolver } from "./storage/platform-database-resolver.ts";
+import {
+    PlatformDatabaseResolver,
+    type PlatformStorageBindings,
+    PlatformStorageRegistry,
+    platformDatabaseBindings,
+} from "./storage/platform-database-resolver.ts";
 
-export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment {
+export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly DIRECTORY_DATABASE: D1Database;
+    readonly D1_SHARD_APAC_01: D1Database;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
+    readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }
@@ -109,13 +114,14 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
     const conversationStreams = new ConversationStreamRegistry();
     return {
         fetch: async (request, environment) => {
-            const control = new PlatformControlPlaneService(
-                new PlatformControlPlaneStorage(
-                    environment.PLATFORM_DIRECTORY_DATABASE,
-                    environment.DIRECTORY_DATABASE,
-                ),
-                authentication,
+            const databaseBindings = platformDatabaseBindings(environment);
+            const projectDatabases = databaseBindings.map(({ database }) => database);
+            const controlStorage = new PlatformControlPlaneStorage(
+                environment.PLATFORM_DIRECTORY_DATABASE,
+                projectDatabases,
             );
+            const storageRegistry = new PlatformStorageRegistry(environment);
+            const control = new PlatformControlPlaneService(controlStorage, authentication, storageRegistry);
             const pathname = new URL(request.url).pathname;
             if (isControlPath(pathname) && !isConversationPath(pathname)) {
                 return await controlApplication.fetch(request, { control });
@@ -127,13 +133,16 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 return new Response("Not Found", { status: 404 });
             }
 
-            const databases = new PlatformDatabaseResolver(environment.DIRECTORY_DATABASE);
-            const tenants = new PlatformTenantShardingDirectory();
+            const databases = new PlatformDatabaseResolver(environment);
+            const projects = new PlatformProjectStorageDirectory(
+                { read: controlStorage.readProjectStoragePlacement },
+                storageRegistry,
+            );
             const infrastructure = {
                 config: { quota: sessionQuotaFromEnvironment(environment) },
                 gateways: {
                     databaseResolver: databases,
-                    tenantShardingDirectory: tenants,
+                    projectStorageDirectory: projects,
                     runtimeRelay: environment.RUNTIME_RELAY,
                     sessionRelay: environment.SESSION_RELAY,
                 },
@@ -148,16 +157,15 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 },
                 config: { apiPrefix: MOBIUS_API_PREFIX, quotaPolicy: control },
                 databases,
-                identityDatabases: [D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE)],
+                identityDatabases: projectDatabases.map((database) => D1DatabaseAdapter.from(database)),
                 logger: console,
                 gateways: {
                     channelGateway: channelRuntime,
                     nowEpochMilliseconds: () => Date.now(),
-                    pairingTenantResolver: new ConfiguredPairingTenantResolver("platform"),
                     publicProjectBootstrap: new DisabledPublicProjectBootstrap(),
-                    sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY),
+                    sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY, "platform"),
                 },
-                tenants,
+                projects,
             });
             if (isConversationPath(pathname)) {
                 if (cx.services.bots === null) {
@@ -165,10 +173,7 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 }
                 return await conversationApplication.fetch(request, {
                     access: new ConversationAccessService(
-                        new ConversationAccessStorage(
-                            environment.PLATFORM_DIRECTORY_DATABASE,
-                            environment.DIRECTORY_DATABASE,
-                        ),
+                        new ConversationAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
                         control,
                     ),
                     allowedOrigins: authentication.allowedOrigins,

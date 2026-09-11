@@ -8,7 +8,6 @@ const disconnectSchema = v.object({
     runtimeId: v.string(),
     connectionEpoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
     connectionId: v.string(),
-    tenantId: v.string(),
     projectId: v.string(),
     disconnectedAt: v.number(),
     progress: v.variant("kind", [
@@ -37,25 +36,24 @@ export class RuntimeConnectionStorage {
         ) STRICT;`);
         database.exec(`CREATE TABLE IF NOT EXISTS runtime_revocations (
             runtime_id TEXT NOT NULL,
-            tenant_id TEXT NOT NULL,
             project_id TEXT NOT NULL,
             revoked_at INTEGER NOT NULL,
-            PRIMARY KEY (runtime_id, tenant_id, project_id)
+            PRIMARY KEY (runtime_id, project_id)
         ) STRICT;`);
     }
 
     readonly isRevoked = (runtimeId: string, scope: ProjectScope): boolean =>
         this.#database.query(
             `SELECT 1 FROM runtime_revocations
-            WHERE runtime_id = ? AND tenant_id = ? AND project_id = ?`,
-            [runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId],
+            WHERE runtime_id = ? AND project_id = ?`,
+            [runtimeId, scope.projectId],
         )[0] !== undefined;
 
     readonly revoke = (runtimeId: string, scope: ProjectScope, now: number): void => {
         this.#database.run(
-            `INSERT INTO runtime_revocations (runtime_id, tenant_id, project_id, revoked_at)
-            VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-            [runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId, now],
+            `INSERT INTO runtime_revocations (runtime_id, project_id, revoked_at)
+            VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+            [runtimeId, scope.projectId, now],
         );
     };
 

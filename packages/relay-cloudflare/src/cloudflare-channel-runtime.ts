@@ -10,7 +10,6 @@ const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
 const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
 const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
-const INTERNAL_TENANT_ID_HEADER = "x-mobius-tenant-id";
 
 export class CloudflareChannelRuntime implements ChannelGateway {
     readonly #namespace: DurableObjectNamespace;
@@ -50,7 +49,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
         headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request("https://runtime.internal/host-credentials/revoke", {
@@ -71,7 +69,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request("https://runtime.internal/runtime/revoke", {
@@ -92,7 +89,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
             new Request("https://runtime.internal/pending-daemon-deliveries", {
@@ -140,7 +136,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const headers = new Headers(request.headers);
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
-        headers.set(INTERNAL_TENANT_ID_HEADER, access.tenantId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
         const forwarded = new Request(request, { headers, signal });
         const objectId = this.#namespace.idFromName(access.channelId);

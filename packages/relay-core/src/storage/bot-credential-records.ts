@@ -7,7 +7,6 @@ export interface InboundCredentialPlaneRecord {
 
 export interface BotProjectScopeRecord {
     readonly project_id: string;
-    readonly tenant_id: string;
 }
 
 export interface BotConversationScopeRecord extends BotProjectScopeRecord {
@@ -21,11 +20,9 @@ export class MissingBotProjectScope extends BotProjectScopeLookup {}
 
 export class FoundBotProjectScope extends BotProjectScopeLookup {
     readonly projectId: string;
-    readonly tenantId: string;
 
-    constructor(tenantId: string, projectId: string) {
+    constructor(projectId: string) {
         super();
-        this.tenantId = tenantId;
         this.projectId = projectId;
     }
 }
@@ -38,11 +35,9 @@ export class FoundBotConversationScope extends BotConversationScopeLookup {
     readonly botId: string;
     readonly projectId: string;
     readonly sessionId: string;
-    readonly tenantId: string;
 
-    constructor(tenantId: string, projectId: string, botId: string, sessionId: string) {
+    constructor(projectId: string, botId: string, sessionId: string) {
         super();
-        this.tenantId = tenantId;
         this.projectId = projectId;
         this.botId = botId;
         this.sessionId = sessionId;
@@ -51,12 +46,7 @@ export class FoundBotConversationScope extends BotConversationScopeLookup {
 
 export interface BotCredentialRecords {
     readonly botExists: (botId: string, signal: AbortSignal) => Promise<boolean>;
-    readonly botExistsInProject: (
-        botId: string,
-        tenantId: string,
-        projectId: string,
-        signal: AbortSignal,
-    ) => Promise<boolean>;
+    readonly botExistsInProject: (botId: string, projectId: string, signal: AbortSignal) => Promise<boolean>;
     readonly readBotProjectScope: (botId: string, signal: AbortSignal) => Promise<BotProjectScopeLookup>;
     readonly readConversationProjectScope: (
         conversationId: string,

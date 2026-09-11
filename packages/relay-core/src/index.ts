@@ -53,7 +53,6 @@ export {
     type InteractionResponseAcceptance,
     type PendingDaemonDelivery,
     ProjectScope,
-    ProjectStorageLocator,
     type SessionDirectoryPage,
     type SessionEventPage,
     type SessionExport,
@@ -142,10 +141,10 @@ export {
     type ImmutableContentStore,
 } from "./infra/content-store.ts";
 export type {
-    TenantContext,
-    TenantShardingDirectory,
-    TenantShardResolution,
-} from "./infra/tenant-sharding-directory.ts";
+    ProjectStorageContext,
+    ProjectStorageDirectory,
+    ProjectStoragePlacement,
+} from "./infra/project-storage-directory.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export type { ProjectAuthenticationService } from "./service/authentication/project-authentication-service.ts";
 export { BotService } from "./service/bot/bot-service.ts";
@@ -158,7 +157,3 @@ export {
 } from "./service/channel/channel-actor.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
 export { validateCreateSessionRequest } from "./service/do/session-records.ts";
-export {
-    ConfiguredPairingTenantResolver,
-    type PairingTenantResolver,
-} from "./service/pairing/pairing-tenant-resolver.ts";

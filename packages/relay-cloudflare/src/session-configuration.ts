@@ -4,7 +4,6 @@ const DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION = 256 * 1024 * 1024;
 
 export interface SessionConfigurationEnvironment {
     readonly SESSION_ACTIVE_SESSIONS_PER_PROJECT?: string;
-    readonly SESSION_ACTIVE_SESSIONS_PER_TENANT?: string;
 }
 
 export interface LiteSessionConfigurationEnvironment extends SessionConfigurationEnvironment {
@@ -27,11 +26,6 @@ function readLimit(value: string | undefined, fallback: number, name: string): n
 
 export function sessionQuotaFromEnvironment(environment: SessionConfigurationEnvironment): SessionQuotaPolicy {
     return new SessionQuotaPolicy(
-        readLimit(
-            environment.SESSION_ACTIVE_SESSIONS_PER_TENANT,
-            DEFAULT_SESSION_QUOTA_POLICY.activeSessionsPerTenant,
-            "SESSION_ACTIVE_SESSIONS_PER_TENANT",
-        ),
         readLimit(
             environment.SESSION_ACTIVE_SESSIONS_PER_PROJECT,
             DEFAULT_SESSION_QUOTA_POLICY.activeSessionsPerProject,

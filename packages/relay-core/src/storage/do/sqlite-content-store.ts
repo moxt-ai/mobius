@@ -18,7 +18,7 @@ interface ContentMetadata {
 }
 
 function objectKey(target: ContentTarget): string {
-    const fields = [target.tenantId, target.projectId, target.sessionId, target.artifactId];
+    const fields = [target.projectId, target.sessionId, target.artifactId];
     if (fields.some((field) => !SAFE_IDENTIFIER.test(field))) {
         throw new ContentStorageError("content_not_found", "The content target is invalid");
     }

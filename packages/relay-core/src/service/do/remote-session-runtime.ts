@@ -66,7 +66,7 @@ import type {
 } from "../../gateway/index.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../../infra/database-resolver.ts";
-import type { TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
+import type { ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import type { SessionDirectoryStorage } from "../../storage/session-directory-storage.ts";
 import { validateCreateSessionRequest } from "./session-records.ts";
 
@@ -190,7 +190,6 @@ function decodeSummary(value: unknown): SessionSummary {
         projectId: readString(value, "projectId"),
         runtimeId: readString(value, "runtimeId"),
         sessionId: readString(value, "sessionId"),
-        tenantId: readString(value, "tenantId"),
         title: readString(value, "title", true),
         updatedAt: readString(value, "updatedAt"),
     };
@@ -680,7 +679,6 @@ function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId
         JSON.stringify({
             projectId: scope.projectId,
             sessionId,
-            tenantId: scope.storageLocator.resolveHostingPlacement(),
             updatedAt,
         }),
     )
@@ -692,7 +690,6 @@ function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId
 function infrastructureScope(scope: ProjectScope): Readonly<Record<string, string>> {
     return {
         projectId: scope.projectId,
-        tenantId: scope.storageLocator.resolveHostingPlacement(),
     };
 }
 
@@ -709,8 +706,7 @@ function decodeDirectoryCursor(
         const value: unknown = JSON.parse(atob(`${base64}${padding}`));
         if (
             !isRecord(value) ||
-            !hasExactKeys(value, ["projectId", "sessionId", "tenantId", "updatedAt"]) ||
-            value["tenantId"] !== scope.storageLocator.resolveHostingPlacement() ||
+            !hasExactKeys(value, ["projectId", "sessionId", "updatedAt"]) ||
             value["projectId"] !== scope["projectId"] ||
             typeof value["sessionId"] !== "string" ||
             typeof value["updatedAt"] !== "number" ||
@@ -735,7 +731,7 @@ export class RemoteSessionRuntime
         SessionEventStreamGateway
 {
     readonly #directory: SessionDirectoryStorage;
-    readonly #tenants: TenantShardingDirectory;
+    readonly #projects: ProjectStorageDirectory;
     readonly #transport: SessionTransport;
     readonly #quotaPolicy: SessionQuotaPolicyProvider;
 
@@ -744,12 +740,12 @@ export class RemoteSessionRuntime
         readonly gateways: {
             readonly transport: SessionTransport;
             readonly databaseResolver: DatabaseResolver;
-            readonly tenantShardingDirectory: TenantShardingDirectory;
+            readonly projectStorageDirectory: ProjectStorageDirectory;
         };
         readonly config: { readonly quotaPolicy: SessionQuotaPolicyProvider };
     }) {
         this.#directory = cx.storages.directory;
-        this.#tenants = cx.gateways.tenantShardingDirectory;
+        this.#projects = cx.gateways.projectStorageDirectory;
         this.#transport = cx.gateways.transport;
         this.#quotaPolicy = cx.config.quotaPolicy;
     }
@@ -1224,8 +1220,8 @@ export class RemoteSessionRuntime
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
-        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
-        const rows = await this.#directory.listReady(tenant, scope, signal);
+        const project = await this.#projects.resolve(scope.projectId, signal);
+        const rows = await this.#directory.listReady(project, scope, signal);
         const deliveries: PendingDaemonDelivery[] = [];
         for (const row of rows) {
             signal.throwIfAborted();
@@ -1307,8 +1303,8 @@ export class RemoteSessionRuntime
             throw new SessionRuntimeError("invalid_page_size", "The page size must be between 1 and 100");
         }
         const decoded = cursor === null ? null : decodeDirectoryCursor(cursor, scope);
-        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
-        const rows = await this.#directory.list(tenant, scope, decoded, limit + 1, signal);
+        const project = await this.#projects.resolve(scope.projectId, signal);
+        const rows = await this.#directory.list(project, scope, decoded, limit + 1, signal);
         signal.throwIfAborted();
         const pageRows = rows.slice(0, limit);
         const last = pageRows.at(-1);
@@ -1444,8 +1440,8 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<readonly string[]> => {
         signal.throwIfAborted();
-        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
-        const rows = await this.#directory.listRuntime(tenant, scope, runtimeId, signal);
+        const project = await this.#projects.resolve(scope.projectId, signal);
+        const rows = await this.#directory.listRuntime(project, scope, runtimeId, signal);
         return rows.map((row) => row.session_id);
     };
 
@@ -1516,10 +1512,10 @@ export class RemoteSessionRuntime
     ): Promise<SessionReservation> => {
         signal.throwIfAborted();
         try {
-            const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
+            const project = await this.#projects.resolve(scope.projectId, signal);
             const quota = await this.#quotaPolicy.resolveSessionQuota(scope, signal);
             const { changes, reservation } = await this.#directory.reserve(
-                tenant,
+                project,
                 scope,
                 sessionId,
                 now,
@@ -1531,7 +1527,7 @@ export class RemoteSessionRuntime
                 await this.#quotaPolicy.recordSessionQuotaDenial(scope, sessionId, quota, signal);
                 throw new SessionRuntimeError(
                     "session_quota_exceeded",
-                    "The tenant or project active session quota is exhausted",
+                    "The project active session quota is exhausted",
                 );
             }
             return changes === 1 ? { kind: "reserved" } : { kind: "existing" };
@@ -1552,8 +1548,8 @@ export class RemoteSessionRuntime
     ): Promise<void> => {
         signal.throwIfAborted();
         try {
-            const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
-            await this.#directory.release(tenant, scope, sessionId, signal);
+            const project = await this.#projects.resolve(scope.projectId, signal);
+            await this.#directory.release(project, scope, sessionId, signal);
             signal.throwIfAborted();
         } catch (cause) {
             if (signal.aborted) {
@@ -1571,8 +1567,8 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<SessionSummary | null> => {
         signal.throwIfAborted();
-        const tenant = await this.#tenants.resolveProject(scope.storageLocator, signal);
-        const row = await this.#directory.read(tenant, scope, sessionId, signal);
+        const project = await this.#projects.resolve(scope.projectId, signal);
+        const row = await this.#directory.read(project, scope, sessionId, signal);
         signal.throwIfAborted();
         if (row === null) {
             return null;
@@ -1604,8 +1600,8 @@ export class RemoteSessionRuntime
 
     private readonly updateDirectory = async (summary: SessionSummary, signal: AbortSignal): Promise<void> => {
         try {
-            const tenant = await this.#tenants.resolve(summary.tenantId, signal);
-            await this.#directory.update(tenant, summary, signal);
+            const project = await this.#projects.resolve(summary.projectId, signal);
+            await this.#directory.update(project, summary, signal);
         } catch (cause) {
             signal.throwIfAborted();
             throw new SessionRuntimeError(

@@ -16,7 +16,6 @@ export class RuntimeDescriptor {
     readonly online: boolean;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
     readonly workspaceName: string;
 
     constructor(channel: ChannelDescriptor, status: RuntimeStatus) {
@@ -27,7 +26,6 @@ export class RuntimeDescriptor {
         this.online = status.online;
         this.projectId = channel.projectId;
         this.runtimeId = channel.runtimeId;
-        this.tenantId = channel.tenantId;
         this.workspaceName = channel.workspaceName;
     }
 }

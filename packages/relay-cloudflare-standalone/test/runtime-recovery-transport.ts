@@ -10,12 +10,12 @@ import {
 } from "@moxt-ai/mobius-relay-cloudflare";
 import { createDurableObjectDependencies, type SessionTransport } from "@moxt-ai/mobius-relay-core";
 import { SingleDatabaseResolver } from "../src/database-resolver.ts";
-import { StandaloneTenantShardingDirectory } from "../src/tenant-sharding-directory.ts";
+import { StandaloneProjectStorageDirectory } from "../src/project-storage-directory.ts";
 
 // Real Session DO requests cannot be made to stall deterministically. This stateful
 // transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
 export class SuspendedDisconnectTransport implements SessionTransport {
-    readonly #transport = new CloudflareSessionTransport(env.SESSION_RELAY);
+    readonly #transport = new CloudflareSessionTransport(env.SESSION_RELAY, env.MOBIUS_TENANT_ID ?? "standalone");
     readonly #suspended = Promise.withResolvers<string>();
     readonly #released = Promise.withResolvers<void>();
     #state:
@@ -64,7 +64,7 @@ export function runtimeWithTransport(state: DurableObjectState, sessionTransport
             content: { kind: "sqlite", archiveByteLimit: sessionArchiveByteLimitFromEnvironment(env) },
             gateways: {
                 databaseResolver: new SingleDatabaseResolver(env.DIRECTORY_DATABASE),
-                tenantShardingDirectory: new StandaloneTenantShardingDirectory(),
+                projectStorageDirectory: new StandaloneProjectStorageDirectory(),
                 sessionTransport,
                 connections: new CloudflareBotConnectionRuntime(env.BOT_CONNECTIONS),
                 peers: new CloudflareChannelPeers(state),

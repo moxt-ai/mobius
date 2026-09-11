@@ -27,7 +27,7 @@
     ],
     "d1_databases": [
         {
-            "binding": "DIRECTORY_DATABASE",
+            "binding": "D1_SHARD_APAC_01",
             "migrations_dir": "../relay-cloudflare/migrations/d1"
         },
         {
@@ -35,6 +35,7 @@
             "migrations_dir": "migrations/d1"
         }
     ],
+    "r2_buckets": [{ "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-demo-local-apac-objects" }],
     "vars": {
         "MOBIUS_DEMO_ALLOWED_ORIGIN": "http://127.0.0.1:5190",
         "MOBIUS_DEMO_DEVELOPER_TOKEN": "local-supervisor-must-replace-this-token",

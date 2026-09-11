@@ -452,7 +452,7 @@ export class RuntimeAccessContext extends VerifiedChannelAccess {
     readonly scope: ProjectScope;
 
     constructor(scope: ProjectScope, runtimeId: string, channelId: string, credentialId: string, leaseId: string) {
-        super(channelId, runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId);
+        super(channelId, runtimeId, scope.projectId);
         this.scope = scope;
         this.credentialId = credentialId;
         this.leaseId = leaseId;

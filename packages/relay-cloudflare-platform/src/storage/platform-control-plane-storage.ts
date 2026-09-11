@@ -22,6 +22,8 @@ import {
     ProjectIdRowSchema,
     type ProjectRow,
     ProjectRowSchema,
+    type ProjectStoragePlacementRow,
+    ProjectStoragePlacementRowSchema,
     type RecordPresenceRow,
     RecordPresenceRowSchema,
     type TenantRow,
@@ -38,11 +40,11 @@ async function waitForD1<T>(operation: () => Promise<T>, signal: AbortSignal): P
 
 export class PlatformControlPlaneStorage {
     readonly #database: D1Database;
-    readonly #projectDatabase: D1Database;
+    readonly #projectDatabases: readonly D1Database[];
 
-    constructor(database: D1Database, projectDatabase: D1Database) {
+    constructor(database: D1Database, projectDatabases: readonly D1Database[]) {
         this.#database = database;
-        this.#projectDatabase = projectDatabase;
+        this.#projectDatabases = projectDatabases;
     }
 
     readonly createTenant = async (
@@ -221,8 +223,33 @@ export class PlatformControlPlaneStorage {
             await waitForD1(
                 () =>
                     this.#database
-                        .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
+                        .prepare(`SELECT projects.*, placement.d1_shard_id, placement.r2_bucket_id,
+                                         placement.placement_revision
+                                    FROM platform_projects AS projects
+                                    JOIN platform_project_storage_placements AS placement USING (project_id)
+                                   WHERE app_id = ? AND idempotency_key = ?`)
                         .bind(appId, idempotencyKey)
+                        .first(),
+                signal,
+            ),
+        );
+
+    readonly readProjectStoragePlacement = async (
+        projectId: string,
+        signal: AbortSignal,
+    ): Promise<ProjectStoragePlacementRow | null> =>
+        decodeOptionalStorageRecord(
+            ProjectStoragePlacementRowSchema,
+            await waitForD1(
+                () =>
+                    this.#database
+                        .prepare(
+                            `SELECT tenant_id, project_id, d1_shard_id, r2_bucket_id, placement_revision
+                               FROM platform_projects
+                               JOIN platform_project_storage_placements USING (project_id)
+                              WHERE project_id = ? AND lifecycle = 'active'`,
+                        )
+                        .bind(projectId)
                         .first(),
                 signal,
             ),
@@ -257,9 +284,9 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `INSERT INTO platform_projects (
-                               project_id, tenant_id, app_id, display_name, client_reference,
-                               idempotency_key, request_digest, lifecycle, created_at, updated_at
-                             ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?
+                                project_id, tenant_id, app_id, display_name, client_reference,
+                                idempotency_key, request_digest, lifecycle, created_at, updated_at
+                              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?
                                WHERE (SELECT COUNT(*) FROM platform_projects
                                        WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
                         )
@@ -276,13 +303,23 @@ export class PlatformControlPlaneStorage {
                             project.tenant_id,
                             activeProjectLimit,
                         ),
+                    this.#database
+                        .prepare(`INSERT INTO platform_project_storage_placements (
+                                      project_id, d1_shard_id, r2_bucket_id, placement_revision
+                                  ) SELECT project_id, ?, ?, ? FROM platform_projects WHERE project_id = ?`)
+                        .bind(
+                            project.d1_shard_id,
+                            project.r2_bucket_id,
+                            project.placement_revision,
+                            project.project_id,
+                        ),
                     this.auditCreatedProjectStatement(audit),
                 ]),
             signal,
         );
         return {
-            projectCreated: results[0]?.meta.changes === 1,
-            auditRecorded: results[1]?.meta.changes === 1,
+            projectCreated: results[0]?.meta.changes === 1 && results[1]?.meta.changes === 1,
+            auditRecorded: results[2]?.meta.changes === 1,
         };
     };
 
@@ -302,7 +339,11 @@ export class PlatformControlPlaneStorage {
         const rows = await waitForD1(
             () =>
                 this.#database
-                    .prepare("SELECT * FROM platform_projects WHERE app_id = ? ORDER BY created_at, project_id")
+                    .prepare(`SELECT projects.*, placement.d1_shard_id, placement.r2_bucket_id,
+                                     placement.placement_revision
+                                FROM platform_projects AS projects
+                                JOIN platform_project_storage_placements AS placement USING (project_id)
+                               WHERE app_id = ? ORDER BY created_at, project_id`)
                     .bind(appId)
                     .all(),
             signal,
@@ -318,7 +359,16 @@ export class PlatformControlPlaneStorage {
         readonly activeProjects: number;
         readonly activeSessions: number;
     }> => {
-        const [apps, projects, sessions] = await waitForD1(
+        const ownedProjects = await waitForD1(
+            () =>
+                this.#database
+                    .prepare("SELECT project_id FROM platform_projects WHERE tenant_id = ?")
+                    .bind(tenantId)
+                    .all(),
+            signal,
+        );
+        const projectIds = decodeStorageRecords(ProjectIdRowSchema, ownedProjects.results).map((row) => row.project_id);
+        const [apps, projects, ...sessions] = await waitForD1(
             () =>
                 Promise.all([
                     this.#database
@@ -333,20 +383,27 @@ export class PlatformControlPlaneStorage {
                         )
                         .bind(tenantId)
                         .first(),
-                    this.#projectDatabase
-                        .prepare("SELECT COUNT(*) AS active_count FROM session_quota_reservations WHERE tenant_id = ?")
-                        .bind(tenantId)
-                        .first(),
+                    ...this.#projectDatabases.map(
+                        async (database) =>
+                            await database
+                                .prepare(`SELECT COUNT(*) AS active_count FROM session_quota_reservations
+                                       WHERE project_id IN (SELECT value FROM json_each(?))`)
+                                .bind(JSON.stringify(projectIds))
+                                .first(),
+                    ),
                 ]),
             signal,
         );
         const appCount: ActiveCountRow = decodeStorageRecord(ActiveCountRowSchema, apps);
         const projectCount: ActiveCountRow = decodeStorageRecord(ActiveCountRowSchema, projects);
-        const sessionCount: ActiveCountRow = decodeStorageRecord(ActiveCountRowSchema, sessions);
+        const sessionCount = sessions.reduce(
+            (total, row) => total + decodeStorageRecord(ActiveCountRowSchema, row).active_count,
+            0,
+        );
         return {
             activeApps: appCount.active_count,
             activeProjects: projectCount.active_count,
-            activeSessions: sessionCount.active_count,
+            activeSessions: sessionCount,
         };
     };
 

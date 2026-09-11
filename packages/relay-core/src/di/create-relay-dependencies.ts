@@ -5,8 +5,8 @@ import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts"
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
-import type { TenantShardingDirectory } from "../infra/tenant-sharding-directory.ts";
 import { BotAuthorization } from "../service/bot/bot-authorization.ts";
 import { BotConversationService } from "../service/bot/bot-conversation-service.ts";
 import { BotManagementService } from "../service/bot/bot-management-service.ts";
@@ -21,7 +21,6 @@ import { PairingIdentityService } from "../service/pairing/pairing-identity-serv
 import type { PublicProjectBootstrapAuthorizer } from "../service/pairing/pairing-request-service.ts";
 import { PairingRequestService } from "../service/pairing/pairing-request-service.ts";
 import { PairingService } from "../service/pairing/pairing-service.ts";
-import type { PairingTenantResolver } from "../service/pairing/pairing-tenant-resolver.ts";
 import { BotConnectionStorage } from "../storage/bot-connection-storage.ts";
 import { BotControlStorage } from "../storage/bot-control-storage.ts";
 import { BotConversationStorage } from "../storage/bot-conversation-storage.ts";
@@ -33,7 +32,7 @@ import { SessionDirectoryStorage } from "../storage/session-directory-storage.ts
 interface PairingInfrastructure {
     readonly authentication: { readonly projects: ProjectAccessAuthorizer };
     readonly databases: DatabaseResolver;
-    readonly tenants: TenantShardingDirectory;
+    readonly projects: ProjectStorageDirectory;
     readonly identityDatabases: readonly SqlDatabase[];
 }
 
@@ -44,7 +43,6 @@ export interface RelayInfrastructure extends PairingInfrastructure {
     } | null;
     readonly gateways: {
         readonly channelGateway: ChannelGateway;
-        readonly pairingTenantResolver: PairingTenantResolver;
         readonly publicProjectBootstrap: PublicProjectBootstrapAuthorizer;
         readonly sessionTransport: SessionTransport;
         readonly nowEpochMilliseconds: () => number;
@@ -59,14 +57,14 @@ export interface RelayInfrastructure extends PairingInfrastructure {
 
 function createPairings(cx: PairingInfrastructure) {
     const sources = cx.identityDatabases.map((database, index) => ({ sourceId: String(index), database }));
-    const identities = new PairingIdentityService(new PairingIdentityStorage(sources, cx.databases), cx.tenants);
+    const identities = new PairingIdentityService(new PairingIdentityStorage(sources, cx.databases), cx.projects);
     return new PairingDirectoryService({
         storages: {
-            forTenant: (tenant) => new PairingStorage(tenant, cx.databases),
+            forProject: (project) => new PairingStorage(project, cx.databases),
         },
         services: { identities, projectAuthentication: cx.authentication.projects },
         gateways: {
-            tenantShardingDirectory: cx.tenants,
+            projectStorageDirectory: cx.projects,
         },
     });
 }
@@ -78,7 +76,7 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
         gateways: {
             transport: infrastructure.gateways.sessionTransport,
             databaseResolver: infrastructure.databases,
-            tenantShardingDirectory: infrastructure.tenants,
+            projectStorageDirectory: infrastructure.projects,
         },
     });
     const cx = {
@@ -95,11 +93,7 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
         },
     };
     const bots = infrastructure.bots === null ? null : createBots(infrastructure.bots, infrastructure, sessions);
-    const pairingRequests = new PairingRequestService(
-        pairings,
-        infrastructure.gateways.pairingTenantResolver,
-        infrastructure.gateways.publicProjectBootstrap,
-    );
+    const pairingRequests = new PairingRequestService(pairings, infrastructure.gateways.publicProjectBootstrap);
     return Object.freeze({
         ...cx,
         services: Object.freeze({
@@ -119,11 +113,11 @@ function createBots(
     sessions: RemoteSessionRuntime,
 ) {
     return new BotService({
-        forTenant: (tenant) => {
+        forProject: (project) => {
             const storages = {
-                connections: new BotConnectionStorage(tenant, cx.databases),
-                control: new BotControlStorage(tenant, cx.databases),
-                conversations: new BotConversationStorage(tenant, cx.databases),
+                connections: new BotConnectionStorage(project, cx.databases),
+                control: new BotControlStorage(project, cx.databases),
+                conversations: new BotConversationStorage(project, cx.databases),
             };
             return {
                 storages,
@@ -145,8 +139,7 @@ function createBots(
             ),
         },
         gateways: {
-            tenants: cx.tenants,
-            tenantResolver: cx.gateways.pairingTenantResolver,
+            projects: cx.projects,
             channels: cx.gateways.channelGateway,
             connections: infrastructure.connections,
             sessions,

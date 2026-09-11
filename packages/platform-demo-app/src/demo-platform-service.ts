@@ -334,6 +334,7 @@ export class DemoPlatformService {
                 clientReference: `${slug}-${suffix}`,
                 displayName: `${label} Project`,
                 idempotencyKey: `provision-${slug}-${suffix}`,
+                placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
             },
             signal,
         );

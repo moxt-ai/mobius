@@ -61,7 +61,7 @@ function validateUploadRequest(request: CreateArtifactUploadRequest, maximumByte
 }
 
 function contentTarget(scope: ProjectScope, sessionId: string, targetId: string): ContentTarget {
-    return new ContentTarget(scope.storageLocator.resolveHostingPlacement(), scope.projectId, sessionId, targetId);
+    return new ContentTarget(scope.projectId, sessionId, targetId);
 }
 
 function baseDescriptor(row: DoSqlRow): UploadingArtifactDescriptor {

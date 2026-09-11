@@ -283,7 +283,6 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
         const directory = await this.#storage.readConversationDirectory(
             normalizedConversationId,
             normalizedSessionId,
-            access.project.scope.storageLocator.resolveHostingPlacement(),
             access.project.scope.projectId,
             signal,
         );
@@ -295,6 +294,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             );
         }
         return await this.insertCredential(
+            access.tenantId,
             access.appId,
             access.project.credentialId,
             access.credentialRevision,
@@ -327,7 +327,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             requestedActorReference,
             signal,
         );
-        if (access.project.scope.storageLocator.resolveHostingPlacement() !== directory.tenant_id) {
+        if (access.project.scope.projectId !== directory.project_id) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_access_denied",
                 "The Conversation belongs to another App",
@@ -337,6 +337,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
         const permissions = decodeConversationPermissions(requestedPermissions);
         this.requirePermissions(access, permissions);
         return await this.insertCredential(
+            access.tenantId,
             access.appId,
             access.project.credentialId,
             access.credentialRevision,
@@ -374,9 +375,9 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             conversation_id: source.conversation_id,
             project_id: source.project_id,
             session_id: source.session_id,
-            tenant_id: source.tenant_id,
         };
         const replacement = await this.createCredential(
+            parent.tenantId,
             parent.appId,
             parent.project.credentialId,
             parent.credentialRevision,
@@ -480,7 +481,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             );
         }
         return new ConversationAccessContext(
-            new ProjectScope(row.tenant_id, row.project_id),
+            new ProjectScope(row.project_id),
             row.conversation_id,
             row.session_id,
             row.credential_id,
@@ -611,6 +612,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     };
 
     private readonly insertCredential = async (
+        tenantId: string,
         appId: string,
         parentCredentialId: string,
         parentCredentialRevision: number,
@@ -621,6 +623,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
         signal: AbortSignal,
     ): Promise<object> => {
         const created = await this.createCredential(
+            tenantId,
             appId,
             parentCredentialId,
             parentCredentialRevision,
@@ -656,6 +659,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     };
 
     private readonly createCredential = async (
+        tenantId: string,
         appId: string,
         parentCredentialId: string,
         parentCredentialRevision: number,
@@ -684,7 +688,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             publicCredentialId,
             secretDigest: await hashSecret(credential),
             sessionId: directory.session_id,
-            tenantId: directory.tenant_id,
+            tenantId,
         };
         return {
             record,
@@ -699,7 +703,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
                 permissions: permissionList,
                 projectId: directory.project_id,
                 sessionId: directory.session_id,
-                tenantId: directory.tenant_id,
+                tenantId,
             },
         };
     };

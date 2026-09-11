@@ -41,7 +41,6 @@ import type { SessionArtifactGateway } from "../../gateway/session-artifact-gate
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
 import type { BotConversationStorage } from "../../storage/bot-conversation-storage.ts";
-import type { PairingTenantResolver } from "../pairing/pairing-tenant-resolver.ts";
 import type { BotAuthorization } from "./bot-authorization.ts";
 import type { BotConversationService } from "./bot-conversation-service.ts";
 import { connectorEventPage } from "./bot-event-visibility.ts";
@@ -54,8 +53,7 @@ const BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS = 5 * 60 * 1_000;
 
 function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit, now: number): void {
     if (
-        permit.scope.storageLocator.resolveHostingPlacement() !==
-            runtime.scope.storageLocator.resolveHostingPlacement() ||
+        permit.scope.projectId !== runtime.scope.projectId ||
         permit.scope.projectId !== runtime.scope.projectId ||
         permit.executionId !== runtime.executionId ||
         permit.capabilityId !== runtime.capabilityId ||
@@ -78,9 +76,9 @@ function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit:
     }
 }
 
-import type { TenantContext, TenantShardingDirectory } from "../../infra/tenant-sharding-directory.ts";
+import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 
-export interface BotTenantContext {
+export interface BotProjectStorageContext {
     readonly services: {
         readonly targets: BotTargetService;
         readonly conversations: BotConversationService;
@@ -95,10 +93,9 @@ export interface BotTenantContext {
 
 export interface BotServiceContext {
     readonly services: { readonly authorization: BotAuthorization };
-    readonly forTenant: (tenant: TenantContext) => BotTenantContext;
+    readonly forProject: (project: ProjectStorageContext) => BotProjectStorageContext;
     readonly gateways: {
-        readonly tenants: TenantShardingDirectory;
-        readonly tenantResolver: PairingTenantResolver;
+        readonly projects: ProjectStorageDirectory;
         readonly channels: ChannelGateway;
         readonly connections: BotConnectionGateway;
         readonly botSessions: BotSessionRuntime;
@@ -139,25 +136,25 @@ export class BotService {
         this.cx = cx;
     }
 
-    private readonly context = async (tenantId: string, signal: AbortSignal) => {
-        const tenant = await this.cx.gateways.tenants.resolve(tenantId, signal);
+    private readonly context = async (projectId: string, signal: AbortSignal) => {
+        const project = await this.cx.gateways.projects.resolve(projectId, signal);
         signal.throwIfAborted();
-        if (tenant.tenantId !== tenantId) {
-            throw new BotApiError("bot_service_unavailable", "The tenant placement is invalid", "unavailable");
+        if (project.projectId !== projectId) {
+            throw new BotApiError("bot_service_unavailable", "The Project placement is invalid", "unavailable");
         }
-        return this.cx.forTenant(tenant);
+        return this.cx.forProject(project);
     };
 
     private readonly projectContext = async (scope: ProjectScope, signal: AbortSignal) => {
-        const tenant = await this.cx.gateways.tenants.resolveProject(scope.storageLocator, signal);
+        const project = await this.cx.gateways.projects.resolve(scope.projectId, signal);
         signal.throwIfAborted();
-        if (tenant.tenantId !== scope.storageLocator.resolveHostingPlacement()) {
+        if (project.projectId !== scope.projectId) {
             throw new BotApiError("bot_service_unavailable", "The Project placement is invalid", "unavailable");
         }
-        return this.cx.forTenant(tenant);
+        return this.cx.forProject(project);
     };
 
-    private readonly readLifecycle = async (cx: BotTenantContext, botId: string, signal: AbortSignal) => {
+    private readonly readLifecycle = async (cx: BotProjectStorageContext, botId: string, signal: AbortSignal) => {
         const bot = await cx.storages.control.readLifecycle(botId, signal);
         if (bot === null) {
             throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
@@ -406,7 +403,7 @@ export class BotService {
     };
 
     private readonly readRuntimeAccess = async (
-        cx: BotTenantContext,
+        cx: BotProjectStorageContext,
         scope: ProjectScope,
         runtimeId: string,
         signal: AbortSignal,
@@ -415,11 +412,11 @@ export class BotService {
         if (row === null) {
             throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
         }
-        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.tenant_id, row.project_id);
+        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id);
     };
 
     private readonly authorizeConversation = async (
-        cx: BotTenantContext,
+        cx: BotProjectStorageContext,
         access: BotConversationAuthorization,
         conversationId: string,
         signal: AbortSignal,
@@ -451,7 +448,7 @@ export class BotService {
     };
 
     private readonly approvedTargets = async (
-        cx: BotTenantContext,
+        cx: BotProjectStorageContext,
         botId: string,
         identifiers: readonly string[],
         signal: AbortSignal,
@@ -484,7 +481,7 @@ export class BotService {
     };
 
     private readonly readApprovedBinding = async (
-        cx: BotTenantContext,
+        cx: BotProjectStorageContext,
         botId: string,
         signal: AbortSignal,
     ): Promise<ApprovedBindingContext> => {
@@ -525,40 +522,6 @@ export class BotService {
             allowedDeliveryTargets: Object.freeze(targets),
             completionPolicy: policy,
         };
-    };
-
-    readonly resolveTenant = async (request: Request, signal: AbortSignal) =>
-        validateIdentifier(await this.cx.gateways.tenantResolver.resolve(request, signal), "tenant_id");
-
-    readonly listProjects = async (tenantId: string, signal: AbortSignal) => {
-        const cx = await this.context(tenantId, signal);
-        return cx.storages.control.listProjects(tenantId, signal);
-    };
-    readonly listProjectBots = async (tenantId: string, projectId: string, signal: AbortSignal) => {
-        const cx = await this.context(tenantId, signal);
-        const project = await cx.storages.control.readProjectRuntime(tenantId, projectId, signal);
-        if (project === null) {
-            throw new BotApiError(
-                "project_access_denied",
-                "This project is not available in the current workspace",
-                "access-denied",
-            );
-        }
-        return cx.storages.control.listProjectBots(tenantId, projectId, signal);
-    };
-    readonly readProjectStatus = async (tenantId: string, projectId: string, signal: AbortSignal) => {
-        const cx = await this.context(tenantId, signal);
-        const project = await cx.storages.control.readProjectRuntime(tenantId, projectId, signal);
-        if (project === null) {
-            throw new BotApiError(
-                "project_access_denied",
-                "This project is not available to this tenant",
-                "access-denied",
-            );
-        }
-        const access = new VerifiedChannelAccess(project.channel_id, project.runtime_id, tenantId, projectId);
-        const runtime = await this.cx.gateways.channels.readRuntimeStatus(access, signal);
-        return { status: runtime.online ? "connected" : "offline" };
     };
 
     readonly createBot = async (
@@ -851,7 +814,7 @@ export class BotService {
             throw new BotApiError("revision_conflict", "The Bot binding could not be requested", "conflict");
         }
         await this.cx.gateways.channels.dispatchPending(
-            new VerifiedChannelAccess(runtime.channel_id, runtime.runtime_id, runtime.tenant_id, runtime.project_id),
+            new VerifiedChannelAccess(runtime.channel_id, runtime.runtime_id, runtime.project_id),
             signal,
         );
         return { bindingId, bindingRevision, lifecycle: "requested" };
@@ -1019,7 +982,7 @@ export class BotService {
             now,
             signal,
         );
-        const cx = await this.context(grant.tenant_id, signal);
+        const cx = await this.context(grant.project_id, signal);
         const connectionId = `bcn_${createRandomToken(18)}`;
         const credentialId = `bcc_${createRandomToken(18)}`;
         const credential = createRandomToken(32);
@@ -1304,7 +1267,7 @@ export class BotService {
     };
 
     private readonly acceptAuthorizedMessage = async (
-        cx: BotTenantContext,
+        cx: BotProjectStorageContext,
         access: BotConversationAuthorization,
         conversation: AuthorizedBotConversation,
         submission: BotTurnSubmission,

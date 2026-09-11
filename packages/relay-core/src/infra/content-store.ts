@@ -23,13 +23,11 @@ export class ContentTarget {
     readonly artifactId: string;
     readonly projectId: string;
     readonly sessionId: string;
-    readonly tenantId: string;
 
-    constructor(tenantId: string, projectId: string, sessionId: string, artifactId: string) {
+    constructor(projectId: string, sessionId: string, artifactId: string) {
         this.artifactId = artifactId;
         this.projectId = projectId;
         this.sessionId = sessionId;
-        this.tenantId = tenantId;
     }
 }
 

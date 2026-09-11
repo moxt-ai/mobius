@@ -1,5 +1,5 @@
-import type { TenantShardResolution } from "./tenant-sharding-directory.ts";
+import type { ProjectStoragePlacement } from "./project-storage-directory.ts";
 
 export interface BucketResolver {
-    readonly resolve: (sharding: TenantShardResolution) => R2Bucket;
+    readonly resolve: (sharding: ProjectStoragePlacement) => R2Bucket;
 }

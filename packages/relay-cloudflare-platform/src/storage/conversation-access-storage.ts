@@ -21,61 +21,74 @@ async function waitForD1<T>(operation: () => Promise<T>, signal: AbortSignal): P
 
 export class ConversationAccessStorage {
     readonly #platformDatabase: D1Database;
-    readonly #projectDatabase: D1Database;
+    readonly #projectDatabases: readonly D1Database[];
 
-    constructor(platformDatabase: D1Database, projectDatabase: D1Database) {
+    constructor(platformDatabase: D1Database, projectDatabases: readonly D1Database[]) {
         this.#platformDatabase = platformDatabase;
-        this.#projectDatabase = projectDatabase;
+        this.#projectDatabases = projectDatabases;
     }
 
     readonly readConversationDirectory = async (
         conversationId: string,
         sessionId: string,
-        tenantId: string,
         projectId: string,
         signal: AbortSignal,
-    ): Promise<ConversationDirectoryRow | null> =>
-        decodeOptionalStorageRecord(
-            ConversationDirectoryRowSchema,
-            await waitForD1(
-                () =>
-                    this.#projectDatabase
-                        .prepare(
-                            `SELECT conversations.conversation_id, conversations.session_id,
-                                bots.tenant_id, bots.project_id
+    ): Promise<ConversationDirectoryRow | null> => {
+        const matches = await Promise.all(
+            this.#projectDatabases.map(async (database) =>
+                decodeOptionalStorageRecord(
+                    ConversationDirectoryRowSchema,
+                    await waitForD1(
+                        () =>
+                            database
+                                .prepare(
+                                    `SELECT conversations.conversation_id, conversations.session_id,
+                                 bots.project_id
                            FROM bot_conversations AS conversations
                            JOIN bots ON bots.bot_id = conversations.bot_id
                           WHERE conversations.conversation_id = ? AND conversations.session_id = ?
-                            AND bots.tenant_id = ? AND bots.project_id = ?`,
-                        )
-                        .bind(conversationId, sessionId, tenantId, projectId)
-                        .first(),
-                signal,
+                             AND bots.project_id = ?`,
+                                )
+                                .bind(conversationId, sessionId, projectId)
+                                .first(),
+                        signal,
+                    ),
+                ),
             ),
         );
+        const records = matches.filter((record): record is ConversationDirectoryRow => record !== null);
+        return records.length === 1 ? (records[0] ?? null) : null;
+    };
 
     readonly readActiveConversationDirectory = async (
         conversationId: string,
         signal: AbortSignal,
-    ): Promise<ConversationDirectoryRow | null> =>
-        decodeOptionalStorageRecord(
-            ConversationDirectoryRowSchema,
-            await waitForD1(
-                () =>
-                    this.#projectDatabase
-                        .prepare(
-                            `SELECT conversations.conversation_id, conversations.session_id,
-                                bots.tenant_id, bots.project_id
+    ): Promise<ConversationDirectoryRow | null> => {
+        const matches = await Promise.all(
+            this.#projectDatabases.map(async (database) =>
+                decodeOptionalStorageRecord(
+                    ConversationDirectoryRowSchema,
+                    await waitForD1(
+                        () =>
+                            database
+                                .prepare(
+                                    `SELECT conversations.conversation_id, conversations.session_id,
+                                 bots.project_id
                            FROM bot_conversations AS conversations
                            JOIN bots ON bots.bot_id = conversations.bot_id
                           WHERE conversations.conversation_id = ? AND conversations.lifecycle = 'active'
                             AND bots.lifecycle = 'active'`,
-                        )
-                        .bind(conversationId)
-                        .first(),
-                signal,
+                                )
+                                .bind(conversationId)
+                                .first(),
+                        signal,
+                    ),
+                ),
             ),
         );
+        const records = matches.filter((record): record is ConversationDirectoryRow => record !== null);
+        return records.length === 1 ? (records[0] ?? null) : null;
+    };
 
     readonly insertCredential = async (
         credential: ConversationCredentialInsert,

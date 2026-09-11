@@ -10,8 +10,8 @@ import type { BotBehaviorRevision, BotProfileRevision } from "../entity/bot/bot-
 import type { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
 import type { SqlDatabase, SqlStatement } from "../infra/sql-database.ts";
-import type { TenantContext } from "../infra/tenant-sharding-directory.ts";
 
 interface BotRow {
     readonly active_behavior_revision_id: unknown;
@@ -24,7 +24,6 @@ interface BotRow {
     readonly lifecycle_revision: number;
     readonly project_id: string;
     readonly suspended_at: unknown;
-    readonly tenant_id: string;
     readonly updated_at: number;
 }
 
@@ -47,7 +46,6 @@ interface RuntimeRow {
     readonly channel_id: string;
     readonly project_id: string;
     readonly runtime_id: string;
-    readonly tenant_id: string;
 }
 
 interface TargetRow {
@@ -98,8 +96,8 @@ interface BindingEventIdentity {
 export class BotControlStorage {
     readonly #database: SqlDatabase;
 
-    constructor(tenant: TenantContext, databases: DatabaseResolver) {
-        this.#database = databases.resolve(tenant.tenantSharding);
+    constructor(project: ProjectStorageContext, databases: DatabaseResolver) {
+        this.#database = databases.resolve(project.storagePlacement);
     }
 
     readonly listBots = async (access: ProjectAccessContext, signal: AbortSignal) => {
@@ -109,9 +107,9 @@ export class BotControlStorage {
                     profiles.description, profiles.revision_number AS profile_revision_number
                 FROM bots INNER JOIN bot_profile_revisions AS profiles
                   ON profiles.profile_revision_id = bots.current_profile_revision_id
-                WHERE bots.tenant_id = ? AND bots.project_id = ?
+                WHERE bots.project_id = ?
                 ORDER BY bots.updated_at DESC, bots.bot_id DESC`)
-            .bind(access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.scope.projectId)
             .all<BotProfileRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -122,9 +120,9 @@ export class BotControlStorage {
         const rows = await this.#database
             .prepare(`SELECT behaviors.* FROM bot_behavior_revisions AS behaviors
                 INNER JOIN bots ON bots.bot_id = behaviors.bot_id
-                WHERE behaviors.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                WHERE behaviors.bot_id = ? AND bots.project_id = ?
                 ORDER BY behaviors.revision_number DESC`)
-            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.botId, access.scope.projectId)
             .all<BehaviorRow>(signal);
         signal.throwIfAborted();
         return rows.results;
@@ -135,38 +133,24 @@ export class BotControlStorage {
         const rows = await this.#database
             .prepare(`SELECT bindings.* FROM bot_execution_bindings AS bindings
                 INNER JOIN bots ON bots.bot_id = bindings.bot_id
-                WHERE bindings.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?
+                WHERE bindings.bot_id = ? AND bots.project_id = ?
                 ORDER BY bindings.binding_revision DESC`)
-            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.botId, access.scope.projectId)
             .all<BindingRow>(signal);
         signal.throwIfAborted();
         return rows.results;
     };
 
-    readonly listProjects = async (tenantId: string, signal: AbortSignal) => {
-        signal.throwIfAborted();
-        const rows = await this.#database
-            .prepare(
-                `SELECT project_id AS projectId, COALESCE(NULLIF(workspace_name, ''), project_id) AS displayName
-               FROM pairing_channels WHERE tenant_id = ? AND status = 'paired'
-               ORDER BY created_at, project_id`,
-            )
-            .bind(tenantId)
-            .all<{ readonly projectId: string; readonly displayName: string }>(signal);
-        signal.throwIfAborted();
-        return rows.results;
-    };
-
-    readonly listProjectBots = async (tenantId: string, projectId: string, signal: AbortSignal) => {
+    readonly listProjectBots = async (projectId: string, signal: AbortSignal) => {
         signal.throwIfAborted();
         const rows = await this.#database
             .prepare(
                 `SELECT b.bot_id AS botId, p.display_name AS displayName, b.lifecycle,
                   COALESCE((SELECT lifecycle FROM bot_execution_bindings WHERE bot_id = b.bot_id ORDER BY binding_revision DESC LIMIT 1), 'not-configured') AS setupStatus
                FROM bots b JOIN bot_profile_revisions p ON p.profile_revision_id = b.current_profile_revision_id
-               WHERE b.tenant_id = ? AND b.project_id = ? ORDER BY b.created_at, b.bot_id`,
+                WHERE b.project_id = ? ORDER BY b.created_at, b.bot_id`,
             )
-            .bind(tenantId, projectId)
+            .bind(projectId)
             .all<{
                 readonly botId: string;
                 readonly displayName: string;
@@ -175,18 +159,6 @@ export class BotControlStorage {
             }>(signal);
         signal.throwIfAborted();
         return rows.results;
-    };
-
-    readonly readProjectRuntime = async (tenantId: string, projectId: string, signal: AbortSignal) => {
-        signal.throwIfAborted();
-        const row = await this.#database
-            .prepare(
-                `SELECT channel_id, runtime_id FROM pairing_channels WHERE tenant_id = ? AND project_id = ? AND status = 'paired' LIMIT 1`,
-            )
-            .bind(tenantId, projectId)
-            .first<{ readonly channel_id: string; readonly runtime_id: string }>(signal);
-        signal.throwIfAborted();
-        return row;
     };
 
     readonly writeBot = async (
@@ -210,18 +182,11 @@ export class BotControlStorage {
                 this.#database
                     .prepare(
                         `INSERT INTO bots (
-                       bot_id, tenant_id, project_id, current_profile_revision_id,
+                       bot_id, project_id, current_profile_revision_id,
                        lifecycle, lifecycle_revision, created_at, updated_at
-                     ) VALUES (?, ?, ?, ?, 'draft', 1, ?, ?)`,
+                     ) VALUES (?, ?, ?, 'draft', 1, ?, ?)`,
                     )
-                    .bind(
-                        botId,
-                        access.scope.storageLocator.resolveHostingPlacement(),
-                        access.scope.projectId,
-                        profileRevisionId,
-                        now,
-                        now,
-                    ),
+                    .bind(botId, access.scope.projectId, profileRevisionId, now, now),
                 this.audit(
                     access.scope,
                     botId,
@@ -374,11 +339,11 @@ export class BotControlStorage {
     readonly readBindingRuntime = async (scope: ProjectScope, runtimeId: string, signal: AbortSignal) => {
         const runtime = await this.#database
             .prepare(
-                `SELECT channel_id, runtime_id, tenant_id, project_id, agents_json
+                `SELECT channel_id, runtime_id, project_id, agents_json
                    FROM pairing_channels
-                  WHERE runtime_id = ? AND tenant_id = ? AND project_id = ? AND status = 'paired'`,
+                  WHERE runtime_id = ? AND project_id = ? AND status = 'paired'`,
             )
-            .bind(runtimeId, scope.storageLocator.resolveHostingPlacement(), scope.projectId)
+            .bind(runtimeId, scope.projectId)
             .first<RuntimeRow>(signal);
         signal.throwIfAborted();
         return runtime;
@@ -500,12 +465,12 @@ export class BotControlStorage {
             .prepare(
                 `SELECT payload FROM bot_control_outbox AS outbox
                    INNER JOIN bots ON bots.bot_id = outbox.bot_id
-                  WHERE bots.tenant_id = ? AND bots.project_id = ?
+                  WHERE bots.project_id = ?
                     AND outbox.runtime_id = ? AND outbox.state = 'pending'
                     AND outbox.message_kind = 'binding_approval'
                   ORDER BY outbox.created_at, outbox.outbox_id LIMIT ?`,
             )
-            .bind(scope.storageLocator.resolveHostingPlacement(), scope.projectId, runtimeId, limit)
+            .bind(scope.projectId, runtimeId, limit)
             .all<{ readonly payload: string }>(signal);
         signal.throwIfAborted();
         return rows.results.map((row) => row.payload);
@@ -652,9 +617,9 @@ export class BotControlStorage {
                    FROM bots
                    INNER JOIN bot_profile_revisions AS profiles
                      ON profiles.profile_revision_id = bots.current_profile_revision_id
-                  WHERE bots.bot_id = ? AND bots.tenant_id = ? AND bots.project_id = ?`,
+                  WHERE bots.bot_id = ? AND bots.project_id = ?`,
             )
-            .bind(access.botId, access.scope.storageLocator.resolveHostingPlacement(), access.scope.projectId)
+            .bind(access.botId, access.scope.projectId)
             .first<BotProfileRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -700,15 +665,11 @@ export class BotControlStorage {
         signal.throwIfAborted();
         const row = await this.#database
             .prepare(
-                `SELECT channel_id, runtime_id, tenant_id, project_id, agents_json
+                `SELECT channel_id, runtime_id, project_id, agents_json
                    FROM pairing_channels
-                  WHERE tenant_id = ? AND project_id = ? AND runtime_id = ? AND status = 'paired'`,
+                  WHERE project_id = ? AND runtime_id = ? AND status = 'paired'`,
             )
-            .bind(
-                scope.storageLocator.resolveHostingPlacement(),
-                scope.projectId,
-                validateIdentifier(runtimeId, "runtime_id"),
-            )
+            .bind(scope.projectId, validateIdentifier(runtimeId, "runtime_id"))
             .first<RuntimeRow>(signal);
         signal.throwIfAborted();
         return row;
@@ -751,10 +712,10 @@ export class BotControlStorage {
                 this.#database
                     .prepare(
                         `INSERT INTO bot_audit_events (
-                       audit_id, tenant_id, project_id, bot_id, actor_kind,
+                       audit_id, project_id, bot_id, actor_kind,
                        actor_id, action, subject_id, details_json, recorded_at
                      )
-                     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                       WHERE EXISTS (
                         SELECT 1 FROM bots
                          WHERE bot_id = ? AND lifecycle = ? AND lifecycle_revision = ?
@@ -766,7 +727,6 @@ export class BotControlStorage {
                     )
                     .bind(
                         `aud_${createRandomToken(18)}`,
-                        access.scope.storageLocator.resolveHostingPlacement(),
                         access.scope.projectId,
                         access.botId,
                         access.actor.kind.value,
@@ -815,7 +775,7 @@ export class BotControlStorage {
                     AND bindings.behavior_revision_id = ?
                     AND bindings.binding_revision = ? AND bindings.runtime_id = ?
                     AND bindings.lifecycle = 'requested'
-                    AND bots.tenant_id = ? AND bots.project_id = ?
+                    AND bots.project_id = ?
                     AND outbox.state = 'pending'
                     AND outbox.message_kind = 'binding_approval'
                     AND json_extract(outbox.payload, '$.requestId') = ?`,
@@ -826,7 +786,6 @@ export class BotControlStorage {
                 event.behaviorRevisionId,
                 event.bindingRevision,
                 runtimeId,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -855,7 +814,7 @@ export class BotControlStorage {
                     AND bindings.local_grant_id = ?
                     AND bindings.agent_identity_digest = ?
                     AND bindings.workspace_identity_digest = ?
-                    AND bots.tenant_id = ? AND bots.project_id = ?
+                    AND bots.project_id = ?
                     AND outbox.state = 'completed'
                     AND outbox.message_kind = 'binding_approval'
                     AND json_extract(outbox.payload, '$.requestId') = ?`,
@@ -869,7 +828,6 @@ export class BotControlStorage {
                 event.localGrantId,
                 event.agentIdentityDigest,
                 event.workspaceIdentityDigest,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -897,7 +855,7 @@ export class BotControlStorage {
                     AND bindings.lifecycle = 'unavailable'
                     AND bindings.unavailable_code = ?
                     AND bindings.unavailable_message = ?
-                    AND bots.tenant_id = ? AND bots.project_id = ?
+                    AND bots.project_id = ?
                     AND outbox.state = 'failed'
                     AND outbox.message_kind = 'binding_approval'
                     AND json_extract(outbox.payload, '$.requestId') = ?`,
@@ -910,7 +868,6 @@ export class BotControlStorage {
                 runtimeId,
                 event.code,
                 event.message,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 event.requestId,
             )
@@ -932,15 +889,14 @@ export class BotControlStorage {
         this.#database
             .prepare(
                 `INSERT INTO bot_audit_events (
-                   audit_id, tenant_id, project_id, bot_id, actor_kind,
+                   audit_id, project_id, bot_id, actor_kind,
                    actor_id, action, subject_id, details_json, recorded_at
                  )
-                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                   WHERE changes() = 1`,
             )
             .bind(
                 `aud_${createRandomToken(18)}`,
-                scope.storageLocator.resolveHostingPlacement(),
                 scope.projectId,
                 botId,
                 actorKind,

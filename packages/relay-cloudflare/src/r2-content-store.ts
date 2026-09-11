@@ -7,7 +7,7 @@ import {
     type ImmutableContent,
 } from "@moxt-ai/mobius-relay-core";
 import type { BucketResolver } from "./bucket-resolver.ts";
-import type { TenantShardingDirectory } from "./tenant-sharding-directory.ts";
+import type { ProjectStorageDirectory } from "./project-storage-directory.ts";
 
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
 
@@ -55,7 +55,7 @@ function unavailable(message: string, cause: unknown): ContentStorageError {
 }
 
 function objectKey(target: ContentTarget): string {
-    const fields = [target.tenantId, target.projectId, target.sessionId, target.artifactId];
+    const fields = [target.projectId, target.sessionId, target.artifactId];
     if (fields.some((field) => !SAFE_IDENTIFIER.test(field))) {
         throw new ContentStorageError("content_not_found", "The content target is invalid");
     }
@@ -83,12 +83,12 @@ function metadata(object: R2Object): {
 
 export class R2ContentStore implements ContentPersistence {
     readonly #buckets: BucketResolver;
-    readonly #tenants: TenantShardingDirectory;
+    readonly #projects: ProjectStorageDirectory;
 
     private readonly keyPrefix: string;
-    constructor(buckets: BucketResolver, tenants: TenantShardingDirectory, keyPrefix = "") {
+    constructor(buckets: BucketResolver, projects: ProjectStorageDirectory, keyPrefix = "") {
         this.#buckets = buckets;
-        this.#tenants = tenants;
+        this.#projects = projects;
         this.keyPrefix = keyPrefix;
     }
 
@@ -97,9 +97,9 @@ export class R2ContentStore implements ContentPersistence {
             signal.throwIfAborted();
             try {
                 const key = this.keyPrefix + objectKey(target);
-                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                const project = await this.#projects.resolve(target.projectId, signal);
                 signal.throwIfAborted();
-                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const bucket = this.#buckets.resolve(project.storagePlacement);
                 await bucket.delete(key);
                 signal.throwIfAborted();
             } catch (error) {
@@ -116,9 +116,9 @@ export class R2ContentStore implements ContentPersistence {
             signal.throwIfAborted();
             try {
                 const key = this.keyPrefix + objectKey(target);
-                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                const project = await this.#projects.resolve(target.projectId, signal);
                 signal.throwIfAborted();
-                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const bucket = this.#buckets.resolve(project.storagePlacement);
                 const object = await bucket.head(key);
                 signal.throwIfAborted();
                 if (object === null) {
@@ -146,9 +146,9 @@ export class R2ContentStore implements ContentPersistence {
             signal.throwIfAborted();
             try {
                 const key = this.keyPrefix + objectKey(target);
-                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                const project = await this.#projects.resolve(target.projectId, signal);
                 signal.throwIfAborted();
-                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const bucket = this.#buckets.resolve(project.storagePlacement);
                 const object = await bucket.get(key);
                 if (object === null) {
                     throw new ContentStorageError("content_not_found", "The R2 content does not exist");
@@ -199,9 +199,9 @@ export class R2ContentStore implements ContentPersistence {
             signal.throwIfAborted();
             try {
                 const key = this.keyPrefix + objectKey(target);
-                const tenant = await this.#tenants.resolve(target.tenantId, signal);
+                const project = await this.#projects.resolve(target.projectId, signal);
                 signal.throwIfAborted();
-                const bucket = this.#buckets.resolve(tenant.tenantSharding);
+                const bucket = this.#buckets.resolve(project.storagePlacement);
                 const written = await bucket.put(key, Uint8Array.from(content.bytes).buffer, {
                     customMetadata: {
                         contentEncoding: content.contentEncoding,

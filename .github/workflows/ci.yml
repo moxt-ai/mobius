@@ -124,3 +124,86 @@ jobs:
           done
           echo "Unexpected health response after deployment propagation: $actual" >&2
           exit 1
+
+  deploy-cloudflare-platform:
+    name: deploy Platform (${{ matrix.environment }})
+    if: >-
+      github.repository == 'moxt-ai/mobius' &&
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - environment: staging
+            domain: mobius-platform.paradev.biz
+          - environment: production
+            domain: mobius-platform.paraflow.biz
+    environment:
+      name: mobius-relay-production
+      url: https://${{ matrix.domain }}
+    concurrency:
+      group: deploy-mobius-platform-${{ matrix.environment }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm
+        id: pnpm
+        shell: bash
+        run: |
+          corepack enable
+          pnpm --version
+          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store-path }}
+          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Deploy mobius-platform
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          pnpm wrangler deploy \
+            --config packages/relay-cloudflare-platform/wrangler.jsonc \
+            --env "${{ matrix.environment }}" \
+            --strict \
+            --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
+
+      - name: Verify Platform health
+        shell: bash
+        run: |
+          expected='{"service":"mobius-relay-platform","status":"ok"}'
+          actual=''
+          for attempt in {1..6}; do
+            if actual="$(curl \
+              --fail \
+              --show-error \
+              --silent \
+              --connect-timeout 5 \
+              --max-time 15 \
+              "https://${{ matrix.domain }}/mobius/api/health")" && \
+              [[ "$actual" == "$expected" ]]; then
+              exit 0
+            fi
+            if [[ "$attempt" -lt 6 ]]; then
+              sleep 5
+            fi
+          done
+          echo "Unexpected Platform health response after deployment propagation: $actual" >&2
+          exit 1

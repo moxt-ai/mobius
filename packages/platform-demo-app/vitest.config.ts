@@ -31,7 +31,7 @@ export default defineConfig(async () => {
         ],
         test: {
             include: ["test/**/*.integration.test.ts"],
-            setupFiles: ["../relay-cloudflare-platform/test/apply-migrations.ts"],
+            setupFiles: ["./test/apply-migrations.ts"],
             testTimeout: 15_000,
         },
     };

@@ -143,7 +143,6 @@ interface PairingRecord {
     readonly daemon_token_hash: string;
     readonly project_id: string;
     readonly runtime_id: string;
-    readonly tenant_id: string;
 }
 
 interface HostCredentialRecord {
@@ -1008,9 +1007,9 @@ describe.sequential("Cloudflare session deployment", () => {
             ]);
             const rejectedQuota = await env.DIRECTORY_DATABASE.prepare(
                 `SELECT details_json FROM runtime_pairing_audit_events
-                  WHERE tenant_id = ? AND project_id = ? AND action = 'runtime_pairing.rejected'`,
+                  WHERE project_id = ? AND action = 'runtime_pairing.rejected'`,
             )
-                .bind(project.created.tenantId, project.created.projectId)
+                .bind(project.created.projectId)
                 .all<{ readonly details_json: string }>();
             expect(rejectedQuota.results.map((row) => row.details_json)).toContain(
                 JSON.stringify({ code: "runtime_quota_exceeded" }),
@@ -1070,7 +1069,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(denied.status).toBe(401);
     });
 
-    it("Given a deployment without a configured tenant, When a browser creates a pairing, Then it receives an availability error instead of an anonymous tenant", async () => {
+    it("Given a deployment without a configured tenant, When a browser creates a pairing, Then it succeeds without exposing a tenant", async () => {
         const fetch = worker.fetch;
         if (fetch === undefined) {
             throw new Error("Worker fetch is unavailable");
@@ -1080,8 +1079,9 @@ describe.sequential("Cloudflare session deployment", () => {
             { ...env, MOBIUS_TENANT_ID: "" },
             createExecutionContext(),
         );
-        expect(response.status).toBe(503);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "pairing_tenant_unavailable" } });
+        expect(response.status).toBe(201);
+        const created = decodeCreatedPairing(await response.json());
+        expect(created.projectId).toMatch(/^prj_/);
     });
 
     it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
@@ -1148,7 +1148,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(unauthorizedHost.status).toBe(401);
 
         const record = await env.DIRECTORY_DATABASE.prepare(
-            `SELECT channel_id, daemon_token_hash, project_id, runtime_id, tenant_id
+            `SELECT channel_id, daemon_token_hash, project_id, runtime_id
        FROM pairing_channels WHERE pairing_id = ?`,
         )
             .bind(created.pairingId)
@@ -1158,7 +1158,6 @@ describe.sequential("Cloudflare session deployment", () => {
             daemon_token_hash: expect.stringMatching(/^[a-f0-9]{64}$/),
             project_id: created.projectId,
             runtime_id: created.runtimeId,
-            tenant_id: created.tenantId,
         });
         const ownerCredential = await env.DIRECTORY_DATABASE.prepare(
             `SELECT credential_id, channel_id, token_hash, authority
@@ -2241,7 +2240,7 @@ describe.sequential("Cloudflare session deployment", () => {
                scope_key, session_id, target_id, archive_kind, owner_id,
                media_type, hot_payload, attempts, last_error
              ) VALUES (?, ?, ?, 'activity', ?, 'application/json', ?, 0, '')`,
-                        `${pairing.created.tenantId}:${pairing.created.projectId}`,
+                        pairing.created.projectId,
                         sessionId,
                         artifactId,
                         "activity-large",
@@ -2364,7 +2363,6 @@ describe.sequential("Cloudflare session deployment", () => {
                         body: JSON.stringify({
                             scope: {
                                 projectId: pairing.created.projectId,
-                                tenantId: pairing.created.tenantId,
                             },
                             sessionId,
                         }),
@@ -3019,7 +3017,6 @@ describe.sequential("Cloudflare session deployment", () => {
                     const headers = {
                         "x-mobius-channel-id": pairing.created.channelId,
                         "x-mobius-runtime-id": pairing.created.runtimeId,
-                        "x-mobius-tenant-id": pairing.created.tenantId,
                         "x-mobius-project-id": pairing.created.projectId,
                     };
                     const connect = () =>

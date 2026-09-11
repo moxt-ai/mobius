@@ -61,7 +61,6 @@ export function createLegacyAuthenticationApplication() {
                     expiresAt: new Date(issued.expiresAtEpochMilliseconds).toISOString(),
                     permissions: [...issued.permissions].map((permission) => permission.value),
                     projectId: issued.scope.projectId,
-                    tenantId: issued.scope.storageLocator.resolveHostingPlacement(),
                 },
                 201,
             );

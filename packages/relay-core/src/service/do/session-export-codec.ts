@@ -167,10 +167,7 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         "title",
         "updatedAt",
     ];
-    if (
-        !hasExactKeys(sourceSession, portableSessionFields) &&
-        !hasExactKeys(sourceSession, [...portableSessionFields, "tenantId"])
-    ) {
+    if (!hasExactKeys(sourceSession, portableSessionFields)) {
         throw new SessionRuntimeError("invalid_export", "The exported session descriptor is invalid");
     }
     const lifecycle = sourceSession["lifecycle"];
@@ -191,9 +188,6 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     } catch (cause) {
         throw new SessionRuntimeError("invalid_export", "The exported default binding is invalid", { cause });
     }
-    const sourceTenantId = Object.hasOwn(sourceSession, "tenantId")
-        ? importIdentifier(sourceSession, "tenantId")
-        : "portable";
     const sourceProjectId = importIdentifier(sourceSession, "projectId");
     importTimestamp(sourceSession, "createdAt");
     importTimestamp(sourceSession, "updatedAt");
@@ -468,15 +462,12 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
     for (const value of commandReceiptValues) {
         let receipt: CommandReceipt;
         try {
-            const normalized =
-                isRecord(value) && !Object.hasOwn(value, "tenantId") ? { ...value, tenantId: sourceTenantId } : value;
-            receipt = decodeCommandReceipt(normalized);
+            receipt = decodeCommandReceipt(value);
         } catch (cause) {
             throw new SessionRuntimeError("invalid_export", "An exported CommandReceipt is invalid", { cause });
         }
         const command = commandsByIdempotencyKey.get(receipt.idempotencyKey);
         if (
-            receipt.tenantId !== sourceTenantId ||
             receipt.projectId !== sourceProjectId ||
             receipt.sessionId !== sessionId ||
             receipt.commandKind !== SESSION_PROMPT_KIND ||

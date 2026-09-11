@@ -7,7 +7,6 @@ const attachmentSchema = v.union([
         channelId: v.string(),
         credentialId: v.string(),
         runtimeId: v.string(),
-        tenantId: v.string(),
         projectId: v.string(),
     }),
     v.object({
@@ -15,7 +14,6 @@ const attachmentSchema = v.union([
         connectionEpoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
         connectionId: v.pipe(v.string(), v.minLength(1)),
         runtimeId: v.string(),
-        tenantId: v.string(),
         projectId: v.string(),
     }),
 ]);
