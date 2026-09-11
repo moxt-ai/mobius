@@ -1,0 +1,48 @@
+{
+    "$schema": "../../node_modules/wrangler/config-schema.json",
+    "name": "mobius-platform-demo-local",
+    "main": "src/local-development-worker.ts",
+    "compatibility_date": "2026-09-03",
+    "durable_objects": {
+        "bindings": [
+            {
+                "name": "RUNTIME_RELAY",
+                "class_name": "RuntimeRelay"
+            },
+            {
+                "name": "SESSION_RELAY",
+                "class_name": "PlatformSessionRelay"
+            },
+            {
+                "name": "BOT_CONNECTIONS",
+                "class_name": "BotConnectionActor"
+            }
+        ]
+    },
+    "migrations": [
+        {
+            "tag": "platform-demo-initial",
+            "new_sqlite_classes": ["RuntimeRelay", "PlatformSessionRelay", "BotConnectionActor"]
+        }
+    ],
+    "d1_databases": [
+        {
+            "binding": "DIRECTORY_DATABASE",
+            "migrations_dir": "../relay-cloudflare/migrations/d1"
+        },
+        {
+            "binding": "PLATFORM_DIRECTORY_DATABASE",
+            "migrations_dir": "migrations/d1"
+        }
+    ],
+    "vars": {
+        "MOBIUS_DEMO_ALLOWED_ORIGIN": "http://127.0.0.1:5190",
+        "MOBIUS_DEMO_DEVELOPER_TOKEN": "local-supervisor-must-replace-this-token",
+        "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "100",
+        "SESSION_ACTIVE_SESSIONS_PER_TENANT": "1000",
+        "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
+    },
+    "observability": {
+        "enabled": false
+    }
+}

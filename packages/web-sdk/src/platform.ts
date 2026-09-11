@@ -1,6 +1,8 @@
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 import { type MobiusEndpointOptions, MobiusRequestExecutor, StaticMobiusCredentialProvider } from "./service-client.ts";
 
+export { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+
 export {
     MobiusApiError,
     MobiusCancellationError,

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
+import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
 import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "../../protocol/src/index.ts";
@@ -197,5 +198,71 @@ describe("daemon prompt artifact resolution", () => {
             code: "artifact_integrity_failed",
             message: "The prompt artifact failed integrity validation",
         });
+    });
+
+    it("Given a Relay that compresses eligible HTTP responses, When the daemon resolves a prompt Artifact, Then it requests the identity representation and verifies the authorized bytes", async () => {
+        const bytes = new TextEncoder().encode("identity encoded artifact context");
+        let acceptedEncoding = "";
+        const server = createServer((request, response) => {
+            acceptedEncoding = request.headers["accept-encoding"] ?? "";
+            const headers = {
+                "content-type": "text/plain",
+                "x-mobius-artifact-id": "art_identity",
+                "x-mobius-sha256": digest(bytes),
+            };
+            if (acceptedEncoding !== "identity") {
+                response.writeHead(200, { ...headers, "content-encoding": "gzip" });
+                response.end(gzipSync(bytes));
+                return;
+            }
+            response.writeHead(200, { ...headers, "content-length": bytes.byteLength });
+            response.end(bytes);
+        });
+        servers.push(server);
+        await listen(server);
+        const relayUrl = new URL(
+            `ws://127.0.0.1:${port(server).toString()}${MOBIUS_API_PREFIX}/channels/channel-artifact/daemon?token=daemon-secret`,
+        );
+        const config = createDaemonConfig({
+            auditDatabasePath: "/tmp/mobius-artifact-test.sqlite",
+            channelId: "channel-artifact",
+            defaultWorkspace: "/tmp",
+            relayUrl,
+        });
+        const command: SessionPromptCommand = {
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            bindingId: "workspace",
+            commandId: "command-artifact",
+            directoryId: "root",
+            disposition: "reject",
+            images: [],
+            kind: SESSION_PROMPT_KIND,
+            prompt: "Use the attachment",
+            resources: [
+                {
+                    mimeType: "text/plain",
+                    name: "context.txt",
+                    text: "",
+                    type: "link",
+                    uri: `mobius-artifact:art_identity?byteLength=${bytes.byteLength.toString()}&sha256=${digest(bytes)}`,
+                },
+            ],
+            sessionId: "session-artifact",
+            targetCommandId: "",
+        };
+
+        const resolved = await resolvePromptArtifacts(config, command, new AbortController().signal);
+
+        expect(acceptedEncoding).toBe("identity");
+        expect(resolved.resources).toEqual([
+            {
+                mimeType: "text/plain",
+                name: "context.txt",
+                text: "identity encoded artifact context",
+                type: "embedded",
+                uri: command.resources[0]?.uri,
+            },
+        ]);
     });
 });

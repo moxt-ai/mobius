@@ -1,0 +1,29 @@
+{
+    "name": "@moxt-ai/mobius-platform-demo",
+    "version": "0.0.1",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "build": "vite build",
+        "dev": "node ../../scripts/platform-demo.ts",
+        "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
+        "typecheck": "tsc --project tsconfig.json && tsc --project test/tsconfig.json && tsc --project tsconfig.vitest.json"
+    },
+    "dependencies": {
+        "@moxt-ai/mobius-sdk": "workspace:*",
+        "lucide-react": "^1.41.0",
+        "react": "^19.2.8",
+        "react-dom": "^19.2.8"
+    },
+    "devDependencies": {
+        "@cloudflare/vitest-plugin": "^1.1.4",
+        "@cloudflare/workers-types": "^5.20260905.1",
+        "@moxt-ai/mobius-protocol": "workspace:*",
+        "@types/node": "^24.13.3",
+        "@types/react": "^19.2.18",
+        "@types/react-dom": "^19.2.7",
+        "@vitejs/plugin-react": "^6.1.1",
+        "vite": "^8.2.2",
+        "vitest": "^4.1.10"
+    }
+}

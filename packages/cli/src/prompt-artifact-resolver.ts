@@ -165,7 +165,10 @@ async function download(
     try {
         response = await fetch(downloadUrl(config, command, reference), {
             dispatcher: environmentProxyDispatcher,
-            headers: { accept: reference.resource.mimeType },
+            headers: {
+                accept: reference.resource.mimeType,
+                "accept-encoding": "identity",
+            },
             signal: requestSignal,
         });
         if (!response.ok) {
