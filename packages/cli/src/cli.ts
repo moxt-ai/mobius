@@ -17,12 +17,14 @@ process.once("SIGTERM", () => shutdown.abort());
 const USAGE = `Mobius CLI
 
 Usage:
+  mobius --version
   mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--workspace <directory>]
   mobius start --channel <channel-id>
   mobius agents [--json]
   mobius bot message send --target <current|alias> --text <message>
 
 Commands:
+  --version  Print the installed Mobius CLI version
   pair   Pair this machine and start its local daemon
   start  Start the local daemon for a saved channel
   agents Show detected, missing, and integration-ready Agents
@@ -36,6 +38,11 @@ async function main(): Promise<void> {
     const command = process.argv[2];
     if (command === undefined || command === "--help" || command === "-h") {
         process.stdout.write(USAGE);
+        return;
+    }
+
+    if (command === "--version" || command === "-v" || command === "version") {
+        process.stdout.write(`${packageMetadata.version}\n`);
         return;
     }
 

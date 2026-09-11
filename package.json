@@ -5,7 +5,7 @@
     "type": "module",
     "packageManager": "pnpm@11.25.0",
     "engines": {
-        "node": ">=24.20.0 <25",
+        "node": ">=24.15.0 <25",
         "pnpm": ">=11.25.0 <12"
     },
     "scripts": {
