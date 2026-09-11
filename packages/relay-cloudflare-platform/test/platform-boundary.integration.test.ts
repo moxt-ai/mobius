@@ -237,8 +237,8 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
     const tenantId = text(tenant, "tenantId");
     const app = await json(
         await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${tenantId}/apps`, {
-                body: JSON.stringify({ displayName: `App ${label}` }),
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
+                body: JSON.stringify({ displayName: `App ${label}`, tenantId }),
                 headers: developerHeaders(),
                 method: "POST",
             }),
@@ -250,7 +250,7 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
     const appCredential = text(record(app["defaultCredential"]), "credential");
     const project = await json(
         await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
                 body: JSON.stringify({
                     displayName: `Project ${label}`,
                     idempotencyKey: `project-${label}`,
@@ -500,7 +500,7 @@ describe.sequential("Platform hosting boundary", () => {
                 { byteLength: -1, mediaType: "text/plain", name: "file.txt", sha256: "a".repeat(64) },
             ],
             [
-                "/v1/client/session/interactions/interaction-test/respond",
+                "/v1/client/session/interactions/interaction-test/response",
                 { kind: "permission", optionId: "allow", outcome: "selected", content: "extra" },
             ],
         ]) {
@@ -517,7 +517,7 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
-    it("Given a Platform deployment, When health, capabilities, and accountless bootstrap are requested, Then Platform is independently discoverable and public bootstrap is unavailable", async () => {
+    it("Given a Platform deployment, When health, capabilities, and developer authentication are requested, Then Platform is discoverable and developer authentication is enforced", async () => {
         const worker = createPlatformWorker(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
         );
@@ -535,12 +535,6 @@ describe.sequential("Platform hosting boundary", () => {
             hosting: { anonymousPublicBootstrap: false, profile: "platform" },
             resources: { apps: true, conversationAccessCredentials: true, projects: true, tenants: true },
         });
-
-        const bootstrap = await worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
-            bindings(),
-        );
-        expect(bootstrap.status).toBe(404);
 
         const configuredEnvironment = {
             ...bindings(),
@@ -930,8 +924,8 @@ describe.sequential("Platform hosting boundary", () => {
         const tenantId = text(tenant, "tenantId");
         const app = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${tenantId}/apps`, {
-                    body: JSON.stringify({ displayName: "Moxt" }),
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Moxt", tenantId }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -943,7 +937,7 @@ describe.sequential("Platform hosting boundary", () => {
         const defaultCredential = text(record(app["defaultCredential"]), "credential");
         const projectOne = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
                     body: JSON.stringify({
                         displayName: "Workspace One",
                         idempotencyKey: "workspace-one",
@@ -958,7 +952,7 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const projectTwo = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
                     body: JSON.stringify({
                         displayName: "Workspace Two",
                         idempotencyKey: "workspace-two",
@@ -989,8 +983,8 @@ describe.sequential("Platform hosting boundary", () => {
 
         const otherApp = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${tenantId}/apps`, {
-                    body: JSON.stringify({ displayName: "Other" }),
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Other", tenantId }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -1027,8 +1021,8 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const app = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${text(tenant, "tenantId")}/apps`, {
-                    body: JSON.stringify({ displayName: "Scoped App" }),
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Scoped App", tenantId: text(tenant, "tenantId") }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -1039,7 +1033,7 @@ describe.sequential("Platform hosting boundary", () => {
         const appId = text(app, "appId");
         const firstProject = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
                     body: JSON.stringify({
                         displayName: "First",
                         idempotencyKey: "first",
@@ -1054,7 +1048,7 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const secondProject = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/projects`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/projects`, {
                     body: JSON.stringify({
                         displayName: "Second",
                         idempotencyKey: "second",
@@ -1069,7 +1063,7 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const issued = await json(
             await worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/apps/${appId}/credentials`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/credentials`, {
                     body: JSON.stringify({
                         expiresInSeconds: 3600,
                         permissions: ["bot:read"],
@@ -1189,21 +1183,18 @@ describe.sequential("Platform hosting boundary", () => {
             const issue = async (
                 actorRef: string,
                 conversationId: string,
-                sessionId: string,
                 permissions: readonly string[],
                 expiresInSeconds = 120,
             ) =>
                 await json(
                     await fixture.worker.fetch(
                         new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/projects/${fixture.projectId}/conversation-access-credentials`,
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversations/${conversationId}/access-credentials`,
                             {
                                 body: JSON.stringify({
                                     actorRef,
-                                    conversationId,
                                     expiresInSeconds,
                                     permissions,
-                                    sessionId,
                                 }),
                                 headers: credentialHeaders(fixture.appCredential),
                                 method: "POST",
@@ -1223,7 +1214,7 @@ describe.sequential("Platform hosting boundary", () => {
                 "conversation:turn:cancel",
                 "conversation:turn:create",
             ];
-            const alice = await issue("actor-alice", fixture.conversationId, fixture.sessionId, fullPermissions);
+            const alice = await issue("actor-alice", fixture.conversationId, fullPermissions);
             const aliceCredential = text(alice, "credential");
             const transport = new PlatformWorkerTransport(fixture.worker, fixture.environment);
             const platformApplication = new MobiusPlatformAppClient({
@@ -1301,12 +1292,7 @@ describe.sequential("Platform hosting boundary", () => {
                 ),
                 201,
             );
-            const bob = await issue(
-                "actor-bob",
-                text(secondConversation, "conversationId"),
-                text(secondConversation, "sessionId"),
-                ["conversation:read"],
-            );
+            const bob = await issue("actor-bob", text(secondConversation, "conversationId"), ["conversation:read"]);
             const bobSession = await json(
                 await fixture.worker.fetch(
                     new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
@@ -1448,7 +1434,7 @@ describe.sequential("Platform hosting boundary", () => {
             const rotated = await json(
                 await fixture.worker.fetch(
                     new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/conversation-access-credentials/${text(alice, "credentialId")}/rotate`,
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(alice, "credentialId")}/rotate`,
                         {
                             body: JSON.stringify({ expiresInSeconds: 60 }),
                             headers: credentialHeaders(fixture.appCredential),
@@ -1502,7 +1488,7 @@ describe.sequential("Platform hosting boundary", () => {
 
             const revoked = await fixture.worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/conversation-access-credentials/${text(bob, "credentialId")}/revoke`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(bob, "credentialId")}/revoke`,
                     { body: "{}", headers: credentialHeaders(fixture.appCredential), method: "POST" },
                 ),
                 fixture.environment,

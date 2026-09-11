@@ -21,7 +21,6 @@ const createTenantBody = v.strictObject({
     ),
 });
 const createAppBody = v.strictObject({ displayName: requiredString, tenantId: requiredString });
-const createTenantAppBody = v.strictObject({ displayName: requiredString });
 const createProjectBody = v.strictObject({
     displayName: requiredString,
     idempotencyKey: requiredString,
@@ -223,69 +222,6 @@ export function createPlatformControlApplication() {
                 context.var.signal,
             );
             return context.json(await context.env.control.listApps(access, context.var.signal));
-        })
-        .post("/v1/platform/tenants/:tenantId/apps", bodyParser(createTenantAppBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const access = await context.env.control.requireTenantDeveloper(
-                identity,
-                path(context.req.param("tenantId")),
-                context.var.signal,
-            );
-            return context.json(
-                await context.env.control.createApp(access, value.displayName, context.var.signal),
-                201,
-            );
-        })
-        .get("/v1/platform/apps/:appId/projects", async (context) => {
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const result = await context.env.control.requireAppDeveloper(
-                identity,
-                path(context.req.param("appId")),
-                context.var.signal,
-            );
-            return context.json(await context.env.control.listProjects(result.access, result.app, context.var.signal));
-        })
-        .post("/v1/platform/apps/:appId/projects", bodyParser(createProjectBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const result = await context.env.control.requireAppDeveloper(
-                identity,
-                path(context.req.param("appId")),
-                context.var.signal,
-            );
-            return context.json(
-                await context.env.control.createProject(
-                    result.access,
-                    result.app,
-                    value.displayName,
-                    value.idempotencyKey,
-                    value.clientReference,
-                    value.placement,
-                    context.var.signal,
-                ),
-                201,
-            );
-        })
-        .post("/v1/platform/apps/:appId/credentials", bodyParser(issueCredentialBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const result = await context.env.control.requireAppDeveloper(
-                identity,
-                path(context.req.param("appId")),
-                context.var.signal,
-            );
-            return context.json(
-                await context.env.control.issueAppCredential(
-                    result.access,
-                    result.app,
-                    value.permissions,
-                    value.projectIds,
-                    value.expiresInSeconds,
-                    context.var.signal,
-                ),
-                201,
-            );
         })
         .post(
             "/v1/platform/app-credentials/:credentialId/rotate",

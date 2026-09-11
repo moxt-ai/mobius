@@ -249,63 +249,6 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
         this.#control = control;
     }
 
-    readonly issue = async (
-        projectId: string,
-        appCredential: string,
-        conversationId: string,
-        sessionId: string,
-        requestedActorReference: string,
-        requestedPermissions: unknown,
-        expiresInSeconds: number,
-        signal: AbortSignal,
-    ): Promise<object> => {
-        signal.throwIfAborted();
-        const normalizedProjectId = validateIdentifier(projectId, "project_id");
-        const normalizedConversationId = validateIdentifier(conversationId, "conversation_id");
-        const normalizedSessionId = validateIdentifier(sessionId, "session_id");
-        const access = await this.#control.authorizePlatformCredential(
-            normalizedProjectId,
-            appCredential,
-            ProjectPermission.ConversationRead,
-            requestedActorReference,
-            signal,
-        );
-        const permissions = decodeConversationPermissions(requestedPermissions);
-        for (const permission of permissions) {
-            if (!access.project.permissions.has(requiredProjectPermission(permission))) {
-                throw new PlatformControlPlaneError(
-                    "conversation_permission_escalation",
-                    "The Conversation credential cannot exceed its parent AppCredential",
-                    403,
-                );
-            }
-        }
-        const directory = await this.#storage.readConversationDirectory(
-            normalizedConversationId,
-            normalizedSessionId,
-            access.project.scope.projectId,
-            signal,
-        );
-        if (directory === null) {
-            throw new PlatformControlPlaneError(
-                "conversation_not_found",
-                "The Conversation was not found in this Project",
-                404,
-            );
-        }
-        return await this.insertCredential(
-            access.tenantId,
-            access.appId,
-            access.project.credentialId,
-            access.credentialRevision,
-            directory,
-            actorReference(requestedActorReference),
-            permissions,
-            lifetime(expiresInSeconds),
-            signal,
-        );
-    };
-
     readonly issueForConversation = async (
         conversationId: string,
         appCredential: string,

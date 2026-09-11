@@ -79,24 +79,7 @@ function isConversationPath(pathname: string): boolean {
         pathname === `${MOBIUS_API_PREFIX}/v1/client/session` ||
         pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session/`) ||
         /^\/mobius\/api\/v1\/conversations\/[^/]+\/access-credentials$/.test(pathname) ||
-        /^\/mobius\/api\/v1\/conversation-access-credentials\/[^/]+\/(?:rotate|revoke)$/.test(pathname) ||
-        /^\/mobius\/api\/v1\/platform\/projects\/[^/]+\/conversation-access-credentials(?:\/|$)/.test(pathname) ||
-        /^\/mobius\/api\/v1\/platform\/conversation-access-credentials\/[^/]+\/(?:rotate|revoke)$/.test(pathname)
-    );
-}
-
-function isLegacyAuthenticationPath(pathname: string): boolean {
-    if (
-        pathname === `${MOBIUS_API_PREFIX}/v1/projects` ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/auth/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-applications/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-application-credentials/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-owner-credentials/`)
-    ) {
-        return true;
-    }
-    return /^\/mobius\/api\/v1\/projects\/[^/]+\/(?:applications|external-identity-bindings|owner-credentials|authentication-audit-events)(?:\/|$)/.test(
-        pathname,
+        /^\/mobius\/api\/v1\/conversation-access-credentials\/[^/]+\/(?:rotate|revoke)$/.test(pathname)
     );
 }
 
@@ -126,13 +109,6 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
             if (isControlPath(pathname) && !isConversationPath(pathname)) {
                 return await controlApplication.fetch(request, { control });
             }
-            if (pathname === `${MOBIUS_API_PREFIX}/pairings`) {
-                return new Response("Not Found", { status: 404 });
-            }
-            if (isLegacyAuthenticationPath(pathname)) {
-                return new Response("Not Found", { status: 404 });
-            }
-
             const databases = new PlatformDatabaseResolver(environment);
             const projects = new PlatformProjectStorageDirectory(
                 { read: controlStorage.readProjectStoragePlacement },

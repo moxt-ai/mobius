@@ -6,12 +6,11 @@ import {
     decodeProjectPermissions,
     ExpiringProjectAccessLifetime,
     ExternalIdentityCredential,
-    type ExternalIdentityProjectGrant,
     hashSecret,
-    type IssuedProjectAccessCredential,
+    type ProjectAccessAuthorizer,
     ProjectAccessContext,
+    type ProjectApplicationCredentialAuthenticator,
     ProjectAuthenticationError,
-    type ProjectAuthenticationService,
     ProjectCredentialScheme,
     type ProjectPermission,
     ProjectScope,
@@ -382,7 +381,9 @@ async function requestDigest(
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, placement }));
 }
 
-export class PlatformControlPlaneService implements ProjectAuthenticationService, SessionQuotaPolicyProvider {
+export class PlatformControlPlaneService
+    implements ProjectAccessAuthorizer, ProjectApplicationCredentialAuthenticator, SessionQuotaPolicyProvider
+{
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
@@ -1258,40 +1259,4 @@ export class PlatformControlPlaneService implements ProjectAuthenticationService
         subjectId,
         tenantId,
     });
-
-    private readonly unsupportedLegacyOperation = (): never => {
-        throw new ProjectAuthenticationError(
-            "platform_authentication_plane_required",
-            "This credential operation is not available through the shared Project API",
-        );
-    };
-
-    readonly resolve = async (
-        _identity: VerifiedExternalIdentity,
-        _signal: AbortSignal,
-    ): Promise<readonly ExternalIdentityProjectGrant[]> => this.unsupportedLegacyOperation();
-
-    readonly issue = async (
-        _identity: VerifiedExternalIdentity,
-        _grant: ExternalIdentityProjectGrant,
-        _lifetime: number,
-        _signal: AbortSignal,
-    ): Promise<IssuedProjectAccessCredential> => this.unsupportedLegacyOperation();
-
-    readonly exchangeExternalIdentity = async (): Promise<IssuedProjectAccessCredential> =>
-        this.unsupportedLegacyOperation();
-
-    readonly createApplication = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly listApplications = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly issueApplicationCredential = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly rotateApplicationCredential = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly revokeApplicationCredential = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly revokeApplication = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly attachExternalIdentity = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly listExternalIdentityBindings = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly revokeExternalIdentityBinding = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly listOwnerCredentials = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly rotateOwnerCredential = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly revokeOwnerCredential = async (): Promise<object> => this.unsupportedLegacyOperation();
-    readonly listAuditEvents = async (): Promise<object> => this.unsupportedLegacyOperation();
 }

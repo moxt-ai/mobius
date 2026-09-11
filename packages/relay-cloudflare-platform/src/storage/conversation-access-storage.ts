@@ -28,38 +28,6 @@ export class ConversationAccessStorage {
         this.#projectDatabases = projectDatabases;
     }
 
-    readonly readConversationDirectory = async (
-        conversationId: string,
-        sessionId: string,
-        projectId: string,
-        signal: AbortSignal,
-    ): Promise<ConversationDirectoryRow | null> => {
-        const matches = await Promise.all(
-            this.#projectDatabases.map(async (database) =>
-                decodeOptionalStorageRecord(
-                    ConversationDirectoryRowSchema,
-                    await waitForD1(
-                        () =>
-                            database
-                                .prepare(
-                                    `SELECT conversations.conversation_id, conversations.session_id,
-                                 bots.project_id
-                           FROM bot_conversations AS conversations
-                           JOIN bots ON bots.bot_id = conversations.bot_id
-                          WHERE conversations.conversation_id = ? AND conversations.session_id = ?
-                             AND bots.project_id = ?`,
-                                )
-                                .bind(conversationId, sessionId, projectId)
-                                .first(),
-                        signal,
-                    ),
-                ),
-            ),
-        );
-        const records = matches.filter((record): record is ConversationDirectoryRow => record !== null);
-        return records.length === 1 ? (records[0] ?? null) : null;
-    };
-
     readonly readActiveConversationDirectory = async (
         conversationId: string,
         signal: AbortSignal,
