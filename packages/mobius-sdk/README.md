@@ -10,8 +10,8 @@ pnpm add @moxt-ai/mobius-sdk
 ```
 
 See the [TypeScript SDK guide](https://github.com/moxt-ai/mobius/blob/main/docs/typescript-sdk.md)
-and the runnable [Node](https://github.com/moxt-ai/mobius/blob/main/packages/web-sdk/examples/node.ts)
-and [browser](https://github.com/moxt-ai/mobius/blob/main/packages/web-sdk/examples/browser.ts)
+and the runnable [Node](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/node.ts)
+and [browser](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/browser.ts)
 examples. Both entry points execute the same shared resource workflow. The
 browser and shared workflow modules are also exported as
 `@moxt-ai/mobius-sdk/examples/browser` and
@@ -25,7 +25,7 @@ Project application registration, OIDC exchange, accountless recovery, and
 credential rotation are documented in the [Project authentication
 guide](https://github.com/moxt-ai/mobius/blob/main/docs/project-authentication.md).
 The server-only
-[`moxt-server`](https://github.com/moxt-ai/mobius/blob/main/packages/web-sdk/examples/moxt-server.ts)
+[`moxt-server`](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/moxt-server.ts)
 example provisions separate least-privilege application credentials for Runtime
 and Bot management, conversation work, and event projection without creating a
 Bot Connection.

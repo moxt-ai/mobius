@@ -327,13 +327,13 @@ events use bounded stages and sanitized stable codes.
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network
   boundaries.
-- `packages/web-sdk` owns the public provider-neutral Bot connector client as
+- `packages/mobius-sdk` owns the public provider-neutral Bot connector client as
   well as the Session resource client.
 - `packages/web` owns the Vite application shell, runtime dependencies, and
   Tailwind CSS entrypoint.
 - `packages/web-core` owns the reusable React agent experience, including chat
   and integration components.
-- `packages/web-sdk` owns the browser-and-Node TypeScript resource API and the
+- `packages/mobius-sdk` owns the browser-and-Node TypeScript resource API and the
   browser channel-control transport used by the built-in Web application.
 - `e2e/fixtures` contains deterministic external-boundary fixtures.
 - `deploy/docker` is an empty placeholder for a future packaged Node image.

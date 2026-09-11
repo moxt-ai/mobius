@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - packages/web-sdk/package.json
+      - packages/mobius-sdk/package.json
 
 permissions:
   contents: read
@@ -46,7 +46,7 @@ jobs:
           if (before === undefined || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(before) || output === undefined) {
             throw new Error("Required GitHub Actions inputs are unavailable or invalid");
           }
-          const manifest = "packages/web-sdk/package.json";
+          const manifest = "packages/mobius-sdk/package.json";
           const readVersion = (text) => {
             const value = JSON.parse(text);
             if (value === null || typeof value !== "object" || Array.isArray(value) || typeof value.version !== "string") {
@@ -54,7 +54,10 @@ jobs:
             }
             return value.version;
           };
-          const previous = readVersion(execFileSync("git", ["show", `${before}:${manifest}`], { encoding: "utf8", timeout: 30_000 }));
+          const previousPath = execFileSync("git", ["ls-tree", "--name-only", before, manifest], { encoding: "utf8", timeout: 30_000 }).trim();
+          // The rename commit still has the SDK at its original path in the previous revision.
+          const previousManifest = previousPath === "" ? "packages/web-sdk/package.json" : manifest;
+          const previous = readVersion(execFileSync("git", ["show", `${before}:${previousManifest}`], { encoding: "utf8", timeout: 30_000 }));
           const current = readVersion(readFileSync(manifest, "utf8"));
           const changed = previous !== current;
           console.log(changed ? `SDK version changed from ${previous} to ${current}.` : `SDK version remains ${current}; publication will be skipped.`);
@@ -78,7 +81,7 @@ jobs:
         if: steps.sdk-version.outputs.changed == 'true'
         run: |
           pnpm --dir packages/protocol pack --out "$RUNNER_TEMP/mobius-protocol.tgz"
-          pnpm --dir packages/web-sdk pack --out "$RUNNER_TEMP/mobius-sdk.tgz"
+          pnpm --dir packages/mobius-sdk pack --out "$RUNNER_TEMP/mobius-sdk.tgz"
           npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public --dry-run
           npm publish "$RUNNER_TEMP/mobius-sdk.tgz" --access public --dry-run
 

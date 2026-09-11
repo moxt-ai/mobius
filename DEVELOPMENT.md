@@ -202,7 +202,7 @@ so it does not require an `NPM_TOKEN` repository secret.
 ## Publishing the SDK
 
 `.github/workflows/publish-sdk.yml` publishes `@moxt-ai/mobius-sdk` when the
-version in `packages/web-sdk/package.json` changes on `main`, following the CLI
+version in `packages/mobius-sdk/package.json` changes on `main`, following the CLI
 release policy. It runs `pnpm check`, packs the protocol and SDK with pnpm, and
 prints an npm publication dry run before publishing. pnpm packing applies
 `publishConfig` and replaces workspace dependencies with registry versions.
@@ -223,7 +223,7 @@ To inspect the exact release artifacts locally without publishing:
 ```bash
 mkdir -p /path/to/release-preview
 pnpm --dir packages/protocol pack --out /path/to/release-preview/mobius-protocol.tgz
-pnpm --dir packages/web-sdk pack --out /path/to/release-preview/mobius-sdk.tgz
+pnpm --dir packages/mobius-sdk pack --out /path/to/release-preview/mobius-sdk.tgz
 npm publish /path/to/release-preview/mobius-protocol.tgz --access public --dry-run
 npm publish /path/to/release-preview/mobius-sdk.tgz --access public --dry-run
 ```

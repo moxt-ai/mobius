@@ -30,7 +30,7 @@
             "entry": ["src/server.ts"],
             "ignoreDependencies": ["cloudflare"]
         },
-        "packages/web-sdk": {
+        "packages/mobius-sdk": {
             "entry": ["examples/*.ts"]
         }
     }

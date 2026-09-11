@@ -524,7 +524,7 @@ packages/
   cli/               Publishable @moxt-ai/mobius CLI and reusable /runtime engine
   protocol/          Shared Mobius commands, events, capabilities, and codecs
   web/               React agent chat application and shadcn/ui components
-  web-sdk/           Browser-and-Node TypeScript SDK
+  mobius-sdk/        Browser-and-Node TypeScript SDK
 deploy/
   docker/            Reserved for a future Docker deployment profile
 e2e/

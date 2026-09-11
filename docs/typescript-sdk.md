@@ -465,10 +465,10 @@ exports, imports, and deletion.
 ## Shared Node and browser example
 
 The runnable examples use one shared workflow in
-[`workflow.ts`](../packages/web-sdk/examples/workflow.ts). The
-[`Node example`](../packages/web-sdk/examples/node.ts) reads its endpoint and
+[`workflow.ts`](../packages/mobius-sdk/examples/workflow.ts). The
+[`Node example`](../packages/mobius-sdk/examples/node.ts) reads its endpoint and
 application credential from environment variables. The
-[`browser example`](../packages/web-sdk/examples/browser.ts) receives a
+[`browser example`](../packages/mobius-sdk/examples/browser.ts) receives a
 short-lived credential provider from its host application.
 
 After installing the package, the Node entry point can be run with the six

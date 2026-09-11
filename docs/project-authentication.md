@@ -282,7 +282,7 @@ Runtime state, or local workspace metadata.
 ## Moxt server integration
 
 The runnable TypeScript example at
-[`packages/web-sdk/examples/moxt-server.ts`](../packages/web-sdk/examples/moxt-server.ts)
+[`packages/mobius-sdk/examples/moxt-server.ts`](../packages/mobius-sdk/examples/moxt-server.ts)
 provisions three applications and stores each one-time plaintext credential
 through a caller-supplied secret-vault port:
 
