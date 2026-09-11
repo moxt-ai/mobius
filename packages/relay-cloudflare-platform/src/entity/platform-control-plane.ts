@@ -34,7 +34,7 @@ export class PlatformAuthenticationConfiguration {
                 500,
             );
         }
-        if ([...allowedOrigins].some((origin) => !validOrigin(origin))) {
+        if ([...allowedOrigins].some((origin) => origin !== "*" && !validOrigin(origin))) {
             throw new PlatformControlPlaneError(
                 "platform_configuration_invalid",
                 "A Platform browser origin is invalid",

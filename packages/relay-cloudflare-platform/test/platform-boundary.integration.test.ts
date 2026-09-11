@@ -1366,6 +1366,51 @@ describe.sequential("Platform hosting boundary", () => {
                 "conversation:turn:create",
             ];
             const alice = await issue("actor-alice", fixture.conversationId, fullPermissions);
+            // Given wildcard browser access, unrelated origins still need a scoped credential and permission.
+            const publicBrowserWorker = createPlatformWorker(
+                new PlatformAuthenticationConfiguration(
+                    new DeveloperAuthenticator(),
+                    new Set(["developer-1"]),
+                    new Set(["*"]),
+                ),
+            );
+            const readOnly = await issue("public-browser", fixture.conversationId, ["conversation:read"]);
+            for (const origin of ["https://independent-app.example", "https://another-app.example"]) {
+                const endpoint = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`;
+                const preflight = await publicBrowserWorker.fetch(
+                    new Request(endpoint, {
+                        method: "OPTIONS",
+                        headers: {
+                            origin,
+                            "access-control-request-method": "GET",
+                            "access-control-request-headers": "authorization",
+                        },
+                    }),
+                    fixture.environment,
+                );
+                expect(preflight.status).toBe(204);
+                expect(preflight.headers.get("access-control-allow-origin")).toBe(origin);
+                const allowed = await publicBrowserWorker.fetch(
+                    new Request(endpoint, {
+                        headers: { origin, ...credentialHeaders(text(readOnly, "credential")) },
+                    }),
+                    fixture.environment,
+                );
+                expect(allowed.status).toBe(200);
+                expect(allowed.headers.get("access-control-allow-origin")).toBe(origin);
+                const unauthenticated = await publicBrowserWorker.fetch(
+                    new Request(endpoint, { headers: { origin } }),
+                    fixture.environment,
+                );
+                expect(unauthenticated.status).toBe(401);
+                const deniedEvents = await publicBrowserWorker.fetch(
+                    new Request(`${endpoint}/events`, {
+                        headers: { origin, ...credentialHeaders(text(readOnly, "credential")) },
+                    }),
+                    fixture.environment,
+                );
+                expect(deniedEvents.status).toBe(403);
+            }
             const aliceCredential = text(alice, "credential");
             const transport = new PlatformWorkerTransport(fixture.worker, fixture.environment);
             const platformApplication = new MobiusPlatformAppClient({
@@ -1409,6 +1454,9 @@ describe.sequential("Platform hosting boundary", () => {
             );
             expect(preflight.status).toBe(204);
             expect(preflight.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+            expect(preflight.headers.get("access-control-expose-headers")?.split(", ")).toContain(
+                "x-mobius-event-format",
+            );
             const aliceSessionResponse = await fixture.worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
                     headers: { ...credentialHeaders(aliceCredential), origin: thirdPartyBrowserOrigin },
