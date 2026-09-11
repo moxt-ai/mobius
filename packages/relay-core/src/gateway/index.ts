@@ -5,6 +5,7 @@ export {
     ProjectBotAccess,
 } from "../entity/bot/bot-access.ts";
 export type { ChannelGateway } from "./channel-gateway.ts";
+export type { ProjectAccessAuthorizer } from "./project-access-authorizer.ts";
 export type { SessionArtifactGateway } from "./session-artifact-gateway.ts";
 export type { SessionCommandGateway } from "./session-command-gateway.ts";
 export type { SessionEventStreamGateway } from "./session-event-stream-gateway.ts";

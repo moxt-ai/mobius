@@ -139,14 +139,12 @@ while Moxt Server holds one AppCredential and translates Mobius events into its
 existing realtime protocol. No Mobius AppCredential or Conversation credential
 is sent to the Moxt browser.
 
-## Standalone compatibility boundary
+## Standalone boundary
 
-The default Standalone Worker installs only accountless Project ownership and
-the shared Project routes. Platform Application/OIDC paths return 404. The
-exported `createLegacyStandaloneWorker` constructor exists only to let an older
-deployment read and migrate already-issued legacy Application or external
-identity credentials. Selecting it is an explicit compatibility action; no
-credential is silently reinterpreted as a Platform AppCredential.
+The Standalone Worker installs only accountless Project ownership and the shared
+Project routes. Platform Application and OIDC paths are not mounted and return
+404. Legacy authentication routes and compatibility constructors are not
+provided.
 ## App Project provisioning
 
 Registered applications create Projects with their server-held AppCredential via

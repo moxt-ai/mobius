@@ -265,7 +265,8 @@ async function run(signal: AbortSignal): Promise<void> {
         return;
     }
 
-    await runPnpm(["--filter", "@moxt-ai/mobius-web", "build"], signal);
+    const webPackage = target === platformTarget ? "@moxt-ai/mobius-platform-app" : "@moxt-ai/mobius-web";
+    await runPnpm(["--filter", webPackage, "build"], signal);
 
     const temporaryDeployment = hasArgument(wranglerArguments, "--temporary");
     const dryRun = hasArgument(wranglerArguments, "--dry-run");

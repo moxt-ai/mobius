@@ -26,6 +26,7 @@ const createTenantBody = v.strictObject({
     ),
 });
 const createAppBody = v.strictObject({ displayName: requiredString, tenantId: requiredString });
+const updateDisplayNameBody = v.strictObject({ displayName: requiredString });
 const createProjectBody = v.strictObject({
     displayName: requiredString,
     idempotencyKey: requiredString,
@@ -116,6 +117,39 @@ export function createPlatformControlApplication() {
                 201,
             );
         })
+        .get("/v1/platform/tenants", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(await context.env.control.listTenants(identity, context.var.signal));
+        })
+        .get("/v1/platform/tenants/:tenantId", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.control.readTenantResource(
+                    identity,
+                    path(context.req.param("tenantId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .put("/v1/platform/tenants/:tenantId", bodyParser(updateDisplayNameBody), async (context) => {
+            const value = context.req.valid("json");
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            const access = await context.env.control.requireTenantDeveloper(
+                identity,
+                path(context.req.param("tenantId")),
+                context.var.signal,
+            );
+            return context.json(await context.env.control.updateTenant(access, value.displayName, context.var.signal));
+        })
+        .delete("/v1/platform/tenants/:tenantId", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            const access = await context.env.control.requireTenantDeveloper(
+                identity,
+                path(context.req.param("tenantId")),
+                context.var.signal,
+            );
+            return context.json(await context.env.control.deleteTenant(access, context.var.signal));
+        })
         .get("/v1/platform/tenants/:tenantId/usage", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const access = await context.env.control.requireTenantDeveloper(
@@ -162,6 +196,27 @@ export function createPlatformControlApplication() {
                     context.var.signal,
                 ),
             );
+        })
+        .put("/v1/apps/:appId", bodyParser(updateDisplayNameBody), async (context) => {
+            const value = context.req.valid("json");
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            const result = await context.env.control.requireAppDeveloper(
+                identity,
+                path(context.req.param("appId")),
+                context.var.signal,
+            );
+            return context.json(
+                await context.env.control.updateApp(result.access, result.app, value.displayName, context.var.signal),
+            );
+        })
+        .delete("/v1/apps/:appId", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            const result = await context.env.control.requireAppDeveloper(
+                identity,
+                path(context.req.param("appId")),
+                context.var.signal,
+            );
+            return context.json(await context.env.control.deleteApp(result.access, result.app, context.var.signal));
         })
         .get("/v1/apps/:appId/projects", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
@@ -210,6 +265,17 @@ export function createPlatformControlApplication() {
                     context.var.signal,
                 ),
                 201,
+            );
+        })
+        .get("/v1/apps/:appId/credentials", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            const result = await context.env.control.requireAppDeveloper(
+                identity,
+                path(context.req.param("appId")),
+                context.var.signal,
+            );
+            return context.json(
+                await context.env.control.listAppCredentials(result.access, result.app, context.var.signal),
             );
         })
         .get("/v1/platform/tenants/:tenantId/apps", async (context) => {

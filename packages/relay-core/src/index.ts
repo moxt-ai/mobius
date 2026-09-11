@@ -122,8 +122,8 @@ export type {
     SessionQueryGateway,
     SessionTransferGateway,
 } from "./gateway/index.ts";
+export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
-export { createLegacyAuthenticationApplication } from "./http/authentication/legacy-authentication-routes.ts";
 export { createBotApplication } from "./http/bot/bot-routes.ts";
 export {
     RequestBodyError,
@@ -147,7 +147,6 @@ export type {
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
 export * from "./service/authentication/oidc-authentication.ts";
-export type { ProjectAuthenticationService } from "./service/authentication/project-authentication-service.ts";
 export { BotService } from "./service/bot/bot-service.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {

@@ -4,7 +4,6 @@ export { CloudflareChannelPeers } from "./cloudflare-channel-peers.ts";
 export { CloudflareChannelRuntime } from "./cloudflare-channel-runtime.ts";
 export { CloudflareSessionTransport } from "./cloudflare-session-transport.ts";
 export { D1DatabaseAdapter } from "./d1-database.ts";
-export { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 export type { DatabaseResolver } from "./database-resolver.ts";
 export { DurableObjectSqlDatabase } from "./durable-object-sql-database.ts";
 export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";

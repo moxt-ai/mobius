@@ -202,27 +202,6 @@ export function bearer(request: Request): string {
     }
     return token;
 }
-export function externalCredential(request: Request): string {
-    const header = request.headers.get("authorization") ?? "";
-    if (!header.startsWith("Bearer ")) {
-        throw new BotApiError("credential_invalid", "An external identity credential is required", "unauthenticated");
-    }
-    const credential = header.slice(7);
-    if (credential.length === 0 || credential.length > 16 * 1024) {
-        throw new BotApiError("credential_invalid", "The external identity credential is invalid", "unauthenticated");
-    }
-    for (const character of credential) {
-        const codePoint = character.codePointAt(0) ?? 0;
-        if (codePoint <= 31 || codePoint === 127) {
-            throw new BotApiError(
-                "credential_invalid",
-                "The external identity credential is invalid",
-                "unauthenticated",
-            );
-        }
-    }
-    return credential;
-}
 export function actorReference(request: Request): string {
     return request.headers.get("x-mobius-actor-ref") ?? "";
 }

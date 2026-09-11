@@ -9,7 +9,6 @@ import {
     hashSecret,
     type ProjectAccessAuthorizer,
     ProjectAccessContext,
-    type ProjectApplicationCredentialAuthenticator,
     ProjectAuthenticationError,
     type ProjectPermission,
     ProjectScope,
@@ -382,9 +381,7 @@ async function requestDigest(display: string, clientReference: string, locationH
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
 
-export class PlatformControlPlaneService
-    implements ProjectAccessAuthorizer, ProjectApplicationCredentialAuthenticator, SessionQuotaPolicyProvider
-{
+export class PlatformControlPlaneService implements ProjectAccessAuthorizer, SessionQuotaPolicyProvider {
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
@@ -433,13 +430,6 @@ export class PlatformControlPlaneService
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
-        if (!this.#authentication.operatorSubjects.has(identity.subject)) {
-            throw new PlatformControlPlaneError(
-                "platform_operator_required",
-                "Platform operator authorization is required",
-                403,
-            );
-        }
         const now = Date.now();
         const tenantId = `ten_${createRandomToken(18)}`;
         const membershipId = `pdm_${createRandomToken(18)}`;
@@ -484,6 +474,86 @@ export class PlatformControlPlaneService
             throw new PlatformControlPlaneError("platform_write_failed", "The Tenant could not be created", 503);
         }
         return tenantResource(tenant);
+    };
+
+    readonly listTenants = async (identity: VerifiedExternalIdentity, signal: AbortSignal): Promise<object> => {
+        signal.throwIfAborted();
+        const rows = await this.#storage.listDeveloperTenants(
+            identity.providerId,
+            identity.issuer,
+            identity.subject,
+            signal,
+        );
+        return { tenants: rows.map(tenantResource) };
+    };
+
+    readonly readTenantResource = async (
+        identity: VerifiedExternalIdentity,
+        tenantId: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        const access = await this.requireTenantDeveloper(identity, tenantId, signal);
+        return tenantResource(await this.readTenant(access.tenantId, signal));
+    };
+
+    readonly updateTenant = async (
+        access: PlatformDeveloperAccess,
+        requestedDisplayName: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        this.requireOwner(access);
+        const now = Date.now();
+        const updated = await this.#storage.updateTenant(
+            access.tenantId,
+            displayName(requestedDisplayName),
+            now,
+            this.auditRecord(
+                access.tenantId,
+                "",
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "tenant.updated",
+                access.tenantId,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!updated) {
+            throw new PlatformControlPlaneError("platform_write_failed", "The Tenant could not be updated", 503);
+        }
+        return tenantResource(await this.readTenant(access.tenantId, signal));
+    };
+
+    readonly deleteTenant = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<object> => {
+        this.requireOwner(access);
+        const tenant = await this.readTenant(access.tenantId, signal);
+        const now = Date.now();
+        const deleted = await this.#storage.deleteTenant(
+            access.tenantId,
+            now,
+            this.auditRecord(
+                access.tenantId,
+                "",
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "tenant.deleted",
+                access.tenantId,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!deleted) {
+            throw new PlatformControlPlaneError("tenant_not_found", "The Tenant was not found", 404);
+        }
+        return { ...tenantResource(tenant), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
     };
 
     readonly requireTenantDeveloper = async (
@@ -645,6 +715,72 @@ export class PlatformControlPlaneService
         }
         const app = appResource(appRow);
         return { ...app, defaultCredential: created.resource() };
+    };
+
+    readonly updateApp = async (
+        access: PlatformDeveloperAccess,
+        app: AppRow,
+        requestedDisplayName: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        this.requireOwner(access);
+        if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
+            throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
+        }
+        const now = Date.now();
+        const updated = await this.#storage.updateApp(
+            app.app_id,
+            displayName(requestedDisplayName),
+            now,
+            this.auditRecord(
+                access.tenantId,
+                app.app_id,
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "app.updated",
+                app.app_id,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!updated) {
+            throw new PlatformControlPlaneError("platform_write_failed", "The App could not be updated", 503);
+        }
+        return appResource(await this.readApp(app.app_id, signal));
+    };
+
+    readonly deleteApp = async (access: PlatformDeveloperAccess, app: AppRow, signal: AbortSignal): Promise<object> => {
+        this.requireOwner(access);
+        if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
+            throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
+        }
+        const now = Date.now();
+        const deleted = await this.#storage.deleteApp(
+            app.app_id,
+            now,
+            this.auditRecord(
+                access.tenantId,
+                app.app_id,
+                "",
+                "platform_developer",
+                access.identity.subject,
+                "",
+                "app.deleted",
+                app.app_id,
+                "succeeded",
+                {},
+                now,
+            ),
+            signal,
+        );
+        if (!deleted) {
+            throw new PlatformControlPlaneError("app_not_found", "The App was not found", 404);
+        }
+        return { ...appResource(app), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
     };
 
     readonly createProject = async (
@@ -952,6 +1088,36 @@ export class PlatformControlPlaneService
             throw new PlatformControlPlaneError("platform_write_failed", "The AppCredential could not be issued", 503);
         }
         return created.resource();
+    };
+
+    readonly listAppCredentials = async (
+        access: PlatformDeveloperAccess,
+        app: AppRow,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        signal.throwIfAborted();
+        if (access.tenantId !== app.tenant_id || app.lifecycle !== "active") {
+            throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
+        }
+        const rows = await this.#storage.listAppCredentials(app.app_id, signal);
+        const credentials = await Promise.all(
+            rows.map(async (row) => ({
+                allProjects: row.all_projects === 1,
+                appId: row.app_id,
+                credentialId: row.credential_id,
+                expiresAt: iso(row.expires_at),
+                issuedAt: iso(row.issued_at),
+                lastUsedAt: iso(row.last_used_at),
+                overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
+                permissions: permissionValues(permissions(row.permissions_json)),
+                projectIds: await this.#storage.listCredentialProjectIds(row.credential_id, signal),
+                publicCredentialId: row.public_credential_id,
+                replacedByCredentialId: row.replaced_by_credential_id ?? "",
+                revision: row.revision,
+                revokedAt: typeof row.revoked_at === "number" ? iso(row.revoked_at) : "",
+            })),
+        );
+        return { credentials };
     };
 
     readonly rotateAppCredential = async (
@@ -1276,6 +1442,12 @@ export class PlatformControlPlaneService
             throw new PlatformControlPlaneError("app_credential_not_found", "The AppCredential was not found", 404);
         }
         return row;
+    };
+
+    private readonly requireOwner = (access: PlatformDeveloperAccess): void => {
+        if (access.role !== "owner") {
+            throw new PlatformControlPlaneError("tenant_owner_required", "Tenant owner authorization is required", 403);
+        }
     };
 
     private readonly auditRecord = (

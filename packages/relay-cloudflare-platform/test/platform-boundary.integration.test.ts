@@ -725,6 +725,57 @@ describe.sequential("Platform hosting boundary", () => {
         service.close();
     });
 
+    it("Given an authenticated developer, When they manage Tenants, Apps, and keys, Then only their active resources and secret-on-create credentials are exposed", async () => {
+        const worker = createPlatformWorker(
+            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+        );
+        const developer = new MobiusPlatformDeveloperClient({
+            authenticationProviderId: "clerk",
+            credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+            endpoint: relayOrigin,
+            transport: new PlatformWorkerTransport(worker, bindings()),
+        });
+
+        const tenant = await developer.createTenant("First tenant", AbortSignal.timeout(5_000));
+        expect((await developer.listTenants(AbortSignal.timeout(5_000))).map((item) => item.tenantId)).toContain(
+            tenant.tenantId,
+        );
+        expect((await developer.readTenant(tenant.tenantId, AbortSignal.timeout(5_000))).displayName).toBe(
+            "First tenant",
+        );
+        expect(
+            (await developer.updateTenant(tenant.tenantId, "Renamed tenant", AbortSignal.timeout(5_000))).displayName,
+        ).toBe("Renamed tenant");
+
+        const app = await developer.createApp(tenant.tenantId, "First app", AbortSignal.timeout(5_000));
+        expect(app.appId).toMatch(/^app_/);
+        expect(app.defaultCredential.credential).toMatch(/^mapp_/);
+        expect((await developer.updateApp(app.appId, "Renamed app", AbortSignal.timeout(5_000))).displayName).toBe(
+            "Renamed app",
+        );
+        const second = await developer.issueAppCredential(
+            app.appId,
+            { expiresInSeconds: 3_600, permissions: ["project:read"], projectIds: [] },
+            AbortSignal.timeout(5_000),
+        );
+        expect(second.credential).toMatch(/^mapp_/);
+        expect(second.credential).not.toBe(app.defaultCredential.credential);
+        const credentials = await developer.listAppCredentials(app.appId, AbortSignal.timeout(5_000));
+        expect(credentials.map((credential) => credential.credentialId)).toEqual(
+            expect.arrayContaining([second.credentialId, app.defaultCredential.credentialId]),
+        );
+        expect(JSON.stringify(credentials)).not.toContain("mapp_");
+
+        const deletedApp = await developer.deleteApp(app.appId, AbortSignal.timeout(5_000));
+        expect(deletedApp.lifecycle).toBe("deleted");
+        expect(await developer.listApps(tenant.tenantId, AbortSignal.timeout(5_000))).toEqual([]);
+        const deletedTenant = await developer.deleteTenant(tenant.tenantId, AbortSignal.timeout(5_000));
+        expect(deletedTenant.lifecycle).toBe("deleted");
+        expect((await developer.listTenants(AbortSignal.timeout(5_000))).map((item) => item.tenantId)).not.toContain(
+            tenant.tenantId,
+        );
+    });
+
     it("Given an approved Project Bot, When the server SDK creates and operates a Conversation, Then the exact Conversation routes persist it and dispatch configuration and Turn commands", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {

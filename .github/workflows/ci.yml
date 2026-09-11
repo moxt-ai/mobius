@@ -140,8 +140,10 @@ jobs:
         include:
           - environment: staging
             domain: mobius-platform.paradev.biz
+            clerk_publishable_key: pk_test_c21hc2hpbmctc3BpZGVyLTg1NzQuY2xlcmsuYWNjb3VudHMuZGV2JA==
           - environment: production
             domain: mobius-platform.paraflow.biz
+            clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLnBhcmFmbG93LmJpeiQ=
     environment:
       name: mobius-relay-production
       url: https://${{ matrix.domain }}
@@ -176,6 +178,7 @@ jobs:
 
       - name: Deploy mobius-platform
         env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ matrix.clerk_publishable_key }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |

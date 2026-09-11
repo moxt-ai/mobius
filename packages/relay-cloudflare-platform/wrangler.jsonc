@@ -43,6 +43,11 @@
         "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
         "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
     },
+    "assets": {
+        "directory": "../platform-app/dist",
+        "not_found_handling": "single-page-application",
+        "run_worker_first": ["/mobius/api/*"]
+    },
     "observability": {
         "enabled": true
     },

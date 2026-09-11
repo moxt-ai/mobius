@@ -1,6 +1,5 @@
 import {
     AuditActorKind,
-    type ProjectAccessAuthorizer,
     type ProjectAccessContext,
     ProjectPermission,
     RuntimeAccessContext,
@@ -36,6 +35,7 @@ import {
 } from "../../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../../entity/pairing/pairing-identity.ts";
 import type { PairingChannelRow, RuntimePairingRow } from "../../entity/pairing/pairing-records.ts";
+import type { ProjectAccessAuthorizer } from "../../gateway/project-access-authorizer.ts";
 import type { ProjectStorageContext, ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import type { AuthorizedChannelRow, PairingStorage } from "../../storage/pairing-storage.ts";
 import type { PairingIdentityService } from "./pairing-identity-service.ts";

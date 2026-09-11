@@ -116,6 +116,29 @@ export class PlatformControlPlaneStorage {
             ),
         );
 
+    readonly listDeveloperTenants = async (
+        providerId: string,
+        issuer: string,
+        subject: string,
+        signal: AbortSignal,
+    ): Promise<readonly TenantRow[]> => {
+        const rows = await waitForD1(
+            () =>
+                this.#database
+                    .prepare(
+                        `SELECT tenants.* FROM platform_tenants AS tenants
+                           JOIN platform_developer_memberships AS memberships USING (tenant_id)
+                          WHERE memberships.provider_id = ? AND memberships.issuer = ? AND memberships.subject = ?
+                            AND memberships.revoked_at IS NULL AND tenants.lifecycle = 'active'
+                          ORDER BY tenants.created_at, tenants.tenant_id`,
+                    )
+                    .bind(providerId, issuer, subject)
+                    .all(),
+            signal,
+        );
+        return decodeStorageRecords(TenantRowSchema, rows.results);
+    };
+
     readonly readActiveProjectAppId = async (
         tenantId: string,
         projectId: string,
@@ -156,6 +179,133 @@ export class PlatformControlPlaneStorage {
                 signal,
             ),
         );
+
+    readonly updateTenant = async (
+        tenantId: string,
+        displayName: string,
+        updatedAt: number,
+        audit: PlatformAuditRecord,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        const results = await waitForD1(
+            () =>
+                this.#database.batch([
+                    this.#database
+                        .prepare(
+                            "UPDATE platform_tenants SET display_name = ?, updated_at = ? WHERE tenant_id = ? AND lifecycle = 'active'",
+                        )
+                        .bind(displayName, updatedAt, tenantId),
+                    this.auditStatement(audit),
+                ]),
+            signal,
+        );
+        return results.every((result) => result.meta.changes === 1);
+    };
+
+    readonly deleteTenant = async (
+        tenantId: string,
+        deletedAt: number,
+        audit: PlatformAuditRecord,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        const results = await waitForD1(
+            () =>
+                this.#database.batch([
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_tenants SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
+                              WHERE tenant_id = ? AND lifecycle = 'active'`,
+                        )
+                        .bind(deletedAt, deletedAt, tenantId),
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_apps SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
+                              WHERE tenant_id = ? AND lifecycle != 'deleted'`,
+                        )
+                        .bind(deletedAt, deletedAt, tenantId),
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_projects SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
+                              WHERE tenant_id = ? AND lifecycle != 'deleted'`,
+                        )
+                        .bind(deletedAt, deletedAt, tenantId),
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_app_credentials SET revoked_at = COALESCE(revoked_at, ?)
+                              WHERE app_id IN (SELECT app_id FROM platform_apps WHERE tenant_id = ?)`,
+                        )
+                        .bind(deletedAt, tenantId),
+                    this.#database
+                        .prepare(
+                            "UPDATE conversation_access_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE tenant_id = ?",
+                        )
+                        .bind(deletedAt, tenantId),
+                    this.auditStatement(audit),
+                ]),
+            signal,
+        );
+        return results[0]?.meta.changes === 1 && results[5]?.meta.changes === 1;
+    };
+
+    readonly updateApp = async (
+        appId: string,
+        displayName: string,
+        updatedAt: number,
+        audit: PlatformAuditRecord,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        const results = await waitForD1(
+            () =>
+                this.#database.batch([
+                    this.#database
+                        .prepare(
+                            "UPDATE platform_apps SET display_name = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
+                        )
+                        .bind(displayName, updatedAt, appId),
+                    this.auditStatement(audit),
+                ]),
+            signal,
+        );
+        return results.every((result) => result.meta.changes === 1);
+    };
+
+    readonly deleteApp = async (
+        appId: string,
+        deletedAt: number,
+        audit: PlatformAuditRecord,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
+        const results = await waitForD1(
+            () =>
+                this.#database.batch([
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_apps SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
+                              WHERE app_id = ? AND lifecycle = 'active'`,
+                        )
+                        .bind(deletedAt, deletedAt, appId),
+                    this.#database
+                        .prepare(
+                            `UPDATE platform_projects SET lifecycle = 'deleted', deleted_at = ?, updated_at = ?
+                              WHERE app_id = ? AND lifecycle != 'deleted'`,
+                        )
+                        .bind(deletedAt, deletedAt, appId),
+                    this.#database
+                        .prepare(
+                            "UPDATE platform_app_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE app_id = ?",
+                        )
+                        .bind(deletedAt, appId),
+                    this.#database
+                        .prepare(
+                            "UPDATE conversation_access_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE app_id = ?",
+                        )
+                        .bind(deletedAt, appId),
+                    this.auditStatement(audit),
+                ]),
+            signal,
+        );
+        return results[0]?.meta.changes === 1 && results[4]?.meta.changes === 1;
+    };
 
     readonly countActiveApps = async (tenantId: string, signal: AbortSignal): Promise<number> => {
         const row: ActiveCountRow | null = decodeOptionalStorageRecord(
@@ -327,7 +477,9 @@ export class PlatformControlPlaneStorage {
         const rows = await waitForD1(
             () =>
                 this.#database
-                    .prepare("SELECT * FROM platform_apps WHERE tenant_id = ? ORDER BY created_at, app_id")
+                    .prepare(
+                        "SELECT * FROM platform_apps WHERE tenant_id = ? AND lifecycle = 'active' ORDER BY created_at, app_id",
+                    )
                     .bind(tenantId)
                     .all(),
             signal,
@@ -448,6 +600,43 @@ export class PlatformControlPlaneStorage {
         statements.push(this.auditStatement(audit));
         const results = await waitForD1(() => this.#database.batch(statements), signal);
         return results.every((result) => result.meta.changes === 1);
+    };
+
+    readonly listAppCredentials = async (appId: string, signal: AbortSignal): Promise<readonly CredentialRow[]> => {
+        const rows = await waitForD1(
+            () =>
+                this.#database
+                    .prepare(
+                        `SELECT credentials.*, apps.tenant_id,
+                                apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
+                           FROM platform_app_credentials AS credentials
+                           JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
+                           JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
+                          WHERE credentials.app_id = ?
+                          ORDER BY credentials.issued_at DESC, credentials.credential_id DESC`,
+                    )
+                    .bind(appId)
+                    .all(),
+            signal,
+        );
+        return decodeStorageRecords(CredentialRowSchema, rows.results);
+    };
+
+    readonly listCredentialProjectIds = async (
+        credentialId: string,
+        signal: AbortSignal,
+    ): Promise<readonly string[]> => {
+        const rows = await waitForD1(
+            () =>
+                this.#database
+                    .prepare(
+                        "SELECT project_id FROM platform_app_credential_projects WHERE credential_id = ? ORDER BY project_id",
+                    )
+                    .bind(credentialId)
+                    .all(),
+            signal,
+        );
+        return decodeStorageRecords(ProjectIdRowSchema, rows.results).map((row) => row.project_id);
     };
 
     readonly rotateAppCredential = async (

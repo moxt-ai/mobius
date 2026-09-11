@@ -2,7 +2,6 @@ import type { ProjectScope } from "../do/session.ts";
 import { VerifiedChannelAccess } from "../pairing/pairing.ts";
 
 export class ProjectPermission {
-    static readonly ApplicationsManage = new ProjectPermission("application:manage");
     static readonly ArtifactRead = new ProjectPermission("artifact:read");
     static readonly ArtifactWrite = new ProjectPermission("artifact:write");
     static readonly BotBehaviorWrite = new ProjectPermission("bot:behavior:write");
@@ -36,7 +35,6 @@ export class ProjectPermission {
 }
 
 export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
-    ProjectPermission.ApplicationsManage,
     ProjectPermission.ArtifactRead,
     ProjectPermission.ArtifactWrite,
     ProjectPermission.BotBehaviorWrite,
@@ -181,45 +179,20 @@ export class ProjectAccessContext {
     readonly permits = (permission: ProjectPermission): boolean => this.permissions.has(permission);
 }
 
-export const ProjectCredentialScheme = Object.freeze({
-    Access: "mobius_access",
-    Application: "project_application",
-    Capability: "project_capability",
-});
-
 export class ProjectCredential {
-    readonly publicCredentialId: string;
-    readonly scheme: string;
     readonly value: string;
 
-    private constructor(scheme: string, value: string, publicCredentialId: string) {
-        this.scheme = scheme;
+    private constructor(value: string) {
         this.value = value;
-        this.publicCredentialId = publicCredentialId;
     }
 
     static readonly decode = (value: unknown): ProjectCredential => {
-        if (typeof value !== "string") {
+        if (typeof value !== "string" || !/^[a-zA-Z0-9_-]{32,256}$/.test(value)) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The Project credential is invalid");
         }
-        const application = APPLICATION_CREDENTIAL_PATTERN.exec(value);
-        if (application !== null) {
-            return new ProjectCredential(ProjectCredentialScheme.Application, value, application[1] ?? "");
-        }
-        const access = ACCESS_CREDENTIAL_PATTERN.exec(value);
-        if (access !== null) {
-            return new ProjectCredential(ProjectCredentialScheme.Access, value, access[1] ?? "");
-        }
-        if (CAPABILITY_CREDENTIAL_PATTERN.test(value)) {
-            return new ProjectCredential(ProjectCredentialScheme.Capability, value, "");
-        }
-        throw new ProjectAuthenticationError("project_credential_invalid", "The Project credential is invalid");
+        return new ProjectCredential(value);
     };
 }
-
-const APPLICATION_CREDENTIAL_PATTERN = /^mapp_([a-zA-Z0-9_-]{22})_([a-zA-Z0-9_-]{43})$/;
-const ACCESS_CREDENTIAL_PATTERN = /^maccess_([a-zA-Z0-9_-]{22})_([a-zA-Z0-9_-]{43})$/;
-const CAPABILITY_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
 export function decodeProjectCredential(value: unknown): ProjectCredential {
     return ProjectCredential.decode(value);
@@ -366,14 +339,6 @@ export interface ExternalIdentityGrantResolver {
     ) => Promise<readonly ExternalIdentityProjectGrant[]>;
 }
 
-export interface ProjectApplicationCredentialAuthenticator {
-    readonly authenticate: (
-        credential: ProjectCredential,
-        requiredPermission: ProjectPermission,
-        signal: AbortSignal,
-    ) => Promise<ProjectAccessContext>;
-}
-
 export interface ProjectAccessCredentialIssuer {
     readonly issue: (
         identity: VerifiedExternalIdentity,
@@ -381,22 +346,6 @@ export interface ProjectAccessCredentialIssuer {
         lifetimeMilliseconds: number,
         signal: AbortSignal,
     ) => Promise<IssuedProjectAccessCredential>;
-}
-
-export interface ProjectAccessAuthorizer {
-    readonly authorize: (
-        credential: ProjectCredential,
-        requiredPermission: ProjectPermission,
-        actorReference: string,
-        signal: AbortSignal,
-    ) => Promise<ProjectAccessContext>;
-    readonly authorizeProject: (
-        projectId: string,
-        credentialValue: string,
-        requiredPermission: ProjectPermission,
-        actorReference: string,
-        signal: AbortSignal,
-    ) => Promise<ProjectAccessContext>;
 }
 
 export class RegisteredExternalIdentityAuthenticator {

@@ -1,8 +1,6 @@
 import {
     decodeProjectCredential,
-    type ProjectAccessAuthorizer,
     type ProjectAccessContext,
-    ProjectCredentialScheme,
     type ProjectPermission,
 } from "../../entity/authentication/project-authentication.ts";
 import {
@@ -15,6 +13,7 @@ import {
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { hashSecret, validateIdentifier, validateToken } from "../../entity/pairing/pairing.ts";
+import type { ProjectAccessAuthorizer } from "../../gateway/project-access-authorizer.ts";
 import {
     type BotConversationScopeLookup,
     type BotProjectScopeLookup,
@@ -274,14 +273,14 @@ export class BotAuthorization {
         actorReference: string,
         signal: AbortSignal,
     ): Promise<BotConversationAuthorization> => {
-        const projectCredential = decodeProjectCredential(token);
-        if (projectCredential.scheme !== ProjectCredentialScheme.Capability) {
-            return await this.authorizeProjectBot(botId, token, requiredProjectPermission, actorReference, signal);
-        }
+        decodeProjectCredential(token);
         const normalizedBotId = validateIdentifier(botId, "bot_id");
         const tokenDigest = await hashSecret(validateToken(token));
         signal.throwIfAborted();
         const planes = await this.inboundCredentialPlanes(normalizedBotId, tokenDigest, Date.now(), signal);
+        if (planes.length === 0) {
+            return await this.authorizeProjectBot(botId, token, requiredProjectPermission, actorReference, signal);
+        }
         const plane = planes[0];
         if (planes.length !== 1 || plane === undefined) {
             throw new BotApiError(

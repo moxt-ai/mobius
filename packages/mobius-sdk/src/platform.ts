@@ -227,6 +227,41 @@ export class MobiusPlatformAppCredential {
     }
 }
 
+export class MobiusPlatformAppCredentialMetadata {
+    readonly allProjects: boolean;
+    readonly appId: string;
+    readonly credentialId: string;
+    readonly expiresAt: string;
+    readonly issuedAt: string;
+    readonly lastUsedAt: string;
+    readonly overlapEndsAt: string;
+    readonly permissions: readonly string[];
+    readonly projectIds: readonly string[];
+    readonly publicCredentialId: string;
+    readonly replacedByCredentialId: string;
+    readonly revision: number;
+    readonly revokedAt: string;
+
+    constructor(value: Readonly<Record<string, unknown>>) {
+        if (typeof value["allProjects"] !== "boolean") {
+            throw new MobiusProtocolError("The Platform returned an invalid AppCredential scope");
+        }
+        this.allProjects = value["allProjects"];
+        this.appId = identifier(value, "appId");
+        this.credentialId = identifier(value, "credentialId");
+        this.expiresAt = timestamp(value, "expiresAt");
+        this.issuedAt = timestamp(value, "issuedAt");
+        this.lastUsedAt = timestamp(value, "lastUsedAt");
+        this.overlapEndsAt = timestamp(value, "overlapEndsAt");
+        this.permissions = strings(value, "permissions");
+        this.projectIds = strings(value, "projectIds");
+        this.publicCredentialId = string(value, "publicCredentialId", 64);
+        this.replacedByCredentialId = string(value, "replacedByCredentialId", 128);
+        this.revision = integer(value, "revision");
+        this.revokedAt = timestamp(value, "revokedAt");
+    }
+}
+
 export class MobiusRotatedPlatformAppCredential extends MobiusPlatformAppCredential {
     readonly overlapEndsAt: string;
     readonly replacedCredentialId: string;
@@ -394,6 +429,53 @@ export class MobiusPlatformDeveloperClient {
             ),
         );
 
+    readonly listTenants = async (signal: AbortSignal): Promise<readonly MobiusPlatformTenant[]> => {
+        const value = record(await this.#executor.get("v1/platform/tenants", signal), "Tenant list");
+        const tenants = value["tenants"];
+        if (!Array.isArray(tenants) || tenants.length > 1_000) {
+            throw new MobiusProtocolError("The Platform returned an invalid Tenant list");
+        }
+        return Object.freeze(tenants.map((tenant) => new MobiusPlatformTenant(record(tenant, "Tenant"))));
+    };
+
+    readonly readTenant = async (tenantId: string, signal: AbortSignal): Promise<MobiusPlatformTenant> =>
+        new MobiusPlatformTenant(
+            record(
+                await this.#executor.get(
+                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
+                    signal,
+                ),
+                "Tenant",
+            ),
+        );
+
+    readonly updateTenant = async (
+        tenantId: string,
+        displayName: string,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformTenant> =>
+        new MobiusPlatformTenant(
+            record(
+                await this.#executor.put(
+                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
+                    { displayName: requestedDisplayName(displayName) },
+                    signal,
+                ),
+                "Tenant",
+            ),
+        );
+
+    readonly deleteTenant = async (tenantId: string, signal: AbortSignal): Promise<MobiusPlatformTenant> =>
+        new MobiusPlatformTenant(
+            record(
+                await this.#executor.delete(
+                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
+                    signal,
+                ),
+                "Tenant",
+            ),
+        );
+
     readonly readConfiguration = async (signal: AbortSignal): Promise<MobiusPlatformConfiguration> =>
         new MobiusPlatformConfiguration(
             record(await this.#executor.get("v1/platform/configuration", signal), "Platform configuration"),
@@ -477,6 +559,29 @@ export class MobiusPlatformDeveloperClient {
             ),
         );
 
+    readonly updateApp = async (appId: string, displayName: string, signal: AbortSignal): Promise<MobiusPlatformApp> =>
+        new MobiusPlatformApp(
+            record(
+                await this.#executor.put(
+                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
+                    { displayName: requestedDisplayName(displayName) },
+                    signal,
+                ),
+                "App",
+            ),
+        );
+
+    readonly deleteApp = async (appId: string, signal: AbortSignal): Promise<MobiusPlatformApp> =>
+        new MobiusPlatformApp(
+            record(
+                await this.#executor.delete(
+                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
+                    signal,
+                ),
+                "App",
+            ),
+        );
+
     readonly listProjects = async (appId: string, signal: AbortSignal): Promise<readonly MobiusPlatformProject[]> => {
         const value = record(
             await this.#executor.get(
@@ -538,6 +643,28 @@ export class MobiusPlatformDeveloperClient {
                 "AppCredential",
             ),
         );
+
+    readonly listAppCredentials = async (
+        appId: string,
+        signal: AbortSignal,
+    ): Promise<readonly MobiusPlatformAppCredentialMetadata[]> => {
+        const value = record(
+            await this.#executor.get(
+                `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
+                signal,
+            ),
+            "AppCredential list",
+        );
+        const credentials = value["credentials"];
+        if (!Array.isArray(credentials) || credentials.length > 10_000) {
+            throw new MobiusProtocolError("The Platform returned an invalid AppCredential list");
+        }
+        return Object.freeze(
+            credentials.map(
+                (credential) => new MobiusPlatformAppCredentialMetadata(record(credential, "AppCredential")),
+            ),
+        );
+    };
 
     readonly rotateAppCredential = async (
         credentialId: string,

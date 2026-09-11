@@ -23,11 +23,6 @@
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/relay-cloudflare-platform": {
-            "entry": ["src/local-development-worker.ts"],
-            "ignoreDependencies": ["cloudflare"]
-        },
-        "packages/platform-demo-app": {
-            "entry": ["src/server.ts"],
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/mobius-sdk": {

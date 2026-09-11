@@ -4,7 +4,6 @@ import {
     CloudflareChannelRuntime,
     CloudflareSessionTransport,
     D1DatabaseAdapter,
-    D1ProjectAuthentication,
     type LiteSessionConfigurationEnvironment,
     type PublicProjectBootstrapEnvironment,
     publicProjectBootstrapPolicyFromEnvironment,
@@ -12,18 +11,11 @@ import {
 } from "@moxt-ai/mobius-relay-cloudflare";
 import {
     createBotApplication,
-    createLegacyAuthenticationApplication,
     createMobiusApplication,
     createRelayDependencies,
-    type ExternalIdentityAuthenticator,
-    type ProjectAccessAuthorizer,
-    type ProjectAccessContext,
-    ProjectAuthenticationError,
-    ProjectCredential,
-    ProjectCredentialScheme,
-    type ProjectPermission,
     StaticSessionQuotaPolicyProvider,
 } from "@moxt-ai/mobius-relay-core";
+import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
 import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
@@ -36,15 +28,6 @@ export interface RelayBindings extends LiteSessionConfigurationEnvironment, Publ
 }
 const application = createMobiusApplication();
 const botApplication = createBotApplication();
-const legacyAuthenticationApplication = createLegacyAuthenticationApplication();
-
-export class StandaloneAuthenticationConfiguration {
-    readonly externalIdentityAuthenticator: ExternalIdentityAuthenticator;
-
-    constructor(externalIdentityAuthenticator: ExternalIdentityAuthenticator) {
-        this.externalIdentityAuthenticator = externalIdentityAuthenticator;
-    }
-}
 
 export interface StandaloneWorker {
     readonly fetch: (request: Request, environment: RelayBindings) => Promise<Response>;
@@ -79,101 +62,6 @@ async function accountlessResponse(response: Response): Promise<Response> {
     });
 }
 
-class AccountlessProjectAccessAuthorizer implements ProjectAccessAuthorizer {
-    readonly #authentication: D1ProjectAuthentication;
-
-    constructor(authentication: D1ProjectAuthentication) {
-        this.#authentication = authentication;
-    }
-
-    readonly authorize = async (
-        credential: ProjectCredential,
-        requiredPermission: ProjectPermission,
-        actorReference: string,
-        signal: AbortSignal,
-    ): Promise<ProjectAccessContext> => {
-        if (credential.scheme !== ProjectCredentialScheme.Capability) {
-            throw new ProjectAuthenticationError(
-                "project_credential_invalid",
-                "Standalone accepts only accountless Project owner capabilities",
-            );
-        }
-        return await this.#authentication.authorize(credential, requiredPermission, actorReference, signal);
-    };
-
-    readonly authorizeProject = async (
-        projectId: string,
-        credentialValue: string,
-        requiredPermission: ProjectPermission,
-        actorReference: string,
-        signal: AbortSignal,
-    ): Promise<ProjectAccessContext> => {
-        const credential = ProjectCredential.decode(credentialValue);
-        if (credential.scheme !== ProjectCredentialScheme.Capability) {
-            throw new ProjectAuthenticationError(
-                "project_credential_invalid",
-                "Standalone accepts only accountless Project owner capabilities",
-            );
-        }
-        return await this.#authentication.authorizeProject(
-            projectId,
-            credentialValue,
-            requiredPermission,
-            actorReference,
-            signal,
-        );
-    };
-}
-
-abstract class StandaloneAuthenticationRoutes {
-    abstract readonly authorizer: (projectAuthentication: D1ProjectAuthentication) => ProjectAccessAuthorizer;
-    abstract readonly handle: (request: Request, projectAuthentication: D1ProjectAuthentication) => Promise<Response>;
-    abstract readonly projectResponse: (response: Response) => Promise<Response>;
-}
-
-class AccountlessStandaloneAuthenticationRoutes extends StandaloneAuthenticationRoutes {
-    readonly authorizer = (projectAuthentication: D1ProjectAuthentication): ProjectAccessAuthorizer =>
-        new AccountlessProjectAccessAuthorizer(projectAuthentication);
-    readonly handle = async (): Promise<Response> => new Response("Not Found", { status: 404 });
-    readonly projectResponse = accountlessResponse;
-}
-
-class LegacyStandaloneAuthenticationRoutes extends StandaloneAuthenticationRoutes {
-    readonly #authentication: StandaloneAuthenticationConfiguration;
-
-    constructor(authentication: StandaloneAuthenticationConfiguration) {
-        super();
-        this.#authentication = authentication;
-    }
-
-    readonly authorizer = (projectAuthentication: D1ProjectAuthentication): ProjectAccessAuthorizer =>
-        projectAuthentication;
-
-    readonly handle = async (request: Request, projectAuthentication: D1ProjectAuthentication): Promise<Response> =>
-        await legacyAuthenticationApplication.fetch(request, {
-            services: {
-                externalIdentityAuthenticator: this.#authentication.externalIdentityAuthenticator,
-                projectAuthentication,
-            },
-        });
-
-    readonly projectResponse = async (response: Response): Promise<Response> => response;
-}
-
-function isLegacyAuthenticationPath(pathname: string): boolean {
-    if (
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/auth/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-applications/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-application-credentials/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/project-owner-credentials/`)
-    ) {
-        return true;
-    }
-    return /^\/mobius\/api\/v1\/projects\/[^/]+\/(?:applications|external-identity-bindings|owner-credentials|authentication-audit-events)(?:\/|$)/.test(
-        pathname,
-    );
-}
-
 function isVersionedSharedProjectPath(pathname: string): boolean {
     return (
         /^\/mobius\/api\/v1\/projects\/[^/]+\/(?:browser-credentials|runtime-pairings|runtimes|session-imports|sessions)(?:\/|$)/.test(
@@ -184,7 +72,7 @@ function isVersionedSharedProjectPath(pathname: string): boolean {
     );
 }
 
-function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthenticationRoutes): StandaloneWorker {
+export function createStandaloneWorker(): StandaloneWorker {
     return {
         fetch: async (request, environment) => {
             const pathname = new URL(request.url).pathname;
@@ -192,9 +80,6 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
                 environment.DIRECTORY_DATABASE,
                 environment.MOBIUS_TENANT_ID,
             );
-            if (isLegacyAuthenticationPath(pathname)) {
-                return await authenticationRoutes.handle(request, projectAuthentication);
-            }
             const infrastructure = {
                 config: { quota: sessionQuotaFromEnvironment(environment) },
                 gateways: {
@@ -207,7 +92,7 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
             const channelRuntime = new CloudflareChannelRuntime(infrastructure);
             const cx = createRelayDependencies({
                 authentication: {
-                    projects: authenticationRoutes.authorizer(projectAuthentication),
+                    projects: projectAuthentication,
                 },
                 bots: {
                     connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
@@ -234,26 +119,18 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
                 projects: infrastructure.gateways.projectStorageDirectory,
             });
             if (isVersionedSharedProjectPath(pathname)) {
-                return await authenticationRoutes.projectResponse(await application.fetch(request, cx));
+                return await accountlessResponse(await application.fetch(request, cx));
             }
             if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
-                return await authenticationRoutes.projectResponse(
+                return await accountlessResponse(
                     await botApplication.fetch(request, {
                         services: { bots: cx.services.bots },
                     }),
                 );
             }
-            return await authenticationRoutes.projectResponse(await application.fetch(request, cx));
+            return await accountlessResponse(await application.fetch(request, cx));
         },
     };
-}
-
-export function createStandaloneWorker(): StandaloneWorker {
-    return createConfiguredStandaloneWorker(new AccountlessStandaloneAuthenticationRoutes());
-}
-
-export function createLegacyStandaloneWorker(authentication: StandaloneAuthenticationConfiguration): StandaloneWorker {
-    return createConfiguredStandaloneWorker(new LegacyStandaloneAuthenticationRoutes(authentication));
 }
 
 const worker: ExportedHandler<RelayBindings> = createStandaloneWorker();

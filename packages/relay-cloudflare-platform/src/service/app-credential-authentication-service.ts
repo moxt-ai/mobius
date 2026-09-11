@@ -1,10 +1,4 @@
-import {
-    decodeProjectCredential,
-    decodeProjectPermissions,
-    hashSecret,
-    ProjectAuthenticationError,
-    ProjectCredentialScheme,
-} from "@moxt-ai/mobius-relay-core";
+import { decodeProjectPermissions, hashSecret, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
 import { type PlatformApplicationIdentity, PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import type { CredentialRow } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
@@ -43,22 +37,16 @@ export class AppCredentialAuthenticationService {
 
     readonly verify = async (credentialValue: string, signal: AbortSignal): Promise<CredentialRow> => {
         signal.throwIfAborted();
-        let credential: ReturnType<typeof decodeProjectCredential>;
-        try {
-            credential = decodeProjectCredential(credentialValue);
-        } catch (cause) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid", {
-                cause,
-            });
-        }
-        if (credential.scheme !== ProjectCredentialScheme.Application) {
+        const match = /^mapp_([a-zA-Z0-9_-]{22})_([a-zA-Z0-9_-]{43})$/.exec(credentialValue);
+        const publicCredentialId = match?.[1];
+        if (publicCredentialId === undefined) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
-        const row = await this.#storage.readCredentialByPublicId(credential.publicCredentialId, signal);
+        const row = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
         if (row === null) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
         }
-        const digest = await hashSecret(credential.value);
+        const digest = await hashSecret(credentialValue);
         signal.throwIfAborted();
         if (!constantTimeEqual(digest, row.secret_digest)) {
             throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");

@@ -9,6 +9,7 @@ overrides:
   happy-dom: 20.8.9
 
 allowBuilds:
+  '@clerk/shared': true
   esbuild: true
   simple-git-hooks: true
   workerd: true

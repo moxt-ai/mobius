@@ -1,8 +1,8 @@
 import { parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
-import type { ProjectAccessAuthorizer } from "../entity/authentication/project-authentication.ts";
 import type { SessionQuotaPolicyProvider } from "../entity/do/session.ts";
 import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
+import type { ProjectAccessAuthorizer } from "../gateway/project-access-authorizer.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
