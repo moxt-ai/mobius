@@ -40,7 +40,6 @@
         "MOBIUS_DEMO_ALLOWED_ORIGIN": "http://127.0.0.1:5190",
         "MOBIUS_DEMO_DEVELOPER_TOKEN": "local-supervisor-must-replace-this-token",
         "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "100",
-        "SESSION_ACTIVE_SESSIONS_PER_TENANT": "1000",
         "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
     },
     "observability": {

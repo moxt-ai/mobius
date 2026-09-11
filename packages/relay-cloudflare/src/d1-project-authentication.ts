@@ -268,9 +268,11 @@ function externalBindingResource(row: ExternalBindingRow): object {
 
 export class D1ProjectAuthentication implements ProjectAuthenticationService {
     readonly #database: D1Database;
+    readonly #tenantId: string;
 
-    constructor(database: D1Database) {
+    constructor(database: D1Database, tenantId: string) {
         this.#database = database;
+        this.#tenantId = tenantId;
     }
 
     readonly authorize = async (
@@ -401,7 +403,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 credentialId,
                 publicCredentialId,
                 grant.grantId,
-                grant.scope.projectId,
+                this.#tenantId,
                 grant.scope.projectId,
                 await hashSecret(credential),
                 encodedPermissions(grant.permissions),
@@ -475,7 +477,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     applicationId,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     name,
                     encodedPermissions(permissions),
@@ -521,7 +523,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE tenant_id = ? AND project_id = ?
                   ORDER BY created_at DESC, application_id DESC`,
             )
-            .bind(access.scope.projectId, access.scope.projectId)
+            .bind(this.#tenantId, access.scope.projectId)
             .all<ApplicationRow>();
         const resources: object[] = [];
         for (const application of applications.results) {
@@ -585,7 +587,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     AND applications.tenant_id = ? AND applications.project_id = ?
                     AND applications.lifecycle = 'active'`,
             )
-            .bind(normalizedCredentialId, access.scope.projectId, access.scope.projectId)
+            .bind(normalizedCredentialId, this.#tenantId, access.scope.projectId)
             .first<ApplicationRow>();
         signal.throwIfAborted();
         if (application === null) {
@@ -626,7 +628,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     now,
                     normalizedCredentialId,
                     application.application_id,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                 ),
             this.#database
@@ -655,7 +657,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -701,7 +703,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                          WHERE tenant_id = ? AND project_id = ?
                       )`,
                 )
-                .bind(now, normalizedCredentialId, access.scope.projectId, access.scope.projectId),
+                .bind(now, normalizedCredentialId, this.#tenantId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -720,7 +722,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -728,7 +730,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedCredentialId,
                     now,
                     normalizedCredentialId,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                 ),
         ]);
@@ -757,7 +759,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                         SET lifecycle = 'revoked', revoked_at = COALESCE(revoked_at, ?), updated_at = ?
                       WHERE application_id = ? AND tenant_id = ? AND project_id = ?`,
                 )
-                .bind(now, now, normalizedApplicationId, access.scope.projectId, access.scope.projectId),
+                .bind(now, now, normalizedApplicationId, this.#tenantId, access.scope.projectId),
             this.#database
                 .prepare(
                     `UPDATE project_application_credentials
@@ -768,7 +770,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                            WHERE tenant_id = ? AND project_id = ?
                         )`,
                 )
-                .bind(now, normalizedApplicationId, access.scope.projectId, access.scope.projectId),
+                .bind(now, normalizedApplicationId, this.#tenantId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -783,7 +785,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -791,7 +793,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedApplicationId,
                     now,
                     normalizedApplicationId,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                 ),
         ]);
@@ -883,7 +885,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 .bind(
                     grantId,
                     bindingId,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     encodedPermissions(permissions),
                     access.actor.kind.value,
@@ -976,7 +978,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                       WHERE bindings.provider_id = ? AND bindings.issuer = ? AND bindings.subject = ?
                         AND grants.tenant_id = ? AND grants.project_id = ? AND grants.revoked_at IS NULL`,
                 )
-                .bind(identity.providerId, identity.issuer, identity.subject, scope.projectId, scope.projectId)
+                .bind(identity.providerId, identity.issuer, identity.subject, this.#tenantId, scope.projectId)
                 .first<{ readonly grant_id: string }>();
             signal.throwIfAborted();
             if (conflict !== null) {
@@ -1010,7 +1012,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE grants.tenant_id = ? AND grants.project_id = ? AND grants.revoked_at IS NULL
                   ORDER BY grants.created_at DESC, grants.grant_id DESC`,
             )
-            .bind(access.scope.projectId, access.scope.projectId)
+            .bind(this.#tenantId, access.scope.projectId)
             .all<ExternalBindingRow>();
         signal.throwIfAborted();
         return { bindings: rows.results.map(externalBindingResource) };
@@ -1032,7 +1034,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                       WHERE binding_id = ? AND tenant_id = ? AND project_id = ?
                         AND revoked_at IS NULL`,
                 )
-                .bind(now, normalizedBindingId, access.scope.projectId, access.scope.projectId),
+                .bind(now, normalizedBindingId, this.#tenantId, access.scope.projectId),
             this.#database
                 .prepare(
                     `UPDATE mobius_access_credentials SET revoked_at = COALESCE(revoked_at, ?)
@@ -1041,7 +1043,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                          WHERE binding_id = ? AND tenant_id = ? AND project_id = ?
                       ) AND revoked_at IS NULL`,
                 )
-                .bind(now, normalizedBindingId, access.scope.projectId, access.scope.projectId),
+                .bind(now, normalizedBindingId, this.#tenantId, access.scope.projectId),
             this.#database
                 .prepare(
                     `INSERT INTO authentication_audit_events (
@@ -1056,7 +1058,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1064,7 +1066,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                     normalizedBindingId,
                     now,
                     normalizedBindingId,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                 ),
         ]);
@@ -1218,7 +1220,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1288,7 +1290,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 )
                 .bind(
                     `aae_${createRandomToken(18)}`,
-                    access.scope.projectId,
+                    this.#tenantId,
                     access.scope.projectId,
                     access.actor.kind.value,
                     access.actor.actorId,
@@ -1331,7 +1333,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                   WHERE tenant_id = ? AND project_id = ?
                   ORDER BY recorded_at DESC, audit_id DESC LIMIT ?`,
             )
-            .bind(access.scope.projectId, access.scope.projectId, limit)
+            .bind(this.#tenantId, access.scope.projectId, limit)
             .all<Readonly<Record<string, unknown>>>();
         signal.throwIfAborted();
         return {
@@ -1625,7 +1627,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
                 `SELECT * FROM project_applications
                   WHERE application_id = ? AND tenant_id = ? AND project_id = ? AND lifecycle = 'active'`,
             )
-            .bind(validateIdentifier(applicationId, "application_id"), scope.projectId, scope.projectId)
+            .bind(validateIdentifier(applicationId, "application_id"), this.#tenantId, scope.projectId)
             .first<ApplicationRow>();
         signal.throwIfAborted();
         if (row === null) {
@@ -1740,7 +1742,7 @@ export class D1ProjectAuthentication implements ProjectAuthenticationService {
             )
             .bind(
                 `aae_${createRandomToken(18)}`,
-                scope.projectId,
+                this.#tenantId,
                 scope.projectId,
                 actor.kind.value,
                 actor.actorId,

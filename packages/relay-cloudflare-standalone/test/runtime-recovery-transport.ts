@@ -15,7 +15,7 @@ import { StandaloneProjectStorageDirectory } from "../src/project-storage-direct
 // Real Session DO requests cannot be made to stall deterministically. This stateful
 // transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
 export class SuspendedDisconnectTransport implements SessionTransport {
-    readonly #transport = new CloudflareSessionTransport(env.SESSION_RELAY, env.MOBIUS_TENANT_ID ?? "standalone");
+    readonly #transport = new CloudflareSessionTransport(env.SESSION_RELAY, env.MOBIUS_TENANT_ID);
     readonly #suspended = Promise.withResolvers<string>();
     readonly #released = Promise.withResolvers<void>();
     #state:

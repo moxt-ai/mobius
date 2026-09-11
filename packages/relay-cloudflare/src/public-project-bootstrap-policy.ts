@@ -7,7 +7,7 @@ const MAXIMUM_LIMIT = 100_000;
 const MAXIMUM_WINDOW_MILLISECONDS = 24 * 60 * 60 * 1_000;
 
 export interface PublicProjectBootstrapEnvironment {
-    readonly MOBIUS_TENANT_ID?: string;
+    readonly MOBIUS_TENANT_ID: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT?: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_ENABLED?: string;
     readonly PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT?: string;
@@ -186,7 +186,7 @@ export function publicProjectBootstrapPolicyFromEnvironment(
 ): PublicProjectBootstrapPolicy {
     return new PublicProjectBootstrapPolicy(
         database,
-        environment.MOBIUS_TENANT_ID ?? "standalone",
+        environment.MOBIUS_TENANT_ID,
         configurationEnabled(environment.PUBLIC_PROJECT_BOOTSTRAP_ENABLED),
         configurationInteger(
             environment.PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT,

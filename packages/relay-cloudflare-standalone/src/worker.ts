@@ -188,7 +188,10 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
     return {
         fetch: async (request, environment) => {
             const pathname = new URL(request.url).pathname;
-            const projectAuthentication = new D1ProjectAuthentication(environment.DIRECTORY_DATABASE);
+            const projectAuthentication = new D1ProjectAuthentication(
+                environment.DIRECTORY_DATABASE,
+                environment.MOBIUS_TENANT_ID,
+            );
             if (isLegacyAuthenticationPath(pathname)) {
                 return await authenticationRoutes.handle(request, projectAuthentication);
             }
@@ -225,7 +228,7 @@ function createConfiguredStandaloneWorker(authenticationRoutes: StandaloneAuthen
                     ),
                     sessionTransport: new CloudflareSessionTransport(
                         environment.SESSION_RELAY,
-                        environment.MOBIUS_TENANT_ID ?? "standalone",
+                        environment.MOBIUS_TENANT_ID,
                     ),
                 },
                 projects: infrastructure.gateways.projectStorageDirectory,

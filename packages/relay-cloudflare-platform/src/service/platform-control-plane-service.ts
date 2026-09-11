@@ -325,11 +325,6 @@ function projectResource(row: ProjectRow): object {
         deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
         displayName: row.display_name,
         lifecycle: row.lifecycle,
-        placement: {
-            d1ShardId: row.d1_shard_id,
-            r2BucketId: row.r2_bucket_id,
-            revision: row.placement_revision,
-        },
         projectId: row.project_id,
         suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,

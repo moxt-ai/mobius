@@ -21,7 +21,6 @@ export default defineConfig(async () => {
                         MOBIUS_DEMO_ALLOWED_ORIGIN: "http://127.0.0.1:5190",
                         MOBIUS_DEMO_DEVELOPER_TOKEN: "developer-token-developer-token-32",
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "8",
-                        SESSION_ACTIVE_SESSIONS_PER_TENANT: "32",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
                         TEST_PLATFORM_MIGRATIONS: platformMigrations,
                         TEST_PROJECT_MIGRATIONS: projectMigrations,

@@ -19,7 +19,7 @@ import { StandaloneProjectStorageDirectory } from "./project-storage-directory.t
 interface RelayEnvironment extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
-    readonly MOBIUS_TENANT_ID?: string;
+    readonly MOBIUS_TENANT_ID: string;
     readonly SESSION_RELAY: DurableObjectNamespace;
     readonly SESSION_ARCHIVES?: R2Bucket;
 }
@@ -41,10 +41,7 @@ function createContext(state: DurableObjectState, environment: RelayEnvironment)
         gateways: {
             databaseResolver: databases,
             projectStorageDirectory: tenants,
-            sessionTransport: new CloudflareSessionTransport(
-                environment.SESSION_RELAY,
-                environment.MOBIUS_TENANT_ID ?? "standalone",
-            ),
+            sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY, environment.MOBIUS_TENANT_ID),
             connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
             peers: new CloudflareChannelPeers(state),
             schedule: async (timestamp, signal) => {

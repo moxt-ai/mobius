@@ -19,7 +19,6 @@ export default defineConfig(async () => {
                 miniflare: {
                     bindings: {
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "8",
-                        SESSION_ACTIVE_SESSIONS_PER_TENANT: "32",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
                         TEST_PLATFORM_MIGRATIONS: platformMigrations,
                         TEST_PROJECT_MIGRATIONS: projectMigrations,

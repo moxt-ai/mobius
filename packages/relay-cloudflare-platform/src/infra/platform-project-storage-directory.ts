@@ -18,7 +18,7 @@ export class PlatformProjectStorageDirectory implements ProjectStorageDirectory 
 
     readonly resolve: ProjectStorageDirectory["resolve"] = async (projectId, signal) => {
         const row = await this.#placements.read(projectId, signal);
-        if (row === null || row.project_id !== projectId) {
+        if (row === null) {
             throw new PairingDirectoryError("directory_unavailable", "Project storage placement is unavailable");
         }
         const placement = { d1ShardId: row.d1_shard_id, r2BucketId: row.r2_bucket_id };

@@ -9,7 +9,6 @@ interface PlatformDemoTestBindings {
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_ACTIVE_SESSIONS_PER_PROJECT: string;
-    readonly SESSION_ACTIVE_SESSIONS_PER_TENANT: string;
     readonly SESSION_ARCHIVE_BYTES_PER_SESSION: string;
     readonly SESSION_RELAY: DurableObjectNamespace;
     readonly TEST_PLATFORM_MIGRATIONS: D1Migration[];

@@ -1,4 +1,4 @@
-import { createExecutionContext, evictDurableObject, runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env, exports } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
@@ -59,7 +59,6 @@ import {
 } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RuntimeRelay } from "../src/durable-objects.ts";
-import worker from "../src/worker.ts";
 import { runtimeWithTransport, SuspendedDisconnectTransport } from "./runtime-recovery-transport.ts";
 
 const relayOrigin = "https://relay.test";
@@ -1067,21 +1066,6 @@ describe.sequential("Cloudflare session deployment", () => {
             { headers: authorization(second.created) },
         );
         expect(denied.status).toBe(401);
-    });
-
-    it("Given a deployment without a configured tenant, When a browser creates a pairing, Then it succeeds without exposing a tenant", async () => {
-        const fetch = worker.fetch;
-        if (fetch === undefined) {
-            throw new Error("Worker fetch is unavailable");
-        }
-        const response = await fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
-            { ...env, MOBIUS_TENANT_ID: "" },
-            createExecutionContext(),
-        );
-        expect(response.status).toBe(201);
-        const created = decodeCreatedPairing(await response.json());
-        expect(created.projectId).toMatch(/^prj_/);
     });
 
     it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
