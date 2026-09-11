@@ -1475,8 +1475,12 @@ async function runRelayConnection(
 
             const processingDeliveryIds = new Set<string>();
 
-            const processDeliveredPrompt = async (delivery: RuntimeDelivery): Promise<void> => {
-                const command = decodeSessionPromptCommand(delivery.payload);
+            const processDeliveredPrompt = async (
+                delivery: RuntimeDelivery,
+                command: DaemonTurnCommand,
+                trackActiveAttempt: boolean,
+                execute: (attemptId: string, signal: AbortSignal) => Promise<void>,
+            ): Promise<void> => {
                 if (command.sessionId !== delivery.sessionId) {
                     throw new Error("Runtime delivery Session identity does not match its payload");
                 }
@@ -1505,22 +1509,11 @@ async function runRelayConnection(
 
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                 activeTurns.set(command.commandId, turn);
-                if (command.disposition !== SessionPromptDisposition.Steer) {
+                if (trackActiveAttempt) {
                     activeAttemptIds.set(command.sessionId, receipt.attemptId);
                 }
                 try {
-                    await executePrompt(
-                        outbox,
-                        publisher,
-                        command,
-                        config,
-                        directories,
-                        audit,
-                        sessions,
-                        receipt.attemptId,
-                        timer,
-                        turn.signal,
-                    );
+                    await execute(receipt.attemptId, turn.signal);
                 } finally {
                     activeTurns.delete(command.commandId);
                     if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
@@ -1600,8 +1593,48 @@ async function runRelayConnection(
                     }
                     return;
                 }
+                if (kind === BOT_SESSION_PROMPT_KIND) {
+                    const command = decodeBotSessionPromptCommand(delivery.payload);
+                    await processDeliveredPrompt(delivery, command, true, (attemptId, executionSignal) =>
+                        executeBotPrompt(
+                            outbox,
+                            publisher,
+                            command,
+                            config,
+                            directories,
+                            audit,
+                            sessions,
+                            grants,
+                            contexts,
+                            applicator,
+                            ipc,
+                            attemptId,
+                            timer,
+                            executionSignal,
+                        ),
+                    );
+                    return;
+                }
                 if (kind === SESSION_PROMPT_KIND) {
-                    await processDeliveredPrompt(delivery);
+                    const command = decodeSessionPromptCommand(delivery.payload);
+                    await processDeliveredPrompt(
+                        delivery,
+                        command,
+                        command.disposition !== SessionPromptDisposition.Steer,
+                        (attemptId, executionSignal) =>
+                            executePrompt(
+                                outbox,
+                                publisher,
+                                command,
+                                config,
+                                directories,
+                                audit,
+                                sessions,
+                                attemptId,
+                                timer,
+                                executionSignal,
+                            ),
+                    );
                     return;
                 }
                 throw new Error("Runtime delivery contains an unsupported protocol message");
@@ -1644,6 +1677,8 @@ async function runRelayConnection(
                     payloadSessionId = decodeSessionElicitationRespondCommand(delivery.payload).sessionId;
                 } else if (payloadKind === SESSION_PROMPT_KIND) {
                     payloadSessionId = decodeSessionPromptCommand(delivery.payload).sessionId;
+                } else if (payloadKind === BOT_SESSION_PROMPT_KIND) {
+                    payloadSessionId = decodeBotSessionPromptCommand(delivery.payload).sessionId;
                 } else {
                     throw new Error("Runtime delivery contains an unsupported protocol message");
                 }

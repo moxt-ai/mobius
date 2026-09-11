@@ -12,18 +12,24 @@ import {
     BotSessionPromptCommand,
     decodeBotExecutionBindingApprovedEvent,
     decodeMessageKind,
+    decodeRuntimeDeliveryReceived,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventEnvelope,
     decodeSessionReadyEvent,
     encodeBotExecutionBindingApprovalRequest,
     encodeBotExecutionBindingApprovedEvent,
     encodeBotSessionPromptCommand,
+    encodeRuntimeDelivery,
+    encodeRuntimeDeliveryCommitted,
     encodeSessionConfigureCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
     NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_CONFIGURE_KIND,
@@ -172,7 +178,7 @@ async function readCompletedText(frames: ClientFrames): Promise<string> {
 }
 
 describe("daemon Bot execution boundary", () => {
-    it("Given a Bot binding proposal, When the relay acknowledges approval and the daemon executes a turn, Then the connection stays usable and the exact local target and pinned behavior are enforced", async () => {
+    it("Given an approved Bot binding, When the relay durably delivers a Bot turn, Then the daemon acknowledges receipt and executes the exact local target with the pinned behavior", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -426,7 +432,29 @@ describe("daemon Bot execution boundary", () => {
                 [],
                 new OwnerBotReplyRoute(),
             );
-            writeServerTextFrame(socket, encodeBotSessionPromptCommand(prompt));
+            const deliveryId = "delivery_bot_prompt_alpha";
+            writeServerTextFrame(
+                socket,
+                encodeRuntimeDelivery({
+                    deliveryId,
+                    kind: RUNTIME_DELIVERY_KIND,
+                    payload: encodeBotSessionPromptCommand(prompt),
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            expect(decodeRuntimeDeliveryReceived(await frames.next())).toEqual({
+                deliveryId,
+                kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                sessionId: prompt.sessionId,
+            });
+            writeServerTextFrame(
+                socket,
+                encodeRuntimeDeliveryCommitted({
+                    deliveryId,
+                    kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+                    sessionId: prompt.sessionId,
+                }),
+            );
 
             const observedKinds: string[] = [];
             let observedText = "";
