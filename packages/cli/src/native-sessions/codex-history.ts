@@ -2,9 +2,7 @@ import { spawn } from "node:child_process";
 import {
     type NativeHistoryMessage,
     type NativeSessionHistory,
-    parseNativeHistoryText,
     SESSION_HISTORY_CHARACTER_LIMIT,
-    SESSION_HISTORY_IMAGE_CHARACTER_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
@@ -12,6 +10,7 @@ import { nativeSessionIdSchema } from "../acp/native-session.ts";
 import { AcpExecutionError } from "../acp/session-manager.ts";
 import type { LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
 import { revalidateExecutable, stopProcessTree } from "../process/executable.ts";
+import { embedLocalHistoryImages } from "./history-images.ts";
 
 const responseSchema = z.union([
     z.object({
@@ -53,7 +52,6 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
     const page = turnsSchema.parse(value);
     const messages: NativeHistoryMessage[] = [];
     let characters = 0;
-    let imageCharacters = 0;
     let truncated = page.nextCursor != null;
     for (const turn of page.data.toReversed()) {
         for (const item of turn.items) {
@@ -61,24 +59,21 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
             let message: NativeHistoryMessage;
             if (type === "userMessage") {
                 const { content } = userMessageSchema.parse(item);
-                const parsed = parseNativeHistoryText(
-                    content
-                        .map((block) => {
-                            const { type } = itemTypeSchema.parse(block);
-                            if (type === "text") {
-                                return textSchema.parse(block).text;
-                            }
-                            if (type === "image") {
-                                return `[@image](${imageSchema.parse(block).url})`;
-                            }
-                            return "[Attachment]";
-                        })
-                        .join(""),
-                );
+                const text = content
+                    .map((block) => {
+                        const { type } = itemTypeSchema.parse(block);
+                        if (type === "text") {
+                            return textSchema.parse(block).text;
+                        }
+                        if (type === "image") {
+                            return `[@image](${imageSchema.parse(block).url})`;
+                        }
+                        return "[Attachment]";
+                    })
+                    .join("");
                 message = {
                     role: "user",
-                    text: parsed.text,
-                    ...(parsed.images.length > 0 ? { images: parsed.images } : {}),
+                    text,
                 };
             } else if (type === "agentMessage") {
                 const agent = agentMessageSchema.parse(item);
@@ -96,16 +91,13 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
             truncated ||= text.length < message.text.length;
             messages.push({ ...message, text });
             characters += text.length;
-            imageCharacters += (message.images ?? []).reduce((size, image) => size + image.data.length, 0);
             while (
                 messages.length > SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT ||
-                characters > SESSION_HISTORY_CHARACTER_LIMIT ||
-                imageCharacters > SESSION_HISTORY_IMAGE_CHARACTER_LIMIT
+                characters > SESSION_HISTORY_CHARACTER_LIMIT
             ) {
                 const removed = messages.shift();
                 if (removed !== undefined) {
                     characters -= removed.text.length;
-                    imageCharacters -= (removed.images ?? []).reduce((size, image) => size + image.data.length, 0);
                 }
                 truncated = true;
             }
@@ -281,7 +273,11 @@ export async function readCodexHistory(
                 params: { clientInfo: { name: "mobius_history", version: "1.0.0" } },
             });
         }
-        return await response.promise;
+        const snapshot = await response.promise;
+        return {
+            ...snapshot,
+            history: await embedLocalHistoryImages(snapshot.history, [cwd, snapshot.cwd], signal),
+        };
     } finally {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);

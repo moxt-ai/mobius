@@ -18,6 +18,7 @@ import {
 import {
     AGENT_CONTENT_KIND,
     type AgentContentEvent,
+    type AgentDisplayContent,
     type AgentPromptResponse,
     decodeAgentPromptResponse,
     type NativeSessionHistory,
@@ -46,15 +47,23 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
-
+import type { LocalRasterImage } from "../authorization/local-raster.ts";
+import { readAuthorizedRaster } from "../authorization/local-raster.ts";
 import type { LocalAgentDefinition } from "../config.ts";
+import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import {
     captureProcessTree,
     type ProcessTreeIdentity,
     revalidateExecutable,
     stopProcessTree,
 } from "../process/executable.ts";
-import { type AcpActivity, AcpActivityTracker, isProgressMessage, normalizeContentBlock } from "./activity.ts";
+import {
+    type AcpActivity,
+    AcpActivityTracker,
+    imageDisplayContent,
+    isProgressMessage,
+    normalizeContentBlock,
+} from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
 import {
     type NativeSessionOrigin,
@@ -138,6 +147,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
+    readonly importLocalImage: (sessionId: string, image: LocalRasterImage, signal: AbortSignal) => Promise<string>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -150,6 +160,14 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
+    readonly importLocalImage = (
+        _sessionId: string,
+        _image: LocalRasterImage,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        signal.throwIfAborted();
+        return Promise.resolve("");
+    };
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (): Promise<void> => Promise.resolve();
@@ -882,10 +900,82 @@ class AcpProcessSession implements AcpClientHandler {
             );
             await this.#updateTail;
             signal.throwIfAborted();
-            return history.snapshot();
+            return await embedLocalHistoryImages(
+                history.snapshot(),
+                [this.#cwd, ...this.#additionalDirectories],
+                signal,
+            );
         } finally {
             this.#replay = { kind: "idle" };
         }
+    };
+
+    private readonly imageRoots = (): readonly string[] => [this.#cwd, ...this.#additionalDirectories];
+
+    private readonly emitAgentText = async (text: string, messageId: string): Promise<void> => {
+        const signal = AbortSignal.timeout(20_000);
+        const parts = text.split(/(\[@image\]\([^)\r\n]*(?:\)|$))/);
+        let leftover = "";
+        for (const part of parts) {
+            const marker = /^\[@image\]\(([^)\r\n]*)(?:\)|$)/.exec(part);
+            if (marker === null) {
+                leftover += part;
+                continue;
+            }
+            if (leftover.length > 0) {
+                await this.#turn.onText(leftover, messageId);
+                leftover = "";
+            }
+            const raster = await readAuthorizedRaster(marker[1] ?? "", this.imageRoots(), signal);
+            if (raster === null) {
+                leftover += "[Image unavailable]";
+                continue;
+            }
+            await this.emitRaster(raster, messageId, signal);
+        }
+        if (leftover.length > 0) {
+            await this.#turn.onText(leftover, messageId);
+        }
+    };
+
+    private readonly emitAgentContent = async (content: AgentDisplayContent, messageId: string): Promise<void> => {
+        if (content.type === "image" && content.data.length === 0 && content.uri.length > 0) {
+            const signal = AbortSignal.timeout(20_000);
+            const raster = await readAuthorizedRaster(content.uri, this.imageRoots(), signal);
+            if (raster !== null) {
+                await this.emitRaster(raster, messageId, signal);
+                return;
+            }
+        }
+        await this.#getObserver().onContent({
+            commandId: this.#turn.commandId,
+            content,
+            contentId: `content-${crypto.randomUUID()}`,
+            kind: AGENT_CONTENT_KIND,
+            messageId,
+            sessionId: this.#mobiusSessionId,
+        });
+    };
+
+    private readonly emitRaster = async (
+        raster: LocalRasterImage,
+        messageId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const artifactId = await this.#getObserver().importLocalImage(this.#mobiusSessionId, raster, signal);
+        await this.#getObserver().onContent({
+            commandId: this.#turn.commandId,
+            content: imageDisplayContent(
+                raster.mimeType,
+                raster.name,
+                artifactId.length > 0 ? "" : raster.base64(),
+                artifactId,
+            ),
+            contentId: `content-${crypto.randomUUID()}`,
+            kind: AGENT_CONTENT_KIND,
+            messageId,
+            sessionId: this.#mobiusSessionId,
+        });
     };
 
     async #initializeAgent(signal: AbortSignal): Promise<void> {
@@ -1652,18 +1742,14 @@ class AcpProcessSession implements AcpClientHandler {
                     );
                 } else {
                     await this.#turn.activities.finishNarrative();
-                    await this.#turn.onText(update.content.text, truncate(update.messageId ?? "", 255));
+                    await this.emitAgentText(update.content.text, truncate(update.messageId ?? "", 255));
                 }
             } else {
                 await this.#turn.activities.finishNarrative();
-                await this.#getObserver().onContent({
-                    commandId: this.#turn.commandId,
-                    content: normalizeContentBlock(update.content),
-                    contentId: `content-${crypto.randomUUID()}`,
-                    kind: AGENT_CONTENT_KIND,
-                    messageId: truncate(update.messageId ?? "", 255),
-                    sessionId: this.#mobiusSessionId,
-                });
+                await this.emitAgentContent(
+                    normalizeContentBlock(update.content),
+                    truncate(update.messageId ?? "", 255),
+                );
             }
             return;
         }

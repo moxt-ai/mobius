@@ -133,7 +133,11 @@ function AgentMessage({
                 {message.text.length === 0 && message.state.isStreaming && message.activities.length === 0 && (
                     <ThinkingIndicator />
                 )}
-                <AgentRichContent contents={message.contents.map((entry) => entry.content)} />
+                <AgentRichContent
+                    connection={connection}
+                    contents={message.contents.map((entry) => entry.content)}
+                    sessionId={sessionId}
+                />
                 <div className="mt-3 flex min-h-8 items-center gap-1.5">
                     {message.state.appearance !== "completed" && (
                         <span
@@ -235,20 +239,29 @@ export function NativeSessionHistoryView({
             </p>
             {messages.map((entry, index) => {
                 const parsed = parseNativeHistoryText(entry.text);
+                const images = [...(entry.images ?? []), ...parsed.images];
                 return entry.role === "user" ? (
-                    <UserPromptMessage
-                        key={index.toString()}
-                        images={[...(entry.images ?? []), ...parsed.images]}
-                        resources={[]}
-                        text={parsed.text}
-                    />
+                    <UserPromptMessage key={index.toString()} images={images} resources={[]} text={parsed.text} />
                 ) : (
                     <article
                         aria-label={`Previous message from ${agentLabel}`}
                         className="mb-6 text-[15px] leading-6"
                         key={index.toString()}
                     >
-                        <AgentMarkdown markdown={entry.text} streaming={false} />
+                        {images.length > 0 && (
+                            <div className="mb-2 grid min-w-0 gap-1.5">
+                                {images.map((image, imageIndex) => (
+                                    <img
+                                        alt={image.name}
+                                        className="h-auto max-h-56 max-w-full rounded-lg object-contain object-left"
+                                        key={`${imageIndex.toString()}:${image.name}`}
+                                        loading="lazy"
+                                        src={`data:${image.mimeType};base64,${image.data}`}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                        {parsed.text.length > 0 && <AgentMarkdown markdown={parsed.text} streaming={false} />}
                     </article>
                 );
             })}

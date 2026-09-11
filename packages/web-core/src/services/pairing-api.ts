@@ -1292,6 +1292,21 @@ function isConcurrentSessionRemoval(error: unknown): boolean {
     );
 }
 
+export async function readSessionArtifactBytes(
+    connection: ChannelConnection,
+    sessionId: string,
+    artifactId: string,
+    signal: AbortSignal,
+): Promise<{ readonly bytes: Uint8Array; readonly mimeType: string }> {
+    const client = publicServiceClient(projectCredential(connection.channelId, connection.projectId));
+    try {
+        const download = await client.artifacts.download(sessionId, artifactId, signal);
+        return { bytes: download.bytes, mimeType: download.artifact.mediaType };
+    } finally {
+        client.close();
+    }
+}
+
 function publicServiceClient(credential: BrowserChannelCredential): MobiusClient {
     return new MobiusClient({
         credentialProvider: new StaticMobiusCredentialProvider(credential.hostToken),

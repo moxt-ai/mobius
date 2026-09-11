@@ -61,6 +61,9 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../mobius-sdk
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3

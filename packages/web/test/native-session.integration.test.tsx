@@ -372,6 +372,11 @@ describe.sequential("Native Session boundaries", () => {
                                 role: "user",
                                 text: `Selected image [@image](data:image/png;base64,${imageData}) [@image](https://example.com/private.png)`,
                             },
+                            {
+                                role: "assistant",
+                                text: "The screenshot is attached.",
+                                images: [{ data: imageData, mimeType: "image/png", name: "Agent screenshot" }],
+                            },
                         ],
                         status: "available",
                         truncated: false,
@@ -395,6 +400,8 @@ describe.sequential("Native Session boundaries", () => {
             expect(history.textContent).not.toContain("base64");
             const image = within(history).getByAltText("Image 1");
             expect(image.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
+            const agentImage = within(history).getByAltText("Agent screenshot");
+            expect(agentImage.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
             expect(history.querySelector('img[src^="http"]')).toBeNull();
         } finally {
             cleanup();

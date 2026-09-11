@@ -612,6 +612,7 @@ function activityEnvelope(
             commandId,
             content: [
                 {
+                    artifactId: "",
                     data: "",
                     mimeType: "",
                     name: "",

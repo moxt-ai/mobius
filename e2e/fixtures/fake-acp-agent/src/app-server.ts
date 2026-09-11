@@ -73,9 +73,13 @@ input.on("line", (line) => {
                                           if (typeof image !== "object" || image === null) {
                                               throw new Error("Invalid saved image");
                                           }
+                                          const path = Reflect.get(image, "path");
                                           return {
                                               type: "image",
-                                              url: `data:${String(Reflect.get(image, "mimeType"))};base64,${String(Reflect.get(image, "data"))}`,
+                                              url:
+                                                  typeof path === "string" && path.length > 0
+                                                      ? path
+                                                      : `data:${String(Reflect.get(image, "mimeType"))};base64,${String(Reflect.get(image, "data"))}`,
                                           };
                                       })
                                     : []),

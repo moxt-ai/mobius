@@ -36,6 +36,8 @@ class RecordingObserver implements AcpSessionObserver {
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
 
+    readonly importLocalImage = (): Promise<string> => Promise.resolve("");
+
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.commands.push(event);
         return Promise.resolve();

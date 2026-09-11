@@ -406,6 +406,7 @@ describe("ACP session control protocol contract", () => {
 
     it("Given rich ACP content, When it is projected to Mobius, Then image and resource details remain structured", () => {
         const content: AgentDisplayContent = {
+            artifactId: "",
             data: "aW1hZ2U=",
             mimeType: "image/png",
             name: "preview.png",

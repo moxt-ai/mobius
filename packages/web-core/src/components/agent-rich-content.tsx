@@ -1,7 +1,10 @@
 import type { AgentDisplayContent } from "@moxt-ai/mobius-sdk";
 import { ExternalLink, FileText, Image as ImageIcon, Terminal } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { AgentMarkdown } from "@/components/agent-markdown";
+import type { ChannelConnection } from "@/domain/channel";
+import { readSessionArtifactBytes } from "@/services/pairing-api";
 
 const SAFE_IMAGE_MIME = /^image\/(?:gif|jpeg|png|webp)$/;
 
@@ -33,8 +36,74 @@ function ContentHeader({ content }: { readonly content: AgentDisplayContent }) {
     );
 }
 
-function AgentRichContentItem({ content }: { readonly content: AgentDisplayContent }) {
+function ArtifactImage({
+    connection,
+    content,
+    sessionId,
+}: {
+    readonly connection: ChannelConnection;
+    readonly content: AgentDisplayContent;
+    readonly sessionId: string;
+}) {
+    const [source, setSource] = useState("");
+    useEffect(() => {
+        const controller = new AbortController();
+        let objectUrl = "";
+        void readSessionArtifactBytes(connection, sessionId, content.artifactId, controller.signal)
+            .then((artifact) => {
+                if (controller.signal.aborted || !SAFE_IMAGE_MIME.test(artifact.mimeType)) {
+                    return;
+                }
+                objectUrl = URL.createObjectURL(
+                    new Blob([Uint8Array.from(artifact.bytes)], { type: artifact.mimeType }),
+                );
+                setSource(objectUrl);
+            })
+            .catch(() => {
+                if (!controller.signal.aborted) {
+                    setSource("");
+                }
+            });
+        return () => {
+            controller.abort();
+            if (objectUrl.length > 0) {
+                URL.revokeObjectURL(objectUrl);
+            }
+        };
+    }, [connection, content.artifactId, sessionId]);
+    if (source.length === 0) {
+        return (
+            <div className="rounded-lg border-[0.5px] border-black/8 bg-black/[0.02] p-3 text-xs text-muted-foreground">
+                Image content could not be displayed safely.
+            </div>
+        );
+    }
+    return (
+        <figure className="m-0 overflow-hidden rounded-xl border-[0.5px] border-black/9 bg-white p-2">
+            <ContentHeader content={content} />
+            <img
+                alt={content.name.length > 0 ? content.name : "Agent-provided image"}
+                className="max-h-[480px] w-auto max-w-full rounded-lg object-contain"
+                loading="lazy"
+                src={source}
+            />
+        </figure>
+    );
+}
+
+function AgentRichContentItem({
+    connection,
+    content,
+    sessionId,
+}: {
+    readonly connection?: ChannelConnection | undefined;
+    readonly content: AgentDisplayContent;
+    readonly sessionId?: string | undefined;
+}) {
     if (content.type === "image") {
+        if (content.artifactId.length > 0 && connection !== undefined && sessionId !== undefined) {
+            return <ArtifactImage connection={connection} content={content} sessionId={sessionId} />;
+        }
         if (!SAFE_IMAGE_MIME.test(content.mimeType) || content.data.length === 0) {
             return (
                 <div className="rounded-lg border-[0.5px] border-black/8 bg-black/[0.02] p-3 text-xs text-muted-foreground">
@@ -122,7 +191,15 @@ function AgentRichContentItem({ content }: { readonly content: AgentDisplayConte
     );
 }
 
-export function AgentRichContent({ contents }: { readonly contents: readonly AgentDisplayContent[] }) {
+export function AgentRichContent({
+    connection,
+    contents,
+    sessionId,
+}: {
+    readonly connection?: ChannelConnection | undefined;
+    readonly contents: readonly AgentDisplayContent[];
+    readonly sessionId?: string | undefined;
+}) {
     if (contents.length === 0) {
         return null;
     }
@@ -130,8 +207,10 @@ export function AgentRichContent({ contents }: { readonly contents: readonly Age
         <div className="mt-2 grid gap-2">
             {contents.map((content, index) => (
                 <AgentRichContentItem
+                    connection={connection}
                     content={content}
-                    key={`${content.type}:${content.name}:${content.uri}:${index.toString()}`}
+                    key={`${content.type}:${content.name}:${content.uri}:${content.artifactId}:${index.toString()}`}
+                    sessionId={sessionId}
                 />
             ))}
         </div>

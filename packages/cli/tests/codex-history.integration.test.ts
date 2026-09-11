@@ -1,5 +1,5 @@
 import { watch } from "node:fs";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,10 @@ import { readCodexHistory } from "../src/native-sessions/codex-history.ts";
 
 const acpUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url).toString();
 const appServerUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
+const PNG_BYTES = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    "base64",
+);
 
 async function fixture() {
     const directory = await mkdtemp(join(tmpdir(), "mobius-codex-reader-"));
@@ -174,6 +178,52 @@ describe("Codex saved history boundary", () => {
             }
         },
     );
+
+    it("Given a saved Codex conversation references a workspace raster image by path, When its history is read, Then Mobius embeds the image bytes and omits the filesystem path", async () => {
+        const f = await fixture();
+        try {
+            const imagePath = join(f.directory, "preview.png");
+            await writeFile(imagePath, PNG_BYTES);
+            const savedPath = join(f.native, `${encodeURIComponent(f.nativeId)}.json`);
+            const previous: unknown = JSON.parse(await readFile(savedPath, "utf8"));
+            await writeFile(
+                savedPath,
+                JSON.stringify({
+                    ...(typeof previous === "object" && previous !== null ? previous : {}),
+                    cwd: f.directory,
+                    history: [
+                        {
+                            role: "user",
+                            text: "Look at this screenshot",
+                            images: [{ mimeType: "image/png", data: "AAAA", path: imagePath }],
+                        },
+                        { role: "assistant", text: `Here it is [@image](${imagePath})` },
+                    ],
+                }),
+            );
+            const snapshot = await readCodexHistory(f.agent, f.directory, f.nativeId, new AbortController().signal);
+            expect(snapshot.history.status).toBe("available");
+            if (snapshot.history.status !== "available") {
+                return;
+            }
+            expect(snapshot.history.messages).toEqual([
+                {
+                    role: "user",
+                    text: "Look at this screenshot",
+                    images: [{ data: PNG_BYTES.toString("base64"), mimeType: "image/png", name: "preview.png" }],
+                },
+                {
+                    role: "assistant",
+                    text: "Here it is ",
+                    images: [{ data: PNG_BYTES.toString("base64"), mimeType: "image/png", name: "preview.png" }],
+                },
+            ]);
+            expect(JSON.stringify(snapshot.history)).not.toContain(imagePath);
+            expect(JSON.stringify(snapshot.history)).not.toContain("[Image unavailable]");
+        } finally {
+            await f.close();
+        }
+    });
 
     it("Given a saved Codex conversation is corrupt, When its history is read, Then a sanitized failure is returned and the reader is released", async () => {
         const f = await fixture();

@@ -145,6 +145,7 @@ export type SessionElicitationField = z.infer<typeof elicitationFieldSchema>;
 
 const displayContentSchema = z
     .strictObject({
+        artifactId: z.string().max(128).default(""),
         data: z.string().max(4_000_000),
         mimeType: z.string().max(255),
         name: z.string().max(500),
@@ -162,6 +163,7 @@ export type AgentDisplayContent = z.infer<typeof displayContentSchema>;
 
 const recordedDisplayContentSchema = z
     .strictObject({
+        artifactId: z.string().max(128).default(""),
         data: z.string().max(4_000_000),
         mimeType: z.string().max(255),
         name: z.string().max(500),

@@ -1292,6 +1292,86 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given a paired Runtime, When it requests an artifact upload lease and PUTs matching bytes, Then the Session stores the content for authorized download", async () => {
+        const pairing = await pairChannel();
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (signal) => {
+                    signal.throwIfAborted();
+                    return pairing.created.hostToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: pairing.created.projectId,
+            transport: {
+                fetch: async (request) => await exports.default.fetch(request),
+            },
+        });
+        const signal = new AbortController().signal;
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        try {
+            const session = await client.sessions.create(
+                {
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    directoryId: "root",
+                    policy: new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000),
+                    runtimeId: pairing.created.runtimeId,
+                    sessionId: "runtime-upload-session",
+                    title: "Runtime upload session",
+                },
+                signal,
+            );
+            const bytes = new TextEncoder().encode("runtime raster");
+            const digest = await sha256Hex(bytes);
+            const leaseResponse = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/uploads?token=${pairing.claimed.daemonToken}`,
+                {
+                    body: JSON.stringify({
+                        byteLength: bytes.byteLength,
+                        mediaType: "image/png",
+                        name: "preview.png",
+                        sha256: digest,
+                    }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                },
+            );
+            expect(leaseResponse.status).toBe(201);
+            const lease = await leaseResponse.json();
+            if (
+                !isRecord(lease) ||
+                typeof lease["artifactId"] !== "string" ||
+                typeof lease["uploadToken"] !== "string"
+            ) {
+                throw new Error("Expected a runtime upload lease");
+            }
+            const putResponse = await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/${lease["artifactId"]}/content?token=${pairing.claimed.daemonToken}`,
+                {
+                    body: bytes,
+                    headers: {
+                        "content-type": "image/png",
+                        "x-mobius-upload-token": lease["uploadToken"],
+                    },
+                    method: "PUT",
+                },
+            );
+            expect(putResponse.status).toBe(200);
+            await expect(
+                client.artifacts.download(session.sessionId, lease["artifactId"], signal),
+            ).resolves.toMatchObject({
+                artifact: expect.objectContaining({ artifactId: lease["artifactId"] }),
+                bytes,
+            });
+        } finally {
+            client.close();
+            daemon.socket.close(1000, "Test complete");
+        }
+    });
+
     it("Given a persisted catalog predates verified capabilities and Web-confirmed installation, When its Channel is read, Then capabilities are conservative and obsolete approval metadata is omitted", async () => {
         const pairing = await pairChannel();
         await env.DIRECTORY_DATABASE.prepare(

@@ -126,8 +126,10 @@ import {
     SucceededInstallation,
 } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
+import { uploadRuntimeArtifact } from "./artifacts/runtime-artifact-uploader.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
+import type { LocalRasterImage } from "./authorization/local-raster.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { EmbeddedBotContextApplicator } from "./bots/bot-context-applicator.ts";
 import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
@@ -158,11 +160,29 @@ function botIpcSocketPath(): string {
 }
 
 class DaemonAcpObserver implements AcpSessionObserver {
+    readonly #config: DaemonConfig;
     readonly #record: (sessionId: string, payload: string) => void;
 
-    constructor(record: (sessionId: string, payload: string) => void) {
+    constructor(config: DaemonConfig, record: (sessionId: string, payload: string) => void) {
+        this.#config = config;
         this.#record = record;
     }
+
+    readonly importLocalImage = async (
+        sessionId: string,
+        image: LocalRasterImage,
+        signal: AbortSignal,
+    ): Promise<string> => {
+        try {
+            return (await uploadRuntimeArtifact(this.#config, sessionId, image, signal)).artifactId;
+        } catch (cause) {
+            signal.throwIfAborted();
+            if (cause instanceof Error && cause.name === "AbortError") {
+                throw cause;
+            }
+            return "";
+        }
+    };
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.#record(event.sessionId, encodeSessionCommandsUpdatedEvent(event));
@@ -2269,7 +2289,7 @@ export async function runDaemon(
         }
         publisher.recordAttempt(sessionId, payload, attemptId);
     };
-    const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore);
+    const sessions = new AcpSessionManager(new DaemonAcpObserver(config, recordSessionEvent), sessionStore);
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(audit, config.channelId, config.relayUrl);

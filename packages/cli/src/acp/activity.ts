@@ -147,6 +147,7 @@ function readContentOutputDetail(content: unknown): string {
 function summarizeDisplayContent(content: AgentDisplayContent): AgentDisplayContent {
     return {
         ...content,
+        artifactId: truncate(content.artifactId, 128),
         data: truncate(content.data, AGENT_ACTIVITY_DETAIL_LIMIT),
         mimeType: truncate(content.mimeType, 255),
         name: truncate(content.name, 500),
@@ -161,6 +162,7 @@ function summarizeDisplayContent(content: AgentDisplayContent): AgentDisplayCont
 
 function contentFitsRecordingEnvelope(content: AgentDisplayContent): boolean {
     return (
+        content.artifactId.length <= 128 &&
         content.data.length <= AGENT_ACTIVITY_RECORDED_FIELD_LIMIT &&
         content.mimeType.length <= 255 &&
         content.name.length <= 500 &&
@@ -212,6 +214,7 @@ function recordedDetail(
 
 function emptyDisplayContent(type: AgentDisplayContent["type"]): AgentDisplayContent {
     return {
+        artifactId: "",
         data: "",
         mimeType: "",
         name: "",
@@ -222,6 +225,23 @@ function emptyDisplayContent(type: AgentDisplayContent["type"]): AgentDisplayCon
         text: "",
         type,
         uri: "",
+    };
+}
+
+export function imageDisplayContent(
+    mimeType: string,
+    name: string,
+    data: string,
+    artifactId = "",
+    uri = "",
+): AgentDisplayContent {
+    return {
+        ...emptyDisplayContent("image"),
+        artifactId,
+        data,
+        mimeType,
+        name,
+        uri,
     };
 }
 

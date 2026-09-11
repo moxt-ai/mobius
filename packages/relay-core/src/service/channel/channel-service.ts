@@ -1,4 +1,11 @@
-import { ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
+import {
+    type ArtifactUploadAuthorization,
+    type ArtifactUploadLease,
+    type AvailableArtifactDescriptor,
+    type CreateArtifactUploadRequest,
+    ProjectScope,
+    SessionRuntimeError,
+} from "../../entity/do/session.ts";
 import type { AgentDescriptor, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway, SessionArtifactGateway, SessionQueryGateway } from "../../gateway/index.ts";
 import type { PairingOperations } from "../pairing/pairing-operations.ts";
@@ -91,5 +98,67 @@ export class ChannelService {
             throw new SessionRuntimeError("session_access_denied", "The Turn is bound to another Runtime");
         }
         return await this.#sessionArtifacts.readArtifactContent(scope, sessionId, artifactId, signal);
+    };
+
+    private readonly authorizeRuntimeSession = async (
+        channelId: string,
+        token: string,
+        sessionId: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
+        const session = await this.#sessionQueries.readSession(access.scope, sessionId, signal);
+        if (session.runtimeId !== access.runtimeId) {
+            throw new SessionRuntimeError("session_access_denied", "The Session is bound to another Runtime");
+        }
+        return access.scope;
+    };
+
+    readonly createRuntimeArtifactUpload = async (
+        channelId: string,
+        token: string,
+        sessionId: string,
+        request: CreateArtifactUploadRequest,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactUploadAuthorization> => {
+        const scope = await this.authorizeRuntimeSession(channelId, token, sessionId, signal);
+        return await this.#sessionArtifacts.createArtifactUpload(scope, sessionId, request, now, signal);
+    };
+
+    readonly authorizeRuntimeArtifactUpload = async (
+        channelId: string,
+        token: string,
+        sessionId: string,
+        artifactId: string,
+        uploadToken: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<ArtifactUploadLease> => {
+        const scope = await this.authorizeRuntimeSession(channelId, token, sessionId, signal);
+        return await this.#sessionArtifacts.authorizeArtifactUpload(
+            scope,
+            sessionId,
+            artifactId,
+            uploadToken,
+            now,
+            signal,
+        );
+    };
+
+    readonly completeRuntimeArtifactUpload = async (
+        channelId: string,
+        token: string,
+        sessionId: string,
+        lease: ArtifactUploadLease,
+        bytes: Uint8Array,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<AvailableArtifactDescriptor> => {
+        const scope = await this.authorizeRuntimeSession(channelId, token, sessionId, signal);
+        if (lease.artifact.sessionId !== sessionId) {
+            throw new SessionRuntimeError("session_access_denied", "The artifact upload belongs to another Session");
+        }
+        return await this.#sessionArtifacts.completeArtifactUpload(scope, lease, bytes, now, signal);
     };
 }
