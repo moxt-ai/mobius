@@ -1,6 +1,7 @@
 import { WebSocket } from "undici";
 
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { runtimeAuthorization } from "./runtime-authentication.ts";
 
 const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -26,12 +27,8 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
 
     return new Promise((resolve, reject) => {
         const endpoint = new URL(url);
-        const headers: Record<string, string> = {};
-        if (endpoint.pathname.endsWith("/v1/runtimes/connect")) {
-            const runtimeCredential = endpoint.searchParams.get("token") ?? "";
-            endpoint.searchParams.delete("token");
-            headers["authorization"] = `Bearer ${runtimeCredential}`;
-        }
+        const headers = runtimeAuthorization(endpoint);
+        endpoint.searchParams.delete("token");
         const socket = new WebSocket(endpoint, {
             dispatcher: environmentProxyDispatcher,
             headers,

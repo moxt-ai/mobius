@@ -73,7 +73,8 @@ describe("Mobius CLI", () => {
             if (
                 request.method === "PUT" &&
                 url.pathname === `${MOBIUS_API_PREFIX}/channels/${channelId}/catalog` &&
-                url.searchParams.get("token") === daemonToken
+                !url.searchParams.has("token") &&
+                request.headers.authorization === `Bearer ${daemonToken}`
             ) {
                 request.resume();
                 response.writeHead(204);

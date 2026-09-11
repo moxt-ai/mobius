@@ -93,7 +93,8 @@ A redemption succeeds exactly once and returns
 `{"channelId":"...","runtimeCredential":"...","runtimeId":"..."}`.
 The Runtime then connects to `WSS /v1/runtimes/connect` with
 `Authorization: Bearer <runtimeCredential>`; the credential is never placed in
-the public WebSocket URL. Replaying a claimed or expired code returns
+the public WebSocket URL. Its authenticated catalog, reconciliation, and artifact
+HTTP requests use the same header-only credential transport. Replaying a claimed or expired code returns
 `invalid_pairing_code` and never issues another credential.
 
 An owner can inspect the lifecycle without exposing `pollToken` in a URL:

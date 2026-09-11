@@ -18,6 +18,7 @@ import {
     decodeNativeSessionCommand,
     decodeNativeSessionResult,
     decodeNativeSessionTurnForkRequest,
+    decodeRuntimeDeliveryReceived,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
@@ -31,6 +32,8 @@ import {
     encodeCommittedSessionEvent,
     encodeNativeSessionResult,
     encodeNativeSessionTurnForkCommand,
+    encodeRuntimeDelivery,
+    encodeRuntimeDeliveryCommitted,
     encodeRuntimeStatusEvent,
     encodeSessionEventAcknowledgement,
     encodeSessionEventRejection,
@@ -44,6 +47,9 @@ import {
     type NativeSessionTurnForkCommand,
     type NativeSessionTurnForkRequest,
     ProtocolMessageError,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_STATUS_KIND,
     SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
@@ -73,6 +79,8 @@ import { sha256 } from "../do/session-archive-codec.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
+const RUNTIME_DELIVERY_WINDOW = 16;
+const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
 
 function reconcileNativeHistoryCoverage(
     history: NativeSessionHistory,
@@ -134,6 +142,15 @@ function sessionErrorCloseCode(error: SessionRuntimeError): 1008 | 1011 | 1013 {
     return 1008;
 }
 
+function isTerminalSessionEventError(error: SessionRuntimeError): boolean {
+    return (
+        error.code === "event_source_conflict" ||
+        error.code === "session_access_denied" ||
+        error.code === "session_conflict" ||
+        error.code === "session_quota_exceeded"
+    );
+}
+
 export interface RelayClock {
     readonly now: () => number;
 }
@@ -161,6 +178,10 @@ export class ChannelActor {
     readonly #queries: SessionQueryGateway;
     readonly #runtimeId: string;
     readonly #scope: ProjectScope;
+    readonly #inFlightDeliveries = new Map<string, number>();
+    #inFlightDeliveryBytes = 0;
+    #deliveryReceipts = false;
+    #dispatchTail: Promise<void> = Promise.resolve();
 
     constructor(cx: {
         readonly config: { readonly runtimeId: string; readonly scope: ProjectScope };
@@ -182,11 +203,20 @@ export class ChannelActor {
     }
 
     readonly attachDaemon = async (replacedExistingConnection: boolean, signal: AbortSignal): Promise<void> => {
+        this.#clearInFlightDeliveries();
         if (replacedExistingConnection) {
             await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         }
         this.broadcastRuntimeStatus(true);
         await this.dispatchPending(signal);
+    };
+
+    readonly configureDaemonDelivery = (deliveryReceipts: boolean): void => {
+        if (this.#deliveryReceipts === deliveryReceipts) {
+            return;
+        }
+        this.#deliveryReceipts = deliveryReceipts;
+        this.#clearInFlightDeliveries();
     };
 
     readonly attachHost = (socket: ChannelSocket, _signal: AbortSignal): Promise<void> => {
@@ -222,6 +252,40 @@ export class ChannelActor {
         }
         try {
             const kind = decodeMessageKind(message);
+            if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
+                if (!this.#deliveryReceipts) {
+                    throw new ProtocolMessageError("Runtime delivery receipts were not negotiated");
+                }
+                const receipt = decodeRuntimeDeliveryReceived(message);
+                try {
+                    await this.#commands.markPendingWorkCompleted(
+                        this.#scope,
+                        receipt.sessionId,
+                        receipt.deliveryId,
+                        this.#clock.now(),
+                        signal,
+                    );
+                } catch (error) {
+                    if (
+                        !(error instanceof SessionRuntimeError) ||
+                        (error.code !== "pending_work_not_found" &&
+                            error.code !== "session_not_found" &&
+                            error.code !== "session_deleted")
+                    ) {
+                        throw error;
+                    }
+                }
+                this.#removeInFlightDelivery(receipt.deliveryId);
+                socket.send(
+                    encodeRuntimeDeliveryCommitted({
+                        deliveryId: receipt.deliveryId,
+                        kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+                        sessionId: receipt.sessionId,
+                    }),
+                );
+                await this.dispatchPending(signal);
+                return;
+            }
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(message);
                 let result: Awaited<ReturnType<SessionCommandGateway["commitEvent"]>>;
@@ -249,6 +313,17 @@ export class ChannelActor {
                         socket.send(
                             encodeSessionEventRejection({
                                 code: SessionEventRejectionCode.SessionNotFound,
+                                eventId: envelope.eventId,
+                                kind: SESSION_EVENT_REJECTED_KIND,
+                                sessionId: envelope.sessionId,
+                            }),
+                        );
+                        return;
+                    }
+                    if (!signal.aborted && error instanceof SessionRuntimeError && isTerminalSessionEventError(error)) {
+                        socket.send(
+                            encodeSessionEventRejection({
+                                code: SessionEventRejectionCode.SessionRejected,
                                 eventId: envelope.eventId,
                                 kind: SESSION_EVENT_REJECTED_KIND,
                                 sessionId: envelope.sessionId,
@@ -762,8 +837,12 @@ export class ChannelActor {
         if (daemon === undefined) {
             return false;
         }
-        daemon.send(message);
-        return true;
+        try {
+            daemon.send(message);
+            return true;
+        } catch {
+            return false;
+        }
     };
 
     private readonly acceptAndDeliverInteractionResponse = async (
@@ -789,16 +868,7 @@ export class ChannelActor {
         if (accepted.pendingWork.state.kind === "completed") {
             return;
         }
-        if (!this.sendToDaemon(payload)) {
-            return;
-        }
-        await this.#commands.markPendingWorkCompleted(
-            this.#scope,
-            sessionId,
-            accepted.pendingWork.workId,
-            this.#clock.now(),
-            signal,
-        );
+        await this.dispatchPending(signal);
     };
 
     private readonly sendInteractionFailure = (
@@ -823,6 +893,18 @@ export class ChannelActor {
     };
 
     readonly dispatchPending = async (signal: AbortSignal): Promise<void> => {
+        const operation = this.#dispatchTail.then(async () => {
+            if (this.#deliveryReceipts) {
+                await this.#dispatchReliablePending(signal);
+                return;
+            }
+            await this.#dispatchLegacyPending(signal);
+        });
+        this.#dispatchTail = operation.catch(() => undefined);
+        await operation;
+    };
+
+    readonly #dispatchLegacyPending = async (signal: AbortSignal): Promise<void> => {
         let delivered = 0;
         while (delivered < 500) {
             const batch = await this.#commands.listPendingDaemonDeliveries(
@@ -852,6 +934,55 @@ export class ChannelActor {
                 return;
             }
         }
+    };
+
+    readonly #dispatchReliablePending = async (signal: AbortSignal): Promise<void> => {
+        while (this.#inFlightDeliveries.size < RUNTIME_DELIVERY_WINDOW) {
+            const batch = await this.#commands.listPendingDaemonDeliveries(this.#scope, this.#runtimeId, 100, signal);
+            let sent = 0;
+            for (const delivery of batch) {
+                signal.throwIfAborted();
+                if (this.#inFlightDeliveries.has(delivery.pendingWork.workId)) {
+                    continue;
+                }
+                const encoded = encodeRuntimeDelivery({
+                    deliveryId: delivery.pendingWork.workId,
+                    kind: RUNTIME_DELIVERY_KIND,
+                    payload: delivery.payload,
+                    sessionId: delivery.pendingWork.sessionId,
+                });
+                const byteLength = new TextEncoder().encode(encoded).byteLength;
+                if (this.#inFlightDeliveryBytes + byteLength > RUNTIME_DELIVERY_BYTE_LIMIT) {
+                    continue;
+                }
+                if (!this.sendToDaemon(encoded)) {
+                    return;
+                }
+                this.#inFlightDeliveries.set(delivery.pendingWork.workId, byteLength);
+                this.#inFlightDeliveryBytes += byteLength;
+                sent += 1;
+                if (this.#inFlightDeliveries.size >= RUNTIME_DELIVERY_WINDOW) {
+                    return;
+                }
+            }
+            if (sent === 0 || batch.length < 100) {
+                return;
+            }
+        }
+    };
+
+    readonly #removeInFlightDelivery = (deliveryId: string): void => {
+        const byteLength = this.#inFlightDeliveries.get(deliveryId);
+        if (byteLength === undefined) {
+            return;
+        }
+        this.#inFlightDeliveries.delete(deliveryId);
+        this.#inFlightDeliveryBytes -= byteLength;
+    };
+
+    readonly #clearInFlightDeliveries = (): void => {
+        this.#inFlightDeliveries.clear();
+        this.#inFlightDeliveryBytes = 0;
     };
 
     private readonly hasOnlineDaemon = (): boolean => this.#peers.daemons().some((socket) => socket.isOpen());

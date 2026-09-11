@@ -2,6 +2,7 @@ import { fetch } from "undici";
 
 import type { DaemonConfig } from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { relayHttpEndpoint, runtimeAuthorization } from "../relay-connection/runtime-authentication.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;
 
@@ -15,8 +16,7 @@ class AgentCatalogPublishError extends Error {
 }
 
 function catalogEndpoint(config: DaemonConfig): URL {
-    const endpoint = new URL(config.relayUrl);
-    endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+    const endpoint = relayHttpEndpoint(config.relayUrl);
     if (endpoint.pathname.endsWith("/daemon")) {
         endpoint.pathname = `${endpoint.pathname.slice(0, -"/daemon".length)}/catalog`;
         return endpoint;
@@ -48,7 +48,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                 installableAgents: catalog.installableAgents,
             }),
             dispatcher: environmentProxyDispatcher,
-            headers: { "content-type": "application/json" },
+            headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },
             method: "PUT",
             signal: requestSignal,
         });

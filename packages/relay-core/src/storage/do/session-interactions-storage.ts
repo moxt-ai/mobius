@@ -228,26 +228,39 @@ export class SessionInteractionsStorage {
         decodeStorageRows(
             PendingWorkRecordSchema,
             this.#database.query(
-                `SELECT p.* FROM pending_work p
-         LEFT JOIN turns t
-           ON t.scope_key = p.scope_key AND t.session_id = p.session_id
-          AND p.work_id = 'dispatch_' || t.turn_id
-         WHERE p.scope_key = ? AND p.runtime_id = ?
-           AND p.work_kind IN ('dispatch', 'interaction_response')
-           AND p.state IN ('pending', 'retryable')
-           AND (
-             p.work_kind = 'interaction_response'
-             OR COALESCE(json_extract(t.command_json, '$.disposition'), 'reject') <> 'queue'
-             OR NOT EXISTS (
-               SELECT 1 FROM turns prior
-               WHERE prior.scope_key = t.scope_key AND prior.session_id = t.session_id
-                 AND prior.rowid < t.rowid
-                 AND prior.state IN ('queued', 'running', 'indeterminate')
-                 AND COALESCE(json_extract(prior.command_json, '$.disposition'), 'reject') <> 'steer'
-             )
-           )
-         ORDER BY p.queued_at, p.work_id
-         LIMIT ?`,
+                `WITH ranked_deliveries AS (
+                   SELECT p.scope_key, p.session_id, p.work_id,
+                          ROW_NUMBER() OVER (
+                            PARTITION BY p.session_id
+                            ORDER BY p.queued_at, p.work_id
+                          ) AS session_position
+                   FROM pending_work p
+                   LEFT JOIN turns t
+                     ON t.scope_key = p.scope_key AND t.session_id = p.session_id
+                    AND p.work_id = 'dispatch_' || t.turn_id
+                   WHERE p.scope_key = ? AND p.runtime_id = ?
+                     AND p.work_kind IN ('dispatch', 'interaction_response')
+                     AND p.state IN ('pending', 'retryable')
+                     AND (
+                       p.work_kind = 'interaction_response'
+                       OR COALESCE(json_extract(t.command_json, '$.disposition'), 'reject') <> 'queue'
+                       OR NOT EXISTS (
+                         SELECT 1 FROM turns prior
+                         WHERE prior.scope_key = t.scope_key AND prior.session_id = t.session_id
+                           AND prior.rowid < t.rowid
+                           AND prior.state IN ('queued', 'running', 'indeterminate')
+                           AND COALESCE(json_extract(prior.command_json, '$.disposition'), 'reject') <> 'steer'
+                       )
+                     )
+                 )
+                 SELECT p.*
+                 FROM ranked_deliveries ranked
+                 INNER JOIN pending_work p
+                   ON p.scope_key = ranked.scope_key
+                  AND p.session_id = ranked.session_id
+                  AND p.work_id = ranked.work_id
+                 ORDER BY ranked.session_position, p.queued_at, p.work_id
+                 LIMIT ?`,
                 [input.scopeKey, input.runtimeId, input.limit],
             ),
         );

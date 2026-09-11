@@ -66,7 +66,10 @@ Values shaped as Platform AppCredentials or Conversation credentials are rejecte
 before Agent discovery or network I/O. The local execution boundary still
 normalizes the executable and workspace and enforces local grants immediately
 before a side effect. The connector removes the credential from the WebSocket URL
-and presents it only as the `Authorization: Bearer` upgrade header.
+and presents it only as the `Authorization: Bearer` upgrade header. Finite Runtime
+requests, including Agent catalog publication, active-turn reconciliation, and
+prompt artifact downloads, use the same header and never copy the credential into
+their HTTP URLs.
 
 The `mobius pair` and `mobius start` shells now delegate to
 `MobiusRuntimeEngine`. Moxt's packaged CLI imports the same `/runtime` entry and

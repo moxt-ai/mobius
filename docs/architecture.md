@@ -75,6 +75,13 @@ container, registration metadata, or application subclass. Core imports no
 Cloudflare API. The actor validates protocol
 messages, selects the one active daemon, routes commands, and commits reliable
 session events before acknowledging them.
+One Runtime uses one multiplexed daemon WebSocket for all of its Sessions. The
+Runtime ingress scheduler preserves order within each Session while allowing up
+to eight independent Session lanes to commit concurrently; heartbeats bypass
+that queue. The connection admits at most 512 scheduled daemon messages, so an
+overloaded daemon reconnects and replays from durable state instead of growing
+Relay memory without bound. A terminal event failure is rejected for that event
+without closing the shared Runtime connection, so another Session can continue.
 Runtime disconnect cleanup persists its intent and per-session progress. Alarms
 and reconnects resume unfinished cleanup after cancellation or a handler deadline;
 completed sessions are not disconnected again when recovery resumes.
@@ -157,6 +164,23 @@ outbox; Relay acknowledgements are emitted only after the authoritative event,
 projection, and archive job commit. Reconnection retransmits the same event IDs,
 so it repairs delivery without rerunning a command. Clients catch up with ordered
 cursors, then consume the same committed-event envelope live.
+
+Daemon-to-Relay replay is fair across event sources: the connection window is 16
+events and 32 MiB, with at most four unacknowledged events from one source. Each
+ACK advances only that source. The SQLite outbox admits 10,000 ordinary events or
+128 MiB and reserves an additional 128 events or 8 MiB for terminal outcomes.
+Once the reserved capacity is exhausted, the local execution boundary fails
+admission explicitly instead of consuming unbounded disk.
+
+For Relay-to-daemon PendingWork, a receipt-capable connection receives a
+`runtime.delivery` envelope with a stable delivery ID. The daemon validates and
+stores it in a bounded SQLite inbox before sending `runtime.delivery.received`;
+only then does Relay mark PendingWork complete and return
+`runtime.delivery.committed`. Either side can reconnect between those steps and
+repeat the same ID without rerunning completed work. Relay keeps at most 16
+deliveries or 16 MiB in flight, while the daemon inbox holds at most 64 deliveries
+or 64 MiB. Daemons that do not advertise delivery receipts retain the previous
+send-compatible behavior during a rolling upgrade.
 
 Public Turn submission names a Session, content, and an idempotency key. Relay
 loads the server-owned Session binding, reauthorizes its exact Runtime, commits

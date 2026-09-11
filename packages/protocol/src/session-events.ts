@@ -61,6 +61,7 @@ export const SESSION_EVENT_REJECTED_KIND = "session.event.rejected";
 export const SessionEventRejectionCode = {
     SessionDeleted: "session_deleted",
     SessionNotFound: "session_not_found",
+    SessionRejected: "session_rejected",
 } as const;
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;

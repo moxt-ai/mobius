@@ -15,10 +15,16 @@ import {
     type AgentActivityDetailCapture,
     type AgentActivityEvent,
     type AgentMessageDeltaEvent,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_STATUS_KIND,
+    type RuntimeDelivery,
+    type RuntimeDeliveryCommitted,
+    type RuntimeDeliveryReceived,
     type RuntimeHeartbeatAckEvent,
     type RuntimeHeartbeatEvent,
     type RuntimeLivenessReadyEvent,
@@ -41,6 +47,7 @@ const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 10_000;
 const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
 const MAX_EVENT_TEXT_LENGTH = 100_000;
+const MAX_RUNTIME_DELIVERY_PAYLOAD_LENGTH = 8 * 1024 * 1024;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
 const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);
 const TOOL_KINDS = new Set([
@@ -392,6 +399,43 @@ export function decodeRuntimeHeartbeatAckEvent(encoded: string): RuntimeHeartbea
     };
 }
 
+export function decodeRuntimeDelivery(encoded: string): RuntimeDelivery {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["deliveryId", "kind", "payload", "sessionId"]);
+    assertKind(value, RUNTIME_DELIVERY_KIND);
+
+    return {
+        deliveryId: readIdentifier(value, "deliveryId"),
+        kind: RUNTIME_DELIVERY_KIND,
+        payload: readString(value, "payload", MAX_RUNTIME_DELIVERY_PAYLOAD_LENGTH),
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
+export function decodeRuntimeDeliveryReceived(encoded: string): RuntimeDeliveryReceived {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["deliveryId", "kind", "sessionId"]);
+    assertKind(value, RUNTIME_DELIVERY_RECEIVED_KIND);
+
+    return {
+        deliveryId: readIdentifier(value, "deliveryId"),
+        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
+export function decodeRuntimeDeliveryCommitted(encoded: string): RuntimeDeliveryCommitted {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["deliveryId", "kind", "sessionId"]);
+    assertKind(value, RUNTIME_DELIVERY_COMMITTED_KIND);
+
+    return {
+        deliveryId: readIdentifier(value, "deliveryId"),
+        kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+        sessionId: readIdentifier(value, "sessionId"),
+    };
+}
+
 export function decodeSessionStartedEvent(encoded: string): SessionStartedEvent {
     const value = parseJson(encoded);
     assertExactKeys(value, ["commandId", "kind", "attemptId", "sessionId"]);
@@ -508,6 +552,18 @@ export function encodeRuntimeHeartbeatEvent(message: RuntimeHeartbeatEvent): str
 
 export function encodeRuntimeHeartbeatAckEvent(message: RuntimeHeartbeatAckEvent): string {
     return JSON.stringify(decodeRuntimeHeartbeatAckEvent(JSON.stringify(message)));
+}
+
+export function encodeRuntimeDelivery(message: RuntimeDelivery): string {
+    return JSON.stringify(decodeRuntimeDelivery(JSON.stringify(message)));
+}
+
+export function encodeRuntimeDeliveryReceived(message: RuntimeDeliveryReceived): string {
+    return JSON.stringify(decodeRuntimeDeliveryReceived(JSON.stringify(message)));
+}
+
+export function encodeRuntimeDeliveryCommitted(message: RuntimeDeliveryCommitted): string {
+    return JSON.stringify(decodeRuntimeDeliveryCommitted(JSON.stringify(message)));
 }
 
 export function encodeSessionStartedEvent(message: SessionStartedEvent): string {

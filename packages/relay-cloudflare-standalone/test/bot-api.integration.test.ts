@@ -6,6 +6,7 @@ import {
     decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventRejection,
     encodeBotExecutionBindingApprovedEvent,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
@@ -13,6 +14,7 @@ import {
     SESSION_EVENT_KIND,
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
+    SessionEventRejectionCode,
 } from "@moxt-ai/mobius-protocol";
 import { ExternalIdentityAuthenticatorRegistry } from "@moxt-ai/mobius-relay-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -136,10 +138,6 @@ class SocketMessages {
         }
         return new Promise((resolve) => this.#resolvers.push(resolve));
     };
-}
-
-function waitForSocketClose(socket: WebSocket): Promise<CloseEvent> {
-    return new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
 }
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
@@ -1360,7 +1358,6 @@ describe.sequential("Provider-neutral Bot API", () => {
             await expectConversationEvents(runtimeA, botA, conversationA, acceptedA, behaviorA);
             await expectConversationEvents(runtimeA, botB, conversationB, acceptedB, behaviorB);
 
-            const crossRuntimeClose = waitForSocketClose(daemonA.socket);
             daemonA.socket.send(
                 encodeSessionEventEnvelope(
                     attemptEnvelope(
@@ -1373,7 +1370,12 @@ describe.sequential("Provider-neutral Bot API", () => {
                     ),
                 ),
             );
-            await expect(crossRuntimeClose).resolves.toMatchObject({ code: 1008, reason: "session_access_denied" });
+            expect(decodeSessionEventRejection(await daemonA.messages.next())).toMatchObject({
+                code: SessionEventRejectionCode.SessionRejected,
+                eventId: "event_runtime_a_cross_commit",
+                sessionId: commandB.sessionId,
+            });
+            expect(daemonA.socket.readyState).toBe(WebSocket.OPEN);
 
             const revoked = await exports.default.fetch(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${runtimeA.projectId}/runtimes/${runtimeA.runtimeId}`,

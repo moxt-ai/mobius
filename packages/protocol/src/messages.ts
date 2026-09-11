@@ -4,6 +4,9 @@ export const RUNTIME_STATUS_KIND = "runtime.status";
 export const RUNTIME_LIVENESS_READY_KIND = "runtime.liveness.ready";
 export const RUNTIME_HEARTBEAT_KIND = "runtime.heartbeat";
 export const RUNTIME_HEARTBEAT_ACK_KIND = "runtime.heartbeat.ack";
+export const RUNTIME_DELIVERY_KIND = "runtime.delivery";
+export const RUNTIME_DELIVERY_RECEIVED_KIND = "runtime.delivery.received";
+export const RUNTIME_DELIVERY_COMMITTED_KIND = "runtime.delivery.committed";
 export const SESSION_STARTED_KIND = "session.started";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
 export const AGENT_ACTIVITY_KIND = "agent.activity";
@@ -60,6 +63,25 @@ export interface RuntimeHeartbeatEvent {
 export interface RuntimeHeartbeatAckEvent {
     readonly heartbeatId: string;
     readonly kind: typeof RUNTIME_HEARTBEAT_ACK_KIND;
+}
+
+export interface RuntimeDelivery {
+    readonly deliveryId: string;
+    readonly kind: typeof RUNTIME_DELIVERY_KIND;
+    readonly payload: string;
+    readonly sessionId: string;
+}
+
+export interface RuntimeDeliveryReceived {
+    readonly deliveryId: string;
+    readonly kind: typeof RUNTIME_DELIVERY_RECEIVED_KIND;
+    readonly sessionId: string;
+}
+
+export interface RuntimeDeliveryCommitted {
+    readonly deliveryId: string;
+    readonly kind: typeof RUNTIME_DELIVERY_COMMITTED_KIND;
+    readonly sessionId: string;
 }
 
 export interface SessionStartedEvent {

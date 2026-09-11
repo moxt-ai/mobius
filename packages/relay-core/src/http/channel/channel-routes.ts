@@ -30,7 +30,7 @@ export function createChannelRoutes() {
                 validateAgentCatalog(agents, installableAgents);
                 await useCases.updateAgentCatalog(
                     validateIdentifier(context.req.param("channelId"), "channel_id"),
-                    context.req.query("token") ?? "",
+                    context.req.query("token") ?? bearerToken(context.req.raw),
                     agents,
                     installableAgents,
                     context.req.raw.signal,
@@ -108,7 +108,7 @@ export function createChannelRoutes() {
             const useCases = context.env.services.channels;
             const content = await useCases.readArtifactContent(
                 validateIdentifier(context.req.param("channelId"), "channel_id"),
-                context.req.query("token") ?? "",
+                context.req.query("token") ?? bearerToken(context.req.raw),
                 validateIdentifier(context.req.param("sessionId"), "session_id"),
                 validateIdentifier(context.req.param("commandId"), "command_id"),
                 validateIdentifier(context.req.param("artifactId"), "artifact_id"),
@@ -127,7 +127,7 @@ export function createChannelRoutes() {
             const useCases = context.env.services.channels;
             return await useCases.acceptDaemon(
                 validateIdentifier(context.req.param("channelId"), "channel_id"),
-                context.req.query("token") ?? "",
+                context.req.query("token") ?? bearerToken(context.req.raw),
                 context.req.raw,
                 context.req.raw.signal,
             );

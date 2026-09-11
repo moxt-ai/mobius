@@ -3,10 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import { decodeSessionEventEnvelope, SESSION_EVENT_ACK_KIND } from "@moxt-ai/mobius-protocol";
+import {
+    decodeSessionEventEnvelope,
+    RUNTIME_DELIVERY_KIND,
+    type RuntimeDelivery,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_REJECTED_KIND,
+    SessionEventRejectionCode,
+} from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SessionEventOutbox } from "../src/relay-connection/session-event-outbox.ts";
+import {
+    RuntimeDeliveryInboxCapacityError,
+    SessionEventOutbox,
+    SessionEventOutboxCapacityError,
+} from "../src/relay-connection/session-event-outbox.ts";
 
 const createdDirectories: string[] = [];
 
@@ -15,6 +26,136 @@ afterEach(async () => {
 });
 
 describe("durable daemon session event outbox", () => {
+    it("Given Runtime deliveries can complete on either side of a reconnect, When daemon receipt and Relay confirmation arrive in either order, Then each command remains durable and is released exactly once", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-runtime-delivery-inbox-"));
+        createdDirectories.push(directory);
+        const databasePath = join(directory, "audit.sqlite");
+        const limits = {
+            criticalEventCount: 3,
+            criticalEventBytes: 4_096,
+            standardEventCount: 2,
+            standardEventBytes: 2_048,
+            runtimeDeliveryCount: 2,
+            runtimeDeliveryBytes: 8_192,
+        };
+        const processedFirst: RuntimeDelivery = {
+            deliveryId: "delivery-processed-first",
+            kind: RUNTIME_DELIVERY_KIND,
+            payload: JSON.stringify({ kind: "session.prompt", sessionId: "session-a" }),
+            sessionId: "session-a",
+        };
+        const committedFirst: RuntimeDelivery = {
+            deliveryId: "delivery-committed-first",
+            kind: RUNTIME_DELIVERY_KIND,
+            payload: JSON.stringify({ kind: "session.cancel", sessionId: "session-b" }),
+            sessionId: "session-b",
+        };
+        const first = new SessionEventOutbox(databasePath, limits);
+        expect(first.claimRuntimeDelivery(processedFirst)).toMatchObject({ duplicate: false, state: "received" });
+        expect(first.markRuntimeDeliveryProcessed(processedFirst.deliveryId, processedFirst.sessionId)).toBe(true);
+        expect(first.claimRuntimeDelivery(committedFirst)).toMatchObject({ duplicate: false, state: "received" });
+        expect(first.markRuntimeDeliveryCommitted(committedFirst.deliveryId, committedFirst.sessionId)).toBe(true);
+        expect(() =>
+            first.claimRuntimeDelivery({
+                deliveryId: "delivery-over-capacity",
+                kind: RUNTIME_DELIVERY_KIND,
+                payload: JSON.stringify({ kind: "session.cancel", sessionId: "session-c" }),
+                sessionId: "session-c",
+            }),
+        ).toThrowError(RuntimeDeliveryInboxCapacityError);
+        first.close();
+
+        const restarted = new SessionEventOutbox(databasePath, limits);
+        expect(restarted.claimRuntimeDelivery(processedFirst)).toMatchObject({ duplicate: true, state: "processed" });
+        expect(restarted.claimRuntimeDelivery(committedFirst)).toMatchObject({
+            duplicate: true,
+            state: "relay_committed",
+        });
+        expect(restarted.markRuntimeDeliveryCommitted(processedFirst.deliveryId, processedFirst.sessionId)).toBe(true);
+        expect(restarted.markRuntimeDeliveryProcessed(committedFirst.deliveryId, committedFirst.sessionId)).toBe(true);
+        expect(restarted.runtimeDeliveries()).toEqual([]);
+        restarted.close();
+    });
+
+    it("Given an existing daemon database predates isolated Session rejection, When Relay rejects one terminal event, Then the schema migrates and quarantines it without retaining replay pressure", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-rejection-migration-"));
+        createdDirectories.push(directory);
+        const databasePath = join(directory, "audit.sqlite");
+        const legacy = new DatabaseSync(databasePath);
+        legacy.exec(`
+          CREATE TABLE relay_session_event_dead_letters (
+            ordinal INTEGER PRIMARY KEY,
+            event_id TEXT NOT NULL UNIQUE,
+            session_id TEXT NOT NULL,
+            envelope_json TEXT NOT NULL,
+            rejection_code TEXT NOT NULL CHECK (
+              rejection_code IN ('session_deleted', 'session_not_found')
+            )
+          ) STRICT;
+        `);
+        legacy.close();
+
+        const outbox = new SessionEventOutbox(databasePath);
+        const encoded = outbox.enqueue("session-a", JSON.stringify({ kind: "session.info.updated" }));
+        const event = decodeSessionEventEnvelope(encoded);
+        expect(
+            outbox.quarantine({
+                code: SessionEventRejectionCode.SessionRejected,
+                eventId: event.eventId,
+                kind: SESSION_EVENT_REJECTED_KIND,
+                sessionId: event.sessionId,
+            }),
+        ).toBe(true);
+        expect(outbox.pending()).toEqual([]);
+        outbox.close();
+
+        const migrated = new DatabaseSync(databasePath);
+        expect(
+            migrated
+                .prepare("SELECT rejection_code FROM relay_session_event_dead_letters WHERE event_id = ?")
+                .get(event.eventId),
+        ).toEqual({ rejection_code: "session_rejected" });
+        migrated.close();
+    });
+
+    it("Given Relay acknowledgements stop draining the local event outbox, When its bounded admission policy is exhausted, Then ordinary events are rejected while reserved terminal capacity remains usable", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-capacity-"));
+        createdDirectories.push(directory);
+        const outbox = new SessionEventOutbox(join(directory, "audit.sqlite"), {
+            criticalEventCount: 3,
+            criticalEventBytes: 4_096,
+            standardEventCount: 2,
+            standardEventBytes: 2_048,
+            runtimeDeliveryCount: 4,
+            runtimeDeliveryBytes: 8_192,
+        });
+        outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "first" }));
+        outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "second" }));
+
+        expect(() =>
+            outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "blocked" })),
+        ).toThrowError(SessionEventOutboxCapacityError);
+        expect(() =>
+            outbox.enqueueCritical("session-a", JSON.stringify({ kind: "session.failed", message: "bounded" })),
+        ).not.toThrow();
+
+        for (const [index, encoded] of outbox.pending().slice(0, 2).entries()) {
+            const event = decodeSessionEventEnvelope(encoded);
+            outbox.acknowledge({
+                cursor: `cursor-capacity-${index.toString()}`,
+                duplicate: false,
+                eventId: event.eventId,
+                kind: SESSION_EVENT_ACK_KIND,
+                sequence: (index + 1).toString(),
+                sessionId: event.sessionId,
+            });
+        }
+        expect(() =>
+            outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "admitted" })),
+        ).not.toThrow();
+        outbox.close();
+    });
+
     it("Given one Session fills the durable replay backlog, When another Session becomes ready, Then the next bounded batch serves both event sources", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-fairness-"));
         createdDirectories.push(directory);

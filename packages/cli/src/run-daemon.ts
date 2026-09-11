@@ -29,6 +29,8 @@ import {
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
     decodeNativeSessionTurnForkCommand,
+    decodeRuntimeDelivery,
+    decodeRuntimeDeliveryCommitted,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
@@ -52,6 +54,7 @@ import {
     encodeBotExecutionBindingApprovedEvent,
     encodeBotExecutionBindingUnavailableEvent,
     encodeNativeSessionResult,
+    encodeRuntimeDeliveryReceived,
     encodeSessionCommandsUpdatedEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
@@ -70,8 +73,12 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
     OwnerBotReplyRoute,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_LIVENESS_READY_KIND,
+    type RuntimeDelivery,
     SESSION_CANCEL_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_CONFIGURE_KIND,
@@ -133,7 +140,8 @@ import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-r
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
-import { SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
+import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
+import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
@@ -395,8 +403,7 @@ class ActiveTurnReconciliationError extends Error {
 }
 
 function activeTurnReconciliationEndpoint(config: DaemonConfig, turn: ActiveDaemonTurn): URL {
-    const endpoint = new URL(config.relayUrl);
-    endpoint.protocol = endpoint.protocol === "wss:" ? "https:" : "http:";
+    const endpoint = relayHttpEndpoint(config.relayUrl);
     let channelPath = "";
     if (endpoint.pathname.endsWith("/daemon")) {
         channelPath = endpoint.pathname.slice(0, -"/daemon".length);
@@ -408,7 +415,6 @@ function activeTurnReconciliationEndpoint(config: DaemonConfig, turn: ActiveDaem
         channelPath = `${endpoint.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
     }
     endpoint.pathname = `${channelPath}/sessions/${encodeURIComponent(turn.command.sessionId)}/attempts/${encodeURIComponent(turn.attemptId)}/reconciliation`;
-    endpoint.searchParams.delete("liveness");
     return endpoint;
 }
 
@@ -421,7 +427,7 @@ async function reconcileActiveTurn(config: DaemonConfig, turn: ActiveDaemonTurn,
         response = await fetch(activeTurnReconciliationEndpoint(config, turn), {
             body: JSON.stringify({ outcome: { kind: "running" } }),
             dispatcher: environmentProxyDispatcher,
-            headers: { "content-type": "application/json" },
+            headers: { ...runtimeAuthorization(config.relayUrl), "content-type": "application/json" },
             method: "POST",
             signal: requestSignal,
         });
@@ -511,11 +517,30 @@ class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState
     };
 }
 
-const SESSION_EVENT_REPLAY_WINDOW = 4;
+const SESSION_EVENT_REPLAY_WINDOW = 16;
+const SESSION_EVENT_SOURCE_REPLAY_WINDOW = 4;
+const SESSION_EVENT_REPLAY_BYTE_LIMIT = 32 * 1024 * 1024;
+
+class InFlightSessionEvent {
+    readonly byteLength: number;
+    readonly sourceKey: string;
+
+    constructor(sourceKey: string, byteLength: number) {
+        this.byteLength = byteLength;
+        this.sourceKey = sourceKey;
+    }
+}
+
+function sessionEventSourceKey(envelope: ReturnType<typeof decodeSessionEventEnvelope>): string {
+    return envelope.source.kind === "attempt"
+        ? `attempt:${envelope.sessionId}:${envelope.source.attemptId}`
+        : `runtime:${envelope.sessionId}`;
+}
 
 class DaemonSessionEventPublisher {
     readonly #outbox: SessionEventOutbox;
-    readonly #inFlightEventIds = new Set<string>();
+    readonly #inFlightEvents = new Map<string, InFlightSessionEvent>();
+    #inFlightBytes = 0;
     #connection: DaemonSessionEventConnectionState = new DisconnectedDaemonSessionEventState();
 
     constructor(outbox: SessionEventOutbox) {
@@ -524,7 +549,7 @@ class DaemonSessionEventPublisher {
 
     readonly connect = (socket: WebSocket): void => {
         this.#connection = new ConnectedDaemonSessionEventState(socket);
-        this.#inFlightEventIds.clear();
+        this.#clearInFlight();
         this.#publishNextBatch();
     };
 
@@ -533,11 +558,16 @@ class DaemonSessionEventPublisher {
             return;
         }
         this.#connection = this.#connection.disconnect(socket);
-        this.#inFlightEventIds.clear();
+        this.#clearInFlight();
     };
 
     readonly recordAttempt = (sessionId: string, payload: string, attemptId: string): void => {
-        this.#outbox.enqueue(sessionId, payload, attemptId);
+        const kind = decodeMessageKind(payload);
+        if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
+            this.#outbox.enqueueCritical(sessionId, payload, attemptId);
+        } else {
+            this.#outbox.enqueue(sessionId, payload, attemptId);
+        }
         this.#publishNextBatch();
     };
 
@@ -550,7 +580,7 @@ class DaemonSessionEventPublisher {
         if (!this.#outbox.acknowledge(acknowledgement)) {
             return;
         }
-        this.#inFlightEventIds.delete(acknowledgement.eventId);
+        this.#removeInFlight(acknowledgement.eventId);
         this.#publishNextBatch();
     };
 
@@ -559,24 +589,64 @@ class DaemonSessionEventPublisher {
         if (!quarantined) {
             return false;
         }
-        this.#inFlightEventIds.delete(rejection.eventId);
+        this.#removeInFlight(rejection.eventId);
         this.#publishNextBatch();
         return true;
     };
 
     readonly #publishNextBatch = (): void => {
-        if (this.#inFlightEventIds.size > 0) {
-            return;
-        }
-        const batch = this.#outbox.pendingBatch(SESSION_EVENT_REPLAY_WINDOW);
-        for (const encoded of batch) {
-            const envelope = decodeSessionEventEnvelope(encoded);
-            if (!this.#connection.send(encoded)) {
-                this.#inFlightEventIds.clear();
+        while (this.#inFlightEvents.size < SESSION_EVENT_REPLAY_WINDOW) {
+            const sourceCounts = new Map<string, number>();
+            for (const inFlight of this.#inFlightEvents.values()) {
+                sourceCounts.set(inFlight.sourceKey, (sourceCounts.get(inFlight.sourceKey) ?? 0) + 1);
+            }
+            const saturatedSources = [...sourceCounts.entries()]
+                .filter(([, count]) => count >= SESSION_EVENT_SOURCE_REPLAY_WINDOW)
+                .map(([sourceKey]) => sourceKey);
+            const batch = this.#outbox.pendingSourceHeads(
+                SESSION_EVENT_REPLAY_WINDOW - this.#inFlightEvents.size,
+                [...this.#inFlightEvents.keys()],
+                saturatedSources,
+            );
+            let sent = 0;
+            for (const encoded of batch) {
+                const envelope = decodeSessionEventEnvelope(encoded);
+                const sourceKey = sessionEventSourceKey(envelope);
+                const sourceCount = sourceCounts.get(sourceKey) ?? 0;
+                if (sourceCount >= SESSION_EVENT_SOURCE_REPLAY_WINDOW) {
+                    continue;
+                }
+                const byteLength = new TextEncoder().encode(encoded).byteLength;
+                if (this.#inFlightBytes + byteLength > SESSION_EVENT_REPLAY_BYTE_LIMIT) {
+                    continue;
+                }
+                if (!this.#connection.send(encoded)) {
+                    this.#clearInFlight();
+                    return;
+                }
+                this.#inFlightEvents.set(envelope.eventId, new InFlightSessionEvent(sourceKey, byteLength));
+                this.#inFlightBytes += byteLength;
+                sourceCounts.set(sourceKey, sourceCount + 1);
+                sent += 1;
+            }
+            if (sent === 0) {
                 return;
             }
-            this.#inFlightEventIds.add(envelope.eventId);
         }
+    };
+
+    readonly #removeInFlight = (eventId: string): void => {
+        const inFlight = this.#inFlightEvents.get(eventId);
+        if (inFlight === undefined) {
+            return;
+        }
+        this.#inFlightEvents.delete(eventId);
+        this.#inFlightBytes -= inFlight.byteLength;
+    };
+
+    readonly #clearInFlight = (): void => {
+        this.#inFlightEvents.clear();
+        this.#inFlightBytes = 0;
     };
 }
 
@@ -895,6 +965,9 @@ async function executeSessionConfigure(
             }),
         );
     } catch (error) {
+        if (signal.aborted) {
+            signal.throwIfAborted();
+        }
         reportOperationFailure(socket, command.requestId, command.sessionId, error);
     }
 }
@@ -1316,6 +1389,7 @@ async function runRelayConnection(
     timer: DaemonTimer,
 ): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
+    relayUrl.searchParams.set("deliveryReceipts", "1");
     relayUrl.searchParams.set("liveness", "1");
     const socket = await connectRelay(relayUrl, signal);
     const reconnectingTurns = [...activeTurns.values()];
@@ -1379,6 +1453,217 @@ async function runRelayConnection(
                 rejectConnection(failure);
             };
 
+            const processingDeliveryIds = new Set<string>();
+
+            const processDeliveredPrompt = async (delivery: RuntimeDelivery): Promise<void> => {
+                const command = decodeSessionPromptCommand(delivery.payload);
+                if (command.sessionId !== delivery.sessionId) {
+                    throw new Error("Runtime delivery Session identity does not match its payload");
+                }
+                const active = activeTurns.get(command.commandId);
+                if (active !== undefined) {
+                    await active.completion;
+                    return;
+                }
+                const receipt = outbox.claimExecution(command.commandId, command.sessionId, delivery.payload);
+                if (receipt.kind === "duplicate") {
+                    if (receipt.state === "running") {
+                        reportFailure(
+                            publisher,
+                            command,
+                            "agent_execution_interrupted",
+                            "The local Agent execution was interrupted before it completed",
+                            receipt.attemptId,
+                        );
+                        outbox.transitionExecution(command.commandId, "failed");
+                        return;
+                    }
+                    if (receipt.state !== "dispatching") {
+                        return;
+                    }
+                }
+
+                const turn = new ActiveDaemonTurn(command, receipt.attemptId);
+                activeTurns.set(command.commandId, turn);
+                if (command.disposition !== SessionPromptDisposition.Steer) {
+                    activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                }
+                try {
+                    await executePrompt(
+                        outbox,
+                        publisher,
+                        command,
+                        config,
+                        directories,
+                        audit,
+                        sessions,
+                        receipt.attemptId,
+                        timer,
+                        turn.signal,
+                    );
+                } finally {
+                    activeTurns.delete(command.commandId);
+                    if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
+                        activeAttemptIds.delete(command.sessionId);
+                    }
+                    turn.finish();
+                }
+            };
+
+            const processDeliveredPayload = async (delivery: RuntimeDelivery): Promise<void> => {
+                const kind = decodeMessageKind(delivery.payload);
+                if (kind === SESSION_CANCEL_KIND) {
+                    const cancellation = decodeSessionCancelCommand(delivery.payload);
+                    if (cancellation.sessionId !== delivery.sessionId) {
+                        throw new Error("Runtime delivery Session identity does not match its payload");
+                    }
+                    const turn = activeTurns.get(cancellation.commandId);
+                    if (turn === undefined || !turn.matches(cancellation) || !turn.requestCancellation()) {
+                        return;
+                    }
+                    audit.record({
+                        commandId: cancellation.commandId,
+                        event: "session_cancellation_requested",
+                        sessionId: cancellation.sessionId,
+                    });
+                    await sessions.cancelPrompt(cancellation.sessionId);
+                    return;
+                }
+                if (kind === SESSION_CONFIGURE_KIND) {
+                    const command = decodeSessionConfigureCommand(delivery.payload);
+                    if (command.sessionId !== delivery.sessionId) {
+                        throw new Error("Runtime delivery Session identity does not match its payload");
+                    }
+                    await executeSessionConfigure(
+                        publisher,
+                        socket,
+                        command,
+                        config,
+                        directories,
+                        audit,
+                        sessions,
+                        connectionController.signal,
+                    );
+                    return;
+                }
+                if (kind === SESSION_PERMISSION_RESPOND_KIND) {
+                    const command = decodeSessionPermissionRespondCommand(delivery.payload);
+                    if (command.sessionId !== delivery.sessionId) {
+                        throw new Error("Runtime delivery Session identity does not match its payload");
+                    }
+                    try {
+                        await sessions.respondPermission(command);
+                        audit.record({
+                            commandId: command.interactionId,
+                            event: "session_permission_resolved",
+                            sessionId: command.sessionId,
+                        });
+                    } catch (error) {
+                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
+                    }
+                    return;
+                }
+                if (kind === SESSION_ELICITATION_RESPOND_KIND) {
+                    const command = decodeSessionElicitationRespondCommand(delivery.payload);
+                    if (command.sessionId !== delivery.sessionId) {
+                        throw new Error("Runtime delivery Session identity does not match its payload");
+                    }
+                    try {
+                        await sessions.respondElicitation(command);
+                        audit.record({
+                            commandId: command.interactionId,
+                            event: "session_elicitation_resolved",
+                            sessionId: command.sessionId,
+                        });
+                    } catch (error) {
+                        reportOperationFailure(socket, command.interactionId, command.sessionId, error);
+                    }
+                    return;
+                }
+                if (kind === SESSION_PROMPT_KIND) {
+                    await processDeliveredPrompt(delivery);
+                    return;
+                }
+                throw new Error("Runtime delivery contains an unsupported protocol message");
+            };
+
+            const processRuntimeDelivery = (delivery: RuntimeDelivery, state: string): void => {
+                if (state === "processed" || processingDeliveryIds.has(delivery.deliveryId)) {
+                    return;
+                }
+                processingDeliveryIds.add(delivery.deliveryId);
+                void processDeliveredPayload(delivery)
+                    .then(() => {
+                        outbox.markRuntimeDeliveryProcessed(delivery.deliveryId, delivery.sessionId);
+                    })
+                    .catch((error: unknown) => {
+                        if (connectionController.signal.aborted) {
+                            return;
+                        }
+                        console.error("Mobius daemon could not process a durable Runtime delivery", error);
+                        failAndClose(
+                            new Error("Runtime delivery processing failed", { cause: error }),
+                            4008,
+                            "Invalid Runtime delivery",
+                            "delivery",
+                        );
+                    })
+                    .finally(() => processingDeliveryIds.delete(delivery.deliveryId));
+            };
+
+            const receiveRuntimeDelivery = (delivery: RuntimeDelivery): void => {
+                const payloadKind = decodeMessageKind(delivery.payload);
+                let payloadSessionId = "";
+                if (payloadKind === SESSION_CANCEL_KIND) {
+                    payloadSessionId = decodeSessionCancelCommand(delivery.payload).sessionId;
+                } else if (payloadKind === SESSION_CONFIGURE_KIND) {
+                    payloadSessionId = decodeSessionConfigureCommand(delivery.payload).sessionId;
+                } else if (payloadKind === SESSION_PERMISSION_RESPOND_KIND) {
+                    payloadSessionId = decodeSessionPermissionRespondCommand(delivery.payload).sessionId;
+                } else if (payloadKind === SESSION_ELICITATION_RESPOND_KIND) {
+                    payloadSessionId = decodeSessionElicitationRespondCommand(delivery.payload).sessionId;
+                } else if (payloadKind === SESSION_PROMPT_KIND) {
+                    payloadSessionId = decodeSessionPromptCommand(delivery.payload).sessionId;
+                } else {
+                    throw new Error("Runtime delivery contains an unsupported protocol message");
+                }
+                if (payloadSessionId !== delivery.sessionId) {
+                    throw new Error("Runtime delivery Session identity does not match its payload");
+                }
+                const stored = outbox.claimRuntimeDelivery(delivery);
+                send(
+                    socket,
+                    encodeRuntimeDeliveryReceived({
+                        deliveryId: delivery.deliveryId,
+                        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                        sessionId: delivery.sessionId,
+                    }),
+                );
+                processRuntimeDelivery(delivery, stored.state);
+            };
+
+            const resumeRuntimeDeliveries = (): void => {
+                for (const stored of outbox.runtimeDeliveries()) {
+                    const delivery: RuntimeDelivery = {
+                        deliveryId: stored.deliveryId,
+                        kind: RUNTIME_DELIVERY_KIND,
+                        payload: stored.payload,
+                        sessionId: stored.sessionId,
+                    };
+                    if (stored.state !== "relay_committed") {
+                        send(
+                            socket,
+                            encodeRuntimeDeliveryReceived({
+                                deliveryId: stored.deliveryId,
+                                kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                                sessionId: stored.sessionId,
+                            }),
+                        );
+                    }
+                    processRuntimeDelivery(delivery, stored.state);
+                }
+            };
+
             const connectionLiveness = new RelayConnectionLiveness(timer, {
                 send: (message) => send(socket, message),
                 unresponsive: (heartbeatId, timeoutMilliseconds) => {
@@ -1419,6 +1704,17 @@ async function runRelayConnection(
 
                 try {
                     const kind = decodeMessageKind(encoded);
+                    if (kind === RUNTIME_DELIVERY_COMMITTED_KIND) {
+                        const committed = decodeRuntimeDeliveryCommitted(encoded);
+                        if (!outbox.markRuntimeDeliveryCommitted(committed.deliveryId, committed.sessionId)) {
+                            console.warn("Mobius daemon ignored confirmation for an unknown Runtime delivery");
+                        }
+                        return;
+                    }
+                    if (kind === RUNTIME_DELIVERY_KIND) {
+                        receiveRuntimeDelivery(decodeRuntimeDelivery(encoded));
+                        return;
+                    }
                     if (kind === SESSION_EVENT_ACK_KIND) {
                         publisher.acknowledge(decodeSessionEventAcknowledgement(encoded));
                         return;
@@ -1892,6 +2188,10 @@ async function runRelayConnection(
                         });
                 } catch (error) {
                     console.error("Mobius daemon rejected a message", error);
+                    if (error instanceof RuntimeDeliveryInboxCapacityError) {
+                        failAndClose(error, 4013, "Runtime delivery queue full", "delivery_backpressure");
+                        return;
+                    }
                     failAndClose(
                         new Error("Relay sent an invalid protocol message", { cause: error }),
                         4008,
@@ -1909,6 +2209,7 @@ async function runRelayConnection(
                         return;
                     }
                     publisher.connect(socket);
+                    resumeRuntimeDeliveries();
                 },
                 (error: unknown) => {
                     if (finished) {

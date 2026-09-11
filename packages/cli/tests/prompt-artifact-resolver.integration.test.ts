@@ -58,13 +58,15 @@ describe("daemon prompt artifact resolution", () => {
             ["art_text", { bytes: text, mediaType: "text/plain" }],
         ]);
         const requestedUrls: string[] = [];
+        const authorizations: string[] = [];
         const server = createServer((request, response) => {
             const url = new URL(request.url ?? "/", "http://127.0.0.1");
             requestedUrls.push(url.toString());
+            authorizations.push(request.headers.authorization ?? "");
             const segments = url.pathname.split("/");
             const artifactId = segments.at(-2) ?? "";
             const found = content.get(artifactId);
-            if (url.searchParams.get("token") !== "daemon-secret" || found === undefined) {
+            if (request.headers.authorization !== "Bearer daemon-secret" || found === undefined) {
                 response.writeHead(403);
                 response.end();
                 return;
@@ -146,7 +148,8 @@ describe("daemon prompt artifact resolution", () => {
             },
         ]);
         expect(requestedUrls).toHaveLength(2);
-        expect(requestedUrls.every((url) => url.includes("token=daemon-secret"))).toBe(true);
+        expect(requestedUrls.every((url) => !url.includes("token="))).toBe(true);
+        expect(authorizations).toEqual(["Bearer daemon-secret", "Bearer daemon-secret"]);
     });
 
     it("Given a tampered artifact response, When integrity validation fails, Then the daemon rejects it with a stable sanitized error", async () => {

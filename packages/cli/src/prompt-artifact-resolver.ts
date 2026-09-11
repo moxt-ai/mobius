@@ -5,6 +5,7 @@ import { fetch } from "undici";
 
 import type { DaemonConfig } from "./config.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
+import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 
 const ARTIFACT_SCHEME = "mobius-artifact:";
 const ARTIFACT_DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000;
@@ -86,8 +87,7 @@ function parseReference(resource: PromptResource): PromptArtifactReference {
 }
 
 function downloadUrl(config: DaemonConfig, command: ArtifactPromptCommand, reference: PromptArtifactReference): URL {
-    const url = new URL(config.relayUrl);
-    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    const url = relayHttpEndpoint(config.relayUrl);
     let channelPath = "";
     if (url.pathname.endsWith("/daemon")) {
         channelPath = url.pathname.slice(0, -"/daemon".length);
@@ -99,7 +99,6 @@ function downloadUrl(config: DaemonConfig, command: ArtifactPromptCommand, refer
         channelPath = `${url.pathname.slice(0, -runtimePath.length)}/channels/${encodeURIComponent(config.channelId)}`;
     }
     url.pathname = `${channelPath}/sessions/${encodeURIComponent(command.sessionId)}/commands/${encodeURIComponent(command.commandId)}/artifacts/${encodeURIComponent(reference.artifactId)}/content`;
-    url.searchParams.delete("liveness");
     return url;
 }
 
@@ -168,6 +167,7 @@ async function download(
             headers: {
                 accept: reference.resource.mimeType,
                 "accept-encoding": "identity",
+                ...runtimeAuthorization(config.relayUrl),
             },
             signal: requestSignal,
         });

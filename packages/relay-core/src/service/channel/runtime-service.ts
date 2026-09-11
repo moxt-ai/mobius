@@ -4,14 +4,18 @@ import {
     decodeBotExecutionBindingApprovedEvent,
     decodeBotExecutionBindingUnavailableEvent,
     decodeMessageKind,
+    decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatEvent,
+    decodeSessionEventEnvelope,
     encodeRuntimeHeartbeatAckEvent,
     encodeRuntimeLivenessReadyEvent,
     encodeRuntimeStatusEvent,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     RUNTIME_STATUS_KIND,
+    SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
 import type { BotRuntimeService } from "../bot/bot-runtime-service.ts";
@@ -19,6 +23,7 @@ import type { RemoteSessionRuntime } from "../do/remote-session-runtime.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
+import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
 import type { RuntimeRecoveryService } from "./runtime-recovery-service.ts";
 
 export type RuntimeSocketIdentity =
@@ -33,6 +38,7 @@ export type RuntimeSocketIdentity =
           readonly role: "daemon" | "replaced-daemon";
           readonly connectionEpoch: number;
           readonly connectionId: string;
+          readonly deliveryReceipts: boolean;
           readonly runtimeId: string;
           readonly projectId: string;
       };
@@ -71,7 +77,8 @@ type RuntimeAcceptance =
 
 export class RuntimeService {
     readonly #cx: RuntimeContext;
-    #daemonMessageTail: Promise<void> = Promise.resolve();
+    readonly #channels = new Map<string, ChannelActor>();
+    readonly #daemonMessages = new RuntimeMessageScheduler();
     #disconnectTail: Promise<void> = Promise.resolve();
     #acceptTail: Promise<void> = Promise.resolve();
     readonly #accepting = new Set<{
@@ -84,7 +91,13 @@ export class RuntimeService {
         this.#cx = cx;
     }
 
-    readonly acceptDaemon = async (runtimeId: string, scope: ProjectScope, liveness: boolean, signal: AbortSignal) => {
+    readonly acceptDaemon = async (
+        runtimeId: string,
+        scope: ProjectScope,
+        liveness: boolean,
+        deliveryReceipts: boolean,
+        signal: AbortSignal,
+    ) => {
         const accepting = { runtimeId, scope, controller: new AbortController() };
         this.#accepting.add(accepting);
         const operation = this.#acceptTail.then(async (): Promise<RuntimeAcceptance> => {
@@ -93,6 +106,7 @@ export class RuntimeService {
                     runtimeId,
                     scope,
                     liveness,
+                    deliveryReceipts,
                     AbortSignal.any([signal, accepting.controller.signal]),
                 );
             } catch (error) {
@@ -121,6 +135,7 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         liveness: boolean,
+        deliveryReceipts: boolean,
         signal: AbortSignal,
     ): Promise<RuntimeAcceptance> => {
         signal.throwIfAborted();
@@ -160,12 +175,13 @@ export class RuntimeService {
         }
         const accepted = this.#cx.gateways.peers.accept({
             ...prepared.identity,
+            deliveryReceipts,
             role: "daemon",
             projectId: scope.projectId,
         });
         this.#cx.services.connections.connected(prepared.identity, Date.now());
         try {
-            await this.attachDaemon(runtimeId, scope, false, signal);
+            await this.attachDaemon(runtimeId, scope, false, deliveryReceipts, signal);
         } catch (error) {
             accepted.socket.close(1011, "Runtime attachment failed");
             throw error;
@@ -267,7 +283,10 @@ export class RuntimeService {
     };
 
     readonly dispatchPending = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<void> => {
-        await this.#cx.services.channel(runtimeId, scope).dispatchPending(signal);
+        const deliveryReceipts = this.#currentDaemonDeliveryReceipts();
+        const channel = this.channel(runtimeId, scope);
+        channel.configureDaemonDelivery(deliveryReceipts);
+        await channel.dispatchPending(signal);
         await this.#cx.services.recovery.dispatch(runtimeId, scope, signal);
         await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
@@ -276,15 +295,18 @@ export class RuntimeService {
         runtimeId: string,
         scope: ProjectScope,
         replaced: boolean,
+        deliveryReceipts: boolean,
         signal: AbortSignal,
     ): Promise<void> => {
-        await this.#cx.services.channel(runtimeId, scope).attachDaemon(replaced, signal);
+        const channel = this.channel(runtimeId, scope);
+        channel.configureDaemonDelivery(deliveryReceipts);
+        await channel.attachDaemon(replaced, signal);
         await this.#cx.services.recovery.dispatch(runtimeId, scope, signal);
         await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
 
     readonly attachHost = (runtimeId: string, scope: ProjectScope, socket: ChannelSocket, signal: AbortSignal) =>
-        this.#cx.services.channel(runtimeId, scope).attachHost(socket, signal);
+        this.channel(runtimeId, scope).attachHost(socket, signal);
 
     readonly recover = async (identity: RuntimeSocketIdentity, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
@@ -310,7 +332,9 @@ export class RuntimeService {
                 socket.close(1008, "Channel access revoked");
                 return;
             }
-            await this.#cx.services.channel(identity.runtimeId, scope).receiveHostMessage(socket, message, signal);
+            const channel = this.channel(identity.runtimeId, scope);
+            channel.configureDaemonDelivery(this.#currentDaemonDeliveryReceipts());
+            await channel.receiveHostMessage(socket, message, signal);
             return;
         }
         // Heartbeats must bypass the durable-write queue.
@@ -335,47 +359,94 @@ export class RuntimeService {
                 return;
             }
         }
-        const operation = this.#daemonMessageTail.then(async () => {
-            signal.throwIfAborted();
-            if (identity.role === "replaced-daemon") {
-                socket.close(1012, "Daemon connection replaced");
-                return;
-            }
-            if (!this.#cx.services.connections.isCurrent(identity)) {
-                socket.replaceDaemon();
-                return;
-            }
-            if (typeof message === "string") {
-                const kind = decodeMessageKind(message);
-                if (kind === BOT_BINDING_APPROVED_KIND) {
-                    await this.#cx.services.bots.approveBinding(
-                        scope,
-                        identity.runtimeId,
-                        decodeBotExecutionBindingApprovedEvent(message),
-                        Date.now(),
-                        signal,
-                    );
-                    socket.send(message);
+        const lane = this.daemonMessageLane(message);
+        try {
+            await this.#daemonMessages.run(lane, signal, async () => {
+                signal.throwIfAborted();
+                if (identity.role === "replaced-daemon") {
+                    socket.close(1012, "Daemon connection replaced");
                     return;
                 }
-                if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
-                    await this.#cx.services.bots.rejectBinding(
-                        scope,
-                        identity.runtimeId,
-                        decodeBotExecutionBindingUnavailableEvent(message),
-                        Date.now(),
-                        signal,
-                    );
-                    socket.send(message);
+                if (!this.#cx.services.connections.isCurrent(identity)) {
+                    socket.replaceDaemon();
                     return;
                 }
+                if (typeof message === "string") {
+                    const kind = decodeMessageKind(message);
+                    if (kind === BOT_BINDING_APPROVED_KIND) {
+                        await this.#cx.services.bots.approveBinding(
+                            scope,
+                            identity.runtimeId,
+                            decodeBotExecutionBindingApprovedEvent(message),
+                            Date.now(),
+                            signal,
+                        );
+                        socket.send(message);
+                        return;
+                    }
+                    if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
+                        await this.#cx.services.bots.rejectBinding(
+                            scope,
+                            identity.runtimeId,
+                            decodeBotExecutionBindingUnavailableEvent(message),
+                            Date.now(),
+                            signal,
+                        );
+                        socket.send(message);
+                        return;
+                    }
+                }
+                const channel = this.channel(identity.runtimeId, scope);
+                channel.configureDaemonDelivery(identity.deliveryReceipts);
+                await channel.receiveDaemonMessage(socket, message, signal);
+            });
+        } catch (error) {
+            if (error instanceof RuntimeMessageSchedulerCapacityError) {
+                socket.close(1013, error.code);
+                return;
             }
-            await this.#cx.services.channel(identity.runtimeId, scope).receiveDaemonMessage(socket, message, signal);
-        });
-        // Keep the queue usable after an operation fails; its caller still receives the failure.
-        this.#daemonMessageTail = operation.catch(() => undefined);
-        await operation;
+            throw error;
+        }
     };
+
+    private readonly daemonMessageLane = (message: unknown): string => {
+        if (typeof message !== "string") {
+            return "runtime";
+        }
+        try {
+            const kind = decodeMessageKind(message);
+            if (kind === SESSION_EVENT_KIND) {
+                return `session:${decodeSessionEventEnvelope(message).sessionId}`;
+            }
+            if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
+                return `session:${decodeRuntimeDeliveryReceived(message).sessionId}`;
+            }
+        } catch {
+            return "runtime";
+        }
+        return "runtime";
+    };
+
+    private readonly channel = (runtimeId: string, scope: ProjectScope): ChannelActor => {
+        const key = JSON.stringify({
+            projectId: scope.projectId,
+            runtimeId,
+        });
+        const existing = this.#channels.get(key);
+        if (existing !== undefined) {
+            return existing;
+        }
+        const channel = this.#cx.services.channel(runtimeId, scope);
+        this.#channels.set(key, channel);
+        return channel;
+    };
+
+    readonly #currentDaemonDeliveryReceipts = (): boolean =>
+        this.#cx.gateways.peers
+            .sockets()
+            .some(({ identity, socket }) =>
+                identity.role === "daemon" && socket.isOpen() ? identity.deliveryReceipts : false,
+            );
 
     readonly detach = async (
         identity: RuntimeSocketIdentity,
@@ -405,7 +476,7 @@ export class RuntimeService {
                 return;
             }
             await this.#cx.gateways.schedule(Date.now() + 30_000, signal);
-            await this.#daemonMessageTail;
+            await this.#daemonMessages.idle(signal);
             signal.throwIfAborted();
             this.#cx.services.connections.disconnected(job, job.disconnectedAt);
             const scope = new ProjectScope(job.projectId);

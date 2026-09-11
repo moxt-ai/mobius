@@ -12,6 +12,8 @@ import {
     decodeNativeSessionCommand,
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
+    decodeRuntimeDelivery,
+    decodeRuntimeDeliveryCommitted,
     decodeRuntimeHeartbeatAckEvent,
     decodeRuntimeLivenessReadyEvent,
     decodeRuntimeStatusEvent,
@@ -24,6 +26,7 @@ import {
     encodeAgentInstallRequestCommand,
     encodeNativeSessionCommand,
     encodeNativeSessionResult,
+    encodeRuntimeDeliveryReceived,
     encodeRuntimeHeartbeatEvent,
     encodeSessionEventEnvelope,
     encodeSessionPrepareCommand,
@@ -31,6 +34,8 @@ import {
     MOBIUS_API_PREFIX,
     type NativeSessionResult,
     type RecordedSessionEvent,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
@@ -1524,6 +1529,69 @@ describe.sequential("Cloudflare session deployment", () => {
         replacement.socket.close(1000, "Connection epoch test complete");
     });
 
+    it("Given Relay has accepted a Turn but daemon receipt is interrupted, When a receipt-capable daemon reconnects, Then the same delivery is retried and completes only after its durable receipt", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "reliable-delivery-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const reliablePath = `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}&deliveryReceipts=1`;
+        const firstDaemon = await openChannelSocket(reliablePath);
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const command = prompt(sessionId, "reliable-delivery-command", "survive the interrupted send");
+            host.socket.send(encodeSessionPromptCommand(command));
+            const firstDelivery = decodeRuntimeDelivery(await firstDaemon.messages.next());
+            expect(firstDelivery).toMatchObject({ payload: encodeSessionPromptCommand(command), sessionId });
+            expect(decodeSessionPromptCommand(await host.messages.next())).toEqual(command);
+
+            const staleClosed = waitForSocketClose(firstDaemon.socket);
+            const replacement = await openChannelSocket(reliablePath);
+            expect((await staleClosed).code).toBe(1012);
+            try {
+                const retried = decodeRuntimeDelivery(await replacement.messages.next());
+                expect(retried).toEqual(firstDelivery);
+                replacement.socket.send(
+                    encodeRuntimeDeliveryReceived({
+                        deliveryId: retried.deliveryId,
+                        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                        sessionId: retried.sessionId,
+                    }),
+                );
+                expect(decodeRuntimeDeliveryCommitted(await replacement.messages.next())).toEqual({
+                    deliveryId: retried.deliveryId,
+                    kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+                    sessionId: retried.sessionId,
+                });
+
+                const sessionStub = env.SESSION_RELAY.get(
+                    env.SESSION_RELAY.idFromName(
+                        `${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`,
+                    ),
+                );
+                await runInDurableObject(sessionStub, async (_instance, state) => {
+                    expect(
+                        state.storage.sql
+                            .exec(
+                                `SELECT state FROM pending_work
+                                 WHERE session_id = ? AND work_id = ?`,
+                                sessionId,
+                                retried.deliveryId,
+                            )
+                            .one(),
+                    ).toMatchObject({ state: "completed" });
+                });
+            } finally {
+                replacement.socket.close(1000, "Reliable delivery test complete");
+            }
+        } finally {
+            host.socket.close(1000, "Reliable delivery test complete");
+            firstDaemon.socket.close(1000, "Reliable delivery test complete");
+        }
+    });
+
     it("Given session persistence is backlogged, When the daemon sends a heartbeat, Then liveness is acknowledged before the event backlog drains", async () => {
         const pairing = await pairChannel();
         const sessionId = "heartbeat-backlog-session";
@@ -1607,6 +1675,93 @@ describe.sequential("Cloudflare session deployment", () => {
         } finally {
             host.socket.close(1000, "Heartbeat backlog test complete");
             daemon.socket.close(1000, "Heartbeat backlog test complete");
+        }
+    });
+
+    it("Given one Session sends a long ordered event burst, When another Session sends an event on the same Runtime connection, Then the second Session commits before the first burst drains", async () => {
+        const pairing = await pairChannel();
+        const firstSessionId = "parallel-event-session-a";
+        const secondSessionId = "parallel-event-session-b";
+        expect((await createSession(pairing.created, firstSessionId)).status).toBe(201);
+        expect((await createSession(pairing.created, secondSessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+
+        try {
+            const firstSessionEvents = Array.from({ length: 24 }, (_, index) =>
+                envelope(firstSessionId, `parallel-a-${index.toString()}`, {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId: firstSessionId,
+                    title: `First ${index.toString()}`,
+                    updatedAt: "2026-09-11T00:00:00.000Z",
+                }),
+            );
+            const secondSessionEvent = envelope(secondSessionId, "parallel-b-1", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: secondSessionId,
+                title: "Second",
+                updatedAt: "2026-09-11T00:00:00.000Z",
+            });
+            for (const event of firstSessionEvents) {
+                daemon.socket.send(encodeSessionEventEnvelope(event));
+            }
+            daemon.socket.send(encodeSessionEventEnvelope(secondSessionEvent));
+
+            let firstSessionAcknowledgements = 0;
+            for (;;) {
+                const acknowledgement = decodeSessionEventAcknowledgement(await daemon.messages.next());
+                if (acknowledgement.eventId === secondSessionEvent.eventId) {
+                    break;
+                }
+                firstSessionAcknowledgements += 1;
+            }
+            expect(firstSessionAcknowledgements).toBeLessThan(firstSessionEvents.length);
+        } finally {
+            daemon.socket.close(1000, "Parallel Session event test complete");
+        }
+    });
+
+    it("Given one Session sends a terminally invalid event, When another Session uses the same Runtime connection, Then only the invalid event is rejected and the other Session still commits", async () => {
+        const pairing = await pairChannel();
+        const rejectedSessionId = "isolated-event-session-a";
+        const healthySessionId = "isolated-event-session-b";
+        expect((await createSession(pairing.created, rejectedSessionId)).status).toBe(201);
+        expect((await createSession(pairing.created, healthySessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+
+        try {
+            const rejectedEvent: SessionEventEnvelope = {
+                ...envelope(rejectedSessionId, "isolated-invalid-sequence", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId: rejectedSessionId,
+                    title: "Invalid source sequence",
+                    updatedAt: "2026-09-11T00:00:00.000Z",
+                }),
+                source: { kind: "runtime", sourceSeq: "2" },
+            };
+            daemon.socket.send(encodeSessionEventEnvelope(rejectedEvent));
+            expect(decodeSessionEventRejection(await daemon.messages.next())).toMatchObject({
+                code: "session_rejected",
+                eventId: rejectedEvent.eventId,
+                sessionId: rejectedSessionId,
+            });
+
+            const healthyEvent = envelope(healthySessionId, "isolated-healthy-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: healthySessionId,
+                title: "Healthy Session",
+                updatedAt: "2026-09-11T00:00:00.000Z",
+            });
+            daemon.socket.send(encodeSessionEventEnvelope(healthyEvent));
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                eventId: healthyEvent.eventId,
+                sessionId: healthySessionId,
+            });
+        } finally {
+            daemon.socket.close(1000, "Session isolation test complete");
         }
     });
 

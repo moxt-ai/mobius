@@ -13,6 +13,7 @@ const attachmentSchema = v.union([
         role: v.picklist(["daemon", "replaced-daemon"]),
         connectionEpoch: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
         connectionId: v.pipe(v.string(), v.minLength(1)),
+        deliveryReceipts: v.optional(v.boolean(), false),
         runtimeId: v.string(),
         projectId: v.string(),
     }),
