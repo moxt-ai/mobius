@@ -54,6 +54,11 @@ the D1 migrations, and exercise the production HTTP and WebSocket paths with a
 stateful local daemon. It does not spawn the Wrangler CLI, replace `fetch`,
 intercept requests, or patch production modules.
 
+Web integration files run in at most four Vitest workers. Each file owns its
+Relay harness, database, browser environment, and teardown; scenarios within a
+file remain sequential. Keep this isolation when adding files so concurrent
+execution does not share ports, credentials, or mutable browser state.
+
 The daemon is a stateful protocol peer at the external local-Agent boundary,
 so CI can drive deterministic Agent states without provider credentials or an
 interactive third-party process. It exchanges real Mobius messages over the
@@ -87,6 +92,14 @@ integration currently requires shared, serialized storage for Durable Object
 WebSocket tests. Run `pnpm test:integration` in addition to `pnpm check` before
 delivery; it runs the Web, Standalone Worker, and Platform Worker integration
 suites.
+
+The root `pnpm test:integration` command first builds and tests Web, then runs
+at most two independent Cloudflare package suites concurrently. Web must finish
+its build before the other harnesses read its assets; overlapping those steps
+would race Vite's cleanup of `packages/web/dist`. Each Cloudflare suite retains
+`--max-workers=1 --no-isolate` for its shared storage.
+The package-specific commands above remain available to investigate a single
+boundary without running the other suites.
 
 ## Cloudflare Platform Integration Tests
 

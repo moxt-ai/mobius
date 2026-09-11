@@ -39,7 +39,7 @@
         "test": "vitest run && pnpm test:integration",
         "test:ci": "vitest run --exclude '**/*.integration.test.ts' --exclude '**/*.integration.test.tsx' --exclude '**/*.e2e.test.ts' --exclude '**/*.e2e.test.tsx'",
         "test:changed": "vitest run --changed=origin/main",
-        "test:integration": "pnpm test:integration:worker && pnpm test:integration:platform && pnpm test:integration:web",
+        "test:integration": "pnpm test:integration:web && pnpm --recursive --workspace-concurrency=2 --filter @moxt-ai/mobius-relay-cloudflare-standalone --filter @moxt-ai/mobius-relay-cloudflare-platform run test:integration",
         "test:integration:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform test:integration",
         "test:integration:web": "pnpm --filter @moxt-ai/mobius-web test:integration",
         "test:integration:worker": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone test:integration",
