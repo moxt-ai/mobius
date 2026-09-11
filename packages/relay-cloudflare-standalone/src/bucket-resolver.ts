@@ -1,4 +1,4 @@
-import type { BucketResolver } from "@moxt-ai/mobius-relay-cloudflare";
+import type { BucketResolver } from "@moxt-ai/mobius-relay-core";
 
 export class SingleBucketResolver implements BucketResolver {
     readonly #bucket: R2Bucket;

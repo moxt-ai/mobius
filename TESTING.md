@@ -80,7 +80,7 @@ pnpm test:integration:worker
 
 The dedicated configuration at `packages/relay-cloudflare-standalone/vitest.config.ts`
 loads the package's `wrangler.jsonc`, starts a local Workers runtime, and applies
-every migration in `packages/relay-cloudflare/migrations/d1` before the test
+every migration in `packages/relay-core/migrations/d1` before the test
 file runs. The suite uses isolated local D1 and Durable Object bindings; it
 does not require Cloudflare credentials and never connects to production
 resources.

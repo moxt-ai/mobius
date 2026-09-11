@@ -1,7 +1,10 @@
 {
     "extends": "../../tsconfig.base.json",
     "compilerOptions": {
-        "noEmit": true
+        "lib": ["ES2024"],
+        "noEmit": true,
+        "skipLibCheck": true,
+        "types": ["@cloudflare/workers-types"]
     },
     "include": ["src/**/*.ts", "tests/**/*.ts"]
 }

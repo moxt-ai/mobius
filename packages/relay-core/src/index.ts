@@ -1,14 +1,10 @@
 export { createMobiusApplication, createPlatformMobiusApplication } from "./app.ts";
-export {
-    createDurableObjectDependencies,
-    type DurableObjectContext,
-    type SessionContentConfiguration,
-} from "./di/create-durable-object-dependencies.ts";
-export {
-    createRelayDependencies,
-    type RelayContext,
-    type RelayInfrastructure,
-} from "./di/create-relay-dependencies.ts";
+export { createDurableObjectContext } from "./di/create-durable-object-context.ts";
+export type { RelayContext } from "./di/create-relay-dependencies.ts";
+export { createWorkerContext } from "./di/create-worker-context.ts";
+export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
+export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
+export { SessionRelay } from "./durable-objects/session-relay.ts";
 export * from "./entity/authentication/conversation-access.ts";
 export * from "./entity/authentication/project-authentication.ts";
 export { BotApiError, type BotErrorCode, type BotFailureKind } from "./entity/bot/bot-error.ts";
@@ -131,6 +127,7 @@ export {
     readBoundedBytesBody,
     readBoundedUtf8Body,
 } from "./infra/bounded-request-body.ts";
+export type { BucketResolver } from "./infra/bucket-resolver.ts";
 export {
     type ContentInspection,
     type ContentPersistence,
@@ -141,11 +138,17 @@ export {
     type ImmutableContent,
     type ImmutableContentStore,
 } from "./infra/content-store.ts";
+export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
     ProjectStorageContext,
     ProjectStorageDirectory,
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
+export {
+    type LiteSessionConfigurationEnvironment,
+    type SessionConfigurationEnvironment,
+    sessionQuotaFromEnvironment,
+} from "./infra/session-configuration.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { BotService } from "./service/bot/bot-service.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
@@ -157,3 +160,8 @@ export {
 } from "./service/channel/channel-actor.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
 export { validateCreateSessionRequest } from "./service/do/session-records.ts";
+export {
+    type PublicProjectBootstrapEnvironment,
+    PublicProjectBootstrapPolicy,
+    publicProjectBootstrapPolicyFromEnvironment,
+} from "./service/pairing/public-project-bootstrap-policy.ts";

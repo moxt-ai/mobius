@@ -1,5 +1,4 @@
-import { D1DatabaseAdapter, type DatabaseResolver } from "@moxt-ai/mobius-relay-cloudflare";
-import { PairingDirectoryError } from "@moxt-ai/mobius-relay-core";
+import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core";
 import type { PlatformProjectPlacement, PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 
 export interface PlatformStorageBindings {
@@ -60,20 +59,20 @@ export class PlatformStorageRegistry implements PlatformProjectPlacementRegistry
     };
 }
 
-export class PlatformDatabaseResolver implements DatabaseResolver {
+export class PlatformDatabaseResolver implements ProjectDatabaseBindings {
     readonly #bindings: PlatformStorageBindings;
 
     constructor(bindings: PlatformStorageBindings) {
         this.#bindings = bindings;
     }
 
-    readonly resolve: DatabaseResolver["resolve"] = (sharding) => {
+    readonly resolve: ProjectDatabaseBindings["resolve"] = (sharding) => {
         const database = sharding.hasShard
             ? platformDatabaseBindings(this.#bindings).find(({ id }) => id === sharding.shard.d1ShardId)?.database
             : undefined;
         if (database === undefined) {
             throw new PairingDirectoryError("directory_unavailable", "Project storage is unavailable");
         }
-        return D1DatabaseAdapter.from(database);
+        return database;
     };
 }

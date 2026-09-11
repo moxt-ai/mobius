@@ -1,3 +1,4 @@
+import type { BucketResolver } from "../infra/bucket-resolver.ts";
 import {
     type ContentInspection,
     type ContentPersistence,
@@ -5,9 +6,8 @@ import {
     type ContentTarget,
     type ContentWriteResult,
     type ImmutableContent,
-} from "@moxt-ai/mobius-relay-core";
-import type { BucketResolver } from "./bucket-resolver.ts";
-import type { ProjectStorageDirectory } from "./project-storage-directory.ts";
+} from "../infra/content-store.ts";
+import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 
 const SAFE_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/;
 

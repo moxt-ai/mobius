@@ -17,7 +17,7 @@ the legacy compatibility entry while migrating an older deployment.
 Create two D1 databases before the first remote deployment:
 
 - `DIRECTORY_DATABASE` stores shared Project resources and uses
-  `packages/relay-cloudflare/migrations/d1`.
+  `packages/relay-core/migrations/d1`.
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
   ConversationAccessCredential, and Platform audit records and uses
   `packages/relay-cloudflare-platform/migrations/d1`.

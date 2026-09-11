@@ -4,7 +4,7 @@ import { defineConfig } from "vitest/config";
 
 const packageDirectory = fileURLToPath(new URL(".", import.meta.url));
 const wranglerConfigPath = fileURLToPath(new URL("./wrangler.jsonc", import.meta.url));
-const projectMigrationsPath = fileURLToPath(new URL("../relay-cloudflare/migrations/d1", import.meta.url));
+const projectMigrationsPath = fileURLToPath(new URL("../relay-core/migrations/d1", import.meta.url));
 const platformMigrationsPath = fileURLToPath(new URL("./migrations/d1", import.meta.url));
 
 export default defineConfig(async () => {

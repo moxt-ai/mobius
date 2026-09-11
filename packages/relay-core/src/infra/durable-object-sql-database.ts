@@ -1,4 +1,4 @@
-import type { DoSqlDatabase, DoSqlRow, DoSqlValue } from "@moxt-ai/mobius-relay-core/database";
+import type { DoSqlDatabase, DoSqlRow, DoSqlValue } from "./sql-database.ts";
 
 function decodeRow(value: Readonly<Record<string, SqlStorageValue>>): DoSqlRow {
     const row: Record<string, DoSqlValue> = {};

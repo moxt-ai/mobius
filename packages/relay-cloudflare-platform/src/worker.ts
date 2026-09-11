@@ -1,16 +1,9 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
-    CloudflareBotConnectionRuntime,
-    CloudflareChannelRuntime,
-    CloudflareSessionTransport,
-    D1DatabaseAdapter,
-    type LiteSessionConfigurationEnvironment,
-    sessionQuotaFromEnvironment,
-} from "@moxt-ai/mobius-relay-cloudflare";
-import {
     createBotApplication,
     createPlatformMobiusApplication,
-    createRelayDependencies,
+    createWorkerContext,
+    type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
 } from "@moxt-ai/mobius-relay-core";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
@@ -121,34 +114,20 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 { read: controlStorage.readProjectStoragePlacement },
                 storageRegistry,
             );
-            const infrastructure = {
-                config: { quota: sessionQuotaFromEnvironment(environment) },
-                gateways: {
-                    databaseResolver: databases,
-                    projectStorageDirectory: projects,
-                    runtimeRelay: environment.RUNTIME_RELAY,
-                    sessionRelay: environment.SESSION_RELAY,
+            const cx = createWorkerContext({
+                namespaces: {
+                    runtime: environment.RUNTIME_RELAY,
+                    sessions: environment.SESSION_RELAY,
+                    connections: environment.BOT_CONNECTIONS,
                 },
-            };
-            const channelRuntime = new CloudflareChannelRuntime(infrastructure);
-            const cx = createRelayDependencies({
-                authentication: {
-                    projects: control,
-                },
-                bots: {
-                    connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
-                },
-                config: { apiPrefix: MOBIUS_API_PREFIX, quotaPolicy: control },
+                namespacePrefix: "platform",
+                authorization: control,
+                bootstrap: new DisabledPublicProjectBootstrap(),
                 databases,
-                identityDatabases: projectDatabases.map((database) => D1DatabaseAdapter.from(database)),
-                logger: console,
-                gateways: {
-                    channelGateway: channelRuntime,
-                    nowEpochMilliseconds: () => Date.now(),
-                    publicProjectBootstrap: new DisabledPublicProjectBootstrap(),
-                    sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY, "platform"),
-                },
+                identityDatabases: projectDatabases,
                 projects,
+                apiPrefix: MOBIUS_API_PREFIX,
+                quotaPolicy: control,
             });
             if (isConversationPath(pathname)) {
                 if (cx.services.bots === null) {

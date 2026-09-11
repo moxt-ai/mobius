@@ -1,5 +1,5 @@
-import type { DurableObjectContext } from "@moxt-ai/mobius-relay-core";
-import { CloudflareChannelSocket } from "../cloudflare-channel-peers.ts";
+import type { DurableObjectContext } from "../di/create-durable-object-dependencies.ts";
+import { CloudflareChannelSocket } from "../gateway/cloudflare-channel-peers.ts";
 
 export class RuntimeRelay {
     readonly #dependencies: DurableObjectContext;

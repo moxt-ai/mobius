@@ -5,7 +5,7 @@ SQL migrations and see them recorded in `mobius_migrations`.
 
 Mobius Cloud owns the physical databases and their inventory in
 [`infra/d1-shards.json`](https://github.com/moxt-ai/mobius-cloud/blob/main/infra/d1-shards.json).
-This repository owns `packages/relay-cloudflare/migrations/d1`. Each business starts at
+This repository owns `packages/relay-core/migrations/d1`. Each business starts at
 its own initial migration and uses its own history table. There is no old-history
 adoption, baseline copying, or legacy-database conversion.
 
@@ -26,7 +26,7 @@ binding, migration directory, and `mobius_migrations` history table. It then
 runs Cloudflare's native `wrangler d1 migrations apply` and removes the temporary
 configuration. A failure returns a nonzero exit status; cancellation and a
 two-minute execution deadline stop the command. Local state lives under
-`packages/relay-cloudflare/.wrangler/shards`.
+`packages/relay-core/.wrangler/shards`.
 
 For remote execution, authenticate Wrangler with D1 write access to the Cloud
 account. Retain the printed target and Wrangler output as the deployment audit.

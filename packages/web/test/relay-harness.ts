@@ -21,7 +21,7 @@ function findRepositoryRoot(start: string): string {
 }
 
 async function readMigrationQueries(repositoryRoot: string): Promise<string[]> {
-    const migrationDirectory = join(repositoryRoot, "packages/relay-cloudflare/migrations/d1");
+    const migrationDirectory = join(repositoryRoot, "packages/relay-core/migrations/d1");
     const names = (await readdir(migrationDirectory)).filter((name) => name.endsWith(".sql")).sort();
     if (names.length === 0) {
         throw new Error("The Web integration harness found no D1 migrations");

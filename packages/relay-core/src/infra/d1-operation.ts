@@ -1,4 +1,4 @@
-import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
+import { DatabaseError } from "./sql-database.ts";
 
 export async function d1Operation<Value>(operation: () => Promise<Value>, signal: AbortSignal): Promise<Value> {
     signal.throwIfAborted();

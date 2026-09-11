@@ -1,21 +1,17 @@
 import { env } from "cloudflare:workers";
-import {
-    CloudflareBotConnectionRuntime,
-    CloudflareChannelPeers,
-    CloudflareSessionTransport,
-    DurableObjectSqlDatabase,
-    RuntimeRelay,
-    sessionArchiveByteLimitFromEnvironment,
-    sessionQuotaFromEnvironment,
-} from "@moxt-ai/mobius-relay-cloudflare";
-import { createDurableObjectDependencies, type SessionTransport } from "@moxt-ai/mobius-relay-core";
+import { createDurableObjectContext, RuntimeRelay, type SessionTransport } from "@moxt-ai/mobius-relay-core";
 import { SingleDatabaseResolver } from "../src/database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "../src/project-storage-directory.ts";
 
 // Real Session DO requests cannot be made to stall deterministically. This stateful
 // transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
 export class SuspendedDisconnectTransport implements SessionTransport {
-    readonly #transport = new CloudflareSessionTransport(env.SESSION_RELAY, env.MOBIUS_TENANT_ID);
+    readonly #transport: SessionTransport = {
+        fetch: (scope, sessionId, request) =>
+            env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${scope.projectId}:${sessionId}`),
+            ).fetch(request),
+    };
     readonly #suspended = Promise.withResolvers<string>();
     readonly #released = Promise.withResolvers<void>();
     #state:
@@ -58,22 +54,15 @@ export class SuspendedDisconnectTransport implements SessionTransport {
 
 export function runtimeWithTransport(state: DurableObjectState, sessionTransport: SessionTransport): RuntimeRelay {
     return new RuntimeRelay(
-        createDurableObjectDependencies({
-            doDatabase: new DurableObjectSqlDatabase(state.storage),
-            quota: sessionQuotaFromEnvironment(env),
-            content: { kind: "sqlite", archiveByteLimit: sessionArchiveByteLimitFromEnvironment(env) },
-            gateways: {
-                databaseResolver: new SingleDatabaseResolver(env.DIRECTORY_DATABASE),
-                projectStorageDirectory: new StandaloneProjectStorageDirectory(),
-                sessionTransport,
-                connections: new CloudflareBotConnectionRuntime(env.BOT_CONNECTIONS),
-                peers: new CloudflareChannelPeers(state),
-                schedule: async (timestamp, signal) => {
-                    signal.throwIfAborted();
-                    await state.storage.setAlarm(timestamp);
-                    signal.throwIfAborted();
-                },
-            },
+        createDurableObjectContext(state, {
+            environment: env,
+            connections: env.BOT_CONNECTIONS,
+            sessions: env.SESSION_RELAY,
+            namespacePrefix: env.MOBIUS_TENANT_ID,
+            databases: new SingleDatabaseResolver(env.DIRECTORY_DATABASE),
+            projects: new StandaloneProjectStorageDirectory(),
+            content: { kind: "sqlite" },
+            sessionTransport,
         }),
     );
 }

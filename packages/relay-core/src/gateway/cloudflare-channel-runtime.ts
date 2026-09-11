@@ -1,10 +1,7 @@
-import {
-    type ChannelGateway,
-    type ChannelHostCredential,
-    type RuntimeAccessContext,
-    RuntimeStatus,
-    type VerifiedChannelAccess,
-} from "@moxt-ai/mobius-relay-core";
+import type { RuntimeAccessContext } from "../entity/authentication/project-authentication.ts";
+import type { ChannelHostCredential, VerifiedChannelAccess } from "../entity/pairing/pairing.ts";
+import { RuntimeStatus } from "../service/channel/channel.ts";
+import type { ChannelGateway } from "./channel-gateway.ts";
 
 const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";

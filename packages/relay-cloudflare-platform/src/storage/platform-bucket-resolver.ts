@@ -1,4 +1,4 @@
-import type { BucketResolver } from "@moxt-ai/mobius-relay-cloudflare";
+import type { BucketResolver } from "@moxt-ai/mobius-relay-core";
 import { ContentStorageError } from "@moxt-ai/mobius-relay-core";
 import { type PlatformStorageBindings, platformBucket } from "./platform-database-resolver.ts";
 

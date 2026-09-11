@@ -2,6 +2,12 @@
 
 ## Hosting profiles
 
+`relay-core` depends directly on Cloudflare and owns the shared Durable Objects,
+D1 and R2 implementations, and shard migrations. Keep implementations in the
+existing gateway, infra, storage, and durable-objects folders rather than adding
+a separate Cloudflare adapter package. Platform and Standalone compose this
+shared implementation and inject their Project authorization gateway.
+
 Cloudflare Platform and Standalone are separate products at their public entry
 points. Platform owns OIDC, Tenant, App, AppCredential, and
 ConversationAccessCredential. Standalone owns accountless Project bootstrap and
@@ -24,7 +30,10 @@ Runtime](./docs/runtime-sdk.md).
 Pairing is scoped to a Project only. Relay services never see a tenant: storage
 placement is resolved per Project by the host's `ProjectStorageDirectory`, and
 scoping keys are derived from `projectId` alone. Embedding applications supply
-the directory to `createRelayDependencies`, which assembles the pairing service.
+the directory to `createWorkerContext`, which assembles the pairing service and
+its Cloudflare transports internally. Durable Object hosts use
+`createDurableObjectContext` with bindings and content placement; they do not
+construct SQL adapters, R2 content stores, channel peers, or alarm schedulers.
 
 Cloudflare adapters own a fixed tenant label used only for Durable Object naming.
 Standalone Workers configure `MOBIUS_TENANT_ID` (the supplied Wrangler profiles

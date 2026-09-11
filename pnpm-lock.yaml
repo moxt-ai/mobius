@@ -139,27 +139,11 @@ importers:
         specifier: ^4.5.4
         version: 4.5.4
 
-  packages/relay-cloudflare:
-    dependencies:
-      '@moxt-ai/mobius-relay-core':
-        specifier: workspace:*
-        version: link:../relay-core
-      valibot:
-        specifier: 1.4.2
-        version: 1.4.2(typescript@7.0.2)
-    devDependencies:
-      '@cloudflare/workers-types':
-        specifier: ^5.20260905.1
-        version: 5.20260905.1
-
   packages/relay-cloudflare-platform:
     dependencies:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@moxt-ai/mobius-relay-cloudflare':
-        specifier: workspace:*
-        version: link:../relay-cloudflare
       '@moxt-ai/mobius-relay-core':
         specifier: workspace:*
         version: link:../relay-core
@@ -188,9 +172,6 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@moxt-ai/mobius-relay-cloudflare':
-        specifier: workspace:*
-        version: link:../relay-cloudflare
       '@moxt-ai/mobius-relay-core':
         specifier: workspace:*
         version: link:../relay-core
@@ -219,6 +200,10 @@ importers:
       valibot:
         specifier: 1.4.2
         version: 1.4.2(typescript@7.0.2)
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^5.20260905.1
+        version: 5.20260905.1
 
   packages/web:
     dependencies:

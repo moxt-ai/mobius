@@ -1,4 +1,4 @@
-import type { DurableObjectContext } from "@moxt-ai/mobius-relay-core";
+import type { DurableObjectContext } from "../di/create-durable-object-dependencies.ts";
 
 export class SessionRelay {
     readonly #dependencies: DurableObjectContext;

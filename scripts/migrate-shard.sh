@@ -16,7 +16,7 @@ if [[ ! -f "$inventory_path" || "$inventory_path" != *.json ]]; then
   echo "Inventory must resolve to a JSON file" >&2
   exit 64
 fi
-readonly package_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../packages/relay-cloudflare" && pwd -P)"
+readonly package_path="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../packages/relay-core" && pwd -P)"
 readonly migration_config_dir="$(mktemp -d)"
 cleanup() {
   local status=$?

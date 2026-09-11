@@ -1,4 +1,4 @@
-import type { SessionTransport } from "@moxt-ai/mobius-relay-core";
+import type { SessionTransport } from "./session-transport.ts";
 
 export class CloudflareSessionTransport implements SessionTransport {
     readonly #namespace: DurableObjectNamespace;

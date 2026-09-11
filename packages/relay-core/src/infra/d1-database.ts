@@ -1,5 +1,5 @@
-import { DatabaseError, type SqlDatabase, type SqlStatement } from "@moxt-ai/mobius-relay-core/database";
 import { d1Operation } from "./d1-operation.ts";
+import { DatabaseError, type SqlDatabase, type SqlStatement } from "./sql-database.ts";
 
 class D1Statement implements SqlStatement {
     readonly database: D1Database;

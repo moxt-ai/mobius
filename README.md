@@ -517,8 +517,7 @@ selected agent advertises that capability.
 
 ```text
 packages/
-  relay-core/        Portable Relay API, channel actor, state contracts, and ports
-  relay-cloudflare/  Reusable Cloudflare Durable Objects, D1, and R2 adapters
+  relay-core/        Relay API, services, Cloudflare Durable Objects, D1, R2, and migrations
   relay-cloudflare-platform/  Multi-tenant Platform Worker and control plane
   relay-cloudflare-standalone/  Standalone Worker entry point and deployment composition
   cli/               Publishable @moxt-ai/mobius CLI and reusable /runtime engine

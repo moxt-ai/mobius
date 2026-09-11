@@ -1,4 +1,4 @@
-import { DEFAULT_SESSION_QUOTA_POLICY, SessionQuotaPolicy } from "@moxt-ai/mobius-relay-core";
+import { DEFAULT_SESSION_QUOTA_POLICY, SessionQuotaPolicy } from "../entity/do/session.ts";
 
 const DEFAULT_SESSION_ARCHIVE_BYTES_PER_SESSION = 256 * 1024 * 1024;
 

@@ -1,4 +1,6 @@
-import { BotApiError, type BotConnectionGateway, type BotOutboundAcceptance } from "@moxt-ai/mobius-relay-core";
+import { BotApiError } from "../entity/bot/bot-error.ts";
+import type { BotOutboundAcceptance } from "../entity/bot/bot-session.ts";
+import type { BotConnectionGateway } from "./bot-connection-gateway.ts";
 
 type BotDeliveryRoute = Parameters<BotConnectionGateway["enqueue"]>[0];
 

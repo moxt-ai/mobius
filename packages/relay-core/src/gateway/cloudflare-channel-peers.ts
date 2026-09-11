@@ -1,5 +1,6 @@
-import type { ChannelSocket, RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "@moxt-ai/mobius-relay-core";
 import * as v from "valibot";
+import type { ChannelSocket } from "../service/channel/channel-actor.ts";
+import type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "../service/channel/runtime-service.ts";
 
 const attachmentSchema = v.union([
     v.object({

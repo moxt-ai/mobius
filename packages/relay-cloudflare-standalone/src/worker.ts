@@ -1,19 +1,13 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
-    CloudflareBotConnectionRuntime,
-    CloudflareChannelRuntime,
-    CloudflareSessionTransport,
-    D1DatabaseAdapter,
+    createBotApplication,
+    createMobiusApplication,
+    createWorkerContext,
     type LiteSessionConfigurationEnvironment,
     type PublicProjectBootstrapEnvironment,
     publicProjectBootstrapPolicyFromEnvironment,
-    sessionQuotaFromEnvironment,
-} from "@moxt-ai/mobius-relay-cloudflare";
-import {
-    createBotApplication,
-    createMobiusApplication,
-    createRelayDependencies,
     StaticSessionQuotaPolicyProvider,
+    sessionQuotaFromEnvironment,
 } from "@moxt-ai/mobius-relay-core";
 import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
@@ -80,43 +74,20 @@ export function createStandaloneWorker(): StandaloneWorker {
                 environment.DIRECTORY_DATABASE,
                 environment.MOBIUS_TENANT_ID,
             );
-            const infrastructure = {
-                config: { quota: sessionQuotaFromEnvironment(environment) },
-                gateways: {
-                    databaseResolver: new SingleDatabaseResolver(environment.DIRECTORY_DATABASE),
-                    projectStorageDirectory: new StandaloneProjectStorageDirectory(),
-                    runtimeRelay: environment.RUNTIME_RELAY,
-                    sessionRelay: environment.SESSION_RELAY,
+            const cx = createWorkerContext({
+                namespaces: {
+                    runtime: environment.RUNTIME_RELAY,
+                    sessions: environment.SESSION_RELAY,
+                    connections: environment.BOT_CONNECTIONS,
                 },
-            };
-            const channelRuntime = new CloudflareChannelRuntime(infrastructure);
-            const cx = createRelayDependencies({
-                authentication: {
-                    projects: projectAuthentication,
-                },
-                bots: {
-                    connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
-                },
-                config: {
-                    apiPrefix: MOBIUS_API_PREFIX,
-                    quotaPolicy: new StaticSessionQuotaPolicyProvider(infrastructure.config.quota),
-                },
-                databases: infrastructure.gateways.databaseResolver,
-                identityDatabases: [D1DatabaseAdapter.from(environment.DIRECTORY_DATABASE)],
-                logger: console,
-                gateways: {
-                    channelGateway: channelRuntime,
-                    nowEpochMilliseconds: () => Date.now(),
-                    publicProjectBootstrap: publicProjectBootstrapPolicyFromEnvironment(
-                        environment.DIRECTORY_DATABASE,
-                        environment,
-                    ),
-                    sessionTransport: new CloudflareSessionTransport(
-                        environment.SESSION_RELAY,
-                        environment.MOBIUS_TENANT_ID,
-                    ),
-                },
-                projects: infrastructure.gateways.projectStorageDirectory,
+                namespacePrefix: environment.MOBIUS_TENANT_ID,
+                authorization: projectAuthentication,
+                bootstrap: publicProjectBootstrapPolicyFromEnvironment(environment.DIRECTORY_DATABASE, environment),
+                databases: new SingleDatabaseResolver(environment.DIRECTORY_DATABASE),
+                identityDatabases: [environment.DIRECTORY_DATABASE],
+                projects: new StandaloneProjectStorageDirectory(),
+                apiPrefix: MOBIUS_API_PREFIX,
+                quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
             });
             if (isVersionedSharedProjectPath(pathname)) {
                 return await accountlessResponse(await application.fetch(request, cx));

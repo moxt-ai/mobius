@@ -1,4 +1,4 @@
-import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-cloudflare";
+import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-core";
 import { PairingDirectoryError } from "@moxt-ai/mobius-relay-core";
 import type { PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 import type { ProjectStoragePlacementRow } from "../entity/platform-records.ts";

@@ -1,17 +1,10 @@
 import {
     BotConnectionActor as BotConnectionImplementation,
-    CloudflareBotConnectionRuntime,
-    CloudflareChannelPeers,
-    CloudflareSessionTransport,
-    DurableObjectSqlDatabase,
+    createDurableObjectContext,
     type LiteSessionConfigurationEnvironment,
-    R2ContentStore,
     RuntimeRelay as RuntimeRelayImplementation,
     SessionRelay as SessionRelayImplementation,
-    sessionArchiveByteLimitFromEnvironment,
-    sessionQuotaFromEnvironment,
-} from "@moxt-ai/mobius-relay-cloudflare";
-import { createDurableObjectDependencies } from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-relay-core";
 import { SingleBucketResolver } from "./bucket-resolver.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
@@ -27,29 +20,17 @@ interface RelayEnvironment extends LiteSessionConfigurationEnvironment {
 function createContext(state: DurableObjectState, environment: RelayEnvironment) {
     const databases = new SingleDatabaseResolver(environment.DIRECTORY_DATABASE);
     const tenants = new StandaloneProjectStorageDirectory();
-    const quota = sessionQuotaFromEnvironment(environment);
-    return createDurableObjectDependencies({
-        doDatabase: new DurableObjectSqlDatabase(state.storage),
-        quota,
+    return createDurableObjectContext(state, {
+        environment,
+        connections: environment.BOT_CONNECTIONS,
+        sessions: environment.SESSION_RELAY,
+        namespacePrefix: environment.MOBIUS_TENANT_ID,
+        databases,
+        projects: tenants,
         content:
             environment.SESSION_ARCHIVES === undefined
-                ? { kind: "sqlite", archiveByteLimit: sessionArchiveByteLimitFromEnvironment(environment) }
-                : {
-                      kind: "external",
-                      content: new R2ContentStore(new SingleBucketResolver(environment.SESSION_ARCHIVES), tenants),
-                  },
-        gateways: {
-            databaseResolver: databases,
-            projectStorageDirectory: tenants,
-            sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY, environment.MOBIUS_TENANT_ID),
-            connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
-            peers: new CloudflareChannelPeers(state),
-            schedule: async (timestamp, signal) => {
-                signal.throwIfAborted();
-                await state.storage.setAlarm(timestamp);
-                signal.throwIfAborted();
-            },
-        },
+                ? { kind: "sqlite" }
+                : { kind: "r2", buckets: new SingleBucketResolver(environment.SESSION_ARCHIVES) },
     });
 }
 

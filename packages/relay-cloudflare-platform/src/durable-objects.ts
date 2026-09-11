@@ -1,16 +1,10 @@
 import {
     BotConnectionActor as BotConnectionImplementation,
-    CloudflareBotConnectionRuntime,
-    CloudflareChannelPeers,
-    CloudflareSessionTransport,
-    DurableObjectSqlDatabase,
+    createDurableObjectContext,
     type LiteSessionConfigurationEnvironment,
-    R2ContentStore,
     RuntimeRelay as RuntimeRelayImplementation,
     SessionRelay as SessionRelayImplementation,
-    sessionQuotaFromEnvironment,
-} from "@moxt-ai/mobius-relay-cloudflare";
-import { createDurableObjectDependencies } from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-relay-core";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
 import { PlatformBucketResolver } from "./storage/platform-bucket-resolver.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
@@ -41,22 +35,14 @@ function createContext(state: DurableObjectState, environment: PlatformDurableOb
         { read: controlStorage.readProjectStoragePlacement },
         registry,
     );
-    return createDurableObjectDependencies({
-        doDatabase: new DurableObjectSqlDatabase(state.storage),
-        quota: sessionQuotaFromEnvironment(environment),
-        content: { kind: "external", content: new R2ContentStore(new PlatformBucketResolver(environment), projects) },
-        gateways: {
-            databaseResolver: databases,
-            projectStorageDirectory: projects,
-            sessionTransport: new CloudflareSessionTransport(environment.SESSION_RELAY, "platform"),
-            connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
-            peers: new CloudflareChannelPeers(state),
-            schedule: async (timestamp, signal) => {
-                signal.throwIfAborted();
-                await state.storage.setAlarm(timestamp);
-                signal.throwIfAborted();
-            },
-        },
+    return createDurableObjectContext(state, {
+        environment,
+        connections: environment.BOT_CONNECTIONS,
+        sessions: environment.SESSION_RELAY,
+        namespacePrefix: "platform",
+        databases,
+        projects,
+        content: { kind: "r2", buckets: new PlatformBucketResolver(environment) },
     });
 }
 

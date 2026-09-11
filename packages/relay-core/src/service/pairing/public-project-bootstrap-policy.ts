@@ -1,4 +1,4 @@
-import { hashSecret, PairingDirectoryError } from "@moxt-ai/mobius-relay-core";
+import { hashSecret, PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 
 const DEFAULT_CLIENT_LIMIT = 10;
 const DEFAULT_TENANT_LIMIT = 100;
