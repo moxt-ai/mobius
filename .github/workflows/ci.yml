@@ -139,10 +139,10 @@ jobs:
       matrix:
         include:
           - environment: staging
-            domain: mobius-platform.paradev.biz
+            domain: mobius.paradev.biz
             clerk_publishable_key: pk_test_c21hc2hpbmctc3BpZGVyLTg1NzQuY2xlcmsuYWNjb3VudHMuZGV2JA==
           - environment: production
-            domain: mobius-platform.paraflow.biz
+            domain: mobius.paraflow.biz
             clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLnBhcmFmbG93LmJpeiQ=
     environment:
       name: mobius-relay-production
@@ -209,3 +209,50 @@ jobs:
           done
           echo "Unexpected Platform health response after deployment propagation: $actual" >&2
           exit 1
+
+      - name: Verify Platform app HTML and JavaScript
+        env:
+          PLATFORM_ORIGIN: https://${{ matrix.domain }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from html.parser import HTMLParser
+          from urllib.parse import urljoin, urlsplit
+
+          def download(url):
+              result = subprocess.run(
+                  ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "5",
+                   "--max-time", "15", "--write-out", "\n%{content_type}", url],
+                  check=True, stdout=subprocess.PIPE, text=True, timeout=20,
+              )
+              body, content_type = result.stdout.rsplit("\n", 1)
+              return body, content_type.split(";", 1)[0]
+
+          class AppPage(HTMLParser):
+              def __init__(self):
+                  super().__init__()
+                  self.has_root = False
+                  self.modules = []
+
+              def handle_starttag(self, tag, attrs):
+                  attrs = dict(attrs)
+                  if attrs.get("id") == "root":
+                      self.has_root = True
+                  if tag == "script" and attrs.get("type") == "module" and attrs.get("src"):
+                      self.modules.append(attrs["src"])
+
+          origin = os.environ["PLATFORM_ORIGIN"]
+          html, content_type = download(origin + "/")
+          assert content_type == "text/html", "Platform root must serve HTML"
+          page = AppPage()
+          page.feed(html)
+          assert page.has_root and page.modules, "Platform HTML must contain the app root and entry module"
+          for source in page.modules:
+              url = urljoin(origin + "/", source)
+              assert urlsplit(url).scheme == "https" and urlsplit(url).netloc == urlsplit(origin).netloc, "Entry module must use the Platform origin"
+              javascript, content_type = download(url)
+              assert content_type in ("application/javascript", "text/javascript"), "Entry module must serve JavaScript"
+              assert javascript, "Entry module must not be empty"
+          print(f"Platform app HTML and entry modules are available at {origin}")
+          PY

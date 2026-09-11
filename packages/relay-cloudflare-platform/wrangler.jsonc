@@ -56,7 +56,10 @@
             "name": "mobius-platform-staging",
             "workers_dev": false,
             "preview_urls": false,
-            "routes": [{ "pattern": "mobius-platform.paradev.biz", "custom_domain": true }],
+            "routes": [
+                { "pattern": "mobius.paradev.biz", "custom_domain": true },
+                { "pattern": "mobius-platform.paradev.biz", "custom_domain": true }
+            ],
             "durable_objects": {
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
@@ -102,7 +105,10 @@
             "name": "mobius-platform-production",
             "workers_dev": false,
             "preview_urls": false,
-            "routes": [{ "pattern": "mobius-platform.paraflow.biz", "custom_domain": true }],
+            "routes": [
+                { "pattern": "mobius.paraflow.biz", "custom_domain": true },
+                { "pattern": "mobius-platform.paraflow.biz", "custom_domain": true }
+            ],
             "durable_objects": {
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
