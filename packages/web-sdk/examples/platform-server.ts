@@ -22,7 +22,7 @@ const project = await developers.createProject(
         clientReference: "customer-42",
         displayName: "Customer 42",
         idempotencyKey: "provision-customer-42",
-        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+        locationHint: "apac",
     },
     signal,
 );

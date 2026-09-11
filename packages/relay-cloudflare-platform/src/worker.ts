@@ -22,6 +22,7 @@ import {
     platformAuthenticationFromEnvironment,
 } from "./infra/platform-authentication-environment.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
+import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
@@ -104,10 +105,16 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 projectDatabases,
             );
             const storageRegistry = new PlatformStorageRegistry(environment);
-            const control = new PlatformControlPlaneService(controlStorage, authentication, storageRegistry);
+            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
+            const control = new PlatformControlPlaneService(
+                controlStorage,
+                authentication,
+                storageRegistry,
+                appAuthentication,
+            );
             const pathname = new URL(request.url).pathname;
             if (isControlPath(pathname) && !isConversationPath(pathname)) {
-                return await controlApplication.fetch(request, { control });
+                return await controlApplication.fetch(request, { control, appAuthentication });
             }
             const databases = new PlatformDatabaseResolver(environment);
             const projects = new PlatformProjectStorageDirectory(

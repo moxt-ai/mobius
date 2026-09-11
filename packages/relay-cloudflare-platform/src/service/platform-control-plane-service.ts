@@ -2,7 +2,7 @@ import {
     AuditActor,
     AuditActorKind,
     createRandomToken,
-    decodeProjectCredential,
+    type decodeProjectCredential,
     decodeProjectPermissions,
     ExpiringProjectAccessLifetime,
     ExternalIdentityCredential,
@@ -11,7 +11,6 @@ import {
     ProjectAccessContext,
     type ProjectApplicationCredentialAuthenticator,
     ProjectAuthenticationError,
-    ProjectCredentialScheme,
     type ProjectPermission,
     ProjectScope,
     SessionQuotaPolicy,
@@ -25,7 +24,7 @@ import {
     type PlatformAuthenticationConfiguration,
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
-    type PlatformProjectPlacement,
+    type PlatformPrincipal,
     type PlatformProjectPlacementRegistry,
 } from "../entity/platform-control-plane.ts";
 import type {
@@ -38,11 +37,26 @@ import type {
     TenantRow,
 } from "../entity/platform-records.ts";
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
+import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
 
 const DEFAULT_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const MINIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
 const MAXIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
+
+type ProjectProvisioningActor =
+    | {
+          readonly kind: "platform_developer";
+          readonly tenantId: string;
+          readonly subject: string;
+          readonly credentialId: "";
+      }
+    | {
+          readonly kind: "application";
+          readonly tenantId: string;
+          readonly subject: string;
+          readonly credentialId: string;
+      };
 
 const PLATFORM_SERVER_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
     ...decodeProjectPermissions([
@@ -364,21 +378,8 @@ function bearer(request: Request): string {
     return value;
 }
 
-function constantTimeEqual(left: string, right: string): boolean {
-    const maximum = Math.max(left.length, right.length);
-    let mismatch = left.length ^ right.length;
-    for (let index = 0; index < maximum; index += 1) {
-        mismatch |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0);
-    }
-    return mismatch === 0;
-}
-
-async function requestDigest(
-    display: string,
-    clientReference: string,
-    placement: PlatformProjectPlacement,
-): Promise<string> {
-    return await hashSecret(JSON.stringify({ clientReference, displayName: display, placement }));
+async function requestDigest(display: string, clientReference: string, locationHint: string): Promise<string> {
+    return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
 
 export class PlatformControlPlaneService
@@ -387,15 +388,18 @@ export class PlatformControlPlaneService
     readonly #authentication: PlatformAuthenticationConfiguration;
     readonly #storage: PlatformControlPlaneStorage;
     readonly #placements: PlatformProjectPlacementRegistry;
+    readonly #appAuthentication: AppCredentialAuthenticationService;
 
     constructor(
         storage: PlatformControlPlaneStorage,
         authentication: PlatformAuthenticationConfiguration,
         placements: PlatformProjectPlacementRegistry,
+        appAuthentication: AppCredentialAuthenticationService,
     ) {
         this.#storage = storage;
         this.#authentication = authentication;
         this.#placements = placements;
+        this.#appAuthentication = appAuthentication;
     }
 
     readonly authenticateDeveloper = async (
@@ -649,7 +653,83 @@ export class PlatformControlPlaneService
         requestedDisplayName: string,
         idempotencyKey: string,
         requestedClientReference: string,
-        requestedPlacement: PlatformProjectPlacement,
+        locationHint: string,
+        signal: AbortSignal,
+    ): Promise<object> =>
+        await this.provisionProject(
+            {
+                kind: "platform_developer",
+                tenantId: access.tenantId,
+                subject: access.identity.subject,
+                credentialId: "",
+            },
+            app,
+            requestedDisplayName,
+            idempotencyKey,
+            requestedClientReference,
+            locationHint,
+            signal,
+        );
+
+    readonly provisionAppProject = async (
+        principal: PlatformPrincipal,
+        appId: string,
+        requestedDisplayName: string,
+        idempotencyKey: string,
+        clientReference: string,
+        locationHint: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        if (principal.kind === "developer") {
+            const result = await this.requireAppDeveloper(principal.identity, appId, signal);
+            return await this.createProject(
+                result.access,
+                result.app,
+                requestedDisplayName,
+                idempotencyKey,
+                clientReference,
+                locationHint,
+                signal,
+            );
+        }
+        if (
+            principal.appId !== appId ||
+            principal.scope !== "all-projects" ||
+            !PLATFORM_SERVER_PROJECT_PERMISSIONS.every((permission) => principal.permissions.has(permission))
+        ) {
+            throw new PlatformControlPlaneError(
+                "app_provisioning_denied",
+                "An App-wide server credential is required",
+                403,
+            );
+        }
+        const app = await this.#storage.readApp(principal.appId, signal);
+        if (app === null || app.tenant_id !== principal.tenantId || app.lifecycle !== "active") {
+            throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
+        }
+        return await this.provisionProject(
+            {
+                kind: "application",
+                tenantId: principal.tenantId,
+                subject: principal.appId,
+                credentialId: principal.credentialId,
+            },
+            app,
+            requestedDisplayName,
+            idempotencyKey,
+            clientReference,
+            locationHint,
+            signal,
+        );
+    };
+
+    private readonly provisionProject = async (
+        access: ProjectProvisioningActor,
+        app: AppRow,
+        requestedDisplayName: string,
+        idempotencyKey: string,
+        requestedClientReference: string,
+        requestedLocationHint: string,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
@@ -662,18 +742,8 @@ export class PlatformControlPlaneService
             "client_reference",
         );
         const normalizedDisplayName = displayName(requestedDisplayName);
-        const placement = {
-            d1ShardId: validateIdentifier(requestedPlacement.d1ShardId, "d1_shard_id"),
-            r2BucketId: validateIdentifier(requestedPlacement.r2BucketId, "r2_bucket_id"),
-        };
-        if (!this.#placements.supports(placement)) {
-            throw new PlatformControlPlaneError(
-                "storage_placement_unavailable",
-                "The storage placement is unavailable",
-                400,
-            );
-        }
-        const digest = await requestDigest(normalizedDisplayName, clientReference, placement);
+        const locationHint = validateIdentifier(requestedLocationHint, "location_hint");
+        const digest = await requestDigest(normalizedDisplayName, clientReference, locationHint);
         signal.throwIfAborted();
         const existing = await this.#storage.readProjectByIdempotencyKey(app.app_id, normalizedIdempotencyKey, signal);
         if (existing !== null) {
@@ -685,6 +755,14 @@ export class PlatformControlPlaneService
                 );
             }
             return projectResource(existing);
+        }
+        const placement = this.#placements.resolveLocationHint(locationHint);
+        if (placement === null || !this.#placements.supports(placement)) {
+            throw new PlatformControlPlaneError(
+                "storage_location_unavailable",
+                "The requested storage location is unavailable",
+                400,
+            );
         }
         const tenant = await this.readTenant(access.tenantId, signal);
         const quota = quotasFromRow(tenant);
@@ -726,9 +804,9 @@ export class PlatformControlPlaneService
                 access.tenantId,
                 app.app_id,
                 projectId,
-                "platform_developer",
-                access.identity.subject,
-                "",
+                access.kind,
+                access.subject,
+                access.credentialId,
                 "project.created",
                 projectId,
                 "succeeded",
@@ -1077,40 +1155,7 @@ export class PlatformControlPlaneService
     private readonly authenticatedCredential = async (
         credentialValue: string,
         signal: AbortSignal,
-    ): Promise<CredentialRow> => {
-        let credential: ReturnType<typeof decodeProjectCredential>;
-        try {
-            credential = decodeProjectCredential(credentialValue);
-        } catch (cause) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid", {
-                cause,
-            });
-        }
-        if (credential.scheme !== ProjectCredentialScheme.Application) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
-        }
-        const row = await this.#storage.readCredentialByPublicId(credential.publicCredentialId, signal);
-        if (row === null) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
-        }
-        const digest = await hashSecret(credential.value);
-        signal.throwIfAborted();
-        if (!constantTimeEqual(digest, row.secret_digest)) {
-            throw new ProjectAuthenticationError("project_credential_invalid", "The AppCredential is invalid");
-        }
-        const now = Date.now();
-        if (
-            row.revoked_at !== null ||
-            row.expires_at <= now ||
-            (row.replaced_by_credential_id !== null &&
-                (typeof row.overlap_ends_at !== "number" || row.overlap_ends_at <= now)) ||
-            row.app_lifecycle !== "active" ||
-            row.tenant_lifecycle !== "active"
-        ) {
-            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
-        }
-        return row;
-    };
+    ): Promise<CredentialRow> => await this.#appAuthentication.verify(credentialValue, signal);
 
     private readonly allowedProjects = async (row: CredentialRow, signal: AbortSignal): Promise<readonly string[]> => {
         const projects =
@@ -1198,7 +1243,7 @@ export class PlatformControlPlaneService
     };
 
     private readonly recordQuotaDenial = async (
-        access: PlatformDeveloperAccess,
+        access: PlatformDeveloperAccess | ProjectProvisioningActor,
         resource: string,
         subjectId: string,
         limit: number,
@@ -1209,9 +1254,9 @@ export class PlatformControlPlaneService
                 access.tenantId,
                 resource === "app" ? "" : subjectId,
                 "",
-                "platform_developer",
-                access.identity.subject,
-                "",
+                access instanceof PlatformDeveloperAccess ? "platform_developer" : access.kind,
+                access instanceof PlatformDeveloperAccess ? access.identity.subject : access.subject,
+                access instanceof PlatformDeveloperAccess ? "" : access.credentialId,
                 "quota.denied",
                 subjectId,
                 "denied",

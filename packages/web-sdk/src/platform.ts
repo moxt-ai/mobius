@@ -353,10 +353,7 @@ export interface MobiusCreatePlatformProjectRequest {
     readonly clientReference: string;
     readonly displayName: string;
     readonly idempotencyKey: string;
-    readonly placement: {
-        readonly d1ShardId: string;
-        readonly r2BucketId: string;
-    };
+    readonly locationHint: string;
 }
 
 export interface MobiusIssueAppCredentialRequest {
@@ -508,13 +505,7 @@ export class MobiusPlatformDeveloperClient {
                         clientReference: requestedIdentifier(request.clientReference, "Project client reference"),
                         displayName: requestedDisplayName(request.displayName),
                         idempotencyKey: requestedIdentifier(request.idempotencyKey, "Project idempotency key"),
-                        placement: {
-                            d1ShardId: requestedIdentifier(request.placement.d1ShardId, "Project D1 shard identifier"),
-                            r2BucketId: requestedIdentifier(
-                                request.placement.r2BucketId,
-                                "Project R2 bucket identifier",
-                            ),
-                        },
+                        locationHint: requestedIdentifier(request.locationHint, "Location hint"),
                     },
                     signal,
                 ),
@@ -597,6 +588,27 @@ export class MobiusPlatformAppClient {
         }
         this.#executor = new MobiusRequestExecutor(options);
     }
+
+    readonly createProject = async (
+        appId: string,
+        request: MobiusCreatePlatformProjectRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusPlatformProject> =>
+        new MobiusPlatformProject(
+            record(
+                await this.#executor.post(
+                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
+                    {
+                        clientReference: requestedIdentifier(request.clientReference, "Project client reference"),
+                        displayName: requestedDisplayName(request.displayName),
+                        idempotencyKey: requestedIdentifier(request.idempotencyKey, "Project idempotency key"),
+                        locationHint: requestedIdentifier(request.locationHint, "Location hint"),
+                    },
+                    signal,
+                ),
+                "Project",
+            ),
+        );
 
     readonly issueConversationAccessCredential = async (
         conversationId: string,

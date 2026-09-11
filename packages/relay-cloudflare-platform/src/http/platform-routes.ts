@@ -3,8 +3,13 @@ import { PairingDirectoryError, ProjectAuthenticationError } from "@moxt-ai/mobi
 import { Hono } from "hono";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
+import {
+    appCredentialAuthentication,
+    authenticateWith,
+    developerOidcAuthentication,
+    type PlatformAuthenticationEnvironment,
+} from "../middleware/authentication.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
-import type { PlatformControlPlaneService } from "../service/platform-control-plane-service.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -25,10 +30,7 @@ const createProjectBody = v.strictObject({
     displayName: requiredString,
     idempotencyKey: requiredString,
     clientReference: v.optional(v.string(), ""),
-    placement: v.strictObject({
-        d1ShardId: requiredString,
-        r2BucketId: requiredString,
-    }),
+    locationHint: requiredString,
 });
 const issueCredentialBody = v.strictObject({
     expiresInSeconds: safeInteger,
@@ -38,10 +40,7 @@ const issueCredentialBody = v.strictObject({
 const rotateCredentialBody = v.strictObject({ expiresInSeconds: safeInteger, overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 
-interface PlatformHttpEnvironment {
-    readonly Bindings: { readonly control: PlatformControlPlaneService };
-    readonly Variables: { readonly signal: AbortSignal };
-}
+type PlatformHttpEnvironment = PlatformAuthenticationEnvironment;
 
 function errorResponse(error: unknown): Response {
     if (error instanceof PlatformControlPlaneError) {
@@ -173,27 +172,26 @@ export function createPlatformControlApplication() {
             );
             return context.json(await context.env.control.listProjects(result.access, result.app, context.var.signal));
         })
-        .post("/v1/apps/:appId/projects", bodyParser(createProjectBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const result = await context.env.control.requireAppDeveloper(
-                identity,
-                path(context.req.param("appId")),
-                context.var.signal,
-            );
-            return context.json(
-                await context.env.control.createProject(
-                    result.access,
-                    result.app,
-                    value.displayName,
-                    value.idempotencyKey,
-                    value.clientReference,
-                    value.placement,
-                    context.var.signal,
-                ),
-                201,
-            );
-        })
+        .post(
+            "/v1/apps/:appId/projects",
+            bodyParser(createProjectBody),
+            authenticateWith(appCredentialAuthentication, developerOidcAuthentication),
+            async (context) => {
+                const value = context.req.valid("json");
+                return context.json(
+                    await context.env.control.provisionAppProject(
+                        context.var.principal,
+                        path(context.req.param("appId")),
+                        value.displayName,
+                        value.idempotencyKey,
+                        value.clientReference,
+                        value.locationHint,
+                        context.var.signal,
+                    ),
+                    201,
+                );
+            },
+        )
         .post("/v1/apps/:appId/credentials", bodyParser(issueCredentialBody), async (context) => {
             const value = context.req.valid("json");
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);

@@ -47,6 +47,17 @@ export class PlatformStorageRegistry implements PlatformProjectPlacementRegistry
         placement.d1ShardId.startsWith(`${placement.r2BucketId}-`) &&
         platformDatabaseBindings(this.#bindings).some(({ id }) => id === placement.d1ShardId) &&
         platformBucket(this.#bindings, placement.r2BucketId) !== undefined;
+
+    readonly resolveLocationHint = (locationHint: string): PlatformProjectPlacement | null => {
+        if (locationHint !== "apac" && locationHint !== "wnam") {
+            return null;
+        }
+        const shard = platformDatabaseBindings(this.#bindings).find(({ id }) => id.startsWith(`${locationHint}-`));
+        if (shard === undefined || platformBucket(this.#bindings, locationHint) === undefined) {
+            return null;
+        }
+        return { d1ShardId: shard.id, r2BucketId: locationHint };
+    };
 }
 
 export class PlatformDatabaseResolver implements DatabaseResolver {

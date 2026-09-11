@@ -136,3 +136,21 @@ exported `createLegacyStandaloneWorker` constructor exists only to let an older
 deployment read and migrate already-issued legacy Application or external
 identity credentials. Selecting it is an explicit compatibility action; no
 credential is silently reinterpreted as a Platform AppCredential.
+## App Project provisioning
+
+Registered applications create Projects with their server-held AppCredential via
+`POST /mobius/api/v1/apps/:appId/projects` or
+`MobiusPlatformAppClient.createProject(appId, request, signal)`. The credential
+must belong to the requested App, cover all Projects, and include the complete
+server permission set. Developer OIDC is also supported on the same route.
+Authentication middleware selects one method and verifies it; a verification
+failure never falls back to another method. Resource authorization remains in
+the control-plane service.
+
+The request contains `displayName`, `clientReference`, `idempotencyKey`, and a
+logical `locationHint` such as `apac` or `wnam`. Applications do not pass D1 shard
+or R2 bucket identifiers. Platform resolves the hint to the first configured shard
+in that location and its matching bucket, then stores that placement on the
+Project. Unavailable locations are rejected with `storage_location_unavailable`.
+An idempotent replay uses the logical request and returns the existing Project;
+it does not move the Project when the registry configuration changes.

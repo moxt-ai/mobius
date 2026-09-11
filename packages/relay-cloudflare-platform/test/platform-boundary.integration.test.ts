@@ -254,7 +254,7 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
                 body: JSON.stringify({
                     displayName: `Project ${label}`,
                     idempotencyKey: `project-${label}`,
-                    placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                    locationHint: "apac",
                 }),
                 headers: developerHeaders(),
                 method: "POST",
@@ -304,6 +304,106 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
         worker,
     };
 }
+
+it("Given an App-wide server credential, When its backend provisions a user Project twice, Then the same Project is returned without developer sign-in", async () => {
+    const fixture = await provisionPlatformProject("app-provision");
+    const request = () =>
+        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
+            method: "POST",
+            headers: credentialHeaders(fixture.appCredential),
+            body: JSON.stringify({
+                displayName: "Anonymous workspace",
+                clientReference: "anonymous-user",
+                idempotencyKey: "anonymous-user",
+                locationHint: "apac",
+            }),
+        });
+    const project = await json(await fixture.worker.fetch(request(), fixture.environment), 201);
+    expect(project["appId"]).toBe(fixture.appId);
+    expect(project["clientReference"]).toBe("anonymous-user");
+    expect(await json(await fixture.worker.fetch(request(), fixture.environment), 201)).toEqual(project);
+    const signal = new AbortController().signal;
+    const client = new MobiusPlatformAppClient({
+        endpoint: relayOrigin,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport: { fetch: async (request) => await fixture.worker.fetch(request, fixture.environment) },
+    });
+    expect(
+        (
+            await client.createProject(
+                fixture.appId,
+                {
+                    displayName: "Anonymous workspace",
+                    clientReference: "anonymous-user",
+                    idempotencyKey: "anonymous-user",
+                    locationHint: "apac",
+                },
+                signal,
+            )
+        ).projectId,
+    ).toBe(project["projectId"]);
+    const other = await provisionPlatformProject("other-app-provision");
+    expect(
+        (
+            await fixture.worker.fetch(
+                new Request(request(), { headers: credentialHeaders(other.appCredential) }),
+                fixture.environment,
+            )
+        ).status,
+    ).toBe(403);
+    expect(
+        (
+            await fixture.worker.fetch(
+                new Request(request(), {
+                    headers: { ...credentialHeaders(fixture.appCredential), "x-mobius-oidc-provider": "clerk" },
+                }),
+                fixture.environment,
+            )
+        ).status,
+    ).toBe(400);
+    const scoped = await json(
+        await fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/credentials`, {
+                method: "POST",
+                headers: developerHeaders(),
+                body: JSON.stringify({
+                    expiresInSeconds: 3600,
+                    permissions: ["project:read"],
+                    projectIds: [fixture.projectId],
+                }),
+            }),
+            fixture.environment,
+        ),
+        201,
+    );
+    const scopedRequest = new Request(request(), { headers: credentialHeaders(text(scoped, "credential")) });
+    expect((await fixture.worker.fetch(scopedRequest, fixture.environment)).status).toBe(403);
+    const denied = await fixture.worker.fetch(
+        new Request(request(), { headers: { "content-type": "application/json" } }),
+        fixture.environment,
+    );
+    expect(denied.status).toBe(401);
+    for (const input of [
+        {
+            displayName: "Unknown location",
+            clientReference: "unknown-location",
+            idempotencyKey: "unknown-location",
+            locationHint: "unknown",
+        },
+        {
+            displayName: "Physical placement",
+            clientReference: "physical-placement",
+            idempotencyKey: "physical-placement",
+            placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+        },
+    ]) {
+        const rejected = await fixture.worker.fetch(
+            new Request(request(), { body: JSON.stringify(input) }),
+            fixture.environment,
+        );
+        expect(rejected.status).toBe(400);
+    }
+});
 
 async function createReadyConversation(label: string): Promise<PlatformConversationFixture> {
     const project = await provisionPlatformProject(label);
@@ -584,7 +684,7 @@ describe.sequential("Platform hosting boundary", () => {
             clientReference: "sdk-customer",
             displayName: "SDK project",
             idempotencyKey: "sdk-project",
-            placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+            locationHint: "apac",
         };
         const project = await developer.createProject(app.appId, projectRequest, AbortSignal.timeout(5_000));
         const replay = await developer.createProject(app.appId, projectRequest, AbortSignal.timeout(5_000));
@@ -787,7 +887,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "Only project",
                         idempotencyKey: "only-project",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",
@@ -799,7 +899,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "Concurrent project",
                         idempotencyKey: "concurrent-project",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",
@@ -941,7 +1041,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "Workspace One",
                         idempotencyKey: "workspace-one",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",
@@ -956,7 +1056,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "Workspace Two",
                         idempotencyKey: "workspace-two",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",
@@ -1037,7 +1137,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "First",
                         idempotencyKey: "first",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",
@@ -1052,7 +1152,7 @@ describe.sequential("Platform hosting boundary", () => {
                     body: JSON.stringify({
                         displayName: "Second",
                         idempotencyKey: "second",
-                        placement: { d1ShardId: "apac-01", r2BucketId: "apac" },
+                        locationHint: "apac",
                     }),
                     headers: developerHeaders(),
                     method: "POST",

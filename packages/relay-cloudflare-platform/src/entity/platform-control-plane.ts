@@ -1,6 +1,7 @@
 import type {
     ExternalIdentityAuthenticator,
     ProjectAccessContext,
+    ProjectPermission,
     VerifiedExternalIdentity,
 } from "@moxt-ai/mobius-relay-core";
 
@@ -74,12 +75,26 @@ export class PlatformAppCredentialAccess {
     }
 }
 
+export interface PlatformApplicationIdentity {
+    readonly kind: "application";
+    readonly tenantId: string;
+    readonly appId: string;
+    readonly credentialId: string;
+    readonly permissions: ReadonlySet<ProjectPermission>;
+    readonly scope: "all-projects" | "selected-projects";
+}
+
+export type PlatformPrincipal =
+    | PlatformApplicationIdentity
+    | { readonly kind: "developer"; readonly identity: VerifiedExternalIdentity };
+
 export interface PlatformProjectPlacement {
     readonly d1ShardId: string;
     readonly r2BucketId: string;
 }
 
 export interface PlatformProjectPlacementRegistry {
+    readonly resolveLocationHint: (locationHint: string) => PlatformProjectPlacement | null;
     readonly supports: (placement: PlatformProjectPlacement) => boolean;
 }
 
