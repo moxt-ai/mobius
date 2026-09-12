@@ -15,6 +15,7 @@ import {
     DirectAcpAgentDefinition,
     type LocalAgentSpecification,
 } from "./agent-specification.ts";
+import { normalizeVersionOutput } from "./version-output.ts";
 
 async function resolveManagedExecutable(
     specification: LocalAgentSpecification,
@@ -132,10 +133,6 @@ export async function resolveAdapterExecutable(
     return executables[0] ?? null;
 }
 
-export function normalizedVersion(output: string): string {
-    return output.trim().split(/\r?\n/, 1)[0]?.trim().slice(0, 128) ?? "";
-}
-
 export async function probeVersion(
     executable: ResolvedExecutable,
     arguments_: readonly string[],
@@ -143,6 +140,7 @@ export async function probeVersion(
     defaultWorkspace: string,
     signal: AbortSignal,
     timeoutMilliseconds: number,
+    normalize: (output: string) => string = normalizeVersionOutput,
 ): Promise<string> {
     const result = await runBoundedProcess({
         arguments: arguments_,
@@ -152,7 +150,7 @@ export async function probeVersion(
         signal,
         timeoutMilliseconds,
     });
-    const version = normalizedVersion(result.stdout || result.stderr);
+    const version = normalize(result.stdout || result.stderr);
     if (version.length === 0) {
         throw new ProcessExecutionError("process_exit_failed", "The executable did not report a version");
     }
@@ -183,6 +181,7 @@ export async function findVerifiedAgentExecutable(
                 context.defaultWorkspace,
                 context.signal,
                 specification.versionProbeTimeoutMilliseconds,
+                specification.normalizeAgentVersion,
             );
             return new VerifiedAgentExecutable(executable, version);
         } catch {

@@ -27,7 +27,7 @@ An Agent specification owns only Agent-specific discovery policy:
 - executable and local override names;
 - fixed launch arguments and environment;
 - managed executable validation;
-- version probe settings;
+- version probe settings and any product-specific output normalization;
 - ACP capability and lifecycle conformance.
 
 `DirectAcpAgentDefinition` accepts one executable override and one managed path,

@@ -5,6 +5,7 @@ import {
     decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
     type Interaction,
+    MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     MobiusAgentIntegrationDescriptor,
     MobiusApiError,
     MobiusClient,
@@ -375,7 +376,7 @@ function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
 }
 
 function decodeAgents(value: unknown): readonly AgentOption[] {
-    if (!Array.isArray(value) || value.length > 8) {
+    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
     }
     const agents: AgentOption[] = [];
@@ -420,7 +421,7 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
 }
 
 function decodeInstallableAgents(value: unknown): readonly InstallableAgentOption[] {
-    if (!Array.isArray(value) || value.length > 8) {
+    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
         throw new PairingApiError(
             "invalid_relay_response",
             "The relay returned an invalid installable Agent directory.",
@@ -850,6 +851,7 @@ function decodeChannelConnection(
     const installableAgents = decodeInstallableAgents(value["installableAgents"]);
     if (
         agents.length + installableAgents.length === 0 ||
+        agents.length + installableAgents.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES ||
         installableAgents.some((agent) => agents.some((available) => available.id === agent.id))
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Agent catalog.");
@@ -888,6 +890,7 @@ function runtimeConnection(
     });
     if (
         agents.length + installableAgents.length === 0 ||
+        agents.length + installableAgents.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES ||
         installableAgents.some((agent) => agents.some((available) => available.id === agent.id))
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid Agent catalog.");

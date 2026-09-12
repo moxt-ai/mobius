@@ -21,6 +21,21 @@ export function promptUsageResponse(prompt: string, turn: number): PromptRespons
             stopReason: "end_turn",
         };
     }
+    if (prompt === "report Gemini usage") {
+        const tokenCount = {
+            input_tokens: 600 * turn,
+            output_tokens: 200 * turn,
+        };
+        return {
+            _meta: {
+                quota: {
+                    model_usage: [{ model: "gemini-3.1-pro-preview", token_count: tokenCount }],
+                    token_count: tokenCount,
+                },
+            },
+            stopReason: "end_turn",
+        };
+    }
     const claude = prompt === "report Claude usage";
     const tokenCount = {
         cachedInputTokens: 200 * turn,

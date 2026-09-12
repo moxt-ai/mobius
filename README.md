@@ -118,12 +118,15 @@ Implemented local integrations:
 
 - Codex
 - Claude Code
+- GitHub Copilot CLI through `copilot --no-auto-update --acp --stdio`
 - Pi coding agent through `pi-acp`
 - DeepSeek Harness through `dsh --profile acp`
+- Hermes Agent through `hermes acp`
 - OpenCode through `opencode acp`
 - Cursor CLI through `cursor-agent acp`
 - Grok Build through `grok agent stdio`
 - WorkBuddy through CodeBuddy Code's `codebuddy --acp`
+- Gemini CLI through `gemini --acp`
 
 Cloud-based integration targets:
 
@@ -228,10 +231,15 @@ handshake. Pi also has to create a session and finish a bounded `/session`
 conformance prompt through `pi-acp -> pi --mode rpc`.
 DeepSeek Harness runs directly as `dsh --profile acp`; Mobius uses the `dsh` CLI
 version because the current ACP profile reports its internal bridge version.
+GitHub Copilot CLI runs directly as `copilot --no-auto-update --acp --stdio`;
+Mobius also sets `COPILOT_AUTO_UPDATE=false` while it owns the process. Hermes
+Agent runs directly as `hermes acp`, with discovery also checking the official
+per-user `~/.local/bin/hermes` installation location.
 OpenCode runs directly as `opencode acp` with its own auto-update disabled while
-Mobius owns the process. Cursor CLI, Grok Build, and WorkBuddy run through their
-native ACP entrypoints with automatic updates disabled; readiness also requires
-successful session creation. On macOS, WorkBuddy discovery checks the embedded
+Mobius owns the process. Cursor CLI, Grok Build, WorkBuddy, and Gemini CLI run
+through their native ACP entrypoints; readiness also requires successful session
+creation. Gemini CLI uses its stable `gemini --acp` entrypoint. On macOS,
+WorkBuddy discovery checks the embedded
 `codebuddy` executable in both the system and current user's standard
 `WorkBuddy.app` locations, so the desktop application does not need to add its
 private CLI to `PATH`. Cursor's optional question and plan extensions are
@@ -247,12 +255,15 @@ Discovery checks these explicit local overrides before direct `PATH` lookup:
 
 - `MOBIUS_CODEX_PATH` and `MOBIUS_CODEX_ACP_PATH`
 - `MOBIUS_CLAUDE_PATH` and `MOBIUS_CLAUDE_ACP_PATH`
+- `MOBIUS_COPILOT_PATH`
 - `MOBIUS_PI_PATH` and `MOBIUS_PI_ACP_PATH`
 - `MOBIUS_DEEPSEEK_HARNESS_PATH`
+- `MOBIUS_HERMES_PATH`
 - `MOBIUS_OPENCODE_PATH`
 - `MOBIUS_CURSOR_PATH`
 - `MOBIUS_GROK_BUILD_PATH`
 - `MOBIUS_WORKBUDDY_PATH`
+- `MOBIUS_GEMINI_PATH`
 
 Automatic lookup uses the `PATH` inherited by the Mobius process, plus documented
 Agent-specific installation locations such as the macOS WorkBuddy application
@@ -298,8 +309,10 @@ The Web request cannot change a release channel, command, URL, arguments, or
 installation target. Local provider credentials remain with the Agent process
 and never cross the Relay. Pi
 authentication is a local terminal action through `pi-acp --terminal-login`;
-OpenCode uses `opencode auth login`, Cursor uses `cursor-agent login`, Grok Build
-uses `grok login`, and WorkBuddy opens its local sign-in through `codebuddy`.
+GitHub Copilot CLI uses `copilot login`, Hermes Agent uses `hermes acp --setup`,
+and Gemini CLI uses its locally configured OAuth, API-key, Vertex AI, or gateway
+authentication. OpenCode uses `opencode auth login`, Cursor uses `cursor-agent login`,
+Grok Build uses `grok login`, and WorkBuddy opens its local sign-in through `codebuddy`.
 DeepSeek Harness reads credentials from its validated local home or launch
 environment; use the local `dsh web` Models page or `DEEPSEEK_API_KEY` to
 configure the default route. `mobius agents` reports ACP
@@ -326,7 +339,11 @@ RPC child. DeepSeek Harness advertises its current list, resume, close, and HTTP
 MCP capabilities; unsupported load, additional-directory, delete, fork, image,
 audio, embedded-resource, and elicitation features remain absent. OpenCode's ACP
 session lifecycle, including persisted load/resume behavior, is negotiated from
-the running binary.
+the running binary. GitHub Copilot CLI must provide load and list support,
+Hermes Agent must provide load, list, resume, and fork support, and Gemini CLI
+must provide load support before Mobius advertises them. Hermes native session
+management remains scoped to the running ACP process;
+Mobius does not present it as cross-process persistence.
 
 Open **Local sessions** in the sidebar, then choose an installed Agent to see
 its saved conversations across projects on the paired machine. This works before starting a chat

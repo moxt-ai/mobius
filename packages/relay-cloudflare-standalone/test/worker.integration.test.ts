@@ -106,6 +106,13 @@ const buildAgents = [
         label: "Build Agent",
     },
 ];
+const completeReadyAgentDirectory = Array.from({ length: 11 }, (_, index) => ({
+    agentPath: `/usr/local/bin/agent-${index + 1}`,
+    agentVersion: `agent ${index + 1}.0.0`,
+    capabilities: verifiedAgentCapabilities,
+    id: `agent-${index + 1}`,
+    label: `Agent ${index + 1}`,
+}));
 const attemptIdsBySession = new Map<string, string>();
 const sourceSequences = new Map<string, number>();
 
@@ -336,11 +343,15 @@ async function createPairing(): Promise<CreatedPairingResponse> {
     return decodeCreatedPairing(await response.json());
 }
 
-async function claimPairing(created: CreatedPairingResponse): Promise<ClaimedPairingResponse> {
+async function claimPairing(
+    created: CreatedPairingResponse,
+    agents: readonly Readonly<Record<string, unknown>>[] = readyAgents,
+    availableInstallableAgents: readonly Readonly<Record<string, unknown>>[] = installableAgents,
+): Promise<ClaimedPairingResponse> {
     const response = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
         body: JSON.stringify({
-            agents: readyAgents,
-            installableAgents,
+            agents,
+            installableAgents: availableInstallableAgents,
             machineName: "Developer Mac",
             pairingCode: created.pairingCode,
             workspaceName: "mobius",
@@ -628,6 +639,15 @@ afterEach(() => {
 });
 
 describe.sequential("Cloudflare session deployment", () => {
+    it("Given all eleven supported local Agents are ready, When the machine claims its pairing, Then the Relay accepts the complete bounded directory", async () => {
+        const created = await createPairing();
+
+        await expect(claimPairing(created, completeReadyAgentDirectory, [])).resolves.toMatchObject({
+            channelId: created.channelId,
+            runtimeId: created.runtimeId,
+        });
+    });
+
     it("Given a ready Session with no recorded events, When a browser opens its event stream, Then the Relay immediately sends a connection frame before the first Turn", async () => {
         const pairing = await pairChannel();
         expect(await createSession(pairing.created, "empty-event-stream-session")).toMatchObject({ status: 201 });

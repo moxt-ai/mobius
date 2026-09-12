@@ -293,12 +293,15 @@ if (process.argv.includes("--version")) {
             });
             expect(inventory.unavailable.map((agent) => agent.specification.id)).toEqual([
                 "claude",
+                "github-copilot-cli",
                 "pi",
                 "deepseek-harness",
+                "hermes",
                 "opencode",
                 "cursor",
                 "grok-build",
                 "workbuddy",
+                "gemini-cli",
             ]);
 
             const chunks: string[] = [];

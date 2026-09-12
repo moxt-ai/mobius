@@ -1,4 +1,8 @@
-import { type SessionCapabilities, sessionCapabilitiesSchema } from "@moxt-ai/mobius-protocol";
+import {
+    MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
+    type SessionCapabilities,
+    sessionCapabilitiesSchema,
+} from "@moxt-ai/mobius-protocol";
 
 export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
@@ -466,7 +470,7 @@ function normalizePersistedInstallableAgents(value: unknown): unknown {
 }
 
 export function validateAgents(value: unknown): readonly AgentDescriptor[] {
-    if (!Array.isArray(value) || value.length > 8) {
+    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
         throw new PairingDirectoryError("invalid_agents", "The ready Agent directory is invalid");
     }
 
@@ -518,7 +522,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
 }
 
 export function validateInstallableAgents(value: unknown): readonly InstallableAgentDescriptor[] {
-    if (!Array.isArray(value) || value.length > 8) {
+    if (!Array.isArray(value) || value.length > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
         throw new PairingDirectoryError("invalid_agents", "The installable Agent directory is invalid");
     }
     const agents: InstallableAgentDescriptor[] = [];
@@ -584,8 +588,12 @@ export function validateAgentCatalog(
     agents: readonly AgentDescriptor[],
     installableAgents: readonly InstallableAgentDescriptor[],
 ): void {
-    if (agents.length + installableAgents.length === 0) {
+    const directorySize = agents.length + installableAgents.length;
+    if (directorySize === 0) {
         throw new PairingDirectoryError("invalid_agents", "At least one ready or installable local Agent is required");
+    }
+    if (directorySize > MAX_LOCAL_AGENT_DIRECTORY_ENTRIES) {
+        throw new PairingDirectoryError("invalid_agents", "The local Agent directory exceeds its maximum size");
     }
     const readyIds = new Set(agents.map((agent) => agent.id));
     if (installableAgents.some((agent) => readyIds.has(agent.id))) {

@@ -787,10 +787,13 @@ describe("pairing and channel chat", () => {
         const port = await reservePort();
         const origin = `http://127.0.0.1:${port.toString()}`;
         const environment = {
+            MOBIUS_GEMINI_PATH: join(temporaryDirectory, "missing-gemini"),
             MOBIUS_CODEX_PATH: join(temporaryDirectory, "codex"),
             MOBIUS_CODEX_ACP_PATH: join(temporaryDirectory, "codex-acp"),
             MOBIUS_CLAUDE_PATH: join(temporaryDirectory, "claude"),
             MOBIUS_CLAUDE_ACP_PATH: join(temporaryDirectory, "claude-acp"),
+            MOBIUS_COPILOT_PATH: join(temporaryDirectory, "missing-copilot"),
+            MOBIUS_HERMES_PATH: join(temporaryDirectory, "missing-hermes"),
             MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "mobius"),
             MOBIUS_FAKE_ACP_FAIL_RUNTIME_INITIALIZATION: "",
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "native"),
@@ -1763,15 +1766,18 @@ describe("pairing and channel chat", () => {
         const workbuddyPath = join(executableDirectory, "codebuddy");
         const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
         const previousCursorPath = process.env["MOBIUS_CURSOR_PATH"];
         const previousDeepSeekPath = process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"];
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousGrokPath = process.env["MOBIUS_GROK_BUILD_PATH"];
+        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
         const previousOpenCodePath = process.env["MOBIUS_OPENCODE_PATH"];
         const previousPath = process.env["PATH"];
         const previousPiPath = process.env["MOBIUS_PI_PATH"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousWorkBuddyPath = process.env["MOBIUS_WORKBUDDY_PATH"];
+        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
         const previousNoProxy = process.env["NO_PROXY"];
         const previousLowerNoProxy = process.env["no_proxy"];
         await mkdir(executableDirectory, { mode: 0o700, recursive: true });
@@ -1780,14 +1786,17 @@ describe("pairing and channel chat", () => {
         const missingAgentPath = join(temporaryDirectory, "missing-agent");
         process.env["MOBIUS_CODEX_PATH"] = missingAgentPath;
         process.env["MOBIUS_CLAUDE_PATH"] = missingAgentPath;
+        process.env["MOBIUS_COPILOT_PATH"] = missingAgentPath;
         process.env["MOBIUS_CURSOR_PATH"] = missingAgentPath;
         process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"] = missingAgentPath;
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(temporaryDirectory, "native");
         process.env["MOBIUS_GROK_BUILD_PATH"] = missingAgentPath;
+        process.env["MOBIUS_HERMES_PATH"] = missingAgentPath;
         process.env["MOBIUS_OPENCODE_PATH"] = missingAgentPath;
         process.env["MOBIUS_PI_PATH"] = missingAgentPath;
         process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
         process.env["MOBIUS_WORKBUDDY_PATH"] = workbuddyPath;
+        process.env["MOBIUS_GEMINI_PATH"] = missingAgentPath;
         process.env["PATH"] = `${executableDirectory}${delimiter}${previousPath ?? ""}`;
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
@@ -1895,14 +1904,17 @@ describe("pairing and channel chat", () => {
             await stopProcess(wrangler);
             restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
             restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
             restoreEnvironmentVariable("MOBIUS_CURSOR_PATH", previousCursorPath);
             restoreEnvironmentVariable("MOBIUS_DEEPSEEK_HARNESS_PATH", previousDeepSeekPath);
             restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
             restoreEnvironmentVariable("MOBIUS_GROK_BUILD_PATH", previousGrokPath);
+            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
             restoreEnvironmentVariable("MOBIUS_OPENCODE_PATH", previousOpenCodePath);
             restoreEnvironmentVariable("MOBIUS_PI_PATH", previousPiPath);
             restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
             restoreEnvironmentVariable("MOBIUS_WORKBUDDY_PATH", previousWorkBuddyPath);
+            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
             restoreEnvironmentVariable("PATH", previousPath);
             restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
             restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
@@ -1993,13 +2005,16 @@ child.once("exit", (code) => process.exit(code ?? 93));
         const previousCodexAdapterPath = process.env["MOBIUS_CODEX_ACP_PATH"];
         const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
         const previousClaudeAdapterPath = process.env["MOBIUS_CLAUDE_ACP_PATH"];
+        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
         const previousPiPath = process.env["MOBIUS_PI_PATH"];
         const previousPiAdapterPath = process.env["MOBIUS_PI_ACP_PATH"];
         const previousDeepSeekHarnessPath = process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"];
+        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
         const previousOpenCodePath = process.env["MOBIUS_OPENCODE_PATH"];
         const previousCursorPath = process.env["MOBIUS_CURSOR_PATH"];
         const previousGrokBuildPath = process.env["MOBIUS_GROK_BUILD_PATH"];
         const previousWorkBuddyPath = process.env["MOBIUS_WORKBUDDY_PATH"];
+        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
         const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousPath = process.env["PATH"];
@@ -2012,11 +2027,14 @@ child.once("exit", (code) => process.exit(code ?? 93));
         process.env["MOBIUS_PI_PATH"] = piPath;
         process.env["MOBIUS_PI_ACP_PATH"] = piAdapterPath;
         const unavailableAgentDirectory = join(temporaryDirectory, "unavailable-agents");
+        process.env["MOBIUS_COPILOT_PATH"] = join(unavailableAgentDirectory, "copilot");
         process.env["MOBIUS_DEEPSEEK_HARNESS_PATH"] = join(unavailableAgentDirectory, "dsh");
+        process.env["MOBIUS_HERMES_PATH"] = join(unavailableAgentDirectory, "hermes");
         process.env["MOBIUS_OPENCODE_PATH"] = join(unavailableAgentDirectory, "opencode");
         process.env["MOBIUS_CURSOR_PATH"] = join(unavailableAgentDirectory, "cursor-agent");
         process.env["MOBIUS_GROK_BUILD_PATH"] = join(unavailableAgentDirectory, "grok");
         process.env["MOBIUS_WORKBUDDY_PATH"] = join(unavailableAgentDirectory, "codebuddy");
+        process.env["MOBIUS_GEMINI_PATH"] = join(unavailableAgentDirectory, "gemini");
         process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(temporaryDirectory, "native");
         process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
         process.env["PATH"] = executableDirectory;
@@ -2149,8 +2167,18 @@ child.once("exit", (code) => process.exit(code ?? 93));
                         status: "integration_not_installed",
                     },
                     {
+                        id: "github-copilot-cli",
+                        label: "GitHub Copilot CLI",
+                        status: "agent_not_installed",
+                    },
+                    {
                         id: "deepseek-harness",
                         label: "DeepSeek Harness",
+                        status: "agent_not_installed",
+                    },
+                    {
+                        id: "hermes",
+                        label: "Hermes Agent",
                         status: "agent_not_installed",
                     },
                     {
@@ -2171,6 +2199,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
                     {
                         id: "workbuddy",
                         label: "WorkBuddy",
+                        status: "agent_not_installed",
+                    },
+                    {
+                        id: "gemini-cli",
+                        label: "Gemini CLI",
                         status: "agent_not_installed",
                     },
                 ],
@@ -2268,8 +2301,18 @@ child.once("exit", (code) => process.exit(code ?? 93));
                                 status: "integration_not_installed",
                             },
                             {
+                                id: "github-copilot-cli",
+                                label: "GitHub Copilot CLI",
+                                status: "agent_not_installed",
+                            },
+                            {
                                 id: "deepseek-harness",
                                 label: "DeepSeek Harness",
+                                status: "agent_not_installed",
+                            },
+                            {
+                                id: "hermes",
+                                label: "Hermes Agent",
                                 status: "agent_not_installed",
                             },
                             {
@@ -2290,6 +2333,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
                             {
                                 id: "workbuddy",
                                 label: "WorkBuddy",
+                                status: "agent_not_installed",
+                            },
+                            {
+                                id: "gemini-cli",
+                                label: "Gemini CLI",
                                 status: "agent_not_installed",
                             },
                         ],
@@ -2573,8 +2621,18 @@ child.once("exit", (code) => process.exit(code ?? 93));
                     ],
                     installableAgents: [
                         {
+                            id: "github-copilot-cli",
+                            label: "GitHub Copilot CLI",
+                            status: "agent_not_installed",
+                        },
+                        {
                             id: "deepseek-harness",
                             label: "DeepSeek Harness",
+                            status: "agent_not_installed",
+                        },
+                        {
+                            id: "hermes",
+                            label: "Hermes Agent",
                             status: "agent_not_installed",
                         },
                         {
@@ -2597,6 +2655,11 @@ child.once("exit", (code) => process.exit(code ?? 93));
                             label: "WorkBuddy",
                             status: "agent_not_installed",
                         },
+                        {
+                            id: "gemini-cli",
+                            label: "Gemini CLI",
+                            status: "agent_not_installed",
+                        },
                     ],
                 });
                 await expect(runBrowserPrompt(refreshedHost, "pi", piSessionId, "third")).resolves.toBe(
@@ -2615,13 +2678,16 @@ child.once("exit", (code) => process.exit(code ?? 93));
             restoreEnvironmentVariable("MOBIUS_CODEX_ACP_PATH", previousCodexAdapterPath);
             restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
             restoreEnvironmentVariable("MOBIUS_CLAUDE_ACP_PATH", previousClaudeAdapterPath);
+            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
             restoreEnvironmentVariable("MOBIUS_PI_PATH", previousPiPath);
             restoreEnvironmentVariable("MOBIUS_PI_ACP_PATH", previousPiAdapterPath);
             restoreEnvironmentVariable("MOBIUS_DEEPSEEK_HARNESS_PATH", previousDeepSeekHarnessPath);
+            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
             restoreEnvironmentVariable("MOBIUS_OPENCODE_PATH", previousOpenCodePath);
             restoreEnvironmentVariable("MOBIUS_CURSOR_PATH", previousCursorPath);
             restoreEnvironmentVariable("MOBIUS_GROK_BUILD_PATH", previousGrokBuildPath);
             restoreEnvironmentVariable("MOBIUS_WORKBUDDY_PATH", previousWorkBuddyPath);
+            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
             restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
             restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
             restoreEnvironmentVariable("PATH", previousPath);

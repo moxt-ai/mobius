@@ -3,6 +3,8 @@ import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import { elicitationFieldSchema, permissionOptionSchema } from "./control-messages.ts";
 
+export const MAX_LOCAL_AGENT_DIRECTORY_ENTRIES = 32;
+
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;

@@ -516,7 +516,15 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                   name: "External login",
                               },
                           ]
-                        : [],
+                        : process.argv.includes("--external-authentication")
+                          ? [
+                                {
+                                    description: "Use the existing local Agent login",
+                                    id: "external",
+                                    name: "External login",
+                                },
+                            ]
+                          : [],
             agentInfo: { name: "Mobius test agent", version: readAgentVersion() },
             protocolVersion: acp.PROTOCOL_VERSION,
         };

@@ -20,8 +20,8 @@ import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
 import { stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
-import { normalizedVersion } from "./executable-discovery.ts";
 import type { LocalAgentDefinition } from "./local-agent.ts";
+import { normalizeVersionOutput } from "./version-output.ts";
 
 const ACP_OUTPUT_LIMIT_BYTES = 1024 * 1024;
 
@@ -180,7 +180,7 @@ export async function probeAcpReadiness(
         }
         await specification.verifyAcp(connection, initialized, defaultWorkspace, controller.signal);
         return new VerifiedAcpReadiness(
-            normalizedVersion(initialized.agentInfo?.version ?? ""),
+            normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
             normalizeAcpCapabilities(initialized),
         );
     } catch (error) {

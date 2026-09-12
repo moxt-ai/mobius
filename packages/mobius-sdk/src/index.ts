@@ -50,6 +50,7 @@ export {
     decodeSessionPermissionResolvedEvent,
     decodeSessionReadyEvent,
     decodeSessionUsageUpdatedEvent,
+    MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     MOBIUS_API_PREFIX,
     MobiusApiConfigurationError,
     mobiusApiPath,

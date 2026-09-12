@@ -18,6 +18,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { describe, expect, it, vi } from "vitest";
 
 import { App } from "@/app";
+import { AgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
 import {
@@ -31,7 +32,59 @@ import {
 
 setupWebIntegrationEnvironment();
 
+const completeReadyAgentDirectory = Array.from(
+    { length: 11 },
+    (_, index) =>
+        new AgentOption(
+            `agent-${index + 1}`,
+            `Agent ${index + 1}`,
+            `/usr/local/bin/agent-${index + 1}`,
+            `${index + 1}.0.0`,
+            {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: true,
+                resumeSession: true,
+                steering: true,
+                unstableForkSession: false,
+            },
+        ),
+);
+
 describe.sequential("Agent interaction boundaries", () => {
+    it("Given all eleven supported local Agents are ready, When Web opens the Agent picker, Then every Agent remains selectable", async () => {
+        const paired = await pairDaemon({ agents: completeReadyAgentDirectory });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            fireEvent.click(
+                await screen.findByRole("button", {
+                    name: "Agent or Bot for this conversation",
+                }),
+            );
+
+            const localAgents = screen.getByRole("tabpanel", { name: "Local Agents" });
+            for (const agent of completeReadyAgentDirectory) {
+                expect(within(localAgents).getByRole("button", { name: agent.label })).toBeTruthy();
+            }
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then its local details are visible and navigation preserves the draft", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

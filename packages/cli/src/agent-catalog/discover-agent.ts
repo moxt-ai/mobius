@@ -73,6 +73,7 @@ export async function discoverAgent(
                 context.defaultWorkspace,
                 context.signal,
                 specification.versionProbeTimeoutMilliseconds,
+                specification.normalizeAgentVersion,
             );
         } catch (error) {
             if (context.signal.aborted) {
@@ -111,6 +112,7 @@ export async function discoverAgent(
                         context.defaultWorkspace,
                         context.signal,
                         specification.versionProbeTimeoutMilliseconds,
+                        specification.normalizeAdapterVersion,
                     );
                 }
             } catch (error) {

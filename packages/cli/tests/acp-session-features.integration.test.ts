@@ -265,6 +265,50 @@ describe("ACP session features", () => {
         },
     );
 
+    it("Given Gemini CLI snake-case quota metadata, When a prompt completes, Then the response succeeds with normalized bounded usage", async () => {
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        try {
+            const result = await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "gemini-usage-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "report Gemini usage",
+                resources: [],
+                sessionId: "gemini-usage-session",
+                signal: new AbortController().signal,
+            });
+            expect(result).toMatchObject({
+                _meta: {
+                    quota: {
+                        model_usage: [
+                            {
+                                model: "gemini-3.1-pro-preview",
+                                token_count: { inputTokens: 600, outputTokens: 200, totalTokens: 800 },
+                            },
+                        ],
+                        token_count: { inputTokens: 600, outputTokens: 200, totalTokens: 800 },
+                    },
+                },
+                stopReason: "end_turn",
+            });
+            expect(observer.usage).toMatchObject([
+                {
+                    _meta: { quota: { token_count: { totalTokens: 800 } } },
+                    commandId: "gemini-usage-command",
+                    source: "prompt",
+                    usage: null,
+                },
+            ]);
+        } finally {
+            await manager.close();
+        }
+    });
+
     it.each(["usage", "quota"])(
         "Given malformed final %s, When a prompt completes, Then invalid data is rejected with a sanitized typed failure",
         async (field) => {

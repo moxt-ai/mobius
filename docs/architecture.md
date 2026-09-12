@@ -235,9 +235,13 @@ Agent path to the adapter, and completes a bounded ACP initialize handshake. Pi
 uses `PI_ACP_PI_COMMAND` to bind the verified executable and must also finish a
 bounded `/session` prompt through `pi-acp -> pi --mode rpc`. The resulting
 candidate pair is accepted only after the complete probe. Cursor CLI, Grok Build,
-and WorkBuddy use native ACP entrypoints and must create a session during
-readiness probing. Besides `PATH`, an Agent specification can contribute fixed
-local installation candidates. WorkBuddy uses this boundary to discover the
+WorkBuddy, GitHub Copilot CLI, Hermes Agent, and Gemini CLI use native ACP
+entrypoints and must create a session during readiness probing. Copilot's fixed
+launch disables self-updates, while Gemini CLI uses its stable `--acp` mode.
+Besides `PATH`,
+an Agent specification can contribute fixed local installation candidates.
+Hermes uses this boundary for its per-user `~/.local/bin` installation, and
+WorkBuddy uses it to discover the
 embedded `codebuddy` executable from standard macOS `WorkBuddy.app` locations
 without accepting an application path from a remote client. An invalid automatic
 external candidate can fall back to the private cache, while an explicit override

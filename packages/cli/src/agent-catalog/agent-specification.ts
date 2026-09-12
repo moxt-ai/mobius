@@ -5,6 +5,7 @@ import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/
 import type { ManagedNpmPackageDefinition } from "../agent-installation/managed-npm-package.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
+import { normalizeVersionOutput } from "./version-output.ts";
 
 const VERSION_PROBE_TIMEOUT_MILLISECONDS = 3_000;
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 5_000;
@@ -24,6 +25,8 @@ export abstract class LocalAgentSpecification {
     readonly authenticationCommand = (): string => "";
     readonly adapterVersionArguments: readonly string[] = ["--version"];
     readonly agentVersionArguments: readonly string[] = ["--version"];
+    readonly normalizeAdapterVersion = normalizeVersionOutput;
+    readonly normalizeAgentVersion = normalizeVersionOutput;
     readonly promptTimeoutMilliseconds: number = DEFAULT_PROMPT_TIMEOUT_MILLISECONDS;
     readonly versionProbeTimeoutMilliseconds: number = VERSION_PROBE_TIMEOUT_MILLISECONDS;
 
