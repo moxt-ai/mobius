@@ -16,9 +16,10 @@ import type {
     SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-
+import type { AcpActivity } from "../src/acp/activity.ts";
 import { AcpSessionManager, type AcpSessionObserver } from "../src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
+import type { LocalRasterImage } from "../src/authorization/local-raster.ts";
 import { LocalAgentDefinition } from "../src/config.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
@@ -33,10 +34,14 @@ class RecordingObserver implements AcpSessionObserver {
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
     readonly usage: SessionUsageUpdatedEvent[] = [];
+    readonly importedImages: LocalRasterImage[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
 
-    readonly importLocalImage = (): Promise<string> => Promise.resolve("");
+    readonly importLocalImage = (_sessionId: string, image: LocalRasterImage): Promise<string> => {
+        this.importedImages.push(image);
+        return Promise.resolve("artifact-inline-image");
+    };
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.commands.push(event);
@@ -96,6 +101,46 @@ function fakeAgent(additionalArguments: readonly string[] = []): LocalAgentDefin
 }
 
 describe("ACP session features", () => {
+    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it uploads a validated raster and references its artifact", async () => {
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const activities: AcpActivity[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "image-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: (activity) => {
+                    activities.push(activity);
+                    return Promise.resolve();
+                },
+                onText: () => Promise.resolve(),
+                prompt: "generate inline image",
+                resources: [],
+                sessionId: "image-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(observer.importedImages).toHaveLength(1);
+            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png" });
+            expect(observer.importedImages[0]?.bytes.subarray(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
+            expect(
+                activities.some((activity) =>
+                    activity.content.some(
+                        (content) =>
+                            content.type === "image" &&
+                            content.artifactId === "artifact-inline-image" &&
+                            content.data.length === 0,
+                    ),
+                ),
+            ).toBe(true);
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
         const manager = new AcpSessionManager();
         const signal = new AbortController().signal;

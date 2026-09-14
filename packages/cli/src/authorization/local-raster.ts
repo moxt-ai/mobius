@@ -49,6 +49,24 @@ function sniffRasterMime(bytes: Uint8Array): LocalRasterMimeType | null {
     return null;
 }
 
+export function readInlineRaster(data: string, name = "Image"): LocalRasterImage | null {
+    if (data.length === 0 || data.length > Math.ceil(MAX_LOCAL_RASTER_BYTES / 3) * 4 || data.length % 4 !== 0) {
+        return null;
+    }
+    if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
+        return null;
+    }
+    const bytes = new Uint8Array(Buffer.from(data, "base64"));
+    if (bytes.byteLength < 1 || bytes.byteLength > MAX_LOCAL_RASTER_BYTES) {
+        return null;
+    }
+    const mimeType = sniffRasterMime(bytes);
+    if (mimeType === null) {
+        return null;
+    }
+    return new LocalRasterImage(basename(name) || "Image", mimeType, bytes);
+}
+
 function isInsideRoot(root: string, target: string): boolean {
     const relation = relative(root, target);
     return relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation);

@@ -1024,7 +1024,18 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                       type: "content",
                                   },
                               ]
-                            : undefined,
+                            : prompt === "generate inline image"
+                              ? [
+                                    {
+                                        content: {
+                                            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                            mimeType: "image/png",
+                                            type: "image",
+                                        },
+                                        type: "content",
+                                    },
+                                ]
+                              : undefined,
                     rawOutput: { name: "mobius-workspace" },
                     sessionUpdate: "tool_call_update",
                     status: "completed",

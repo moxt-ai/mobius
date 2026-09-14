@@ -16,6 +16,7 @@ import type { PlatformControlPlaneService } from "./platform-control-plane-servi
 
 const tokenPattern = /^msession_([A-Za-z0-9_-]{22})_([A-Za-z0-9_-]{43})$/u;
 const permissions = new Set([
+    ProjectPermission.ArtifactRead,
     ProjectPermission.SessionRead,
     ProjectPermission.SessionWrite,
     ProjectPermission.ConversationTurnCreate,
@@ -104,7 +105,9 @@ export class SessionAccessService {
             const allowed =
                 suffix !== null &&
                 ((request.method === "GET" &&
-                    /^(?:|\/(?:messages|native-history|events)|\/turns\/[A-Za-z0-9._:-]+)$/u.test(suffix)) ||
+                    /^(?:|\/(?:messages|native-history|events)|\/turns\/[A-Za-z0-9._:-]+|\/artifacts\/[A-Za-z0-9._:-]+(?:\/content)?)$/u.test(
+                        suffix,
+                    )) ||
                     (request.method === "POST" &&
                         /^\/(?:turns|prepare|configuration|turns\/[A-Za-z0-9._:-]+\/cancel)$/u.test(suffix)));
             if (!allowed || row.project_id !== projectId || !permissions.has(permission)) {

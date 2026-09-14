@@ -48,7 +48,7 @@ import {
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
-import { readAuthorizedRaster } from "../authorization/local-raster.ts";
+import { readAuthorizedRaster, readInlineRaster } from "../authorization/local-raster.ts";
 import type { LocalAgentDefinition } from "../config.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import {
@@ -592,10 +592,11 @@ class RunningAcpTurn extends AcpTurnState {
         commandId: string,
         onActivity: (activity: AcpActivity) => Promise<void>,
         onText: (text: string, messageId: string) => Promise<void>,
+        prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>,
     ) {
         super();
         this.commandId = commandId;
-        this.activities = new AcpActivityTracker(onActivity);
+        this.activities = new AcpActivityTracker(onActivity, prepareContent);
         this.onText = onText;
     }
 }
@@ -938,18 +939,28 @@ class AcpProcessSession implements AcpClientHandler {
         }
     };
 
-    private readonly emitAgentContent = async (content: AgentDisplayContent, messageId: string): Promise<void> => {
+    private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
+        if (content.type === "image" && content.data.length > 0) {
+            const raster = readInlineRaster(content.data, content.name);
+            if (raster !== null) {
+                return await this.importRaster(raster, AbortSignal.timeout(20_000));
+            }
+        }
         if (content.type === "image" && content.data.length === 0 && content.uri.length > 0) {
             const signal = AbortSignal.timeout(20_000);
             const raster = await readAuthorizedRaster(content.uri, this.imageRoots(), signal);
             if (raster !== null) {
-                await this.emitRaster(raster, messageId, signal);
-                return;
+                return await this.importRaster(raster, signal);
             }
         }
+        return content;
+    };
+
+    private readonly emitAgentContent = async (content: AgentDisplayContent, messageId: string): Promise<void> => {
+        const prepared = await this.prepareAgentContent(content);
         await this.#getObserver().onContent({
             commandId: this.#turn.commandId,
-            content,
+            content: prepared,
             contentId: `content-${crypto.randomUUID()}`,
             kind: AGENT_CONTENT_KIND,
             messageId,
@@ -962,20 +973,28 @@ class AcpProcessSession implements AcpClientHandler {
         messageId: string,
         signal: AbortSignal,
     ): Promise<void> => {
-        const artifactId = await this.#getObserver().importLocalImage(this.#mobiusSessionId, raster, signal);
+        const content = await this.importRaster(raster, signal);
         await this.#getObserver().onContent({
             commandId: this.#turn.commandId,
-            content: imageDisplayContent(
-                raster.mimeType,
-                raster.name,
-                artifactId.length > 0 ? "" : raster.base64(),
-                artifactId,
-            ),
+            content,
             contentId: `content-${crypto.randomUUID()}`,
             kind: AGENT_CONTENT_KIND,
             messageId,
             sessionId: this.#mobiusSessionId,
         });
+    };
+
+    private readonly importRaster = async (
+        raster: LocalRasterImage,
+        signal: AbortSignal,
+    ): Promise<AgentDisplayContent> => {
+        const artifactId = await this.#getObserver().importLocalImage(this.#mobiusSessionId, raster, signal);
+        return imageDisplayContent(
+            raster.mimeType,
+            raster.name,
+            artifactId.length > 0 ? "" : raster.base64(),
+            artifactId,
+        );
     };
 
     async #initializeAgent(signal: AbortSignal): Promise<void> {
@@ -1373,7 +1392,12 @@ class AcpProcessSession implements AcpClientHandler {
             ),
         );
         this.#prompted = true;
-        const running = new RunningAcpTurn(options.commandId, options.onActivity, options.onText);
+        const running = new RunningAcpTurn(
+            options.commandId,
+            options.onActivity,
+            options.onText,
+            this.prepareAgentContent,
+        );
         this.#turn = running;
         try {
             const response: unknown = await this.race(

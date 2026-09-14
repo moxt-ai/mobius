@@ -739,6 +739,16 @@ it("Given an App-owned Session, When its backend issues browser access, Then the
                 )
             ).status,
         ).toBe(200);
+        for (const path of ["missing-artifact", "missing-artifact/content"]) {
+            expect(
+                (
+                    await fixture.worker.fetch(
+                        new Request(`${base}/sessions/${fixture.sessionId}/artifacts/${path}`, { headers }),
+                        fixture.environment,
+                    )
+                ).status,
+            ).toBe(404);
+        }
         for (const path of ["sessions", "runtimes", "sessions/another-session"]) {
             expect(
                 (await fixture.worker.fetch(new Request(`${base}/${path}`, { headers }), fixture.environment)).status,

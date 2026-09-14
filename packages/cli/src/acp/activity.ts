@@ -288,7 +288,10 @@ export function normalizeContentBlock(content: ContentBlock): AgentDisplayConten
     };
 }
 
-function normalizeToolContent(content: readonly ToolCallContent[]): readonly AgentDisplayContent[] {
+async function normalizeToolContent(
+    content: readonly ToolCallContent[],
+    prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>,
+): Promise<readonly AgentDisplayContent[]> {
     const normalized: AgentDisplayContent[] = [];
     for (const item of content) {
         if (item.type === "diff") {
@@ -307,7 +310,7 @@ function normalizeToolContent(content: readonly ToolCallContent[]): readonly Age
             });
             continue;
         }
-        normalized.push(normalizeContentBlock(item.content));
+        normalized.push(await prepareContent(normalizeContentBlock(item.content)));
     }
     return normalized;
 }
@@ -389,11 +392,17 @@ export class AcpActivityTracker {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #identities = new Map<string, ActivityIdentity>();
     readonly #onActivity: (activity: AcpActivity) => Promise<void>;
+    readonly #prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>;
     #activeNarrativeKey = "";
     #nextSequence = 0;
 
-    constructor(onActivity: (activity: AcpActivity) => Promise<void>) {
+    constructor(
+        onActivity: (activity: AcpActivity) => Promise<void>,
+        prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent> = (content) =>
+            Promise.resolve(content),
+    ) {
         this.#onActivity = onActivity;
+        this.#prepareContent = prepareContent;
     }
 
     readonly recordNarrative = async (activityType: string, messageId: string, text: string): Promise<void> => {
@@ -490,7 +499,7 @@ export class AcpActivityTracker {
             update.rawOutput === undefined
                 ? readContentOutputDetail(update.content)
                 : formatUnknownDetail(update.rawOutput);
-        const detailContent = normalizeToolContent(update.content ?? []);
+        const detailContent = await normalizeToolContent(update.content ?? [], this.#prepareContent);
         await this.#record(
             key,
             new AcpActivity(
@@ -525,7 +534,7 @@ export class AcpActivityTracker {
         const content =
             update.content === undefined || update.content === null
                 ? (previous?.content ?? [])
-                : normalizeToolContent(update.content);
+                : await normalizeToolContent(update.content, this.#prepareContent);
         const detailInput =
             update.rawInput === undefined
                 ? (previousDetail?.input ?? previous?.input ?? "")
@@ -539,7 +548,7 @@ export class AcpActivityTracker {
         const detailContent =
             update.content === undefined || update.content === null
                 ? (previousDetail?.content ?? previous?.content ?? [])
-                : normalizeToolContent(update.content);
+                : content;
         await this.#record(
             key,
             new AcpActivity(
