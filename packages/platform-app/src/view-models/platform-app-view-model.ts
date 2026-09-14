@@ -18,7 +18,10 @@ export interface RevealedSecret {
 interface PlatformStore {
     readonly apps: readonly MobiusPlatformApp[];
     readonly busy: string;
-    readonly credentials: readonly MobiusPlatformAppCredentialMetadata[];
+    readonly credentials:
+        | { readonly kind: "loading" }
+        | { readonly kind: "failed" }
+        | { readonly kind: "ready"; readonly items: readonly MobiusPlatformAppCredentialMetadata[] };
     readonly error: string;
     readonly notice: { readonly message: string } | null;
     readonly rename: RenameState;
@@ -29,7 +32,8 @@ interface PlatformStore {
     readonly tenants: readonly MobiusPlatformTenant[];
     readonly setApps: (value: readonly MobiusPlatformApp[]) => void;
     readonly setBusy: (value: string) => void;
-    readonly setCredentials: (value: readonly MobiusPlatformAppCredentialMetadata[]) => void;
+    readonly setCredentials: (appId: string, value: readonly MobiusPlatformAppCredentialMetadata[]) => void;
+    readonly failCredentials: (appId: string) => void;
     readonly setError: (value: string) => void;
     readonly setNotice: (value: string) => void;
     readonly setRename: (value: RenameState) => void;
@@ -43,7 +47,7 @@ interface PlatformStore {
 export const usePlatformStore = create<PlatformStore>()((set) => ({
     apps: [],
     busy: "",
-    credentials: [],
+    credentials: { kind: "loading" },
     error: "",
     notice: null,
     rename: { kind: "idle" },
@@ -54,14 +58,27 @@ export const usePlatformStore = create<PlatformStore>()((set) => ({
     tenants: [],
     setApps: (apps) => set({ apps }),
     setBusy: (busy) => set({ busy }),
-    setCredentials: (credentials) => set({ credentials }),
+    setCredentials: (appId, items) =>
+        set((state) => (state.selectedAppId === appId ? { credentials: { kind: "ready", items } } : state)),
+    failCredentials: (appId) =>
+        set((state) => (state.selectedAppId === appId ? { credentials: { kind: "failed" } } : state)),
     setError: (error) => set({ error }),
     setNotice: (message) => set({ notice: message.length > 0 ? { message } : null }),
     setRename: (rename) => set({ rename }),
     setSecret: (secret) => set({ secret }),
     setSecretVisible: (secretVisible) => set({ secretVisible }),
     setSelectedAppId: (value) =>
-        set((state) => ({ selectedAppId: typeof value === "function" ? value(state.selectedAppId) : value })),
+        set((state) => {
+            const selectedAppId = typeof value === "function" ? value(state.selectedAppId) : value;
+            return selectedAppId === state.selectedAppId
+                ? state
+                : {
+                      selectedAppId,
+                      credentials: { kind: "loading" },
+                      rename: { kind: "idle" },
+                      error: "",
+                  };
+        }),
     setSelectedTenantId: (value) =>
         set((state) => ({ selectedTenantId: typeof value === "function" ? value(state.selectedTenantId) : value })),
     setTenants: (tenants) => set({ tenants }),

@@ -1,4 +1,4 @@
-import { AppWindow, Building2, Check, Clipboard, Pencil, Plus, Trash2, X } from "lucide-react";
+import { AppWindow, Building2, Check, Clipboard, LoaderCircle, Pencil, Plus, Trash2, X } from "lucide-react";
 import { type ReactNode, useCallback, useEffect } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
@@ -68,6 +68,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
         setApps,
         credentials,
         setCredentials,
+        failCredentials,
         selectedTenantId,
         setSelectedTenantId,
         selectedAppId,
@@ -160,20 +161,24 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
 
     useEffect(() => {
         if (selectedAppId.length === 0) {
-            setCredentials([]);
             return;
         }
         const controller = new AbortController();
         void client()
             .listAppCredentials(selectedAppId, AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]))
-            .then(setCredentials)
+            .then((listed) => {
+                if (!controller.signal.aborted) {
+                    setCredentials(selectedAppId, listed);
+                }
+            })
             .catch((cause: unknown) => {
                 if (!controller.signal.aborted) {
+                    failCredentials(selectedAppId);
                     setError(cause instanceof Error ? cause.message : "Could not load keys");
                 }
             });
         return () => controller.abort();
-    }, [client, selectedAppId, setCredentials, setError]);
+    }, [client, selectedAppId, setCredentials, failCredentials, setError]);
 
     const selectedTenant = tenants.find((tenant) => tenant.tenantId === selectedTenantId);
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
@@ -213,7 +218,10 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                 { permissions: APP_PERMISSIONS, projectIds: [] },
                 AbortSignal.timeout(20_000),
             );
-            setCredentials(await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)));
+            setCredentials(
+                selectedApp.appId,
+                await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)),
+            );
             setSecret({
                 appId: created.appId,
                 secret: created.credential,
@@ -432,7 +440,20 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                         </div>
                                     )}
                                 </section>
-                                {selectedApp === undefined ? null : (
+                                {selectedApp === undefined ? null : credentials.kind === "loading" ? (
+                                    <section
+                                        className="mt-5 flex min-h-64 items-center justify-center gap-3 rounded-xl border border-[#dde3df] bg-white p-7 text-sm text-[#69766f] shadow-sm"
+                                        role="status"
+                                        aria-live="polite"
+                                    >
+                                        <LoaderCircle
+                                            className="motion-safe:animate-spin text-[#168247]"
+                                            size={24}
+                                            aria-hidden="true"
+                                        />
+                                        <span>Loading application…</span>
+                                    </section>
+                                ) : credentials.kind === "failed" ? null : (
                                     <section className="mt-5 rounded-xl border border-[#dde3df] bg-white p-5 shadow-sm md:p-7">
                                         <div className="flex flex-col items-start justify-between gap-6 border-b border-[#e8ece9] pb-6 md:flex-row md:items-center [&_h2]:m-0 [&_h2]:text-xl [&_h2]:font-bold [&_p:last-child]:mt-1.5 [&_p:last-child]:text-sm [&_p:last-child]:text-[#69766f]">
                                             <div>
@@ -554,7 +575,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                                 <span>Status</span>
                                                 <span />
                                             </div>
-                                            {credentials.map((credential, index) => (
+                                            {credentials.items.map((credential, index) => (
                                                 <div
                                                     className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
                                                     key={credential.credentialId}
@@ -584,6 +605,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                                                         AbortSignal.timeout(20_000),
                                                                     );
                                                                     setCredentials(
+                                                                        selectedApp.appId,
                                                                         await client().listAppCredentials(
                                                                             selectedApp.appId,
                                                                             AbortSignal.timeout(20_000),
