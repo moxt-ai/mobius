@@ -24,8 +24,10 @@ import {
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
     type PlatformPrincipal,
+    type PlatformProjectPlacement,
     type PlatformProjectPlacementRegistry,
 } from "../entity/platform-control-plane.ts";
+import { decodePlatformProjectPlacement, encodePlatformProjectId } from "../entity/platform-project-id.ts";
 import type {
     AppRow,
     AuditRow,
@@ -550,6 +552,25 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         return new PlatformDeveloperAccess(identity, membership.membership_id, membership.tenant_id, membership.role);
     };
 
+    readonly resolveProjectPlacement = (
+        projectId: string,
+        signal: AbortSignal,
+    ): PlatformProjectPlacement & { readonly projectId: string } => {
+        signal.throwIfAborted();
+        const placement = decodePlatformProjectPlacement(projectId);
+        if (placement === null) {
+            throw new PlatformControlPlaneError("invalid_request", "The Project identifier is invalid", 400);
+        }
+        if (!this.#placements.supports(placement)) {
+            throw new PlatformControlPlaneError(
+                "storage_location_unavailable",
+                "The requested storage location is unavailable",
+                400,
+            );
+        }
+        return { projectId, ...placement };
+    };
+
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
         const placement = await this.#storage.readProjectStoragePlacement(scope.projectId, signal);
         if (placement === null) {
@@ -879,7 +900,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             );
         }
         const now = Date.now();
-        const projectId = `prj_${createRandomToken(18)}`;
+        const projectId = encodePlatformProjectId(placement, createRandomToken(18));
         const project: ProjectRow = {
             app_id: app.app_id,
             client_reference: clientReference,

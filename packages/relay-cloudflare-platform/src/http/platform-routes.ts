@@ -114,6 +114,11 @@ export function createPlatformControlApplication() {
                 },
             }),
         )
+        .get("/v1/projects/:projectId/storage-placement", (context) =>
+            context.json(
+                context.env.control.resolveProjectPlacement(path(context.req.param("projectId")), context.var.signal),
+            ),
+        )
         .get("/v1/platform/configuration", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(await context.env.control.readPlatformConfiguration(identity, context.var.signal));

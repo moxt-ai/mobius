@@ -64,6 +64,25 @@ its Cloudflare transports internally. Durable Object hosts use
 `createDurableObjectContext` with bindings and content placement; they do not
 construct SQL adapters, R2 content stores, channel peers, or alarm schedulers.
 
+Platform Project IDs use `prj_<shard-code>_<local-id>`, for example
+`prj_a01_<24-character-base64url-token>`. A shared local mapping resolves `a01`/`a02`
+to D1 `apac-01`/`apac-02` and R2 `apac`, and `w01`/`w02` to D1 `wnam-01`/`wnam-02`
+and R2 `wnam`. The local ID has 144 bits of randomness.
+The mapped logical D1 shard and regional R2 bucket are checked
+against configured bindings locally in Workers and Durable Objects, without a
+placement database lookup. Placement is immutable for an ID; physical bindings
+may change while keeping their logical names. Unencoded IDs are rejected by
+Platform storage routing. Routing does not grant access: credential, ownership,
+and lifecycle checks remain at their authorization boundaries.
+
+Other applications can resolve one ID with the public, database-free endpoint
+`GET /mobius/api/v1/projects/:projectId/storage-placement`. For an `a01` ID, it
+returns `{ "projectId": "prj_a01_...", "d1ShardId": "apac-01", "r2BucketId": "apac" }`.
+This decodes placement only; it does not check Project existence or grant access.
+Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;
+mapped placements missing configured bindings return HTTP 400 with
+`storage_location_unavailable`.
+
 Cloudflare adapters own a fixed tenant label used only for Durable Object naming.
 Standalone Workers configure `MOBIUS_TENANT_ID` (the supplied Wrangler profiles
 use `standalone`); the Platform entry point uses the fixed `platform` label.

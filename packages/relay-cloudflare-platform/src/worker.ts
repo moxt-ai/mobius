@@ -65,6 +65,7 @@ function isControlPath(pathname: string): boolean {
     return (
         pathname === `${MOBIUS_API_PREFIX}/health` ||
         pathname === `${MOBIUS_API_PREFIX}/capabilities` ||
+        /^\/mobius\/api\/v1\/projects\/[^/]+\/storage-placement\/?$/.test(pathname) ||
         pathname === `${MOBIUS_API_PREFIX}/v1/apps` ||
         pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/apps/`) ||
         pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/platform/`) ||
@@ -119,10 +120,7 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 });
             }
             const databases = new PlatformDatabaseResolver(environment);
-            const projects = new PlatformProjectStorageDirectory(
-                { read: controlStorage.readProjectStoragePlacement },
-                storageRegistry,
-            );
+            const projects = new PlatformProjectStorageDirectory(storageRegistry);
             const sessionAccess = new SessionAccessService(
                 new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
                 control,
