@@ -962,6 +962,33 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it.each([
+        ["a01", "apac"],
+        ["w01", "wnam"],
+    ])(
+        "Given a %s Project ID, When a public caller resolves its placement, Then only its %s location is returned",
+        async (code, location) => {
+            const worker = createPlatformWorker(
+                new PlatformAuthenticationConfiguration(
+                    new DeveloperAuthenticator(),
+                    new Set(["developer-1"]),
+                    new Set([thirdPartyBrowserOrigin]),
+                ),
+            );
+            const response = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/prj_${code}_abcdefghijklmnopqrstuvwx/storage-placement`,
+                ),
+                {
+                    ...bindings(),
+                    D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD,
+                    R2_BUCKET_WNAM: env.R2_BUCKET_APAC,
+                },
+            );
+            expect(await json(response, 200)).toEqual({ location });
+        },
+    );
+
     it("Given a Project Bot and an uninitialized unrelated shard, When its owner reads and updates it using the Project endpoint and SDK, Then the Bot remains available in its own Project", async () => {
         const fixture = await provisionPlatformProject("project-routed-bot");
         const environment = { ...fixture.environment, D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD };

@@ -77,7 +77,7 @@ and lifecycle checks remain at their authorization boundaries.
 
 Other applications can resolve one ID with the public, database-free endpoint
 `GET /mobius/api/v1/projects/:projectId/storage-placement`. For an `a01` ID, it
-returns `{ "projectId": "prj_a01_...", "d1ShardId": "apac-01", "r2BucketId": "apac" }`.
+returns only `{ "location": "apac" }`; `w01`/`w02` IDs return `{ "location": "wnam" }`.
 This decodes placement only; it does not check Project existence or grant access.
 Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;
 mapped placements missing configured bindings return HTTP 400 with

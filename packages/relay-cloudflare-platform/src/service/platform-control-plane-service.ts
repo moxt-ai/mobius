@@ -24,7 +24,6 @@ import {
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
     type PlatformPrincipal,
-    type PlatformProjectPlacement,
     type PlatformProjectPlacementRegistry,
 } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement, encodePlatformProjectId } from "../entity/platform-project-id.ts";
@@ -552,10 +551,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         return new PlatformDeveloperAccess(identity, membership.membership_id, membership.tenant_id, membership.role);
     };
 
-    readonly resolveProjectPlacement = (
-        projectId: string,
-        signal: AbortSignal,
-    ): PlatformProjectPlacement & { readonly projectId: string } => {
+    readonly resolveProjectPlacement = (projectId: string, signal: AbortSignal): { readonly location: string } => {
         signal.throwIfAborted();
         const placement = decodePlatformProjectPlacement(projectId);
         if (placement === null) {
@@ -568,7 +564,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                 400,
             );
         }
-        return { projectId, ...placement };
+        return { location: placement.r2BucketId };
     };
 
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
