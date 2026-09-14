@@ -266,7 +266,12 @@ async function run(signal: AbortSignal): Promise<void> {
     }
 
     const webPackage = target === platformTarget ? "@moxt-ai/mobius-platform-app" : "@moxt-ai/mobius-web";
-    await runPnpm(["--filter", webPackage, "build"], signal);
+    const environmentOptions = selectWranglerOptions(wranglerArguments, ["--env"]);
+    const environment = environmentOptions[0]?.startsWith("--env=")
+        ? environmentOptions[0].slice("--env=".length)
+        : environmentOptions[1];
+    const buildOptions = target === platformTarget ? ["--mode", environment ?? "development"] : [];
+    await runPnpm(["--filter", webPackage, "build", ...buildOptions], signal);
 
     const temporaryDeployment = hasArgument(wranglerArguments, "--temporary");
     const dryRun = hasArgument(wranglerArguments, "--dry-run");

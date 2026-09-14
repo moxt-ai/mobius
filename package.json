@@ -21,7 +21,7 @@
         "dev:stack": "pnpm --parallel --filter @moxt-ai/mobius-relay-cloudflare-standalone --filter @moxt-ai/mobius-web dev",
         "deploy:temporary": "pnpm wrangler deploy --temporary",
         "deploy:cloudflare:r2": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone deploy:r2",
-        "deploy:cloudflare:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform deploy",
+        "deploy:cloudflare:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform run deploy",
         "mobius": "pnpm --filter @moxt-ai/mobius exec node src/cli.ts",
         "wrangler": "node scripts/wrangler.ts",
         "worktree:new": "bash scripts/worktree/new.sh",

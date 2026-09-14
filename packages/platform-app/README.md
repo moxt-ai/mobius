@@ -14,6 +14,17 @@ available as aliases for existing API clients.
 
 ## Run
 
+Set `VITE_CLERK_PUBLISHABLE_KEY` in the build environment or in this package's
+`.env.<mode>.local` file. Builds fail if the key is missing or blank. Use the
+Clerk instance configured for the target Platform API.
+
+The repository's `pnpm wrangler deploy --config
+packages/relay-cloudflare-platform/wrangler.jsonc --env staging` command forwards
+the environment to Vite. Use `--env production` for production. For a direct
+app build, use `pnpm --filter @moxt-ai/mobius-platform-app build --mode staging`
+or `--mode production`. Rebuild and redeploy to update an already-published bundle;
+Worker runtime variables cannot change Vite's compiled browser configuration.
+
 From the repository root:
 
 ```bash

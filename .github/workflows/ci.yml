@@ -47,6 +47,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm check
+        env:
+          # Build-only fixture; this bundle is never deployed.
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
       - run: pnpm test:integration
 
