@@ -59,8 +59,9 @@ Runtime](./docs/runtime-sdk.md).
 Pairing is scoped to a Project only. Relay services never see a tenant: storage
 placement is resolved per Project by the host's `ProjectStorageDirectory`, and
 scoping keys are derived from `projectId` alone. Embedding applications supply
-the directory to `createWorkerContext`, which assembles the pairing service and
-its Cloudflare transports internally. Durable Object hosts use
+the directory and required Runtime, Session, and connection gateways to
+`createWorkerContext`, which assembles the pairing service. Hosting entrypoints
+construct their Cloudflare gateways explicitly. Durable Object hosts use
 `createDurableObjectContext` with bindings and content placement; they do not
 construct SQL adapters, R2 content stores, channel peers, or alarm schedulers.
 

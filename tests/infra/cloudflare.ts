@@ -1,0 +1,84 @@
+import { fileURLToPath } from "node:url";
+import { readD1Migrations } from "@cloudflare/vitest-plugin";
+import { build } from "esbuild";
+import { convertV4MiniflareOptions, Miniflare } from "miniflare";
+import type { PlatformRelayBindings, RelayBindings } from "./app.ts";
+
+/** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
+async function createCloudflareRuntime(profile: "standalone" | "platform") {
+    const packageDirectory = new URL(`../../packages/relay-cloudflare-${profile}/`, import.meta.url);
+    const bundle = await build({
+        entryPoints: [fileURLToPath(new URL("src/worker.ts", packageDirectory))],
+        bundle: true,
+        format: "esm",
+        platform: "browser",
+        write: false,
+    });
+    const output = bundle.outputFiles[0];
+    if (output === undefined) {
+        throw new Error("Expected the Standalone Worker bundle");
+    }
+    const runtime = new Miniflare(
+        convertV4MiniflareOptions({
+            modules: true,
+            script: output.text,
+            compatibilityDate: "2026-09-03",
+            d1Databases:
+                profile === "standalone"
+                    ? ["DIRECTORY_DATABASE"]
+                    : ["D1_SHARD_APAC_01", "D1_SHARD_WNAM_01", "PLATFORM_DIRECTORY_DATABASE"],
+            r2Buckets: profile === "standalone" ? [] : ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
+            bindings:
+                profile === "standalone"
+                    ? { MOBIUS_TENANT_ID: "standalone", PUBLIC_PROJECT_BOOTSTRAP_ENABLED: "true" }
+                    : {},
+            durableObjects: {
+                RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
+                SESSION_RELAY: {
+                    className: profile === "standalone" ? "LiteSessionRelay" : "PlatformSessionRelay",
+                    useSQLite: true,
+                },
+                BOT_CONNECTIONS: { className: "BotConnectionActor", useSQLite: true },
+            },
+        }),
+    );
+    return runtime;
+}
+
+async function migrate(database: D1Database, directory: URL) {
+    for (const migration of await readD1Migrations(fileURLToPath(directory))) {
+        await database.batch(migration.queries.map((query) => database.prepare(query)));
+    }
+}
+
+export async function createTestMobiusBindings() {
+    const runtime = await createCloudflareRuntime("standalone");
+    try {
+        const env = await runtime.getBindings<RelayBindings>();
+        await migrate(env.DIRECTORY_DATABASE, new URL("../../packages/relay-core/migrations/d1", import.meta.url));
+        return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
+    } catch (cause) {
+        await runtime.dispose();
+        throw cause;
+    }
+}
+
+export async function createTestMobiusPlatformBindings() {
+    const runtime = await createCloudflareRuntime("platform");
+    try {
+        const env = await runtime.getBindings<PlatformRelayBindings>();
+        for (const database of [env.D1_SHARD_APAC_01, env.D1_SHARD_WNAM_01]) {
+            if (database !== undefined) {
+                await migrate(database, new URL("../../packages/relay-core/migrations/d1", import.meta.url));
+            }
+        }
+        await migrate(
+            env.PLATFORM_DIRECTORY_DATABASE,
+            new URL("../../packages/relay-cloudflare-platform/migrations/d1", import.meta.url),
+        );
+        return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
+    } catch (cause) {
+        await runtime.dispose();
+        throw cause;
+    }
+}

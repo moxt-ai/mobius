@@ -1,7 +1,10 @@
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStandaloneWorker, type RelayBindings } from "../src/worker.ts";
+import { createTestMobiusApp } from "../../../tests/infra/app.ts";
+import type { RelayBindings } from "../src/worker.ts";
+import { createStandaloneGateways } from "../src/worker.ts";
+import { testBindings } from "./infra/bindings.ts";
 
 const relayOrigin = "https://relay.test";
 function record(value: unknown): Readonly<Record<string, unknown>> {
@@ -60,13 +63,14 @@ afterEach(() => {
 
 describe.sequential("Project authentication", () => {
     it("Given a Standalone deployment, When Platform application or external-login routes are requested, Then those trust planes are not mounted", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await responseRecord(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
+            await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, { method: "POST" }),
             201,
         );
         const projectId = stringField(pairing, "projectId");
         const ownerCredential = stringField(pairing, "hostToken");
-        const application = await exports.default.fetch(
+        const application = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`,
             {
                 body: JSON.stringify({ name: "must-not-exist", permissions: ["bot:read"] }),
@@ -75,18 +79,18 @@ describe.sequential("Project authentication", () => {
             },
         );
         expect(application.status).toBe(404);
-        const exchange = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/auth/exchanges/clerk`, {
+        const exchange = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/auth/exchanges/clerk`, {
             body: JSON.stringify({ expiresInSeconds: 300, projectId }),
             headers: { authorization: "Bearer external-proof", "content-type": "application/json" },
             method: "POST",
         });
         expect(exchange.status).toBe(404);
-        const ownerCredentials = await exports.default.fetch(
+        const ownerCredentials = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/owner-credentials`,
             { headers: authorization(ownerCredential) },
         );
         expect(ownerCredentials.status).toBe(404);
-        const auditEvents = await exports.default.fetch(
+        const auditEvents = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/authentication-audit-events`,
             { headers: authorization(ownerCredential) },
         );
@@ -94,7 +98,7 @@ describe.sequential("Project authentication", () => {
     });
 
     it("Given public accountless bootstrap limits and an operator disable switch, When clients create Projects, Then limits are atomic, recover after the window, and disabled deployments reject bootstrap", async () => {
-        const limited = createStandaloneWorker();
+        const limited = createTestMobiusApp({}, createStandaloneGateways);
         const limitedEnvironment = bootstrapEnvironment(true, 1, 2);
         const bootstrap = async (clientAddress: string): Promise<Response> =>
             await limited.fetch(
@@ -118,7 +122,7 @@ describe.sequential("Project authentication", () => {
         vi.setSystemTime(Date.now() + 60_001);
         expect((await bootstrap("192.0.2.10")).status).toBe(201);
 
-        const defensive = createStandaloneWorker();
+        const defensive = createTestMobiusApp({}, createStandaloneGateways);
         const defensiveEnvironment = bootstrapEnvironment(true, 1, 100);
         const invalidAddressBootstrap = async (clientAddress: string): Promise<Response> =>
             await defensive.fetch(
@@ -131,7 +135,7 @@ describe.sequential("Project authentication", () => {
         expect((await invalidAddressBootstrap("forged-client-a")).status).toBe(201);
         expect((await invalidAddressBootstrap("forged-client-b")).status).toBe(429);
 
-        const disabled = createStandaloneWorker();
+        const disabled = createTestMobiusApp({}, createStandaloneGateways);
         const disabledResponse = await disabled.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, {
                 headers: { "cf-connecting-ip": "192.0.2.20" },

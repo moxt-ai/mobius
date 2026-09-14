@@ -1,0 +1,178 @@
+import {
+    createDurableObjectDependencies,
+    type DurableObjectContext,
+} from "../../packages/relay-core/src/di/create-durable-object-dependencies.ts";
+import type { WorkerRuntimeGateways } from "../../packages/relay-core/src/di/create-worker-context.ts";
+import { DEFAULT_SESSION_QUOTA_POLICY, ProjectScope } from "../../packages/relay-core/src/entity/do/session.ts";
+import type { DatabaseResolver } from "../../packages/relay-core/src/infra/database-resolver.ts";
+import type { ProjectStorageDirectory } from "../../packages/relay-core/src/infra/project-storage-directory.ts";
+import { RuntimeStatus } from "../../packages/relay-core/src/service/channel/channel.ts";
+import { TestRuntimePeers } from "./peers.ts";
+import { TestSqliteDatabase } from "./sqlite.ts";
+
+/** Local hosting adapter: production actor logic on SQLite, sharing the caller's clock. */
+export function createTestGateways(options: {
+    readonly databases: DatabaseResolver;
+    readonly projects: ProjectStorageDirectory;
+    readonly signal: AbortSignal;
+}) {
+    const resources = new AsyncDisposableStack();
+    const actors = new Map<string, DurableObjectContext>();
+    const alarms = new Map<string, number>();
+    function actor(key: string): DurableObjectContext {
+        const existing = actors.get(key);
+        if (existing !== undefined) {
+            return existing;
+        }
+        const database = resources.use(new TestSqliteDatabase());
+        const peers = resources.use(new TestRuntimePeers(() => context.services.runtime, options.signal));
+        const context = createDurableObjectDependencies({
+            doDatabase: database,
+            quota: DEFAULT_SESSION_QUOTA_POLICY,
+            content: { kind: "sqlite", archiveByteLimit: 100_000_000 },
+            gateways: {
+                databaseResolver: options.databases,
+                projectStorageDirectory: options.projects,
+                peers,
+                sessionTransport: gateways.sessions,
+                connections: gateways.connections,
+                schedule: async (timestamp, signal) => {
+                    signal.throwIfAborted();
+                    alarms.set(key, timestamp);
+                },
+            },
+        });
+        actors.set(key, context);
+        return context;
+    }
+    const gateways: WorkerRuntimeGateways = {
+        sessions: {
+            fetch: async (scope, sessionId, request) =>
+                await actor(`session:${scope.projectId}:${sessionId}`).applications.session.request(request),
+        },
+        channel: {
+            acceptDaemon: async (access, request, signal) => {
+                const url = new URL(request.url);
+                url.pathname = "/daemon";
+                const headers = new Headers(request.headers);
+                headers.set("x-mobius-channel-id", access.channelId);
+                headers.set("x-mobius-runtime-id", access.runtimeId);
+                headers.set("x-mobius-project-id", access.projectId);
+                return await actor(`runtime:${access.channelId}`).applications.runtime.request(
+                    new Request(url, { headers, signal }),
+                );
+            },
+            acceptHost: async (access, request, signal) => {
+                const headers = new Headers(request.headers);
+                headers.set("x-mobius-channel-id", access.channelId);
+                headers.set("x-mobius-runtime-id", access.runtimeId);
+                headers.set("x-mobius-project-id", access.projectId);
+                headers.set("x-mobius-host-credential-id", access.credentialId);
+                return await actor(`runtime:${access.channelId}`).applications.runtime.request(
+                    new Request(request, { headers, signal }),
+                );
+            },
+            disconnectHost: async (access, signal) => {
+                signal.throwIfAborted();
+                actor(`runtime:${access.channelId}`).services.runtime.revokeHost(
+                    access.channelId,
+                    access.credentialId,
+                    access.runtimeId,
+                    new ProjectScope(access.projectId),
+                );
+            },
+            disconnectRuntime: async (access, signal) =>
+                await actor(`runtime:${access.channelId}`).services.runtime.revokeRuntime(
+                    access.channelId,
+                    access.runtimeId,
+                    new ProjectScope(access.projectId),
+                    signal,
+                ),
+            dispatchPending: async (access, signal) =>
+                await actor(`runtime:${access.channelId}`).services.runtime.dispatchPending(
+                    access.runtimeId,
+                    new ProjectScope(access.projectId),
+                    signal,
+                ),
+            readRuntimeStatus: async (access, signal) => {
+                signal.throwIfAborted();
+                return new RuntimeStatus(
+                    actor(`runtime:${access.channelId}`).services.runtime.isOnline(access.runtimeId),
+                );
+            },
+        },
+        connections: {
+            enqueue: async (route, message, signal) =>
+                await actor(`connection:${route.connectionId}`).services.deliveries.enqueue(
+                    { ...message, connectionId: route.connectionId },
+                    signal,
+                ),
+            read: async (connectionId, after, limit, now, targets, signal) => {
+                signal.throwIfAborted();
+                return actor(`connection:${connectionId}`).services.deliveries.read(
+                    connectionId,
+                    after,
+                    limit,
+                    now,
+                    targets,
+                );
+            },
+            delivered: async (connectionId, messageId, claimId, now, signal) => {
+                signal.throwIfAborted();
+                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
+                    connectionId,
+                    messageId,
+                    claimId,
+                    "delivered",
+                    "",
+                    now,
+                    now,
+                );
+            },
+            retryableFailure: async (connectionId, messageId, claimId, code, retryAt, now, signal) => {
+                signal.throwIfAborted();
+                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
+                    connectionId,
+                    messageId,
+                    claimId,
+                    "retryable_failed",
+                    code,
+                    now,
+                    retryAt,
+                );
+            },
+            terminalFailure: async (connectionId, messageId, claimId, code, now, signal) => {
+                signal.throwIfAborted();
+                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
+                    connectionId,
+                    messageId,
+                    claimId,
+                    "terminal_failed",
+                    code,
+                    now,
+                    now,
+                );
+            },
+        },
+    };
+    return {
+        ...gateways,
+        runAlarms: async () => {
+            for (const [key, deadline] of alarms) {
+                if (deadline > Date.now()) {
+                    continue;
+                }
+                alarms.delete(key);
+                const context = actor(key);
+                if (key.startsWith("runtime:")) {
+                    await context.services.runtime.alarm(options.signal);
+                } else if (key.startsWith("session:")) {
+                    await context.services.sessionRecovery.recover(options.signal);
+                } else {
+                    await context.services.deliveries.recover(Date.now(), options.signal);
+                }
+            }
+        },
+        [Symbol.asyncDispose]: () => resources.disposeAsync(),
+    };
+}

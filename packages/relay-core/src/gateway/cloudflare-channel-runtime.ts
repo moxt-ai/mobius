@@ -136,7 +136,7 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
         const forwarded = new Request(request, { headers, signal });
         const objectId = this.#namespace.idFromName(access.channelId);
-        const response = await this.#namespace.get(objectId).fetch(forwarded);
+        const response = await this.#namespace.get(objectId).fetch(forwarded.url, forwarded);
         signal.throwIfAborted();
         return response;
     };

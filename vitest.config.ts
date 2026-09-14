@@ -10,6 +10,7 @@ export default defineConfig({
     test: {
         fileParallelism: false,
         include: [
+            "tests/**/*.integration.test.ts",
             "packages/*/tests/**/*.contract.test.ts",
             "packages/*/tests/**/*.integration.test.ts",
             "e2e/**/*.e2e.test.ts",

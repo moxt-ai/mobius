@@ -19,12 +19,6 @@ import {
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
 import {
-    type ExternalIdentityAuthenticator,
-    type ExternalIdentityCredential,
-    ProjectAuthenticationError,
-    VerifiedExternalIdentity,
-} from "@moxt-ai/mobius-relay-core";
-import {
     createMobiusConversationSession,
     MobiusApiError,
     MobiusBrowserAccessToken,
@@ -44,12 +38,15 @@ import {
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
+import { TestDeveloperAuthenticator as DeveloperAuthenticator } from "../../../tests/infra/identity.ts";
 import configuredPlatformWorker, {
-    createPlatformWorker,
+    createPlatformGateways,
     PlatformAuthenticationConfiguration,
     type PlatformRelayBindings,
-    type PlatformWorker,
 } from "../src/worker.ts";
+
+type PlatformWorker = ReturnType<typeof createTestMobiusPlatformApp>;
 
 const relayOrigin = "https://platform.test";
 const thirdPartyBrowserOrigin = "https://app.example.test";
@@ -123,35 +120,6 @@ class SocketMessages {
     };
 }
 
-class DeveloperAuthenticator implements ExternalIdentityAuthenticator {
-    #available = true;
-
-    readonly disable = (): void => {
-        this.#available = false;
-    };
-
-    readonly authenticate = async (
-        credential: ExternalIdentityCredential,
-        signal: AbortSignal,
-    ): Promise<VerifiedExternalIdentity> => {
-        signal.throwIfAborted();
-        if (!this.#available) {
-            throw new ProjectAuthenticationError("external_provider_unavailable", "The provider is unavailable");
-        }
-        if (credential.providerId !== "clerk" || credential.credential !== "developer-token") {
-            throw new ProjectAuthenticationError("external_identity_invalid", "The identity is invalid");
-        }
-        return new VerifiedExternalIdentity(
-            "clerk",
-            "https://identity.example.test",
-            "developer-1",
-            new Map(),
-            Date.now(),
-            Date.now() + 3_600_000,
-        );
-    };
-}
-
 class PlatformWorkerTransport {
     readonly #environment: PlatformRelayBindings;
     readonly #worker: PlatformWorker;
@@ -219,12 +187,13 @@ async function json(response: Response, expectedStatus: number): Promise<Readonl
 }
 
 async function provisionPlatformProject(label: string): Promise<PlatformProjectFixture> {
-    const worker = createPlatformWorker(
+    const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(
             new DeveloperAuthenticator(),
             new Set(["developer-1"]),
             new Set([thirdPartyBrowserOrigin]),
         ),
+        createPlatformGateways,
     );
     const environment = bindings();
     const tenant = await json(
@@ -596,8 +565,9 @@ async function commitRuntimeEvent(fixture: PlatformConversationFixture, event: S
 it.each([[thirdPartyBrowserOrigin], ["*"]])(
     "Given a permitted Platform browser origin %j, When a developer preflights and manages tenants and apps, Then CORS permits the requests while authentication remains required",
     async (allowedOrigin) => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(), new Set([allowedOrigin])),
+            createPlatformGateways,
         );
         const environment = bindings();
         const headers = new Headers(developerHeaders());
@@ -672,12 +642,13 @@ it.each([[thirdPartyBrowserOrigin], ["*"]])(
 );
 
 it("Given a Platform origin allowlist, When a browser requests an untrusted origin or unsupported preflight, Then the control API rejects it without CORS permission", async () => {
-    const worker = createPlatformWorker(
+    const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(
             new DeveloperAuthenticator(),
             new Set(),
             new Set([thirdPartyBrowserOrigin]),
         ),
+        createPlatformGateways,
     );
     const cases: readonly (readonly [string, string, string, string])[] = [
         ["https://untrusted.example.test", "POST", "authorization", "browser_origin_denied"],
@@ -968,12 +939,13 @@ describe.sequential("Platform hosting boundary", () => {
     ])(
         "Given a %s Project ID, When a public caller resolves its placement, Then only its %s location is returned",
         async (code, location) => {
-            const worker = createPlatformWorker(
+            const worker = createTestMobiusPlatformApp(
                 new PlatformAuthenticationConfiguration(
                     new DeveloperAuthenticator(),
                     new Set(["developer-1"]),
                     new Set([thirdPartyBrowserOrigin]),
                 ),
+                createPlatformGateways,
             );
             const response = await worker.fetch(
                 new Request(
@@ -1185,8 +1157,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given invalid or oversized JSON, When a client posts to a Platform route, Then the request is rejected with a bounded body error", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         for (const path of [
             "/v1/platform/app-credentials/credential-test/revoke",
@@ -1219,8 +1192,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given malformed Platform request fields, When a client submits JSON, Then the route rejects the body before authorizing an operation", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         for (const [path, body] of [
             ["/v1/platform/tenants", { displayName: 12 }],
@@ -1260,8 +1234,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given a Platform deployment, When health, capabilities, and developer authentication are requested, Then Platform is discoverable and developer authentication is enforced", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         const health = await json(
             await worker.fetch(new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/health`), bindings()),
@@ -1306,8 +1281,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given the split SDK entry points, When a backend provisions and pairs a Project, Then OIDC, AppCredential, idempotency, and server capabilities remain separated", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         const environment = bindings();
         const transport = new PlatformWorkerTransport(worker, environment);
@@ -1367,8 +1343,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given an authenticated developer, When they manage Tenants, Apps, and keys, Then only their active resources and secret-on-create credentials are exposed", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         const developer = new MobiusPlatformDeveloperClient({
             authenticationProviderId: "clerk",
@@ -1728,12 +1705,13 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given a Platform operator configures bounded Tenant capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(
                 new DeveloperAuthenticator(),
                 new Set(["developer-1"]),
                 new Set([thirdPartyBrowserOrigin]),
             ),
+            createPlatformGateways,
         );
         const environment = bindings();
         const tenant = await json(
@@ -1912,8 +1890,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given an OIDC-authorized Platform developer, When one App provisions two Projects, Then its default AppCredential reaches both Projects and another App cannot reach either", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         const environment = bindings();
         const tenant = await json(
@@ -2010,8 +1989,9 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given a non-expiring App key with one Project and read-only permission, When years pass and it is rotated and revoked, Then access persists while scope, permission, overlap, and revocation are enforced", async () => {
-        const worker = createPlatformWorker(
+        const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            createPlatformGateways,
         );
         const environment = bindings();
         const tenant = await json(
@@ -2224,12 +2204,13 @@ describe.sequential("Platform hosting boundary", () => {
             ];
             const alice = await issue("actor-alice", fixture.conversationId, fullPermissions);
             // Given wildcard browser access, unrelated origins still need a scoped credential and permission.
-            const publicBrowserWorker = createPlatformWorker(
+            const publicBrowserWorker = createTestMobiusPlatformApp(
                 new PlatformAuthenticationConfiguration(
                     new DeveloperAuthenticator(),
                     new Set(["developer-1"]),
                     new Set(["*"]),
                 ),
+                createPlatformGateways,
             );
             const readOnly = await issue("public-browser", fixture.conversationId, ["conversation:read"]);
             for (const origin of ["https://independent-app.example", "https://another-app.example"]) {

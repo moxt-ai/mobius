@@ -65,7 +65,7 @@ export class BotExecutionContextRegistry {
     readonly activate = (command: BotSessionPromptCommand): BotExecutionContextLease => {
         let handle = this.#handlesBySession.get(command.sessionId);
         if (handle === undefined) {
-            handle = `ctx_${randomBytes(32).toString("base64url")}`;
+            handle = `ctx_${Buffer.from(randomBytes(32)).toString("base64url")}`;
             this.#handlesBySession.set(command.sessionId, handle);
         }
         if (this.#activeByHandle.has(handle)) {

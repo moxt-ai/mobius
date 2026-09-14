@@ -1,7 +1,7 @@
 export { createMobiusApplication, createPlatformMobiusApplication } from "./app.ts";
 export { createDurableObjectContext } from "./di/create-durable-object-context.ts";
 export type { RelayContext } from "./di/create-relay-dependencies.ts";
-export { createWorkerContext } from "./di/create-worker-context.ts";
+export { createWorkerContext, type WorkerRuntimeGateways } from "./di/create-worker-context.ts";
 export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
 export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 export { SessionRelay } from "./durable-objects/session-relay.ts";
@@ -110,6 +110,9 @@ export {
     validateToken,
 } from "./entity/pairing/pairing.ts";
 export type { BotConnectionGateway } from "./gateway/bot-connection-gateway.ts";
+export { CloudflareBotConnectionRuntime } from "./gateway/cloudflare-bot-connection-runtime.ts";
+export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
+export { CloudflareSessionTransport } from "./gateway/cloudflare-session-transport.ts";
 export type {
     ChannelGateway,
     SessionArtifactGateway,

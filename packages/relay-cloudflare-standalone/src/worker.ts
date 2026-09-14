@@ -1,5 +1,8 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
+    CloudflareBotConnectionRuntime,
+    CloudflareChannelRuntime,
+    CloudflareSessionTransport,
     createBotApplication,
     createMobiusApplication,
     createWorkerContext,
@@ -8,7 +11,9 @@ import {
     publicProjectBootstrapPolicyFromEnvironment,
     StaticSessionQuotaPolicyProvider,
     sessionQuotaFromEnvironment,
+    type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
+import { Hono } from "hono";
 import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
@@ -66,41 +71,51 @@ function isVersionedSharedProjectPath(pathname: string): boolean {
     );
 }
 
-export function createStandaloneWorker(): StandaloneWorker {
-    return {
-        fetch: async (request, environment) => {
-            const pathname = new URL(request.url).pathname;
-            const projectAuthentication = new D1ProjectAuthentication(
-                environment.DIRECTORY_DATABASE,
-                environment.MOBIUS_TENANT_ID,
-            );
-            const cx = createWorkerContext({
-                namespaces: {
-                    runtime: environment.RUNTIME_RELAY,
-                    sessions: environment.SESSION_RELAY,
-                    connections: environment.BOT_CONNECTIONS,
-                },
-                namespacePrefix: environment.MOBIUS_TENANT_ID,
-                authorization: projectAuthentication,
-                bootstrap: publicProjectBootstrapPolicyFromEnvironment(environment.DIRECTORY_DATABASE, environment),
-                databases: new SingleDatabaseResolver(environment.DIRECTORY_DATABASE),
-                identityDatabases: [environment.DIRECTORY_DATABASE],
-                projects: new StandaloneProjectStorageDirectory(),
-                apiPrefix: MOBIUS_API_PREFIX,
-                quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
-            });
-            if (isVersionedSharedProjectPath(pathname)) {
-                return await accountlessResponse(await application.fetch(request, cx));
-            }
-            if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
-                return await accountlessResponse(
-                    await botApplication.fetch(request, {
-                        services: { bots: cx.services.bots },
-                    }),
-                );
-            }
+export function createStandaloneApplication(
+    gateways: (environment: RelayBindings) => WorkerRuntimeGateways,
+): Hono<{ Bindings: RelayBindings }> {
+    return new Hono<{ Bindings: RelayBindings }>().all("*", async (context) => {
+        const request = context.req.raw;
+        const environment = context.env;
+        const pathname = new URL(request.url).pathname;
+        const projectAuthentication = new D1ProjectAuthentication(
+            environment.DIRECTORY_DATABASE,
+            environment.MOBIUS_TENANT_ID,
+        );
+        const cx = createWorkerContext({
+            gateways: gateways(environment),
+            authorization: projectAuthentication,
+            bootstrap: publicProjectBootstrapPolicyFromEnvironment(environment.DIRECTORY_DATABASE, environment),
+            databases: new SingleDatabaseResolver(environment.DIRECTORY_DATABASE),
+            identityDatabases: [environment.DIRECTORY_DATABASE],
+            projects: new StandaloneProjectStorageDirectory(),
+            apiPrefix: MOBIUS_API_PREFIX,
+            quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
+        });
+        if (isVersionedSharedProjectPath(pathname)) {
             return await accountlessResponse(await application.fetch(request, cx));
-        },
+        }
+        if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
+            return await accountlessResponse(
+                await botApplication.fetch(request, {
+                    services: { bots: cx.services.bots },
+                }),
+            );
+        }
+        return await accountlessResponse(await application.fetch(request, cx));
+    });
+}
+
+export function createStandaloneWorker(): StandaloneWorker {
+    const app = createStandaloneApplication(createStandaloneGateways);
+    return { fetch: async (request, environment) => await app.fetch(request, environment) };
+}
+
+export function createStandaloneGateways(environment: RelayBindings): WorkerRuntimeGateways {
+    return {
+        channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
+        sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, environment.MOBIUS_TENANT_ID),
+        connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }
 

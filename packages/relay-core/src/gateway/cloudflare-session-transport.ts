@@ -12,5 +12,5 @@ export class CloudflareSessionTransport implements SessionTransport {
     readonly fetch: SessionTransport["fetch"] = (scope, sessionId, request) =>
         this.#namespace
             .get(this.#namespace.idFromName(`${this.#tenantId}:${scope.projectId}:${sessionId}`))
-            .fetch(request);
+            .fetch(request.url, request);
 }

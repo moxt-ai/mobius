@@ -1,5 +1,5 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
-import { env, exports } from "cloudflare:workers";
+import { env } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_INSTALL_PROGRESS_KIND,
@@ -65,7 +65,10 @@ import {
     MobiusRuntimePairingRequest,
 } from "@moxt-ai/mobius-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestMobiusApp } from "../../../tests/infra/app.ts";
 import { RuntimeRelay } from "../src/durable-objects.ts";
+import { createStandaloneGateways } from "../src/worker.ts";
+import { testBindings } from "./infra/bindings.ts";
 import { runtimeWithTransport, SuspendedDisconnectTransport } from "./runtime-recovery-transport.ts";
 
 const relayOrigin = "https://relay.test";
@@ -337,138 +340,152 @@ interface OpenSocket {
     readonly socket: WebSocket;
 }
 
-async function createPairing(): Promise<CreatedPairingResponse> {
-    const response = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, {
-        method: "POST",
-    });
-    expect(response.status).toBe(201);
-    return decodeCreatedPairing(await response.json());
-}
+function createSessionRequests(app: ReturnType<typeof createTestMobiusApp>) {
+    async function createPairing(): Promise<CreatedPairingResponse> {
+        const response = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings`, {
+            method: "POST",
+        });
+        expect(response.status).toBe(201);
+        return decodeCreatedPairing(await response.json());
+    }
 
-async function claimPairing(
-    created: CreatedPairingResponse,
-    agents: readonly Readonly<Record<string, unknown>>[] = readyAgents,
-    availableInstallableAgents: readonly Readonly<Record<string, unknown>>[] = installableAgents,
-): Promise<ClaimedPairingResponse> {
-    const response = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
-        body: JSON.stringify({
-            agents,
-            installableAgents: availableInstallableAgents,
-            machineName: "Developer Mac",
-            pairingCode: created.pairingCode,
-            workspaceName: "mobius",
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-    expect(response.status).toBe(200);
-    return decodeClaimedPairing(await response.json());
-}
+    async function claimPairing(
+        created: CreatedPairingResponse,
+        agents: readonly Readonly<Record<string, unknown>>[] = readyAgents,
+        availableInstallableAgents: readonly Readonly<Record<string, unknown>>[] = installableAgents,
+    ): Promise<ClaimedPairingResponse> {
+        const response = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            body: JSON.stringify({
+                agents,
+                installableAgents: availableInstallableAgents,
+                machineName: "Developer Mac",
+                pairingCode: created.pairingCode,
+                workspaceName: "mobius",
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+        expect(response.status).toBe(200);
+        return decodeClaimedPairing(await response.json());
+    }
 
-async function pairChannel(): Promise<PairedChannel> {
-    const created = await createPairing();
-    return { claimed: await claimPairing(created), created };
-}
+    async function pairChannel(): Promise<PairedChannel> {
+        const created = await createPairing();
+        return { claimed: await claimPairing(created), created };
+    }
 
-async function createProjectRuntimePairing(
-    project: CreatedPairingResponse,
-    idempotencyKey: string,
-): Promise<CreatedRuntimePairingResponse> {
-    const response = await exports.default.fetch(
-        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.projectId}/runtime-pairings`,
-        {
-            body: JSON.stringify({ idempotencyKey }),
+    async function createProjectRuntimePairing(
+        project: CreatedPairingResponse,
+        idempotencyKey: string,
+    ): Promise<CreatedRuntimePairingResponse> {
+        const response = await app.request(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.projectId}/runtime-pairings`,
+            {
+                body: JSON.stringify({ idempotencyKey }),
+                headers: {
+                    ...authorization(project),
+                    "content-type": "application/json",
+                },
+                method: "POST",
+            },
+        );
+        expect(response.status).toBe(201);
+        return decodeCreatedRuntimePairing(await response.json());
+    }
+
+    async function claimProjectRuntimePairing(
+        created: CreatedRuntimePairingResponse,
+        machineName: string,
+        workspaceName: string,
+        agents: readonly Readonly<Record<string, unknown>>[],
+        availableInstallableAgents: readonly Readonly<Record<string, unknown>>[],
+    ): Promise<ClaimedPairingResponse> {
+        const response = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            body: JSON.stringify({
+                agents,
+                installableAgents: availableInstallableAgents,
+                machineName,
+                pairingCode: created.pairingCode,
+                workspaceName,
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        });
+        expect(response.status).toBe(200);
+        return decodeClaimedPairing(await response.json());
+    }
+
+    function waitForSocketClose(socket: WebSocket): Promise<CloseEvent> {
+        return new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
+    }
+
+    function requireWebSocket(response: Response): WebSocket {
+        const socket = response.webSocket;
+        if (socket === null || socket === undefined) {
+            throw new Error("Expected a WebSocket upgrade response");
+        }
+        return socket;
+    }
+
+    async function openChannelSocket(path: string): Promise<OpenSocket> {
+        const response = await app.request(`${relayOrigin}${path}`, {
+            headers: { Upgrade: "websocket" },
+        });
+        expect(response.status).toBe(101);
+        const socket = requireWebSocket(response);
+        const messages = new SocketMessages(socket);
+        socket.accept();
+        return { messages, socket };
+    }
+
+    function authorization(pairing: CreatedPairingResponse): HeadersInit {
+        return { authorization: `Bearer ${pairing.hostToken}` };
+    }
+
+    async function createSession(
+        pairing: CreatedPairingResponse,
+        sessionId: string,
+        options: {
+            readonly contentLimitBytes?: number;
+            readonly hotEventLimit?: number;
+            readonly retentionMilliseconds?: number;
+        } = {},
+    ): Promise<Response> {
+        return await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/sessions`, {
+            body: JSON.stringify({
+                agentId: "codex",
+                bindingId: "workspace",
+                directoryId: "root",
+                policy: {
+                    contentLimitBytes: options.contentLimitBytes ?? 2_000_000,
+                    hotEventLimit: options.hotEventLimit ?? 100,
+                    idempotencyRetentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
+                    level: "full",
+                    retentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
+                },
+                runtimeId: pairing.runtimeId,
+                sessionId,
+                title: `Session ${sessionId}`,
+            }),
             headers: {
-                ...authorization(project),
+                ...authorization(pairing),
                 "content-type": "application/json",
             },
             method: "POST",
-        },
-    );
-    expect(response.status).toBe(201);
-    return decodeCreatedRuntimePairing(await response.json());
-}
-
-async function claimProjectRuntimePairing(
-    created: CreatedRuntimePairingResponse,
-    machineName: string,
-    workspaceName: string,
-    agents: readonly Readonly<Record<string, unknown>>[],
-    availableInstallableAgents: readonly Readonly<Record<string, unknown>>[],
-): Promise<ClaimedPairingResponse> {
-    const response = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
-        body: JSON.stringify({
-            agents,
-            installableAgents: availableInstallableAgents,
-            machineName,
-            pairingCode: created.pairingCode,
-            workspaceName,
-        }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-    });
-    expect(response.status).toBe(200);
-    return decodeClaimedPairing(await response.json());
-}
-
-function waitForSocketClose(socket: WebSocket): Promise<CloseEvent> {
-    return new Promise((resolve) => socket.addEventListener("close", resolve, { once: true }));
-}
-
-function requireWebSocket(response: Response): WebSocket {
-    const socket = response.webSocket;
-    if (socket === null || socket === undefined) {
-        throw new Error("Expected a WebSocket upgrade response");
+        });
     }
-    return socket;
-}
 
-async function openChannelSocket(path: string): Promise<OpenSocket> {
-    const response = await exports.default.fetch(`${relayOrigin}${path}`, {
-        headers: { Upgrade: "websocket" },
-    });
-    expect(response.status).toBe(101);
-    const socket = requireWebSocket(response);
-    const messages = new SocketMessages(socket);
-    socket.accept();
-    return { messages, socket };
-}
-
-function authorization(pairing: CreatedPairingResponse): HeadersInit {
-    return { authorization: `Bearer ${pairing.hostToken}` };
-}
-
-async function createSession(
-    pairing: CreatedPairingResponse,
-    sessionId: string,
-    options: {
-        readonly contentLimitBytes?: number;
-        readonly hotEventLimit?: number;
-        readonly retentionMilliseconds?: number;
-    } = {},
-): Promise<Response> {
-    return await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/sessions`, {
-        body: JSON.stringify({
-            agentId: "codex",
-            bindingId: "workspace",
-            directoryId: "root",
-            policy: {
-                contentLimitBytes: options.contentLimitBytes ?? 2_000_000,
-                hotEventLimit: options.hotEventLimit ?? 100,
-                idempotencyRetentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
-                level: "full",
-                retentionMilliseconds: options.retentionMilliseconds ?? 86_400_000,
-            },
-            runtimeId: pairing.runtimeId,
-            sessionId,
-            title: `Session ${sessionId}`,
-        }),
-        headers: {
-            ...authorization(pairing),
-            "content-type": "application/json",
-        },
-        method: "POST",
-    });
+    return {
+        createPairing,
+        claimPairing,
+        pairChannel,
+        createProjectRuntimePairing,
+        claimProjectRuntimePairing,
+        waitForSocketClose,
+        openChannelSocket,
+        authorization,
+        createSession,
+    };
 }
 
 function prompt(sessionId: string, commandId: string, text: string): SessionPromptCommand {
@@ -642,6 +659,8 @@ afterEach(() => {
 
 describe.sequential("Cloudflare session deployment", () => {
     it("Given all eleven supported local Agents are ready, When the machine claims its pairing, Then the Relay accepts the complete bounded directory", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { createPairing, claimPairing } = createSessionRequests(app);
         const created = await createPairing();
 
         await expect(claimPairing(created, completeReadyAgentDirectory, [])).resolves.toMatchObject({
@@ -651,10 +670,12 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a ready Session with no recorded events, When a browser opens its event stream, Then the Relay immediately sends a connection frame before the first Turn", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         expect(await createSession(pairing.created, "empty-event-stream-session")).toMatchObject({ status: 201 });
 
-        const response = await exports.default.fetch(
+        const response = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/empty-event-stream-session/events`,
             {
                 headers: {
@@ -678,6 +699,9 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an existing Project owner, When a second Runtime is paired, used, and revoked through the SDK, Then retries are idempotent and only that Runtime becomes unavailable", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, claimProjectRuntimePairing, waitForSocketClose, openChannelSocket } =
+            createSessionRequests(app);
         const bootstrap = await pairChannel();
         const signal = new AbortController().signal;
         const client = new MobiusClient({
@@ -689,7 +713,7 @@ describe.sequential("Cloudflare session deployment", () => {
             },
             endpoint: relayOrigin,
             projectId: bootstrap.created.projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await app.request(request) },
         });
         const request = new MobiusRuntimePairingRequest("second-runtime-request");
         expect((await client.capabilities.read(signal)).resources.runtimePairings).toBe(true);
@@ -700,7 +724,7 @@ describe.sequential("Cloudflare session deployment", () => {
             new MobiusPendingRuntimePairingStatus(additional.expiresAt),
         );
         const claimed = await claimProjectRuntimePairing(additional, "Build Mac", "mobius-build", buildAgents, []);
-        const replay = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+        const replay = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
             body: JSON.stringify({
                 agents: buildAgents,
                 installableAgents: [],
@@ -713,7 +737,7 @@ describe.sequential("Cloudflare session deployment", () => {
         });
         expect(replay.status).toBe(400);
         await expect(replay.json()).resolves.toMatchObject({ error: { code: "invalid_pairing_code" } });
-        const runtimeCannotPair = await exports.default.fetch(
+        const runtimeCannotPair = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${bootstrap.created.projectId}/runtime-pairings`,
             {
                 body: JSON.stringify({ idempotencyKey: "runtime-authority-escalation" }),
@@ -902,7 +926,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 commandId: "bootstrap-after-revoke",
                 sessionId: bootstrapSession.sessionId,
             });
-            const deniedReconnect = await exports.default.fetch(
+            const deniedReconnect = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${additional.channelId}/daemon?token=${claimed.daemonToken}`,
                 { headers: { Upgrade: "websocket" } },
             );
@@ -932,12 +956,14 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given the Project Runtime quota and an expiring pairing, When an owner exceeds the quota and later retries after expiry, Then the request is rejected, audited, and the expired slot is reusable", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createProjectRuntimePairing, authorization } = createSessionRequests(app);
         const project = await pairChannel();
         const pending: CreatedRuntimePairingResponse[] = [];
         for (let index = 1; index < 8; index += 1) {
             pending.push(await createProjectRuntimePairing(project.created, `quota-runtime-${index.toString()}`));
         }
-        const quotaResponse = await exports.default.fetch(
+        const quotaResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/runtime-pairings`,
             {
                 body: JSON.stringify({ idempotencyKey: "quota-runtime-overflow" }),
@@ -953,7 +979,7 @@ describe.sequential("Cloudflare session deployment", () => {
             error: { code: "runtime_quota_exceeded" },
         });
 
-        const browserCredentialResponse = await exports.default.fetch(
+        const browserCredentialResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/browser-credentials`,
             {
                 body: JSON.stringify({ expiresInSeconds: 120 }),
@@ -969,7 +995,7 @@ describe.sequential("Cloudflare session deployment", () => {
         if (!isRecord(browserCredential)) {
             throw new Error("Expected a browser credential");
         }
-        const browserDenied = await exports.default.fetch(
+        const browserDenied = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${project.created.projectId}/runtime-pairings`,
             {
                 body: JSON.stringify({ idempotencyKey: "browser-cannot-pair" }),
@@ -997,14 +1023,14 @@ describe.sequential("Cloudflare session deployment", () => {
             },
             endpoint: relayOrigin,
             projectId: project.created.projectId,
-            transport: { fetch: async (request) => await exports.default.fetch(request) },
+            transport: { fetch: async (request) => await app.request(request) },
         });
         const signal = new AbortController().signal;
         try {
             expect(await client.runtimePairings.read(expiring.pairingId, signal)).toBeInstanceOf(
                 MobiusExpiredRuntimePairingStatus,
             );
-            const expiredClaim = await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
+            const expiredClaim = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/pairings/claim`, {
                 body: JSON.stringify({
                     agents: buildAgents,
                     installableAgents: [],
@@ -1046,6 +1072,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a Standalone deployment, When two machines pair and create sessions, Then tenant placement remains internal while Project credentials stay isolated", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization, createSession } = createSessionRequests(app);
         const first = await pairChannel();
         const second = await pairChannel();
         expect(first.created.tenantId).toBe("standalone");
@@ -1059,7 +1087,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(secondSession.status).toBe(201);
         const secondSessionResource = await secondSession.json();
         expect(isRecord(secondSessionResource) && Object.hasOwn(secondSessionResource, "tenantId")).toBe(false);
-        const crossProjectRuntime = await exports.default.fetch(
+        const crossProjectRuntime = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions`,
             {
                 body: JSON.stringify({
@@ -1088,7 +1116,7 @@ describe.sequential("Cloudflare session deployment", () => {
         await expect(crossProjectRuntime.json()).resolves.toMatchObject({
             error: { code: "runtime_access_denied" },
         });
-        const denied = await exports.default.fetch(
+        const denied = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions/existing-tenant-session`,
             { headers: authorization(second.created) },
         );
@@ -1096,15 +1124,17 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { createPairing, claimPairing, authorization } = createSessionRequests(app);
         const created = await createPairing();
-        const pending = await exports.default.fetch(
+        const pending = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/${created.pairingId}?token=${created.pollToken}`,
         );
         await expect(pending.json()).resolves.toEqual({
             expiresAt: created.expiresAt,
             status: "pending",
         });
-        const ownerPending = await exports.default.fetch(
+        const ownerPending = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/runtime-pairings/${created.pairingId}`,
             { headers: authorization(created) },
         );
@@ -1118,7 +1148,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(claimed.channelId).toBe(created.channelId);
         expect(claimed.runtimeId).toBe(created.runtimeId);
         expect(created.runtimeId).not.toBe(created.channelId);
-        const paired = await exports.default.fetch(
+        const paired = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/pairings/${created.pairingId}?token=${created.pollToken}`,
         );
         const pairedResource = await paired.json();
@@ -1129,7 +1159,7 @@ describe.sequential("Cloudflare session deployment", () => {
             runtimeId: created.runtimeId,
             status: "paired",
         });
-        const ownerPaired = await exports.default.fetch(
+        const ownerPaired = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/runtime-pairings/${created.pairingId}`,
             { headers: authorization(created) },
         );
@@ -1140,10 +1170,9 @@ describe.sequential("Cloudflare session deployment", () => {
             status: "paired",
         });
 
-        const channel = await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}`,
-            { headers: authorization(created) },
-        );
+        const channel = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}`, {
+            headers: authorization(created),
+        });
         expect(channel.status).toBe(200);
         const channelResource = await channel.json();
         expect(isRecord(channelResource) && Object.hasOwn(channelResource, "tenantId")).toBe(false);
@@ -1152,7 +1181,7 @@ describe.sequential("Cloudflare session deployment", () => {
             projectId: created.projectId,
             runtimeId: created.runtimeId,
         });
-        const unauthorizedHost = await exports.default.fetch(
+        const unauthorizedHost = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${created.channelId}/host?token=${"x".repeat(43)}`,
             { headers: { Upgrade: "websocket" } },
         );
@@ -1188,9 +1217,11 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an owner app credential, When a browser uses a short-lived project credential through the SDK, Then Runtime discovery and every Session request enforce expiry, refresh, and revocation", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
         const issueCredential = async (): Promise<Readonly<Record<string, unknown>>> => {
-            const response = await exports.default.fetch(
+            const response = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/browser-credentials`,
                 {
                     body: JSON.stringify({ expiresInSeconds: 120 }),
@@ -1222,7 +1253,7 @@ describe.sequential("Cloudflare session deployment", () => {
             endpoint: relayOrigin,
             projectId: pairing.created.projectId,
             transport: {
-                fetch: async (request) => await exports.default.fetch(request),
+                fetch: async (request) => await app.request(request),
             },
         });
 
@@ -1294,7 +1325,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 sessionId: session.sessionId,
             });
 
-            const revokeResponse = await exports.default.fetch(
+            const revokeResponse = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/browser-credentials/${requiredString(refreshedCredential, "credentialId")}`,
                 {
                     headers: authorization(pairing.created),
@@ -1315,6 +1346,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a paired Runtime, When it requests an artifact upload lease and PUTs matching bytes, Then the Session stores the content for authorized download", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket } = createSessionRequests(app);
         const pairing = await pairChannel();
         const client = new MobiusClient({
             credentialProvider: {
@@ -1326,7 +1359,7 @@ describe.sequential("Cloudflare session deployment", () => {
             endpoint: relayOrigin,
             projectId: pairing.created.projectId,
             transport: {
-                fetch: async (request) => await exports.default.fetch(request),
+                fetch: async (request) => await app.request(request),
             },
         });
         const signal = new AbortController().signal;
@@ -1348,7 +1381,7 @@ describe.sequential("Cloudflare session deployment", () => {
             );
             const bytes = new TextEncoder().encode("runtime raster");
             const digest = await sha256Hex(bytes);
-            const leaseResponse = await exports.default.fetch(
+            const leaseResponse = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/uploads?token=${pairing.claimed.daemonToken}`,
                 {
                     body: JSON.stringify({
@@ -1370,7 +1403,7 @@ describe.sequential("Cloudflare session deployment", () => {
             ) {
                 throw new Error("Expected a runtime upload lease");
             }
-            const putResponse = await exports.default.fetch(
+            const putResponse = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/${lease["artifactId"]}/content?token=${pairing.claimed.daemonToken}`,
                 {
                     body: bytes,
@@ -1395,6 +1428,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a persisted catalog predates verified capabilities and Web-confirmed installation, When its Channel is read, Then capabilities are conservative and obsolete approval metadata is omitted", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
         await env.DIRECTORY_DATABASE.prepare(
             `UPDATE pairing_channels
@@ -1414,10 +1449,9 @@ describe.sequential("Cloudflare session deployment", () => {
             )
             .run();
 
-        const response = await exports.default.fetch(
-            `${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`,
-            { headers: authorization(pairing.created) },
-        );
+        const response = await app.request(`${relayOrigin}/mobius/api/channels/${pairing.created.channelId}`, {
+            headers: authorization(pairing.created),
+        });
         expect(response.status).toBe(200);
         const descriptor: unknown = await response.json();
         expect(descriptor).toMatchObject({
@@ -1449,8 +1483,10 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
-        const createGrantResponse = await exports.default.fetch(
+        const createGrantResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
             { headers: authorization(pairing.created), method: "POST" },
         );
@@ -1471,7 +1507,7 @@ describe.sequential("Cloudflare session deployment", () => {
         });
         expect(storedGrant?.secret_hash).not.toBe(grant.grantSecret);
 
-        const wrongSecretResponse = await exports.default.fetch(
+        const wrongSecretResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
             {
                 body: JSON.stringify({ grantSecret: "x".repeat(43) }),
@@ -1484,7 +1520,7 @@ describe.sequential("Cloudflare session deployment", () => {
             error: { code: "access_grant_invalid" },
         });
 
-        const redeemResponse = await exports.default.fetch(
+        const redeemResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
             {
                 body: JSON.stringify({ grantSecret: grant.grantSecret }),
@@ -1502,7 +1538,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(redeemed.hostToken).not.toBe(pairing.created.hostToken);
         expect(redeemed.hostToken).not.toBe(grant.grantSecret);
 
-        const replayResponse = await exports.default.fetch(
+        const replayResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${grant.grantId}/redeem`,
             {
                 body: JSON.stringify({ grantSecret: grant.grantSecret }),
@@ -1518,12 +1554,12 @@ describe.sequential("Cloudflare session deployment", () => {
         const linkedAuthorization = {
             authorization: `Bearer ${redeemed.hostToken}`,
         };
-        const linkedChannel = await exports.default.fetch(
+        const linkedChannel = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
             { headers: linkedAuthorization },
         );
         expect(linkedChannel.status).toBe(200);
-        const linkedProject = await exports.default.fetch(
+        const linkedProject = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions`,
             { headers: linkedAuthorization },
         );
@@ -1534,7 +1570,7 @@ describe.sequential("Cloudflare session deployment", () => {
         const linkedHostClosed = new Promise<number>((resolve) => {
             linkedHost.socket.addEventListener("close", (event) => resolve(event.code), { once: true });
         });
-        const delegationAttempt = await exports.default.fetch(
+        const delegationAttempt = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
             { headers: linkedAuthorization, method: "POST" },
         );
@@ -1543,7 +1579,7 @@ describe.sequential("Cloudflare session deployment", () => {
             error: { code: "owner_access_required" },
         });
 
-        const devicePageResponse = await exports.default.fetch(
+        const devicePageResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/linked-devices`,
             { headers: authorization(pairing.created) },
         );
@@ -1559,30 +1595,30 @@ describe.sequential("Cloudflare session deployment", () => {
         }
         const linkedCredentialId = requiredString(devicePage["devices"][0], "credentialId");
 
-        const revokeResponse = await exports.default.fetch(
+        const revokeResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/linked-devices/${linkedCredentialId}`,
             { headers: authorization(pairing.created), method: "DELETE" },
         );
         expect(revokeResponse.status).toBe(204);
         expect(await linkedHostClosed).toBe(1008);
-        const revokedChannel = await exports.default.fetch(
+        const revokedChannel = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
             { headers: linkedAuthorization },
         );
         expect(revokedChannel.status).toBe(401);
-        const ownerChannel = await exports.default.fetch(
+        const ownerChannel = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}`,
             { headers: authorization(pairing.created) },
         );
         expect(ownerChannel.status).toBe(200);
 
-        const expiringGrantResponse = await exports.default.fetch(
+        const expiringGrantResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants`,
             { headers: authorization(pairing.created), method: "POST" },
         );
         const expiringGrant = decodeCreatedAccessGrant(await expiringGrantResponse.json());
         vi.setSystemTime(Date.parse(expiringGrant.expiresAt));
-        const expiredResponse = await exports.default.fetch(
+        const expiredResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/access-grants/${expiringGrant.grantId}/redeem`,
             {
                 body: JSON.stringify({ grantSecret: expiringGrant.grantSecret }),
@@ -1597,6 +1633,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a stable Channel targets a distinct Runtime, When a daemon connection is replaced, Then its durable epoch advances and the stale connection is fenced", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket } = createSessionRequests(app);
         const pairing = await pairChannel();
         const first = await openChannelSocket(
             `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
@@ -1632,6 +1670,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given Relay has accepted a Turn but daemon receipt is interrupted, When a receipt-capable daemon reconnects, Then the same delivery is retried and completes only after its durable receipt", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, waitForSocketClose, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "reliable-delivery-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -1695,6 +1735,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given session persistence is backlogged, When the daemon sends a heartbeat, Then liveness is acknowledged before the event backlog drains", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "heartbeat-backlog-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -1781,6 +1823,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a long Session has more pending archive rows than its hot window, When its next event arrives, Then the event commits without disconnecting the Runtime", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession, openChannelSocket } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "long-session-count-backlog";
         expect((await createSession(pairing.created, sessionId, { hotEventLimit: 10 })).status).toBe(201);
@@ -1837,6 +1881,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a Session archive reaches its byte safety boundary, When a durable event is deferred and storage recovers, Then the same Runtime connection retries and commits it", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession, openChannelSocket } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "long-session-byte-backpressure";
         expect(
@@ -1939,6 +1985,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a sustained Session has a deep archive queue, When recovery runs, Then it drains a production-sized batch and records the continuation alarm", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "long-session-archive-drain";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -1993,6 +2041,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given one Session sends a long ordered event burst, When another Session sends an event on the same Runtime connection, Then the second Session commits before the first burst drains", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const firstSessionId = "parallel-event-session-a";
         const secondSessionId = "parallel-event-session-b";
@@ -2037,6 +2087,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given one Session sends a terminally invalid event, When another Session uses the same Runtime connection, Then only the invalid event is rejected and the other Session still commits", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const rejectedSessionId = "isolated-event-session-a";
         const healthySessionId = "isolated-event-session-b";
@@ -2080,6 +2132,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given independent sessions on one runtime, When history pages and a reconnect cursor are read, Then records stay ordered while duplicate delivery never reruns a command", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const { channelId } = pairing.created;
         const daemon = await openChannelSocket(
@@ -2137,7 +2191,7 @@ describe.sequential("Cloudflare session deployment", () => {
             });
             const firstLive = await commit(host, daemon, startedEnvelope);
 
-            const messages = await exports.default.fetch(
+            const messages = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2`,
                 { headers: authorization(pairing.created) },
             );
@@ -2154,7 +2208,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 throw new Error("Expected a message page");
             }
             const nextCursor = requiredString(firstPage, "nextCursor");
-            const older = await exports.default.fetch(
+            const older = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=2&cursor=${encodeURIComponent(nextCursor)}`,
                 { headers: authorization(pairing.created) },
             );
@@ -2199,7 +2253,7 @@ describe.sequential("Cloudflare session deployment", () => {
             const nextLive = await commit(host, daemon, deltaEnvelope);
             expect(BigInt(nextLive.sequence)).toBe(BigInt(firstLive.sequence) + 1n);
 
-            const catchup = await exports.default.fetch(
+            const catchup = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-b/events?limit=10&cursor=${encodeURIComponent(firstLive.cursor)}`,
                 { headers: authorization(pairing.created) },
             );
@@ -2224,7 +2278,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:session-a`),
             );
             await evictDurableObject(sessionStub);
-            const recovered = await exports.default.fetch(
+            const recovered = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/session-a/messages?limit=1`,
                 { headers: authorization(pairing.created) },
             );
@@ -2238,6 +2292,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an Agent titled a prepared session, When the browser reconnects and prepares it again, Then the same session resumes without closing the channel", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket } = createSessionRequests(app);
         const pairing = await pairChannel();
         const { channelId } = pairing.created;
         const daemon = await openChannelSocket(
@@ -2282,6 +2338,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a prepared Session has no accepted Turn, When the browser changes its Agent and workspace, Then the new default binding is used without closing the channel", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
         const { channelId } = pairing.created;
         const daemon = await openChannelSocket(
@@ -2306,7 +2364,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(decodeSessionPrepareCommand(await daemon.messages.next())).toEqual(changedPreparation);
         expect(decodeSessionPrepareCommand(await host.messages.next())).toEqual(changedPreparation);
 
-        const response = await exports.default.fetch(
+        const response = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/selectable-session`,
             { headers: authorization(pairing.created) },
         );
@@ -2324,6 +2382,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an existing Session uses a workspace alias, When its native session reopens with the resolved workspace identity, Then the Relay returns the existing Session without dropping the daemon", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
         const { channelId } = pairing.created;
         const daemon = await openChannelSocket(
@@ -2405,7 +2465,7 @@ describe.sequential("Cloudflare session deployment", () => {
             daemon.socket.send(encodeNativeSessionResult(result));
             expect(decodeNativeSessionResult(await host.messages.next())).toEqual(result);
 
-            const existing = await exports.default.fetch(
+            const existing = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session`,
                 { headers: authorization(pairing.created) },
             );
@@ -2414,13 +2474,13 @@ describe.sequential("Cloudflare session deployment", () => {
                 hasNativeHistory: true,
                 title: "Existing native session",
             });
-            const nativeHistory = await exports.default.fetch(
+            const nativeHistory = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/native-history`,
                 { headers: authorization(pairing.created) },
             );
             expect(nativeHistory.status).toBe(200);
             await expect(nativeHistory.json()).resolves.toEqual(result.history);
-            const exported = await exports.default.fetch(
+            const exported = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/export`,
                 { headers: authorization(pairing.created) },
             );
@@ -2432,7 +2492,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     session: { hasNativeHistory: true },
                 },
             });
-            const provisional = await exports.default.fetch(
+            const provisional = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/provisional-native-session`,
                 { headers: authorization(pairing.created) },
             );
@@ -2444,6 +2504,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an Attempt is running, When its daemon disconnects and restarts, Then the indeterminate outcome is retained until explicit reconciliation", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "daemon-restart-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -2470,7 +2532,7 @@ describe.sequential("Cloudflare session deployment", () => {
         daemon.socket.close(1000, "Daemon restart");
         expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(false);
 
-        const interruptedHistory = await exports.default.fetch(
+        const interruptedHistory = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
             { headers: authorization(pairing.created) },
         );
@@ -2491,7 +2553,7 @@ describe.sequential("Cloudflare session deployment", () => {
         );
         expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
         try {
-            const deniedReconciliation = await exports.default.fetch(
+            const deniedReconciliation = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.created.hostToken)}`,
                 {
                     body: JSON.stringify({ outcome: { kind: "cancelled" } }),
@@ -2507,7 +2569,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 },
             });
 
-            const reconciliation = await exports.default.fetch(
+            const reconciliation = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/interrupted-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
                 {
                     body: JSON.stringify({
@@ -2531,7 +2593,7 @@ describe.sequential("Cloudflare session deployment", () => {
             });
             const recovered = prompt(sessionId, "recovered-command", "continue after restart");
             await completeTurn(host, replacement, recovered, "recovered response");
-            const recoveredHistory = await exports.default.fetch(
+            const recoveredHistory = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
                 { headers: authorization(pairing.created) },
             );
@@ -2555,6 +2617,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an owning Runtime has an already-running Attempt, When reconnection confirms the same running outcome, Then reconciliation succeeds without changing the Attempt", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "already-running-reconciliation-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -2580,7 +2644,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 }),
             );
 
-            const reconciliation = await exports.default.fetch(
+            const reconciliation = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/already-running-reconciliation-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
                 {
                     body: JSON.stringify({ outcome: { kind: "running" } }),
@@ -2602,6 +2666,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a large tool record in the free deployment profile, When archive recovery and restart run, Then full details remain readable without external object storage", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "large-session";
         expect(
@@ -2702,7 +2768,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 });
             });
             const detailPath = `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/large-attempt/tool-calls/activity-large`;
-            const availableBeforeRecovery = await exports.default.fetch(detailPath, {
+            const availableBeforeRecovery = await app.request(detailPath, {
                 headers: authorization(pairing.created),
             });
             await expect(availableBeforeRecovery.json()).resolves.toMatchObject({
@@ -2724,7 +2790,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     .toArray()
                     .map((row) => row.byte_length);
             });
-            const archived = await exports.default.fetch(detailPath, {
+            const archived = await app.request(detailPath, {
                 headers: authorization(pairing.created),
             });
             await expect(archived.json()).resolves.toMatchObject({
@@ -2741,6 +2807,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given the free deployment archive quota, When a compressed tool record exceeds it, Then the archive reports a typed quota error and preserves the hot detail", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "quota-session";
         expect(
@@ -2831,7 +2899,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 },
             });
 
-            const detail = await exports.default.fetch(
+            const detail = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/quota-attempt/tool-calls/activity-quota`,
                 { headers: authorization(pairing.created) },
             );
@@ -2847,23 +2915,25 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given sessions in different project scopes and bounded retention, When callers export, import, delete, and expire data, Then isolation and availability outcomes are explicit", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization, createSession } = createSessionRequests(app);
         const source = await pairChannel();
         const destination = await pairChannel();
         const sessionId = "lifecycle-session";
         expect((await createSession(source.created, sessionId)).status).toBe(201);
 
-        const unauthorized = await exports.default.fetch(
+        const unauthorized = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions`,
             { headers: authorization(destination.created) },
         );
         expect(unauthorized.status).toBe(401);
-        const invisible = await exports.default.fetch(
+        const invisible = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}`,
             { headers: authorization(destination.created) },
         );
         expect(invisible.status).toBe(404);
 
-        const exportedResponse = await exports.default.fetch(
+        const exportedResponse = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions/${sessionId}/export`,
             { headers: authorization(source.created) },
         );
@@ -2872,7 +2942,7 @@ describe.sequential("Cloudflare session deployment", () => {
         if (!isRecord(exported)) {
             throw new Error("Expected a Session export envelope");
         }
-        const imported = await exports.default.fetch(
+        const imported = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/session-imports`,
             {
                 body: JSON.stringify({
@@ -2901,7 +2971,7 @@ describe.sequential("Cloudflare session deployment", () => {
             sessionId,
         });
 
-        const deleted = await exports.default.fetch(
+        const deleted = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}`,
             {
                 headers: authorization(destination.created),
@@ -2910,7 +2980,7 @@ describe.sequential("Cloudflare session deployment", () => {
         );
         expect(deleted.status).toBe(200);
         await expect(deleted.json()).resolves.toMatchObject({ kind: "deleted" });
-        const afterDelete = await exports.default.fetch(
+        const afterDelete = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}/messages`,
             { headers: authorization(destination.created) },
         );
@@ -2925,7 +2995,7 @@ describe.sequential("Cloudflare session deployment", () => {
             ).status,
         ).toBe(201);
         vi.setSystemTime(new Date("2026-09-06T00:01:00.000Z"));
-        const expired = await exports.default.fetch(
+        const expired = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions/${expiringId}`,
             { headers: authorization(source.created) },
         );
@@ -2936,6 +3006,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a deleted Session and a live Session share one daemon, When stale and valid events arrive, Then only the stale event is rejected and the Channel stays online", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const deletedSessionId = "deleted-event-session";
         const liveSessionId = "live-event-session";
@@ -2950,7 +3022,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
 
         try {
-            const deleted = await exports.default.fetch(
+            const deleted = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${deletedSessionId}`,
                 {
                     headers: authorization(pairing.created),
@@ -2995,6 +3067,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given one Host has an active Turn, When a second Host submits another Turn to the same Session, Then only that request fails and both Host connections stay open", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "busy-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -3059,6 +3133,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a Turn is running, When a capable Host queues a follow-up, Then the Relay preserves it until the running Turn completes and dispatches it next", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "queued-follow-up-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -3110,6 +3186,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a Turn is running, When a capable Host steers that exact Turn, Then the Relay dispatches the targeted follow-up immediately", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "steered-follow-up-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -3149,6 +3227,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an active Turn, When its daemon sends a large event and completion without waiting between frames, Then the Relay commits both events in source order and keeps the connection open", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "ordered-burst-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -3211,6 +3291,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an active Turn with queued daemon events, When the daemon closes immediately after completion, Then its prior frames commit before disconnect recovery", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "ordered-close-session";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
@@ -3270,7 +3352,7 @@ describe.sequential("Cloudflare session deployment", () => {
             expect(decodeCommittedSessionEvent(activityMessage).eventId).toBe(activity.eventId);
             expect(decodeCommittedSessionEvent(completedMessage).eventId).toBe(completed.eventId);
             expect(decodeRuntimeStatusEvent(offlineMessage).online).toBe(false);
-            const history = await exports.default.fetch(
+            const history = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
                 { headers: authorization(pairing.created) },
             );
@@ -3288,6 +3370,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given an active turn, When disconnect cleanup times out and the relay wakes again, Then its alarm recovers the interrupted turn", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
         const pairing = await pairChannel();
         const sessionId = "disconnect-recovery-session";
@@ -3335,7 +3419,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 await state.storage.deleteAlarm();
                 await new RuntimeRelay(state, env).alarm();
             });
-            const history = await exports.default.fetch(
+            const history = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
                 { headers: authorization(pairing.created) },
             );
@@ -3349,6 +3433,8 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given disconnect cleanup has recovered one of two turns, When its deadline expires and the daemon reconnects, Then only unfinished recovery resumes and later alarms preserve running work", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
         const pairing = await pairChannel();
         const sessionIds = ["checkpoint-session-a", "checkpoint-session-b"];
@@ -3401,7 +3487,7 @@ describe.sequential("Cloudflare session deployment", () => {
             // The completed session is reconciled through the daemon's supported HTTP boundary.
             // Replaying that session's disconnect after restart would regress it to indeterminate.
             const reconcile = async (sessionId: string) =>
-                exports.default.fetch(
+                app.request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${sessionId}/attempts/${sessionId}-attempt/reconciliation?token=${encodeURIComponent(pairing.claimed.daemonToken)}`,
                     {
                         method: "POST",
@@ -3418,7 +3504,7 @@ describe.sequential("Cloudflare session deployment", () => {
             );
             try {
                 for (const sessionId of sessionIds) {
-                    const history = await exports.default.fetch(
+                    const history = await app.request(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
                         { headers: authorization(pairing.created) },
                     );
@@ -3434,7 +3520,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     await new RuntimeRelay(state, env).alarm();
                 });
                 for (const sessionId of sessionIds) {
-                    const history = await exports.default.fetch(
+                    const history = await app.request(
                         `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
                         { headers: authorization(pairing.created) },
                     );
@@ -3454,6 +3540,8 @@ describe.sequential("Cloudflare session deployment", () => {
     it.each(["replacement", "reconnect"])(
         "Given a %s is waiting for disconnect cleanup, When its runtime is revoked, Then pending and future connections remain forbidden",
         async (mode) => {
+            const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+            const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
             vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
             const pairing = await pairChannel();
             for (const suffix of ["a", "b"]) {
@@ -3537,6 +3625,8 @@ describe.sequential("Cloudflare session deployment", () => {
     );
 
     it("Given an archived event window, When a client resumes from an old durable cursor and retransmits an archived event, Then catch-up and deduplication remain complete", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "cursor-session";
         expect(
@@ -3593,7 +3683,7 @@ describe.sequential("Cloudflare session deployment", () => {
                 await state.storage.deleteAlarm();
                 await instance.alarm();
             });
-            const resumed = await exports.default.fetch(
+            const resumed = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/events?cursor=${encodeURIComponent(first.cursor)}`,
                 { headers: authorization(pairing.created) },
             );
@@ -3632,8 +3722,10 @@ describe.sequential("Cloudflare session deployment", () => {
     });
 
     it("Given a configured project session quota, When public callers exhaust and release it, Then admission returns an explicit retryable outcome", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
-        const invalidImport = await exports.default.fetch(
+        const invalidImport = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/session-imports`,
             {
                 body: JSON.stringify({
@@ -3668,7 +3760,7 @@ describe.sequential("Cloudflare session deployment", () => {
         });
         expect((await createSession(pairing.created, "quota-first")).status).toBe(201);
 
-        const deleted = await exports.default.fetch(
+        const deleted = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/quota-first`,
             { headers: authorization(pairing.created), method: "DELETE" },
         );

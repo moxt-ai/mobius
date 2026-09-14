@@ -175,6 +175,9 @@ importers:
       '@moxt-ai/mobius-relay-core':
         specifier: workspace:*
         version: link:../relay-core
+      hono:
+        specifier: ^4.13.5
+        version: 4.13.5
     devDependencies:
       '@cloudflare/vitest-plugin':
         specifier: ^1.1.4
@@ -316,6 +319,48 @@ importers:
       zustand:
         specifier: ^5.0.15
         version: 5.0.15(@types/react@19.2.18)(react@19.2.8)(use-sync-external-store@1.7.0(react@19.2.8))
+
+  tests:
+    dependencies:
+      '@cloudflare/vitest-plugin':
+        specifier: ^1.1.4
+        version: 1.1.4(@cloudflare/workers-types@5.20260905.1)(@vitest/runner@4.1.11)(@vitest/snapshot@4.1.11)(vitest@4.1.11)
+      '@cloudflare/workers-types':
+        specifier: ^5.20260905.1
+        version: 5.20260905.1
+      '@moxt-ai/mobius-fake-acp-agent':
+        specifier: workspace:*
+        version: link:../e2e/fixtures/fake-acp-agent
+      '@moxt-ai/mobius-relay-cloudflare-platform':
+        specifier: workspace:*
+        version: link:../packages/relay-cloudflare-platform
+      '@moxt-ai/mobius-relay-cloudflare-standalone':
+        specifier: workspace:*
+        version: link:../packages/relay-cloudflare-standalone
+      '@moxt-ai/mobius-relay-core':
+        specifier: workspace:*
+        version: link:../packages/relay-core
+      '@moxt-ai/mobius-sdk':
+        specifier: workspace:*
+        version: link:../packages/mobius-sdk
+      '@types/ws':
+        specifier: ^8.18.1
+        version: 8.18.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
+      hono:
+        specifier: ^4.13.5
+        version: 4.13.5
+      miniflare:
+        specifier: 5.20260903.0-alpha
+        version: 5.20260903.0-alpha
+      valibot:
+        specifier: 1.4.2
+        version: 1.4.2(typescript@7.0.2)
+      ws:
+        specifier: ^8.18.3
+        version: 8.21.0
 
 packages:
 

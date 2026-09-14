@@ -1,6 +1,7 @@
 packages:
   - packages/*
   - e2e/fixtures/*
+  - tests
 
 engineStrict: true
 minimumReleaseAge: 1440

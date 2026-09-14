@@ -1,11 +1,16 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
+    CloudflareBotConnectionRuntime,
+    CloudflareChannelRuntime,
+    CloudflareSessionTransport,
     createBotApplication,
     createPlatformMobiusApplication,
     createWorkerContext,
     type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
+    type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
+import { Hono } from "hono";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { createConversationApplication } from "./http/conversation-routes.ts";
@@ -93,83 +98,94 @@ function isVersionedSharedProjectPath(pathname: string): boolean {
     );
 }
 
-export function createPlatformWorker(authentication: PlatformAuthenticationConfiguration): PlatformWorker {
+export function createPlatformApplication(
+    authentication: PlatformAuthenticationConfiguration,
+    gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
+): Hono<{ Bindings: PlatformRelayBindings }> {
     const conversationStreams = new ConversationStreamRegistry();
-    return {
-        fetch: async (request, environment) => {
-            const databaseBindings = platformDatabaseBindings(environment);
-            const projectDatabases = databaseBindings.map(({ database }) => database);
-            const controlStorage = new PlatformControlPlaneStorage(
-                environment.PLATFORM_DIRECTORY_DATABASE,
-                projectDatabases,
-            );
-            const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
-            const control = new PlatformControlPlaneService(
-                controlStorage,
-                authentication,
-                storageRegistry,
-                appAuthentication,
-            );
-            const pathname = new URL(request.url).pathname;
-            if (isControlPath(pathname) && !isConversationPath(pathname)) {
-                return await controlApplication.fetch(request, {
-                    control,
-                    appAuthentication,
-                    allowedOrigins: authentication.allowedOrigins,
-                });
-            }
-            const databases = new PlatformDatabaseResolver(environment);
-            const projects = new PlatformProjectStorageDirectory(storageRegistry);
-            const sessionAccess = new SessionAccessService(
-                new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+    return new Hono<{ Bindings: PlatformRelayBindings }>().all("*", async (context) => {
+        const request = context.req.raw;
+        const environment = context.env;
+        const databaseBindings = platformDatabaseBindings(environment);
+        const projectDatabases = databaseBindings.map(({ database }) => database);
+        const controlStorage = new PlatformControlPlaneStorage(
+            environment.PLATFORM_DIRECTORY_DATABASE,
+            projectDatabases,
+        );
+        const storageRegistry = new PlatformStorageRegistry(environment);
+        const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
+        const control = new PlatformControlPlaneService(
+            controlStorage,
+            authentication,
+            storageRegistry,
+            appAuthentication,
+        );
+        const pathname = new URL(request.url).pathname;
+        if (isControlPath(pathname) && !isConversationPath(pathname)) {
+            return await controlApplication.fetch(request, {
                 control,
-            );
-            const cx = createWorkerContext({
-                namespaces: {
-                    runtime: environment.RUNTIME_RELAY,
-                    sessions: environment.SESSION_RELAY,
-                    connections: environment.BOT_CONNECTIONS,
-                },
-                namespacePrefix: "platform",
-                authorization: sessionAccess.authorizer(request),
-                bootstrap: new DisabledPublicProjectBootstrap(),
-                databases,
-                identityDatabases: projectDatabases,
-                projects,
-                apiPrefix: MOBIUS_API_PREFIX,
-                quotaPolicy: control,
+                appAuthentication,
+                allowedOrigins: authentication.allowedOrigins,
             });
-            if (isConversationPath(pathname)) {
-                if (cx.services.bots === null) {
-                    throw new Error("Platform Bot services are unavailable");
-                }
-                return await conversationApplication.fetch(request, {
-                    sessionAccess,
-                    access: new ConversationAccessService(
-                        new ConversationAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
-                        control,
-                    ),
-                    allowedOrigins: authentication.allowedOrigins,
-                    bots: cx.services.bots,
-                    nowEpochMilliseconds: () => Date.now(),
-                    sessions: cx.services.sessions,
-                    streams: conversationStreams,
-                });
+        }
+        const databases = new PlatformDatabaseResolver(environment);
+        const projects = new PlatformProjectStorageDirectory(storageRegistry);
+        const sessionAccess = new SessionAccessService(
+            new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+            control,
+        );
+        const cx = createWorkerContext({
+            gateways: gateways(environment),
+            authorization: sessionAccess.authorizer(request),
+            bootstrap: new DisabledPublicProjectBootstrap(),
+            databases,
+            identityDatabases: projectDatabases,
+            projects,
+            apiPrefix: MOBIUS_API_PREFIX,
+            quotaPolicy: control,
+        });
+        if (isConversationPath(pathname)) {
+            if (cx.services.bots === null) {
+                throw new Error("Platform Bot services are unavailable");
             }
-            if (isVersionedSharedProjectPath(pathname)) {
-                return await scopedProjectApplication.fetch(request, {
-                    relay: cx,
-                    allowedOrigins: authentication.allowedOrigins,
-                });
-            }
-            if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
-                return await botApplication.fetch(request, {
-                    services: { bots: cx.services.bots },
-                });
-            }
-            return await projectApplication.fetch(request, cx);
-        },
+            return await conversationApplication.fetch(request, {
+                sessionAccess,
+                access: new ConversationAccessService(
+                    new ConversationAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
+                    control,
+                ),
+                allowedOrigins: authentication.allowedOrigins,
+                bots: cx.services.bots,
+                nowEpochMilliseconds: () => Date.now(),
+                sessions: cx.services.sessions,
+                streams: conversationStreams,
+            });
+        }
+        if (isVersionedSharedProjectPath(pathname)) {
+            return await scopedProjectApplication.fetch(request, {
+                relay: cx,
+                allowedOrigins: authentication.allowedOrigins,
+            });
+        }
+        if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
+            return await botApplication.fetch(request, {
+                services: { bots: cx.services.bots },
+            });
+        }
+        return await projectApplication.fetch(request, cx);
+    });
+}
+
+export function createPlatformWorker(authentication: PlatformAuthenticationConfiguration): PlatformWorker {
+    const app = createPlatformApplication(authentication, createPlatformGateways);
+    return { fetch: async (request, environment) => await app.fetch(request, environment) };
+}
+
+export function createPlatformGateways(environment: PlatformRelayBindings): WorkerRuntimeGateways {
+    return {
+        channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
+        sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, "platform"),
+        connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }
 
