@@ -40,6 +40,22 @@ and displayed only when created; subsequent reads expose metadata only.
 `platform-app` owns its Vite and Clerk composition together with its UI,
 view-models, services, and Platform SDK integration.
 
+## Workspace scrolling acceptance
+
+After this, a user can scroll a long application workspace and see the header
+and tenant navigation remain visible.
+
+- Given a selected tenant whose apps and keys exceed the viewport height, When
+  the user scrolls the right-hand workspace, Then the workspace scrolls to its
+  last key while the header and tenant navigation stay in place.
+- Given more tenants than fit in the sidebar, When the user scrolls the tenant
+  list, Then every tenant remains reachable without scrolling the workspace.
+- Given a narrow viewport, When the user scrolls the workspace, Then the header
+  and stacked tenant navigation remain visible and the page has no horizontal
+  overflow.
+
+Verify these layout scenarios with `agent-browser` at desktop and mobile widths.
+
 ## Creation flow acceptance
 
 After this, a user can click Create tenant or Create app, enter a name in a

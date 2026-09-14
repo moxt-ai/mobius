@@ -234,8 +234,8 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
     };
 
     return (
-        <div className="min-h-screen bg-[#f4f6f4] text-[#17221d]">
-            <header className="sticky top-0 z-40 flex h-[66px] items-center justify-between border-b border-[#dde3df] bg-white px-4 md:px-[30px]">
+        <div className="flex h-dvh flex-col overflow-hidden bg-[#f4f6f4] text-[#17221d]">
+            <header className="z-40 flex h-[66px] shrink-0 items-center justify-between border-b border-[#dde3df] bg-white px-4 md:px-[30px]">
                 <a
                     href="#workspace"
                     className="flex items-center gap-2 text-[17px] font-bold text-[#17221d] no-underline [&>small]:border-l [&>small]:border-[#dde3df] [&>small]:pl-2 [&>small]:text-[13px] [&>small]:font-medium [&>small]:text-[#819087] [&>span]:grid [&>span]:size-[31px] [&>span]:place-items-center [&>span]:rounded-lg [&>span]:bg-[#168247] [&>span]:font-extrabold [&>span]:text-white"
@@ -244,8 +244,11 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                 </a>
                 {userControl}
             </header>
-            <div className="min-h-[calc(100vh-66px)] md:grid md:grid-cols-[254px_minmax(0,1fr)]" id="workspace">
-                <aside className="border-b border-[#dde3df] bg-[#fafbfa] p-4 md:border-r md:border-b-0 md:px-4 md:py-6">
+            <div
+                className="flex min-h-0 flex-1 flex-col overflow-hidden md:grid md:grid-cols-[254px_minmax(0,1fr)] md:grid-rows-[minmax(0,1fr)]"
+                id="workspace"
+            >
+                <aside className="flex min-h-0 shrink-0 flex-col border-b border-[#dde3df] bg-[#fafbfa] p-4 md:border-r md:border-b-0 md:px-4 md:py-6">
                     <div className="flex items-center justify-between px-2 pb-3 text-[11px] font-bold uppercase tracking-[.1em] text-[#7a8780] [&>button]:grid [&>button]:size-[30px] [&>button]:place-items-center [&>button]:rounded-lg [&>button]:border-0 [&>button]:bg-transparent hover:[&>button]:bg-[#eaf3ed] hover:[&>button]:text-[#168247]">
                         <span>Tenants</span>
                         <CreateNameDialog
@@ -263,7 +266,10 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                             </button>
                         </CreateNameDialog>
                     </div>
-                    <nav aria-label="Tenants">
+                    <nav
+                        className="flex min-h-0 gap-1 overflow-x-auto overscroll-contain md:block md:overflow-x-hidden md:overflow-y-auto"
+                        aria-label="Tenants"
+                    >
                         {tenants.map((tenant) => (
                             <button
                                 type="button"
@@ -281,330 +287,341 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                         ))}
                     </nav>
                 </aside>
-                <main className="mx-auto w-full max-w-[1240px] px-4 py-8 md:px-12 md:py-12">
-                    <ErrorBanner message={error} onClose={() => setError("")} />
-                    {selectedTenant === undefined ? (
-                        <EmptyState>
-                            <Building2 size={34} />
-                            <h1>Create your first tenant</h1>
-                            <p>A tenant groups the applications your team builds on Mobius.</p>
-                        </EmptyState>
-                    ) : (
-                        <>
-                            <section className="flex flex-col items-start justify-between gap-6 pb-8 md:flex-row md:items-end [&_h1]:mb-2 [&_h1]:text-4xl [&_h1]:font-bold [&_h1]:tracking-[-.035em] [&_code]:text-xs [&_code]:text-[#78857e]">
-                                <div>
-                                    <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#168247]">
-                                        Tenant workspace
-                                    </p>
-                                    <h1>{selectedTenant.displayName}</h1>
-                                    <code>{selectedTenant.tenantId}</code>
-                                </div>
-                                <div className="flex flex-wrap gap-2">
-                                    <button
-                                        type="button"
-                                        className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
-                                        onClick={() => setRename({ kind: "tenant", name: selectedTenant.displayName })}
-                                    >
-                                        <Pencil size={15} /> Rename
-                                    </button>
-                                    <ConfirmAction
-                                        title={`Delete ${selectedTenant.displayName}?`}
-                                        description="All apps, projects, and credentials in this tenant will become unavailable. This cannot be undone."
-                                        onConfirm={() =>
-                                            void perform("delete-tenant", async () => {
-                                                await client().deleteTenant(
-                                                    selectedTenant.tenantId,
-                                                    AbortSignal.timeout(20_000),
-                                                );
-                                                await loadTenants();
-                                            })
-                                        }
-                                    >
-                                        <button
-                                            type="button"
-                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#e2c9c9] bg-[#fffafa] px-3.5 font-bold text-[#b83e3e] hover:bg-[#fff1f1]"
-                                        >
-                                            <Trash2 size={15} /> Delete
-                                        </button>
-                                    </ConfirmAction>
-                                </div>
-                            </section>
-                            {rename.kind === "tenant" ? (
-                                <form
-                                    className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#dde3df] bg-white p-3.5 [&_input]:w-[220px] [&_input]:rounded-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-3 [&_input]:py-2"
-                                    onSubmit={(event) => {
-                                        event.preventDefault();
-                                        void perform("rename-tenant", async () => {
-                                            await client().updateTenant(
-                                                selectedTenant.tenantId,
-                                                rename.name,
-                                                AbortSignal.timeout(20_000),
-                                            );
-                                            setRename({ kind: "idle" });
-                                            await loadTenants();
-                                        });
-                                    }}
-                                >
-                                    <input
-                                        value={rename.name}
-                                        onChange={(event) => setRename({ kind: "tenant", name: event.target.value })}
-                                        required
-                                        maxLength={120}
-                                    />
-                                    <button
-                                        className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                        type="submit"
-                                    >
-                                        Save name
-                                    </button>
-                                    <button
-                                        className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
-                                        type="button"
-                                        onClick={() => setRename({ kind: "idle" })}
-                                    >
-                                        Cancel
-                                    </button>
-                                </form>
-                            ) : null}
-                            <section className="mt-4 rounded-xl border border-[#dde3df] bg-white p-5 shadow-sm md:p-7">
-                                <div className="flex flex-col items-start justify-between gap-6 border-b border-[#e8ece9] pb-6 md:flex-row md:items-center [&_h2]:m-0 [&_h2]:text-xl [&_h2]:font-bold [&_p:last-child]:mt-1.5 [&_p:last-child]:text-sm [&_p:last-child]:text-[#69766f]">
+                <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain">
+                    <div className="mx-auto w-full max-w-[1240px] px-4 py-8 md:px-12 md:py-12">
+                        <ErrorBanner message={error} onClose={() => setError("")} />
+                        {selectedTenant === undefined ? (
+                            <EmptyState>
+                                <Building2 size={34} />
+                                <h1>Create your first tenant</h1>
+                                <p>A tenant groups the applications your team builds on Mobius.</p>
+                            </EmptyState>
+                        ) : (
+                            <>
+                                <section className="flex flex-col items-start justify-between gap-6 pb-8 md:flex-row md:items-end [&_h1]:mb-2 [&_h1]:text-4xl [&_h1]:font-bold [&_h1]:tracking-[-.035em] [&_code]:text-xs [&_code]:text-[#78857e]">
                                     <div>
                                         <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#168247]">
-                                            Applications
+                                            Tenant workspace
                                         </p>
-                                        <h2>Your apps</h2>
-                                        <p>Each app has a stable ID and its own server credentials.</p>
+                                        <h1>{selectedTenant.displayName}</h1>
+                                        <code>{selectedTenant.tenantId}</code>
                                     </div>
-                                    <CreateNameDialog
-                                        title="Create app"
-                                        description={`Create an application in ${selectedTenant.displayName}. You’ll receive its App ID and first secret.`}
-                                        label="Application name"
-                                        placeholder="My application"
-                                        busy={busy.length > 0}
-                                        error={error}
-                                        onOpen={() => setError("")}
-                                        onCreate={createApp}
-                                    >
+                                    <div className="flex flex-wrap gap-2">
                                         <button
-                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
                                             type="button"
-                                            disabled={busy.length > 0}
+                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
+                                            onClick={() =>
+                                                setRename({ kind: "tenant", name: selectedTenant.displayName })
+                                            }
                                         >
-                                            <Plus size={16} />
-                                            Create app
+                                            <Pencil size={15} /> Rename
                                         </button>
-                                    </CreateNameDialog>
-                                </div>
-                                {apps.length === 0 ? (
-                                    <EmptyState>
-                                        <AppWindow size={30} />
-                                        <h3>No applications yet</h3>
-                                        <p>Create an app to receive its App ID and first secret.</p>
-                                    </EmptyState>
-                                ) : (
-                                    <div className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 xl:grid-cols-3">
-                                        {apps.map((app) => (
+                                        <ConfirmAction
+                                            title={`Delete ${selectedTenant.displayName}?`}
+                                            description="All apps, projects, and credentials in this tenant will become unavailable. This cannot be undone."
+                                            onConfirm={() =>
+                                                void perform("delete-tenant", async () => {
+                                                    await client().deleteTenant(
+                                                        selectedTenant.tenantId,
+                                                        AbortSignal.timeout(20_000),
+                                                    );
+                                                    await loadTenants();
+                                                })
+                                            }
+                                        >
                                             <button
                                                 type="button"
-                                                key={app.appId}
-                                                className={
-                                                    app.appId === selectedAppId
-                                                        ? "grid min-w-0 gap-2 rounded-xl border-2 border-[#55a674] bg-[#fbfefc] p-4 text-left text-inherit [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:text-[11px] [&>code]:text-[#69776f] [&>span:last-child]:text-[11px] [&>span:last-child]:text-[#8a958e]"
-                                                        : "grid min-w-0 gap-2 rounded-xl border border-[#dde3df] bg-white p-4 text-left text-inherit hover:border-[#a8c8b2] hover:shadow-md [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:text-[11px] [&>code]:text-[#69776f] [&>span:last-child]:text-[11px] [&>span:last-child]:text-[#8a958e]"
-                                                }
-                                                onClick={() => setSelectedAppId(app.appId)}
+                                                className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#e2c9c9] bg-[#fffafa] px-3.5 font-bold text-[#b83e3e] hover:bg-[#fff1f1]"
                                             >
-                                                <span className="mb-0.5 grid size-[38px] place-items-center rounded-lg bg-[#e7f3eb] text-[#168247]">
-                                                    <AppWindow size={20} />
-                                                </span>
-                                                <strong>{app.displayName}</strong>
-                                                <code>{app.appId}</code>
-                                                <span>Created {new Date(app.createdAt).toLocaleDateString()}</span>
+                                                <Trash2 size={15} /> Delete
                                             </button>
-                                        ))}
+                                        </ConfirmAction>
                                     </div>
-                                )}
-                            </section>
-                            {selectedApp === undefined ? null : (
-                                <section className="mt-5 rounded-xl border border-[#dde3df] bg-white p-5 shadow-sm md:p-7">
+                                </section>
+                                {rename.kind === "tenant" ? (
+                                    <form
+                                        className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#dde3df] bg-white p-3.5 [&_input]:w-[220px] [&_input]:rounded-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-3 [&_input]:py-2"
+                                        onSubmit={(event) => {
+                                            event.preventDefault();
+                                            void perform("rename-tenant", async () => {
+                                                await client().updateTenant(
+                                                    selectedTenant.tenantId,
+                                                    rename.name,
+                                                    AbortSignal.timeout(20_000),
+                                                );
+                                                setRename({ kind: "idle" });
+                                                await loadTenants();
+                                            });
+                                        }}
+                                    >
+                                        <input
+                                            value={rename.name}
+                                            onChange={(event) =>
+                                                setRename({ kind: "tenant", name: event.target.value })
+                                            }
+                                            required
+                                            maxLength={120}
+                                        />
+                                        <button
+                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
+                                            type="submit"
+                                        >
+                                            Save name
+                                        </button>
+                                        <button
+                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
+                                            type="button"
+                                            onClick={() => setRename({ kind: "idle" })}
+                                        >
+                                            Cancel
+                                        </button>
+                                    </form>
+                                ) : null}
+                                <section className="mt-4 rounded-xl border border-[#dde3df] bg-white p-5 shadow-sm md:p-7">
                                     <div className="flex flex-col items-start justify-between gap-6 border-b border-[#e8ece9] pb-6 md:flex-row md:items-center [&_h2]:m-0 [&_h2]:text-xl [&_h2]:font-bold [&_p:last-child]:mt-1.5 [&_p:last-child]:text-sm [&_p:last-child]:text-[#69766f]">
                                         <div>
                                             <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#168247]">
-                                                Selected application
+                                                Applications
                                             </p>
-                                            <h2>{selectedApp.displayName}</h2>
-                                            <button
-                                                type="button"
-                                                className="mt-2 flex items-center gap-2 border-0 bg-transparent p-0 text-xs text-[#718077] hover:text-[#168247]"
-                                                onClick={() => copy(selectedApp.appId, "App ID")}
-                                            >
-                                                <code>{selectedApp.appId}</code>
-                                                <Clipboard size={14} /> Copy App ID
-                                            </button>
+                                            <h2>Your apps</h2>
+                                            <p>Each app has a stable ID and its own server credentials.</p>
                                         </div>
-                                        <div className="flex flex-wrap gap-2">
-                                            <button
-                                                type="button"
-                                                className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
-                                                onClick={() =>
-                                                    setRename({ kind: "app", name: selectedApp.displayName })
-                                                }
-                                            >
-                                                <Pencil size={15} /> Rename app
-                                            </button>
-                                            <ConfirmAction
-                                                title={`Delete ${selectedApp.displayName}?`}
-                                                description="Its projects and credentials will become unavailable. This cannot be undone."
-                                                onConfirm={() =>
-                                                    void perform("delete-app", async () => {
-                                                        await client().deleteApp(
-                                                            selectedApp.appId,
-                                                            AbortSignal.timeout(20_000),
-                                                        );
-                                                        setApps(
-                                                            await client().listApps(
-                                                                selectedTenant.tenantId,
-                                                                AbortSignal.timeout(20_000),
-                                                            ),
-                                                        );
-                                                        setSelectedAppId("");
-                                                    })
-                                                }
-                                            >
-                                                <button
-                                                    type="button"
-                                                    className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#e2c9c9] bg-[#fffafa] px-3.5 font-bold text-[#b83e3e] hover:bg-[#fff1f1]"
-                                                >
-                                                    <Trash2 size={15} /> Delete app
-                                                </button>
-                                            </ConfirmAction>
-                                        </div>
-                                    </div>
-                                    {rename.kind === "app" ? (
-                                        <form
-                                            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#dde3df] bg-white p-3.5 [&_input]:w-[220px] [&_input]:rounded-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-3 [&_input]:py-2"
-                                            onSubmit={(event) => {
-                                                event.preventDefault();
-                                                void perform("rename-app", async () => {
-                                                    const updated = await client().updateApp(
-                                                        selectedApp.appId,
-                                                        rename.name,
-                                                        AbortSignal.timeout(20_000),
-                                                    );
-                                                    setApps(
-                                                        apps.map((app) =>
-                                                            app.appId === updated.appId ? updated : app,
-                                                        ),
-                                                    );
-                                                    setRename({ kind: "idle" });
-                                                });
-                                            }}
+                                        <CreateNameDialog
+                                            title="Create app"
+                                            description={`Create an application in ${selectedTenant.displayName}. You’ll receive its App ID and first secret.`}
+                                            label="Application name"
+                                            placeholder="My application"
+                                            busy={busy.length > 0}
+                                            error={error}
+                                            onOpen={() => setError("")}
+                                            onCreate={createApp}
                                         >
-                                            <input
-                                                value={rename.name}
-                                                onChange={(event) =>
-                                                    setRename({ kind: "app", name: event.target.value })
-                                                }
-                                                required
-                                                maxLength={120}
-                                            />
                                             <button
                                                 className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                                type="submit"
-                                            >
-                                                Save name
-                                            </button>
-                                            <button
-                                                className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
                                                 type="button"
-                                                onClick={() => setRename({ kind: "idle" })}
+                                                disabled={busy.length > 0}
                                             >
-                                                Cancel
+                                                <Plus size={16} />
+                                                Create app
                                             </button>
-                                        </form>
-                                    ) : null}
-                                    <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
-                                        <div>
-                                            <h3 id="app-keys-title">App keys</h3>
-                                            <p>
-                                                Keys do not expire. Use these only on trusted servers. Secrets cannot be
-                                                viewed again.
-                                            </p>
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                            onClick={issueCredential}
-                                            disabled={busy.length > 0}
-                                        >
-                                            <Plus size={16} /> Create key
-                                        </button>
+                                        </CreateNameDialog>
                                     </div>
-                                    <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
-                                        <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
-                                            <span>Key</span>
-                                            <span>Created</span>
-                                            <span>Status</span>
-                                            <span />
-                                        </div>
-                                        {credentials.map((credential) => (
-                                            <div
-                                                className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
-                                                key={credential.credentialId}
-                                            >
-                                                <div className="flex min-w-0 items-center gap-2">
-                                                    <code className="text-[11px] text-[#34423a]">
-                                                        ••••••••{credential.publicCredentialId.slice(-4)}
-                                                    </code>
-                                                    <button
-                                                        type="button"
-                                                        className="grid size-[30px] shrink-0 place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247]"
-                                                        aria-label={`Copy key ID ending in ${credential.publicCredentialId.slice(-4)}`}
-                                                        title="Copy key ID"
-                                                        onClick={() => copy(credential.publicCredentialId, "Key ID")}
-                                                    >
-                                                        <Clipboard size={15} />
-                                                    </button>
-                                                </div>
-                                                <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
-                                                <span
-                                                    className={
-                                                        credential.revokedAt.length > 0
-                                                            ? "w-fit rounded-full bg-[#f5e9e9] px-2 py-1 text-[10px] font-bold uppercase text-[#8b5555]"
-                                                            : "w-fit rounded-full bg-[#e5f3e9] px-2 py-1 text-[10px] font-bold uppercase text-[#168247]"
-                                                    }
-                                                >
-                                                    {credential.revokedAt.length > 0 ? "Revoked" : "Active"}
-                                                </span>
+                                    {apps.length === 0 ? (
+                                        <EmptyState>
+                                            <AppWindow size={30} />
+                                            <h3>No applications yet</h3>
+                                            <p>Create an app to receive its App ID and first secret.</p>
+                                        </EmptyState>
+                                    ) : (
+                                        <div className="grid grid-cols-1 gap-3 pt-5 sm:grid-cols-2 xl:grid-cols-3">
+                                            {apps.map((app) => (
                                                 <button
                                                     type="button"
-                                                    className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
-                                                    aria-label={`Revoke key ending in ${credential.publicCredentialId.slice(-4)}`}
-                                                    disabled={credential.revokedAt.length > 0 || busy.length > 0}
+                                                    key={app.appId}
+                                                    className={
+                                                        app.appId === selectedAppId
+                                                            ? "grid min-w-0 gap-2 rounded-xl border-2 border-[#55a674] bg-[#fbfefc] p-4 text-left text-inherit [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:text-[11px] [&>code]:text-[#69776f] [&>span:last-child]:text-[11px] [&>span:last-child]:text-[#8a958e]"
+                                                            : "grid min-w-0 gap-2 rounded-xl border border-[#dde3df] bg-white p-4 text-left text-inherit hover:border-[#a8c8b2] hover:shadow-md [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:text-[11px] [&>code]:text-[#69776f] [&>span:last-child]:text-[11px] [&>span:last-child]:text-[#8a958e]"
+                                                    }
+                                                    onClick={() => setSelectedAppId(app.appId)}
+                                                >
+                                                    <span className="mb-0.5 grid size-[38px] place-items-center rounded-lg bg-[#e7f3eb] text-[#168247]">
+                                                        <AppWindow size={20} />
+                                                    </span>
+                                                    <strong>{app.displayName}</strong>
+                                                    <code>{app.appId}</code>
+                                                    <span>Created {new Date(app.createdAt).toLocaleDateString()}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </section>
+                                {selectedApp === undefined ? null : (
+                                    <section className="mt-5 rounded-xl border border-[#dde3df] bg-white p-5 shadow-sm md:p-7">
+                                        <div className="flex flex-col items-start justify-between gap-6 border-b border-[#e8ece9] pb-6 md:flex-row md:items-center [&_h2]:m-0 [&_h2]:text-xl [&_h2]:font-bold [&_p:last-child]:mt-1.5 [&_p:last-child]:text-sm [&_p:last-child]:text-[#69766f]">
+                                            <div>
+                                                <p className="mb-2 text-[10px] font-extrabold uppercase tracking-[.13em] text-[#168247]">
+                                                    Selected application
+                                                </p>
+                                                <h2>{selectedApp.displayName}</h2>
+                                                <button
+                                                    type="button"
+                                                    className="mt-2 flex items-center gap-2 border-0 bg-transparent p-0 text-xs text-[#718077] hover:text-[#168247]"
+                                                    onClick={() => copy(selectedApp.appId, "App ID")}
+                                                >
+                                                    <code>{selectedApp.appId}</code>
+                                                    <Clipboard size={14} /> Copy App ID
+                                                </button>
+                                            </div>
+                                            <div className="flex flex-wrap gap-2">
+                                                <button
+                                                    type="button"
+                                                    className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
                                                     onClick={() =>
-                                                        void perform(`revoke-${credential.credentialId}`, async () => {
-                                                            await client().revokeAppCredential(
-                                                                credential.credentialId,
+                                                        setRename({ kind: "app", name: selectedApp.displayName })
+                                                    }
+                                                >
+                                                    <Pencil size={15} /> Rename app
+                                                </button>
+                                                <ConfirmAction
+                                                    title={`Delete ${selectedApp.displayName}?`}
+                                                    description="Its projects and credentials will become unavailable. This cannot be undone."
+                                                    onConfirm={() =>
+                                                        void perform("delete-app", async () => {
+                                                            await client().deleteApp(
+                                                                selectedApp.appId,
                                                                 AbortSignal.timeout(20_000),
                                                             );
-                                                            setCredentials(
-                                                                await client().listAppCredentials(
-                                                                    selectedApp.appId,
+                                                            setApps(
+                                                                await client().listApps(
+                                                                    selectedTenant.tenantId,
                                                                     AbortSignal.timeout(20_000),
                                                                 ),
                                                             );
+                                                            setSelectedAppId("");
                                                         })
                                                     }
                                                 >
-                                                    <Trash2 size={15} />
-                                                </button>
+                                                    <button
+                                                        type="button"
+                                                        className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#e2c9c9] bg-[#fffafa] px-3.5 font-bold text-[#b83e3e] hover:bg-[#fff1f1]"
+                                                    >
+                                                        <Trash2 size={15} /> Delete app
+                                                    </button>
+                                                </ConfirmAction>
                                             </div>
-                                        ))}
-                                    </div>
-                                </section>
-                            )}
-                        </>
-                    )}
+                                        </div>
+                                        {rename.kind === "app" ? (
+                                            <form
+                                                className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#dde3df] bg-white p-3.5 [&_input]:w-[220px] [&_input]:rounded-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-3 [&_input]:py-2"
+                                                onSubmit={(event) => {
+                                                    event.preventDefault();
+                                                    void perform("rename-app", async () => {
+                                                        const updated = await client().updateApp(
+                                                            selectedApp.appId,
+                                                            rename.name,
+                                                            AbortSignal.timeout(20_000),
+                                                        );
+                                                        setApps(
+                                                            apps.map((app) =>
+                                                                app.appId === updated.appId ? updated : app,
+                                                            ),
+                                                        );
+                                                        setRename({ kind: "idle" });
+                                                    });
+                                                }}
+                                            >
+                                                <input
+                                                    value={rename.name}
+                                                    onChange={(event) =>
+                                                        setRename({ kind: "app", name: event.target.value })
+                                                    }
+                                                    required
+                                                    maxLength={120}
+                                                />
+                                                <button
+                                                    className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
+                                                    type="submit"
+                                                >
+                                                    Save name
+                                                </button>
+                                                <button
+                                                    className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#ccd5cf] bg-white px-3.5 font-bold text-[#45534b] hover:bg-[#fafbfa]"
+                                                    type="button"
+                                                    onClick={() => setRename({ kind: "idle" })}
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </form>
+                                        ) : null}
+                                        <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
+                                            <div>
+                                                <h3 id="app-keys-title">App keys</h3>
+                                                <p>
+                                                    Keys do not expire. Use these only on trusted servers. Secrets
+                                                    cannot be viewed again.
+                                                </p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
+                                                onClick={issueCredential}
+                                                disabled={busy.length > 0}
+                                            >
+                                                <Plus size={16} /> Create key
+                                            </button>
+                                        </div>
+                                        <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
+                                            <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
+                                                <span>Key</span>
+                                                <span>Created</span>
+                                                <span>Status</span>
+                                                <span />
+                                            </div>
+                                            {credentials.map((credential) => (
+                                                <div
+                                                    className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
+                                                    key={credential.credentialId}
+                                                >
+                                                    <div className="flex min-w-0 items-center gap-2">
+                                                        <code className="text-[11px] text-[#34423a]">
+                                                            ••••••••{credential.publicCredentialId.slice(-4)}
+                                                        </code>
+                                                        <button
+                                                            type="button"
+                                                            className="grid size-[30px] shrink-0 place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247]"
+                                                            aria-label={`Copy key ID ending in ${credential.publicCredentialId.slice(-4)}`}
+                                                            title="Copy key ID"
+                                                            onClick={() =>
+                                                                copy(credential.publicCredentialId, "Key ID")
+                                                            }
+                                                        >
+                                                            <Clipboard size={15} />
+                                                        </button>
+                                                    </div>
+                                                    <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
+                                                    <span
+                                                        className={
+                                                            credential.revokedAt.length > 0
+                                                                ? "w-fit rounded-full bg-[#f5e9e9] px-2 py-1 text-[10px] font-bold uppercase text-[#8b5555]"
+                                                                : "w-fit rounded-full bg-[#e5f3e9] px-2 py-1 text-[10px] font-bold uppercase text-[#168247]"
+                                                        }
+                                                    >
+                                                        {credential.revokedAt.length > 0 ? "Revoked" : "Active"}
+                                                    </span>
+                                                    <button
+                                                        type="button"
+                                                        className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
+                                                        aria-label={`Revoke key ending in ${credential.publicCredentialId.slice(-4)}`}
+                                                        disabled={credential.revokedAt.length > 0 || busy.length > 0}
+                                                        onClick={() =>
+                                                            void perform(
+                                                                `revoke-${credential.credentialId}`,
+                                                                async () => {
+                                                                    await client().revokeAppCredential(
+                                                                        credential.credentialId,
+                                                                        AbortSignal.timeout(20_000),
+                                                                    );
+                                                                    setCredentials(
+                                                                        await client().listAppCredentials(
+                                                                            selectedApp.appId,
+                                                                            AbortSignal.timeout(20_000),
+                                                                        ),
+                                                                    );
+                                                                },
+                                                            )
+                                                        }
+                                                    >
+                                                        <Trash2 size={15} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </section>
+                                )}
+                            </>
+                        )}
+                    </div>
                 </main>
             </div>
             <div
