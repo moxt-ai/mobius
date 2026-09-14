@@ -14,7 +14,6 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
-import { readCodexHistory } from "./codex-history.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -204,7 +203,7 @@ export class NativeSessionService {
                 "native_session_unsupported",
             );
         }
-        const opening = this.#sessions.openNativeSession(
+        const opened = await this.#sessions.openNativeSession(
             {
                 ...options,
                 cwd: target.cwd,
@@ -213,43 +212,6 @@ export class NativeSessionService {
             },
             { kind: command.action, nativeSessionId: target.info.sessionId },
         );
-        const opened = await opening.catch(async (cause: unknown) => {
-            signal.throwIfAborted();
-            if (
-                command.action !== "import" ||
-                options.agent.id !== "codex" ||
-                !(cause instanceof AcpExecutionError) ||
-                cause.code !== "acp_execution_failed"
-            ) {
-                throw cause;
-            }
-            const snapshot = await readCodexHistory(options.agent, target.cwd, target.info.sessionId, signal);
-            const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
-            if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
-                throw new AcpExecutionError(
-                    "Codex returned history for a different session or workspace.",
-                    { cause },
-                    "invalid_native_session_response",
-                );
-            }
-            signal.throwIfAborted();
-            this.record(command, "native_session_previewed");
-            return { kind: "preview", history: snapshot.history } satisfies {
-                readonly kind: "preview";
-                readonly history: typeof snapshot.history;
-            };
-        });
-        if ("kind" in opened) {
-            return {
-                ...envelope,
-                action: "preview",
-                entryId: command.entryId,
-                reason: "continuation_unavailable",
-                targetSessionId: command.targetSessionId,
-                title: target.info.title ?? "Untitled session",
-                history: opened.history,
-            };
-        }
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
             additionalDirectories: target.additionalEntries,

@@ -1,13 +1,12 @@
 # Native session concurrency
 
-Status: implemented Codex saved-history fallback, with broader observation and
-control-transfer behavior proposed below. Both original-session continuation and
+Status: native imports propagate opening failures without a saved-history fallback.
+Broader observation and control-transfer behavior is proposed below. Both original-session continuation and
 explicit fork remain product features. Mobius does not provide cross-process
 live takeover.
 
-After this, a user can open a running conversation and see whether it is live or
-a saved snapshot, continue the original session after verified control is obtained,
-or explicitly fork it and see a separate conversation with its available history.
+After this, a user can attempt to open a saved conversation and see either a ready
+conversation or the opening error, then retry after resolving the failure.
 
 ## Protocol findings
 
@@ -51,34 +50,16 @@ status describes that connection; it does not prove the original writer is idle.
 
 ## Implemented recovery
 
-After this, a user can open an externally owned Codex session and see its saved
-conversation in a read-only preview, then retry continuing the original session
-or explicitly fork it.
+When an authorized import fails at the ACP execution boundary, Mobius propagates
+the original typed opening error. It does not start a temporary history reader or
+return a read-only preview. Cancellation and timeout remain distinct failures.
+No native writer-conflict classification is inferred from an ACP error message.
 
-When an authorized Codex import fails at the ACP execution boundary, Mobius tries
-metadata-only `thread/read` followed by `thread/turns/list` with summary items
-through the same validated local Codex executable. It revalidates
-the returned thread identity and canonical workspace before exposing bounded
-user and assistant history. It does not prompt, subscribe, close the source
-thread, or create a ready Mobius conversation. Cancellation and a finite deadline
-stop only the temporary reader process. No native writer-conflict classification
-is inferred from an ACP error message.
-
-Native history displays at most the latest ten user and assistant messages in
-conversation order. The preview indicates when earlier history is omitted; this
-display limit does not shorten the Agent's native context. Codex summary pages
-avoid loading the full tool transcript just to display recent conversation.
-Embedded raster images are preserved separately from text and share a bounded
-image budget. Previously imported Codex image links also render as attachments.
-Unavailable images use a text placeholder; history does not authorize reading
-local image paths or fetching remote URLs.
-
-The preview is a saved snapshot inside the local session browser, not a live
-attachment. **Continue original** retries the normal restore path; only its
-success opens an executable conversation. **Fork session** remains an explicit,
-independent operation. An unsupported read or other failure stays contextual to
-the selected session, with retry for that operation or refresh for a stale list.
-Neither path terminates another application's writer.
+The user can retry the normal import path after resolving the failure, such as
+closing the session in another application. Only successful restoration opens an
+executable conversation with its available history. Fork remains an explicit,
+independent operation when supported; a failed import never automatically forks
+or terminates another application's writer.
 
 ## Proposed behavior
 

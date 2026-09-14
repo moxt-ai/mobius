@@ -776,7 +776,7 @@ async function verifyActiveTurnHistory(
 }
 
 describe("pairing and channel chat", () => {
-    it("Given a machine is paired with saved Agent conversations and the first runtime handshake fails, When a browser prepares and manages those conversations, Then initialization recovers and restored history retains its original project through fork refresh and deletion", {
+    it("Given a machine is paired with saved Agent conversations and one is still open elsewhere, When a browser imports it and retries after it closes, Then the first import reports an error and the retry restores a conversation that supports chatting fork refresh and deletion", {
         timeout: 90_000,
     }, async () => {
         vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
@@ -1038,34 +1038,22 @@ describe("pairing and channel chat", () => {
                         projectDirectoryId,
                     ),
                 ).toBe(await realpath(workspace));
-                const preview = await request({
+                const failedImport = await request({
                     action: "import",
                     directoryId: projectDirectoryId,
                     entryId: entries[0]["entryId"],
-                    targetSessionId: "read-only-preview",
+                    targetSessionId: "failed-import",
                 });
-                expect(preview).toMatchObject({
-                    action: "preview",
-                    entryId: entries[0]["entryId"],
-                    reason: "continuation_unavailable",
-                    history: {
-                        status: "available",
-                        messages: [
-                            { role: "user", text: "Saved native conversation" },
-                            {
-                                role: "assistant",
-                                text: "Codex turn 1: Saved native conversation",
-                            },
-                        ],
-                        truncated: false,
-                    },
+                expect(failedImport).toMatchObject({
+                    kind: "session.operation.failed",
+                    code: "acp_execution_failed",
                 });
-                expect(preview).not.toHaveProperty("ready");
-                expectSelectedImageHistory(preview["history"]);
-                const previewDirectory = await fetch(projectSessionUrl(pairing, origin), {
+                expect(failedImport).not.toHaveProperty("history");
+                expect(failedImport).not.toHaveProperty("ready");
+                const sessionDirectory = await fetch(projectSessionUrl(pairing, origin), {
                     headers: authenticatedHeaders(pairing),
                 });
-                expect(JSON.stringify(await previewDirectory.json())).not.toContain("read-only-preview");
+                expect(JSON.stringify(await sessionDirectory.json())).not.toContain("failed-import");
                 await external.close();
                 await writeFile(join(environment.MOBIUS_FAKE_ACP_STATE_DIRECTORY, "pause-load"), "");
                 const loading = waitForProtocolKind(socket, "session.info.updated");

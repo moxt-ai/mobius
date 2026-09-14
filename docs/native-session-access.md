@@ -17,8 +17,9 @@ Browser <-> Mobius <-> Runtime: history, turns, configuration, events, cancellat
   and either `cursor` or `entryId`. Pass `discoveryId: null` for an initial listing,
   then pass the returned `sessionId` as `discoveryId` for pagination and import so
   the Runtime can resolve entries from that discovery context. Runtime and Project authorization are enforced
-  before connecting to the local agent. Imports may resolve to an existing
-  canonical Session or a read-only preview.
+   before connecting to the local agent. Imports resolve to a ready Session,
+   reusing its canonical identity when already imported. Failed imports propagate
+   the opening error without falling back to a read-only preview.
 - `client.sessions.createAccess(sessionId, expiresInSeconds, signal)` issues an
   `msession_…` credential for an existing Session in the App's Project. Supported
   lifetimes are 60–3600 seconds. Parent App keys do not expire; their revocation

@@ -22,7 +22,10 @@ class NativeSessionObserver extends NullAcpSessionObserver {
     };
 }
 
-async function fixture(label: string, profile: "supported" | "unsupported" | "invalid-fork" = "supported") {
+async function fixture(
+    label: string,
+    profile: "supported" | "unsupported" | "invalid-fork" | "exclusive-writer" = "supported",
+) {
     const temporary = await realpath(await mkdtemp(join(tmpdir(), "mobius-native-boundary-")));
     const workspace = join(temporary, "workspace");
     const native = join(temporary, "native");
@@ -38,7 +41,9 @@ async function fixture(label: string, profile: "supported" | "unsupported" | "in
             ? ["--no-native-sessions"]
             : profile === "invalid-fork"
               ? ["--reuse-session-on-fork"]
-              : []),
+              : profile === "exclusive-writer"
+                ? ["--exclusive-writer"]
+                : []),
     ]);
     const storePath = join(temporary, "sessions.sqlite");
     const store = new SqliteAcpSessionStore(storePath);
@@ -126,6 +131,53 @@ async function fixture(label: string, profile: "supported" | "unsupported" | "in
 }
 
 describe("native Agent session boundary", () => {
+    it("Given a saved Codex conversation is open elsewhere, When a user imports it and retries after it closes, Then the original opening error is reported and the retry opens the conversation", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));
+        const f = await fixture("Codex", "exclusive-writer");
+        const external = new AcpSessionManager();
+        try {
+            await external.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal: new AbortController().signal,
+                sessionId: "external",
+                commandId: "external-turn",
+                prompt: "Saved conversation",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const command = {
+                ...f.identity,
+                action: "import",
+                entryId: entry.entryId,
+                targetSessionId: "imported",
+            } satisfies NativeSessionCommand;
+            await expect(f.service.execute(command, new AbortController().signal)).rejects.toMatchObject({
+                code: "acp_execution_failed",
+            });
+            await external.close();
+            expect(await f.service.execute(command, new AbortController().signal)).toMatchObject({
+                action: "import",
+                ready: { sessionId: "imported" },
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Saved conversation" }]),
+                },
+            });
+        } finally {
+            await external.close();
+            await f.close();
+            vi.useRealTimers();
+        }
+    });
     it("Given an Agent returns the original session as a fork, When a user requests an independent conversation, Then the invalid fork is rejected", async () => {
         const f = await fixture("Codex", "invalid-fork");
         try {
