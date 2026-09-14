@@ -40,6 +40,15 @@ entrypoint, or remove it when a stronger scenario already owns the behavior.
 
 ## Web Integration Tests
 
+### Platform page colors (manual browser scenario)
+
+Given a visitor opening Platform with either a light or dark browser preference,
+When the initial document is displayed and the application finishes loading,
+Then the page background stays `#f4f6f4`, the default text is `#17221d`, and
+native controls use a light color scheme. Verify the initial document while
+JavaScript is disabled, then enable JavaScript and check both the signed-out
+page and signed-in dashboard. The browser theme color should also be `#f4f6f4`.
+
 Run the Web boundary suite from the repository root:
 
 ```bash

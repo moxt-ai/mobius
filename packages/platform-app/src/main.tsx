@@ -44,7 +44,7 @@ createRoot(root).render(
     <StrictMode>
         <ClerkProvider publishableKey={publishableKey}>
             <SignedOut>
-                <main className="grid min-h-screen place-items-center bg-[#f3f5f3] p-6">
+                <main className="grid min-h-screen place-items-center bg-[#f4f6f4] p-6">
                     <div className="w-full max-w-[480px] rounded-2xl border border-[#dce2de] bg-white p-8 text-center shadow-xl md:p-12 [&>h1]:mb-3 [&>h1]:text-4xl [&>h1]:font-bold [&>h1]:tracking-[-.04em] [&>p:not(.eyebrow)]:text-[#65736b] [&>p:not(.eyebrow)]:leading-6">
                         <div className="mx-auto mb-7 grid size-[54px] place-items-center rounded-xl bg-[#168247] text-2xl font-extrabold text-white">
                             M
