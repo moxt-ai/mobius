@@ -99,6 +99,21 @@ until its binding has been locally approved.
 
 ## Local execution authority
 
+If Chat reports `binding_not_approved` for a previously approved Bot, run this on
+the machine hosting its Runtime:
+
+```sh
+npx --yes @moxt-ai/mobius@latest bot approve --bot <bot-id>
+```
+
+The local command resolves the saved Runtime connection, validates its current
+Agent and workspace, and renews the latest saved binding's local grant in place.
+It preserves the Bot, binding, grant, and conversation IDs and records a local
+audit event. Keep the daemon running and resend the message in the same Chat page.
+The command does not pair a Runtime or create a Bot or conversation. If several
+saved local channels contain this Bot, append `--channel <channel-id>` to select
+the intended Runtime. A Bot with no saved local grant must complete initial setup.
+
 An execution-binding request is untrusted input even when it comes from an
 owner-facing service. The local daemon resolves the registered Agent, canonical
 executable identity, real workspace identity, required adapter capabilities,

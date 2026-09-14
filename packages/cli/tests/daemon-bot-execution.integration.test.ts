@@ -1,11 +1,13 @@
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
 import {
     BotExecutionBindingApprovalRequest,
@@ -40,9 +42,9 @@ import {
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LocalAgentDefinition } from "../src/agent-catalog/local-agent.ts";
+import { discoverLocalAgentInventory } from "../src/agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig } from "../src/config.ts";
 import { runDaemon } from "../src/run-daemon.ts";
@@ -179,13 +181,43 @@ async function readCompletedText(frames: ClientFrames): Promise<string> {
 }
 
 describe("daemon Bot execution boundary", () => {
-    it("Given an approved Bot binding whose Agent announces setup state, When the relay durably delivers a Bot turn, Then setup stays Runtime-scoped and the Attempt starts before execution output", async () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
+    });
+    afterEach(() => vi.useRealTimers());
+    it("Given a Bot conversation loses local approval after its workspace changes, When its owner runs bot approve and sends another turn, Then the same Bot and conversation execute again", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
         const native = join(stateDirectory, "native");
         await Promise.all([mkdir(workspace), mkdir(overrideWorkspace), mkdir(native)]);
-        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        const bin = join(stateDirectory, "bin");
+        await mkdir(bin);
+        // Stateful ACP processes stand in for a provider requiring interactive authentication.
+        await writeFile(
+            join(bin, "codex"),
+            `#!${process.execPath}\nif (process.argv.includes("--version")) process.stdout.write("codex 0.153.0\\n");\n`,
+            { mode: 0o700 },
+        );
+        await writeFile(
+            join(bin, "codex-acp"),
+            `#!${process.execPath}\nif (process.argv.includes("--version")) { process.stdout.write("codex-acp 1.8.0\\n"); } else { process.argv.push("--agent-name", "Codex", "--announce-config-while-creating"); await import(${JSON.stringify(fakeAgentPath)}); }\n`,
+            { mode: 0o700 },
+        );
+        const environment = {
+            ...process.env,
+            PATH: bin,
+            MOBIUS_STATE_DIRECTORY: stateDirectory,
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: native,
+        };
+        const inventory = await discoverLocalAgentInventory({
+            defaultWorkspace: workspace,
+            environment,
+            signal: AbortSignal.timeout(20_000),
+        });
+        expect(inventory.available.map((entry) => entry.agent.id)).toContain("codex");
         const daemonToken = "d".repeat(43);
         const socketReady = Promise.withResolvers<Duplex>();
         const relay = createServer((request, response) => {
@@ -231,6 +263,17 @@ describe("daemon Bot execution boundary", () => {
         process.env["no_proxy"] = "127.0.0.1,localhost";
         const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", daemonToken);
+        await mkdir(join(stateDirectory, "connections"));
+        await writeFile(
+            join(stateDirectory, "connections", "channel_alpha.json"),
+            JSON.stringify({
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayOrigin: `http://127.0.0.1:${readPort(relay)}`,
+                runtimeCredential: daemonToken,
+            }),
+            { mode: 0o600 },
+        );
         const config = createDaemonConfig(
             {
                 auditDatabasePath,
@@ -238,34 +281,7 @@ describe("daemon Bot execution boundary", () => {
                 defaultWorkspace: workspace,
                 relayUrl,
             },
-            [
-                new LocalAgentDefinition(
-                    "codex",
-                    "Codex",
-                    process.execPath,
-                    [fakeAgentPath, "--agent-name", "Codex", "--announce-config-while-creating"],
-                    {},
-                    "test-adapter",
-                    process.version,
-                    undefined,
-                    undefined,
-                    60_000,
-                    {
-                        additionalDirectories: true,
-                        audioPrompt: false,
-                        closeSession: true,
-                        deleteSession: true,
-                        embeddedContextPrompt: true,
-                        imagePrompt: true,
-                        listSessions: true,
-                        loadSession: true,
-                        promptQueueing: false,
-                        resumeSession: true,
-                        steering: true,
-                        unstableForkSession: false,
-                    },
-                ),
-            ],
+            inventory.available.map((entry) => entry.agent),
         );
         const cancellation = new AbortController();
         const audit = new AuditStore(auditDatabasePath);
@@ -292,7 +308,9 @@ describe("daemon Bot execution boundary", () => {
             );
             const approvalFrame = frames.next();
             writeServerTextFrame(socket, encodeBotExecutionBindingApprovalRequest(proposal));
-            const approved = decodeBotExecutionBindingApprovedEvent(await approvalFrame);
+            const approvalPayload = await approvalFrame;
+            expect(JSON.parse(approvalPayload)).toHaveProperty("localGrantId");
+            const approved = decodeBotExecutionBindingApprovedEvent(approvalPayload);
             writeServerTextFrame(socket, encodeBotExecutionBindingApprovedEvent(approved));
             expect(approved).toMatchObject({
                 behaviorRevisionId: proposal.behaviorRevisionId,
@@ -543,6 +561,54 @@ describe("daemon Bot execution boundary", () => {
             } finally {
                 revokedDatabase.close();
             }
+            await expect(
+                promisify(execFile)(
+                    process.execPath,
+                    [
+                        fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
+                        "bot",
+                        "approve",
+                        "--bot",
+                        "bot_unknown",
+                    ],
+                    { env: environment, signal: AbortSignal.timeout(20_000) },
+                ),
+            ).rejects.toMatchObject({
+                stderr: expect.stringContaining("bot_not_found"),
+            });
+            const result = await promisify(execFile)(
+                process.execPath,
+                [fileURLToPath(new URL("../src/cli.ts", import.meta.url)), "bot", "approve", "--bot", proposal.botId],
+                { env: environment, signal: AbortSignal.timeout(20_000) },
+            );
+            expect(result.stdout).toContain("Approved Bot bot_alpha");
+            const retry = new BotSessionPromptCommand(
+                changedTargetPrompt.sessionId,
+                "message_after_approval",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "Recovered",
+                "execution_after_approval",
+                "capability_after_approval",
+                "f".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_alpha",
+                "turn_after_approval",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(retry));
+            expect(await readCompletedText(frames)).toContain("Recovered");
         } finally {
             cancellation.abort();
             await daemon;

@@ -5,7 +5,9 @@ import packageMetadata from "../package.json" with { type: "json" };
 
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
+import { executeBotApproveCommand } from "./bots/bot-approve-command.ts";
 import { BotMessageCommandError, executeBotMessageCommand } from "./bots/bot-message-command.ts";
+import { LocalBotAuthorizationError } from "./bots/local-bot-grant-store.ts";
 import { type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
 import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
@@ -21,6 +23,7 @@ Usage:
   mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--workspace <directory>]
   mobius start --channel <channel-id>
   mobius agents [--json]
+  mobius bot approve --bot <bot-id> [--channel <channel-id>]
   mobius bot message send --target <current|alias> --text <message>
 
 Commands:
@@ -28,7 +31,7 @@ Commands:
   pair   Pair this machine and start its local daemon
   start  Start the local daemon for a saved channel
   agents Show detected, missing, and integration-ready Agents
-  bot    Invoke Bot-scoped actions from an active local execution
+  bot    Approve a saved Bot locally or send a message from an active execution
 
 Pairing grants this browser access to the machine with your user account's permissions.
 New conversations default to ~/.mobius/workspace; choose other directories in the browser.
@@ -62,6 +65,10 @@ async function main(): Promise<void> {
     }
 
     if (command === "bot") {
+        if (process.argv[3] === "approve") {
+            process.stdout.write(await executeBotApproveCommand(process.argv.slice(4), process.env, shutdown.signal));
+            return;
+        }
         if (process.argv[3] !== "message" || process.argv[4] !== "send") {
             throw new BotMessageCommandError(
                 "invalid_request",
@@ -103,7 +110,10 @@ try {
 } catch (error) {
     if (!shutdown.signal.aborted) {
         const message = error instanceof Error ? error.message : "Unknown failure";
-        const code = error instanceof BotMessageCommandError ? `${error.code}: ` : "";
+        const code =
+            error instanceof BotMessageCommandError || error instanceof LocalBotAuthorizationError
+                ? `${error.code}: `
+                : "";
         process.stderr.write(`Mobius daemon failed: ${code}${message}\n`);
         process.exitCode = 1;
     }

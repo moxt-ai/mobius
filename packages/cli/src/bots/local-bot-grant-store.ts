@@ -6,12 +6,27 @@ import {
     BotExecutionBindingApprovedEvent,
     type BotSessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
+import { z } from "zod";
 
 import type { LocalAgentCatalog, LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { revalidateExecutable } from "../process/executable.ts";
 
 const LOCAL_BOT_GRANT_LIFETIME_MILLISECONDS = 90 * 24 * 60 * 60 * 1_000;
+const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
+const savedApprovalSchema = z
+    .object({
+        local_grant_id: identifier,
+        bot_id: identifier,
+        binding_id: identifier,
+        binding_revision: z.number().int().positive(),
+        agent_ref: identifier,
+        workspace_ref: z.string().min(1).max(2048),
+        revocation_epoch: z.number().int().nonnegative(),
+        agent_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+        workspace_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .readonly();
 
 export class LocalBotAuthorizationError extends Error {
     readonly code: string;
@@ -151,6 +166,25 @@ function parseTargets(encoded: string): readonly string[] {
 export class LocalBotGrantStore {
     readonly #database: DatabaseSync;
 
+    static readonly containsBot = (path: string, botId: string): boolean => {
+        const database = new DatabaseSync(path, { readOnly: true });
+        try {
+            if (
+                database
+                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_bot_grants'")
+                    .get() === undefined
+            ) {
+                return false;
+            }
+            return (
+                database.prepare("SELECT local_grant_id FROM local_bot_grants WHERE bot_id = ? LIMIT 1").get(botId) !==
+                undefined
+            );
+        } finally {
+            database.close();
+        }
+    };
+
     constructor(path: string) {
         this.#database = new DatabaseSync(path);
         this.#database.exec(`
@@ -184,6 +218,92 @@ export class LocalBotGrantStore {
           ) STRICT;
         `);
     }
+
+    /** Only the local CLI may invoke this explicit approval transition. */
+    readonly reapprove = async (
+        botId: string,
+        catalog: LocalAgentCatalog,
+        directories: WorkspaceDirectoryService,
+        bindingAuthorityId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<{ readonly bindingId: string; readonly workspacePath: string; readonly agentRef: string }> => {
+        signal.throwIfAborted();
+        if (!identifier.safeParse(botId).success) {
+            throw new LocalBotAuthorizationError("invalid_request", "The Bot ID is invalid");
+        }
+        const row = this.#database
+            .prepare("SELECT * FROM local_bot_grants WHERE bot_id = ? ORDER BY binding_revision DESC LIMIT 1")
+            .get(botId);
+        if (row === undefined) {
+            throw new LocalBotAuthorizationError("bot_not_found", "This machine has no saved approval for that Bot");
+        }
+        const parsed = savedApprovalSchema.safeParse(row);
+        if (!parsed.success) {
+            throw new LocalBotAuthorizationError("local_grant_invalid", "The saved Bot approval is invalid", {
+                cause: parsed.error,
+            });
+        }
+        const saved = parsed.data;
+        const agent = catalog.find(saved.agent_ref);
+        if (!agent.capabilities.embeddedContextPrompt) {
+            throw new LocalBotAuthorizationError("binding_incompatible", "The local Agent cannot apply Bot context");
+        }
+        const [adapterUnchanged, agentUnchanged] = await Promise.all([
+            revalidateExecutable(agent.adapterIdentity),
+            revalidateExecutable(agent.agentIdentity),
+        ]);
+        signal.throwIfAborted();
+        if (!adapterUnchanged || !agentUnchanged) {
+            throw new LocalBotAuthorizationError(
+                "binding_incompatible",
+                "The local Agent executable changed before approval",
+            );
+        }
+        const workspacePath = await directories.resolve(bindingAuthorityId, saved.workspace_ref, signal);
+        const workspaceIdentityDigest = await workspaceDigest(workspacePath);
+        signal.throwIfAborted();
+        this.#database.exec("BEGIN IMMEDIATE");
+        try {
+            const result = this.#database
+                .prepare(`UPDATE local_bot_grants
+                SET agent_identity_digest = ?, workspace_identity_digest = ?, workspace_path = ?,
+                    revoked_at = NULL, expires_at = ?, revocation_epoch = revocation_epoch + 1
+                WHERE local_grant_id = ? AND revocation_epoch = ?
+                    AND agent_identity_digest = ? AND workspace_identity_digest = ?
+                    AND binding_revision = (SELECT MAX(binding_revision) FROM local_bot_grants WHERE bot_id = ?)`)
+                .run(
+                    agentDigest(agent),
+                    workspaceIdentityDigest,
+                    workspacePath,
+                    now + LOCAL_BOT_GRANT_LIFETIME_MILLISECONDS,
+                    saved.local_grant_id,
+                    saved.revocation_epoch,
+                    saved.agent_identity_digest,
+                    saved.workspace_identity_digest,
+                    botId,
+                );
+            if (result.changes !== 1) {
+                throw new LocalBotAuthorizationError(
+                    "binding_not_approved",
+                    "The Bot binding changed during approval; run the command again",
+                );
+            }
+            this.#database
+                .prepare(`INSERT INTO audit_events (recorded_at, event, command_id, session_id, details_json)
+                VALUES (?, 'bot_binding_locally_reapproved', ?, '', ?)`)
+                .run(
+                    new Date(now).toISOString(),
+                    saved.binding_id,
+                    JSON.stringify({ botId, bindingId: saved.binding_id, agentRef: saved.agent_ref }),
+                );
+            this.#database.exec("COMMIT");
+        } catch (cause) {
+            this.#database.exec("ROLLBACK");
+            throw cause;
+        }
+        return { bindingId: saved.binding_id, workspacePath, agentRef: saved.agent_ref };
+    };
 
     readonly approve = async (
         request: BotExecutionBindingApprovalRequest,
