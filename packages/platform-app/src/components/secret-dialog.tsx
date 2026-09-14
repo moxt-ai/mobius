@@ -54,20 +54,19 @@ export function SecretDialog({ onClose, onCopy, onVisibleChange, secret, visible
                             </p>
                             <Dialog.Title className="mb-2 text-3xl font-bold">Save your app secret</Dialog.Title>
                             <Dialog.Description className="mb-6 text-sm leading-6 text-[#69766f]">
-                                This is the only time Mobius will show this secret. Store it in your server’s secret
-                                manager.
+                                Copy the full app secret below for server authentication. This is the only time Mobius
+                                will show it. Store it in your server’s secret manager.
                             </Dialog.Description>
                             <SecretField
                                 label="App ID"
                                 value={secret.appId}
                                 onCopy={() => onCopy(secret.appId, "App ID")}
                             />
-                            <SecretField
-                                label="Key ID"
-                                value={secret.publicCredentialId}
-                                onCopy={() => onCopy(secret.publicCredentialId, "Key ID")}
-                            />
                             <div className="mt-3 mb-1.5 text-[11px] font-bold text-[#6d7b73]">App secret</div>
+                            <p className="mb-2 text-xs leading-5 text-[#69766f]">
+                                This is your full <code>mapp_…</code> AppCredential. Use it as{" "}
+                                <code>MOBIUS_APP_SECRET</code>, with the App ID above as <code>MOBIUS_APP_ID</code>.
+                            </p>
                             <div className="flex min-h-[43px] items-center rounded-lg border border-[#d3dad5] bg-[#f8faf8] pl-3 [&>code]:min-w-0 [&>code]:flex-1 [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:whitespace-nowrap [&>code]:text-[11px] [&>button]:grid [&>button]:w-[38px] [&>button]:self-stretch [&>button]:place-items-center [&>button]:border-0 [&>button]:border-l [&>button]:border-[#dce2de] [&>button]:bg-transparent">
                                 <code>{visible ? secret.secret : "•".repeat(32)}</code>
                                 <button
@@ -77,14 +76,16 @@ export function SecretDialog({ onClose, onCopy, onVisibleChange, secret, visible
                                 >
                                     {visible ? <EyeOff size={15} /> : <Eye size={15} />}
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => onCopy(secret.secret, "App secret")}
-                                    aria-label="Copy App secret"
-                                >
-                                    <Clipboard size={15} />
-                                </button>
                             </div>
+                            <button
+                                type="button"
+                                className="mt-3 inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#e7f3eb] px-3.5 text-sm font-bold text-[#168247] hover:bg-[#d8ebdf]"
+                                onClick={() => onCopy(secret.secret, "App secret")}
+                                aria-label="Copy App secret"
+                            >
+                                <Clipboard size={15} />
+                                Copy App secret
+                            </button>
                             <Dialog.Close asChild>
                                 <button
                                     type="button"

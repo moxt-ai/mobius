@@ -12,8 +12,6 @@ type RenameState =
 
 export interface RevealedSecret {
     readonly appId: string;
-    readonly credentialId: string;
-    readonly publicCredentialId: string;
     readonly secret: string;
 }
 

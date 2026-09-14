@@ -56,6 +56,25 @@ and tenant navigation remain visible.
 
 Verify these layout scenarios with `agent-browser` at desktop and mobile widths.
 
+## Credential identification acceptance
+
+After this, a user can copy the one-time App secret for server authentication
+and see that existing secrets cannot be retrieved.
+
+Verify these scenarios against the running app:
+
+- Given an app with existing keys, When the credentials table is viewed, Then
+  no Key ID, secret value, or copy button is shown, each row explains that the
+  secret is only shown when created, and creation date, status, and revocation
+  remain available.
+- Given a newly created app or key, When Save your app secret opens, Then the
+  App secret is identified as the full `mapp_…` AppCredential for
+  `MOBIUS_APP_SECRET`, no Key ID is displayed, and Copy App secret copies that
+  full value whether the secret is visible or hidden.
+- Given a previously dismissed secret dialog, When the user returns to App keys,
+  Then the page explains that Create key provides a new secret and existing
+  secrets cannot be viewed again.
+
 ## Creation flow acceptance
 
 After this, a user can click Create tenant or Create app, enter a name in a

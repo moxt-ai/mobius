@@ -197,8 +197,6 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
             setSelectedAppId(created.appId);
             setSecret({
                 appId: created.appId,
-                credentialId: created.defaultCredential.credentialId,
-                publicCredentialId: created.defaultCredential.publicCredentialId,
                 secret: created.defaultCredential.credential,
             });
             setSecretVisible(false);
@@ -218,8 +216,6 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
             setCredentials(await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)));
             setSecret({
                 appId: created.appId,
-                credentialId: created.credentialId,
-                publicCredentialId: created.publicCredentialId,
                 secret: created.credential,
             });
             setSecretVisible(false);
@@ -538,8 +534,8 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                             <div>
                                                 <h3 id="app-keys-title">App keys</h3>
                                                 <p>
-                                                    Keys do not expire. Use these only on trusted servers. Secrets
-                                                    cannot be viewed again.
+                                                    Secrets cannot be viewed again. Choose Create key to get a new app
+                                                    secret. Keys do not expire. Use app secrets only on trusted servers.
                                                 </p>
                                             </div>
                                             <button
@@ -553,32 +549,17 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                         </div>
                                         <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
                                             <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
-                                                <span>Key</span>
+                                                <span>App secret</span>
                                                 <span>Created</span>
                                                 <span>Status</span>
                                                 <span />
                                             </div>
-                                            {credentials.map((credential) => (
+                                            {credentials.map((credential, index) => (
                                                 <div
                                                     className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
                                                     key={credential.credentialId}
                                                 >
-                                                    <div className="flex min-w-0 items-center gap-2">
-                                                        <code className="text-[11px] text-[#34423a]">
-                                                            ••••••••{credential.publicCredentialId.slice(-4)}
-                                                        </code>
-                                                        <button
-                                                            type="button"
-                                                            className="grid size-[30px] shrink-0 place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247]"
-                                                            aria-label={`Copy key ID ending in ${credential.publicCredentialId.slice(-4)}`}
-                                                            title="Copy key ID"
-                                                            onClick={() =>
-                                                                copy(credential.publicCredentialId, "Key ID")
-                                                            }
-                                                        >
-                                                            <Clipboard size={15} />
-                                                        </button>
-                                                    </div>
+                                                    <span>Only shown when created</span>
                                                     <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
                                                     <span
                                                         className={
@@ -592,7 +573,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                                     <button
                                                         type="button"
                                                         className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
-                                                        aria-label={`Revoke key ending in ${credential.publicCredentialId.slice(-4)}`}
+                                                        aria-label={`Revoke key ${index + 1}`}
                                                         disabled={credential.revokedAt.length > 0 || busy.length > 0}
                                                         onClick={() =>
                                                             void perform(
