@@ -148,10 +148,10 @@ jobs:
       matrix:
         include:
           - environment: staging
-            domain: mobius.paradev.biz
+            domain: mobius.moxt.ws
             clerk_publishable_key: pk_test_c21hc2hpbmctc3BpZGVyLTg1NzQuY2xlcmsuYWNjb3VudHMuZGV2JA==
           - environment: production
-            domain: mobius.paraflow.biz
+            domain: mobius.moxt.ai
             clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLnBhcmFmbG93LmJpeiQ=
     environment:
       name: mobius-relay-production

@@ -71,7 +71,7 @@ Standalone Worker.
 CI deploys staging and production using the `mobius-relay-production` GitHub
 environment. Its `CLOUDFLARE_API_TOKEN` must retain account access for Worker
 uploads, D1 migrations, R2 bindings, and custom domains, plus Zone Read and
-Workers Routes Edit access to both `paradev.biz` and `paraflow.biz`. A token
+Workers Routes Edit access to both `moxt.ws` and `moxt.ai`. A token
 that can upload a Worker can still fail when Wrangler reads or updates routes.
 
 The checked-in Platform configuration is authoritative for CI deployments.

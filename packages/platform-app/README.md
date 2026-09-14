@@ -5,12 +5,10 @@ copy each App ID, and create or revoke multiple server credentials.
 
 ## Hosted app
 
-- Staging: https://mobius.paradev.biz/
-- Production: https://mobius.paraflow.biz/
+- Staging: https://mobius.moxt.ws/
+- Production: https://mobius.moxt.ai/
 
-The Platform Worker serves this app and its API on the same origin. The
-`mobius-platform.paradev.biz` and `mobius-platform.paraflow.biz` domains remain
-available as aliases for existing API clients.
+The Platform Worker serves this app and its API on the same origin.
 
 ## Run
 
@@ -29,7 +27,7 @@ From the repository root:
 
 ```bash
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_... \
-VITE_MOBIUS_PLATFORM_ENDPOINT=https://mobius.paradev.biz \
+VITE_MOBIUS_PLATFORM_ENDPOINT=https://mobius.moxt.ws \
 pnpm --filter @moxt-ai/mobius-platform-app dev
 ```
 
