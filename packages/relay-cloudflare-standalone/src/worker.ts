@@ -9,11 +9,12 @@ import {
     type LiteSessionConfigurationEnvironment,
     type PublicProjectBootstrapEnvironment,
     publicProjectBootstrapPolicyFromEnvironment,
+    type RelayContext,
     StaticSessionQuotaPolicyProvider,
     sessionQuotaFromEnvironment,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
-import { Hono } from "hono";
+import { type Handler, Hono } from "hono";
 import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
@@ -61,15 +62,34 @@ async function accountlessResponse(response: Response): Promise<Response> {
     });
 }
 
-function isVersionedSharedProjectPath(pathname: string): boolean {
-    return (
-        /^\/mobius\/api\/v1\/projects\/[^/]+\/(?:browser-credentials|runtime-pairings|runtimes|session-imports|sessions)(?:\/|$)/.test(
-            pathname,
-        ) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/runtime-pairings/`) ||
-        pathname === `${MOBIUS_API_PREFIX}/v1/runtimes/connect`
-    );
-}
+type DispatchEnvironment = { readonly Bindings: RelayContext };
+
+const sharedProjectHandler: Handler<DispatchEnvironment> = (context) => application.fetch(context.req.raw, context.env);
+
+const projectRoutes = new Hono<DispatchEnvironment>()
+    .all("/browser-credentials/*", sharedProjectHandler)
+    .all("/runtime-pairings/*", sharedProjectHandler)
+    .all("/runtimes/*", sharedProjectHandler)
+    .all("/session-imports/*", sharedProjectHandler)
+    .all("/sessions/*", sharedProjectHandler);
+
+const versionedRoutes = new Hono<DispatchEnvironment>()
+    .route("/projects/:projectId", projectRoutes)
+    .all("/runtime-pairings/*", sharedProjectHandler)
+    .all("/runtimes/connect", sharedProjectHandler)
+    .all("/*", (context) => {
+        const bots = context.env.services.bots;
+        return bots === null
+            ? application.fetch(context.req.raw, context.env)
+            : botApplication.fetch(context.req.raw, { services: { bots } });
+    });
+
+const dispatchApplication = new Hono<DispatchEnvironment>()
+    .onError((error) => {
+        throw error;
+    })
+    .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
+    .all("*", sharedProjectHandler);
 
 export function createStandaloneApplication(
     gateways: (environment: RelayBindings) => WorkerRuntimeGateways,
@@ -77,7 +97,6 @@ export function createStandaloneApplication(
     return new Hono<{ Bindings: RelayBindings }>().all("*", async (context) => {
         const request = context.req.raw;
         const environment = context.env;
-        const pathname = new URL(request.url).pathname;
         const projectAuthentication = new D1ProjectAuthentication(
             environment.DIRECTORY_DATABASE,
             environment.MOBIUS_TENANT_ID,
@@ -92,17 +111,7 @@ export function createStandaloneApplication(
             apiPrefix: MOBIUS_API_PREFIX,
             quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
         });
-        if (isVersionedSharedProjectPath(pathname)) {
-            return await accountlessResponse(await application.fetch(request, cx));
-        }
-        if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
-            return await accountlessResponse(
-                await botApplication.fetch(request, {
-                    services: { bots: cx.services.bots },
-                }),
-            );
-        }
-        return await accountlessResponse(await application.fetch(request, cx));
+        return await accountlessResponse(await dispatchApplication.fetch(request, cx));
     });
 }
 

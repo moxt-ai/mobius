@@ -8,9 +8,10 @@ import {
     createWorkerContext,
     type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
+    type RelayContext,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
-import { Hono } from "hono";
+import { type Handler, Hono } from "hono";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { createConversationApplication } from "./http/conversation-routes.ts";
@@ -66,114 +67,153 @@ const botApplication = createBotApplication();
 const controlApplication = createPlatformControlApplication();
 const conversationApplication = createConversationApplication();
 
-function isControlPath(pathname: string): boolean {
-    return (
-        pathname === `${MOBIUS_API_PREFIX}/health` ||
-        pathname === `${MOBIUS_API_PREFIX}/capabilities` ||
-        /^\/mobius\/api\/v1\/projects\/[^/]+\/storage-placement\/?$/.test(pathname) ||
-        pathname === `${MOBIUS_API_PREFIX}/v1/apps` ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/apps/`) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/platform/`) ||
-        pathname === `${MOBIUS_API_PREFIX}/v1/platform`
-    );
-}
-
-function isConversationPath(pathname: string): boolean {
-    return (
-        pathname === `${MOBIUS_API_PREFIX}/v1/client/session` ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session/`) ||
-        /^\/mobius\/api\/v1\/conversations\/[^/]+\/access-credentials$/.test(pathname) ||
-        /^\/mobius\/api\/v1\/projects\/[^/]+\/sessions\/[^/]+\/access-credentials$/.test(pathname) ||
-        /^\/mobius\/api\/v1\/conversation-access-credentials\/[^/]+\/(?:rotate|revoke)$/.test(pathname)
-    );
-}
-
-function isVersionedSharedProjectPath(pathname: string): boolean {
-    return (
-        /^\/mobius\/api\/v1\/projects\/[^/]+\/(?:browser-credentials|runtime-pairings|runtimes|session-imports|sessions)(?:\/|$)/.test(
-            pathname,
-        ) ||
-        pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/runtime-pairings/`) ||
-        pathname === `${MOBIUS_API_PREFIX}/v1/runtimes/connect`
-    );
-}
+type DispatchEnvironment = {
+    readonly Bindings: PlatformRelayBindings;
+    readonly Variables: {
+        readonly control: PlatformControlPlaneService;
+        readonly appAuthentication: AppCredentialAuthenticationService;
+        readonly storageRegistry: PlatformStorageRegistry;
+        readonly projectDatabases: D1Database[];
+        readonly relay: RelayContext;
+        readonly sessionAccess: SessionAccessService;
+    };
+};
 
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
     gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
 ): Hono<{ Bindings: PlatformRelayBindings }> {
     const conversationStreams = new ConversationStreamRegistry();
-    return new Hono<{ Bindings: PlatformRelayBindings }>().all("*", async (context) => {
-        const request = context.req.raw;
-        const environment = context.env;
-        const databaseBindings = platformDatabaseBindings(environment);
-        const projectDatabases = databaseBindings.map(({ database }) => database);
-        const controlStorage = new PlatformControlPlaneStorage(
-            environment.PLATFORM_DIRECTORY_DATABASE,
-            projectDatabases,
-        );
-        const storageRegistry = new PlatformStorageRegistry(environment);
-        const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
-        const control = new PlatformControlPlaneService(
-            controlStorage,
-            authentication,
-            storageRegistry,
-            appAuthentication,
-        );
-        const pathname = new URL(request.url).pathname;
-        if (isControlPath(pathname) && !isConversationPath(pathname)) {
-            return await controlApplication.fetch(request, {
-                control,
-                appAuthentication,
-                allowedOrigins: authentication.allowedOrigins,
-            });
-        }
-        const databases = new PlatformDatabaseResolver(environment);
-        const projects = new PlatformProjectStorageDirectory(storageRegistry);
-        const sessionAccess = new SessionAccessService(
-            new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
-            control,
-        );
-        const cx = createWorkerContext({
-            gateways: gateways(environment),
-            authorization: sessionAccess.authorizer(request),
-            bootstrap: new DisabledPublicProjectBootstrap(),
-            databases,
-            identityDatabases: projectDatabases,
-            projects,
-            apiPrefix: MOBIUS_API_PREFIX,
-            quotaPolicy: control,
+    const controlHandler: Handler<DispatchEnvironment> = (context) =>
+        controlApplication.fetch(context.req.raw, {
+            control: context.var.control,
+            appAuthentication: context.var.appAuthentication,
+            allowedOrigins: authentication.allowedOrigins,
         });
-        if (isConversationPath(pathname)) {
-            if (cx.services.bots === null) {
-                throw new Error("Platform Bot services are unavailable");
-            }
-            return await conversationApplication.fetch(request, {
-                sessionAccess,
-                access: new ConversationAccessService(
-                    new ConversationAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
-                    control,
+    const conversationHandler: Handler<DispatchEnvironment> = (context) => {
+        const { relay, sessionAccess, control, projectDatabases } = context.var;
+        if (relay.services.bots === null) {
+            throw new Error("Platform Bot services are unavailable");
+        }
+        return conversationApplication.fetch(context.req.raw, {
+            sessionAccess,
+            access: new ConversationAccessService(
+                new ConversationAccessStorage(context.env.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
+                control,
+            ),
+            allowedOrigins: authentication.allowedOrigins,
+            bots: relay.services.bots,
+            nowEpochMilliseconds: () => Date.now(),
+            sessions: relay.services.sessions,
+            streams: conversationStreams,
+        });
+    };
+    const projectHandler: Handler<DispatchEnvironment> = (context) =>
+        scopedProjectApplication.fetch(context.req.raw, {
+            relay: context.var.relay,
+            allowedOrigins: authentication.allowedOrigins,
+        });
+
+    const controlRoutes = new Hono<DispatchEnvironment>()
+        .all("/health", controlHandler)
+        .all("/capabilities", controlHandler)
+        .route(
+            "/v1",
+            new Hono<DispatchEnvironment>()
+                .all("/apps/*", controlHandler)
+                .all("/platform/*", controlHandler)
+                .route(
+                    "/projects/:projectId",
+                    new Hono<DispatchEnvironment>()
+                        .all("/storage-placement", controlHandler)
+                        .all("/storage-placement/", controlHandler),
                 ),
-                allowedOrigins: authentication.allowedOrigins,
-                bots: cx.services.bots,
-                nowEpochMilliseconds: () => Date.now(),
-                sessions: cx.services.sessions,
-                streams: conversationStreams,
+        );
+    const projectRoutes = new Hono<DispatchEnvironment>()
+        .route(
+            "/sessions",
+            new Hono<DispatchEnvironment>()
+                .all("/:sessionId/access-credentials", conversationHandler)
+                .all("/*", projectHandler),
+        )
+        .all("/browser-credentials/*", projectHandler)
+        .all("/runtime-pairings/*", projectHandler)
+        .all("/runtimes/*", projectHandler)
+        .all("/session-imports/*", projectHandler);
+    const versionedRoutes = new Hono<DispatchEnvironment>()
+        .route("/projects/:projectId", projectRoutes)
+        .all("/client/session/*", conversationHandler)
+        .all("/conversations/:conversationId/access-credentials", conversationHandler)
+        .route(
+            "/conversation-access-credentials/:credentialId",
+            new Hono<DispatchEnvironment>().all("/rotate", conversationHandler).all("/revoke", conversationHandler),
+        )
+        .all("/runtime-pairings/*", projectHandler)
+        .all("/runtimes/connect", projectHandler)
+        .all("/*", (context) => {
+            const bots = context.var.relay.services.bots;
+            return bots === null
+                ? projectApplication.fetch(context.req.raw, context.var.relay)
+                : botApplication.fetch(context.req.raw, { services: { bots } });
+        });
+
+    const application = new Hono<DispatchEnvironment>()
+        .onError((error) => {
+            throw error;
+        })
+        .use("*", async (context, next) => {
+            const environment = context.env;
+            const databaseBindings = platformDatabaseBindings(environment);
+            const projectDatabases = databaseBindings.map(({ database }) => database);
+            const controlStorage = new PlatformControlPlaneStorage(
+                environment.PLATFORM_DIRECTORY_DATABASE,
+                projectDatabases,
+            );
+            const storageRegistry = new PlatformStorageRegistry(environment);
+            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
+            const control = new PlatformControlPlaneService(
+                controlStorage,
+                authentication,
+                storageRegistry,
+                appAuthentication,
+            );
+            context.set("control", control);
+            context.set("appAuthentication", appAuthentication);
+            context.set("storageRegistry", storageRegistry);
+            context.set("projectDatabases", projectDatabases);
+            await next();
+        })
+        .route(MOBIUS_API_PREFIX, controlRoutes)
+        .use("*", async (context, next) => {
+            const environment = context.env;
+            const { control, storageRegistry, projectDatabases } = context.var;
+            const databases = new PlatformDatabaseResolver(environment);
+            const projects = new PlatformProjectStorageDirectory(storageRegistry);
+            const sessionAccess = new SessionAccessService(
+                new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+                control,
+            );
+            const cx = createWorkerContext({
+                gateways: gateways(environment),
+                authorization: sessionAccess.authorizer(context.req.raw),
+                bootstrap: new DisabledPublicProjectBootstrap(),
+                databases,
+                identityDatabases: projectDatabases,
+                projects,
+                apiPrefix: MOBIUS_API_PREFIX,
+                quotaPolicy: control,
             });
-        }
-        if (isVersionedSharedProjectPath(pathname)) {
-            return await scopedProjectApplication.fetch(request, {
-                relay: cx,
-                allowedOrigins: authentication.allowedOrigins,
-            });
-        }
-        if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
-            return await botApplication.fetch(request, {
-                services: { bots: cx.services.bots },
-            });
-        }
-        return await projectApplication.fetch(request, cx);
-    });
+            context.set("relay", cx);
+            context.set("sessionAccess", sessionAccess);
+            await next();
+        })
+        .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
+        .all("*", (context) => projectApplication.fetch(context.req.raw, context.var.relay));
+    return new Hono<{ Bindings: PlatformRelayBindings }>()
+        .onError((error) => {
+            throw error;
+        })
+        .route("/", application);
 }
 
 export function createPlatformWorker(authentication: PlatformAuthenticationConfiguration): PlatformWorker {
