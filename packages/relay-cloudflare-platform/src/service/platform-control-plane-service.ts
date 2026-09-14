@@ -572,16 +572,11 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     };
 
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
-        const placement = await this.#storage.readProjectStoragePlacement(scope.projectId, signal);
-        if (placement === null) {
+        const project = await this.#storage.readActiveProjectScope(scope.projectId, signal);
+        if (project === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
         }
-        const tenantId = placement.tenant_id;
-        const tenant = await this.readTenant(tenantId, signal);
-        const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
-        if (appId === null) {
-            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
-        }
+        const tenant = await this.readTenant(project.tenant_id, signal);
         const quota = quotasFromRow(tenant);
         return new SessionQuotaPolicy(quota.activeSessions);
     };
@@ -592,19 +587,14 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         policy: SessionQuotaPolicy,
         signal: AbortSignal,
     ): Promise<void> => {
-        const placement = await this.#storage.readProjectStoragePlacement(scope.projectId, signal);
-        if (placement === null) {
-            throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
-        }
-        const tenantId = placement.tenant_id;
-        const appId = await this.#storage.readActiveProjectAppId(tenantId, scope.projectId, signal);
-        if (appId === null) {
+        const project = await this.#storage.readActiveProjectScope(scope.projectId, signal);
+        if (project === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project was not found", 404);
         }
         const recorded = await this.#storage.recordAudit(
             this.auditRecord(
-                tenantId,
-                appId,
+                project.tenant_id,
+                project.app_id,
                 scope.projectId,
                 "platform_system",
                 "session-quota",
@@ -907,12 +897,9 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             created_at: now,
             deleted_at: null,
             display_name: normalizedDisplayName,
-            d1_shard_id: placement.d1ShardId,
             idempotency_key: normalizedIdempotencyKey,
             lifecycle: "active",
             project_id: projectId,
-            placement_revision: 1,
-            r2_bucket_id: placement.r2BucketId,
             request_digest: digest,
             suspended_at: null,
             tenant_id: app.tenant_id,

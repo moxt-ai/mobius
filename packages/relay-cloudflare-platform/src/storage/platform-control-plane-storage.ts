@@ -1,8 +1,6 @@
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
-    type AppIdRow,
-    AppIdRowSchema,
     type AppRow,
     AppRowSchema,
     type AuditRow,
@@ -22,8 +20,6 @@ import {
     ProjectIdRowSchema,
     type ProjectRow,
     ProjectRowSchema,
-    type ProjectStoragePlacementRow,
-    ProjectStoragePlacementRowSchema,
     type RecordPresenceRow,
     RecordPresenceRowSchema,
     type TenantRow,
@@ -137,28 +133,6 @@ export class PlatformControlPlaneStorage {
             signal,
         );
         return decodeStorageRecords(TenantRowSchema, rows.results);
-    };
-
-    readonly readActiveProjectAppId = async (
-        tenantId: string,
-        projectId: string,
-        signal: AbortSignal,
-    ): Promise<string | null> => {
-        const row: AppIdRow | null = decodeOptionalStorageRecord(
-            AppIdRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            `SELECT app_id FROM platform_projects
-                              WHERE tenant_id = ? AND project_id = ? AND lifecycle = 'active'`,
-                        )
-                        .bind(tenantId, projectId)
-                        .first(),
-                signal,
-            ),
-        );
-        return row?.app_id ?? null;
     };
 
     readonly readTenant = async (tenantId: string, signal: AbortSignal): Promise<TenantRow | null> =>
@@ -373,30 +347,25 @@ export class PlatformControlPlaneStorage {
             await waitForD1(
                 () =>
                     this.#database
-                        .prepare(`SELECT projects.*, placement.d1_shard_id, placement.r2_bucket_id,
-                                         placement.placement_revision
-                                    FROM platform_projects AS projects
-                                    JOIN platform_project_storage_placements AS placement USING (project_id)
-                                   WHERE app_id = ? AND idempotency_key = ?`)
+                        .prepare("SELECT * FROM platform_projects WHERE app_id = ? AND idempotency_key = ?")
                         .bind(appId, idempotencyKey)
                         .first(),
                 signal,
             ),
         );
 
-    readonly readProjectStoragePlacement = async (
+    readonly readActiveProjectScope = async (
         projectId: string,
         signal: AbortSignal,
-    ): Promise<ProjectStoragePlacementRow | null> =>
+    ): Promise<PlatformProjectScopeRow | null> =>
         decodeOptionalStorageRecord(
-            ProjectStoragePlacementRowSchema,
+            PlatformProjectScopeRowSchema,
             await waitForD1(
                 () =>
                     this.#database
                         .prepare(
-                            `SELECT tenant_id, project_id, d1_shard_id, r2_bucket_id, placement_revision
+                            `SELECT app_id, tenant_id, project_id, lifecycle
                                FROM platform_projects
-                               JOIN platform_project_storage_placements USING (project_id)
                               WHERE project_id = ? AND lifecycle = 'active'`,
                         )
                         .bind(projectId)
@@ -453,23 +422,13 @@ export class PlatformControlPlaneStorage {
                             project.tenant_id,
                             activeProjectLimit,
                         ),
-                    this.#database
-                        .prepare(`INSERT INTO platform_project_storage_placements (
-                                      project_id, d1_shard_id, r2_bucket_id, placement_revision
-                                  ) SELECT project_id, ?, ?, ? FROM platform_projects WHERE project_id = ?`)
-                        .bind(
-                            project.d1_shard_id,
-                            project.r2_bucket_id,
-                            project.placement_revision,
-                            project.project_id,
-                        ),
                     this.auditCreatedProjectStatement(audit),
                 ]),
             signal,
         );
         return {
-            projectCreated: results[0]?.meta.changes === 1 && results[1]?.meta.changes === 1,
-            auditRecorded: results[2]?.meta.changes === 1,
+            projectCreated: results[0]?.meta.changes === 1,
+            auditRecorded: results[1]?.meta.changes === 1,
         };
     };
 
@@ -491,11 +450,7 @@ export class PlatformControlPlaneStorage {
         const rows = await waitForD1(
             () =>
                 this.#database
-                    .prepare(`SELECT projects.*, placement.d1_shard_id, placement.r2_bucket_id,
-                                     placement.placement_revision
-                                FROM platform_projects AS projects
-                                JOIN platform_project_storage_placements AS placement USING (project_id)
-                               WHERE app_id = ? ORDER BY created_at, project_id`)
+                    .prepare("SELECT * FROM platform_projects WHERE app_id = ? ORDER BY created_at, project_id")
                     .bind(appId)
                     .all(),
             signal,

@@ -83,6 +83,10 @@ Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;
 mapped placements missing configured bindings return HTTP 400 with
 `storage_location_unavailable`.
 
+The control plane stores Project metadata directly in `platform_projects`.
+Placement is derived only from the encoded ID; migration
+`0006_drop_project_storage_placements.sql` removes the redundant placement table.
+
 Cloudflare adapters own a fixed tenant label used only for Durable Object naming.
 Standalone Workers configure `MOBIUS_TENANT_ID` (the supplied Wrangler profiles
 use `standalone`); the Platform entry point uses the fixed `platform` label.
