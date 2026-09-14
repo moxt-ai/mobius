@@ -20,11 +20,9 @@ function readPromptText(value: unknown): string {
 
     let text = "";
     for (const block of value) {
-        // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
         if (!isRecord(block) || block["type"] !== "text") {
             continue;
         }
-        // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
         const blockText = block["text"];
         if (typeof blockText === "string") {
             text += blockText;

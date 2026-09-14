@@ -18,6 +18,10 @@
         },
         "rules": {
             "preset": "recommended",
+            "complexity": {
+                "useLiteralKeys": "off",
+                "noUselessConstructor": "error"
+            },
             "style": {
                 "useBlockStatements": "error"
             },

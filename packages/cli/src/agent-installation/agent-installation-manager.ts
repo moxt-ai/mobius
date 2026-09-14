@@ -18,6 +18,7 @@ export abstract class AgentInstallation {
 export class RequestedInstallation extends AgentInstallation {
     readonly status = "requested";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(requestId: string, agentId: string) {
         super(requestId, agentId);
     }
@@ -37,6 +38,7 @@ export class SucceededInstallation extends AgentInstallation {
     readonly authenticationMayBeRequired = true;
     readonly status = "succeeded";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(requestId: string, agentId: string) {
         super(requestId, agentId);
     }
@@ -57,6 +59,7 @@ export class FailedInstallation extends AgentInstallation {
 export class CancelledInstallation extends AgentInstallation {
     readonly status = "cancelled";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(requestId: string, agentId: string) {
         super(requestId, agentId);
     }

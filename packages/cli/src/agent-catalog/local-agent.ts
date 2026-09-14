@@ -76,6 +76,7 @@ export abstract class InstallableAgentDefinition {
 export class MissingAgentDefinition extends InstallableAgentDefinition {
     readonly status = "agent_not_installed";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(id: string, label: string) {
         super(id, label);
     }

@@ -753,6 +753,7 @@ export abstract class MobiusInstallableAgentDescriptor {
 export class MobiusMissingAgentDescriptor extends MobiusInstallableAgentDescriptor {
     readonly status = "agent_not_installed";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(id: string, label: string) {
         super(id, label);
     }

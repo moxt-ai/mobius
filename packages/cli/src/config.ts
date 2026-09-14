@@ -52,14 +52,9 @@ export function createDaemonConfig(
 
 export function loadDaemonConfig(): DaemonConfig {
     const relayUrl = new URL(
-        // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
         process.env["MOBIUS_RELAY_URL"] ?? `ws://127.0.0.1:8787${mobiusApiPath("/channels/local/daemon")}`,
     );
-    relayUrl.searchParams.set(
-        "token",
-        // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
-        process.env["MOBIUS_RELAY_TOKEN"] ?? "local-development-token",
-    );
+    relayUrl.searchParams.set("token", process.env["MOBIUS_RELAY_TOKEN"] ?? "local-development-token");
 
     if (relayUrl.protocol !== "ws:" && relayUrl.protocol !== "wss:") {
         throw new Error("MOBIUS_RELAY_URL must use ws or wss");
@@ -69,10 +64,8 @@ export function loadDaemonConfig(): DaemonConfig {
         {
             defaultWorkspace: loadDefaultWorkspace(),
             auditDatabasePath:
-                // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
                 process.env["MOBIUS_AUDIT_DATABASE"] ??
                 fileURLToPath(new URL("../../../.mobius/daemon.sqlite", import.meta.url)),
-            // biome-ignore lint/complexity/useLiteralKeys: Environment variables use an index signature.
             channelId: process.env["MOBIUS_CHANNEL_ID"] ?? "local",
             relayUrl,
         },

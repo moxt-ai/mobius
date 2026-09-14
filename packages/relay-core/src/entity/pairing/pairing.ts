@@ -51,6 +51,7 @@ export abstract class InstallableAgentDescriptor {
 export class MissingAgentDescriptor extends InstallableAgentDescriptor {
     readonly status = "agent_not_installed";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     public constructor(id: string, label: string) {
         super(id, label);
     }

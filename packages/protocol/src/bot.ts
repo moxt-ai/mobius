@@ -46,6 +46,7 @@ export abstract class BotResource {
 export class DraftBot extends BotResource {
     readonly lifecycle = "draft";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(
         botId: string,
         projectId: string,
@@ -184,6 +185,7 @@ export abstract class BotBehaviorRevision {
 export class ProposedBotBehavior extends BotBehaviorRevision {
     readonly lifecycle = "proposed";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(
         behaviorRevisionId: string,
         botId: string,
@@ -306,6 +308,7 @@ export abstract class BotExecutionBinding {
 export class RequestedBotExecutionBinding extends BotExecutionBinding {
     readonly lifecycle = "requested";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(
         bindingId: string,
         botId: string,
@@ -462,6 +465,7 @@ export abstract class BotDeliveryTarget {
 export class ActiveBotDeliveryTarget extends BotDeliveryTarget {
     readonly lifecycle = "active";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(
         deliveryTargetId: string,
         botId: string,
@@ -582,6 +586,7 @@ export abstract class BotConversation {
 export class ProvisioningBotConversation extends BotConversation {
     readonly lifecycle = "provisioning";
 
+    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(
         conversationId: string,
         botId: string,
@@ -630,10 +635,6 @@ export class ActiveBotConversation extends BotConversation {
 export class OwnerBotConversation extends ActiveBotConversation {
     readonly creatorKind = "owner";
     readonly replyRoute = new OwnerBotReplyRoute();
-
-    constructor(conversation: BotConversation, activatedAt: string) {
-        super(conversation, activatedAt);
-    }
 }
 
 export class ConnectedBotConversation extends ActiveBotConversation {

@@ -278,7 +278,6 @@ function readBoolean(value: Readonly<Record<string, unknown>>, key: string): boo
 }
 
 function assertKind(value: Readonly<Record<string, unknown>>, expectedKind: string): void {
-    // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires index-signature access here.
     if (value["kind"] !== expectedKind) {
         throw new ProtocolMessageError(`Expected message kind: ${expectedKind}`);
     }

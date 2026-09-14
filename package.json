@@ -30,7 +30,7 @@
         "worktree:reset": "bash scripts/worktree/reset.sh",
         "worktree:ports": "node scripts/worktree/port-allocator.mjs validate",
         "worktree:repair-ports": "node scripts/worktree/port-allocator.mjs repair",
-        "build": "pnpm --filter @moxt-ai/mobius-protocol build && pnpm --filter @moxt-ai/mobius-relay-core build && pnpm --filter @moxt-ai/mobius-sdk build && pnpm --filter @moxt-ai/mobius-fake-acp-agent build && pnpm --filter @moxt-ai/mobius build && pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone build && pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform build",
+        "build": "pnpm --recursive --workspace-concurrency=3 --filter '!@moxt-ai/mobius-web' --filter '!@moxt-ai/mobius-platform-app' --if-present build",
         "typecheck": "tsc --project tsconfig.json && pnpm --recursive --if-present typecheck",
         "check:no-chinese": "node scripts/check-no-chinese.ts",
         "lint": "biome ci --error-on-warnings && pnpm check:no-chinese",
@@ -46,11 +46,11 @@
         "test:watch": "vitest",
         "test:coverage": "vitest run --coverage",
         "knip": "knip",
-        "check": "pnpm typecheck && pnpm build && pnpm lint && pnpm test:ci && pnpm knip",
+        "check": "pnpm --filter mobius-workspace run --parallel '/^(lint|typecheck|build|test:ci|knip)$/'",
         "postinstall": "simple-git-hooks"
     },
     "simple-git-hooks": {
-        "pre-commit": "pnpm typecheck && pnpm check:no-chinese && pnpm biome check --staged --files-ignore-unknown=true --no-errors-on-unmatched"
+        "pre-commit": "pnpm biome check --staged --error-on-warnings --files-ignore-unknown=true --no-errors-on-unmatched && pnpm check:no-chinese && pnpm typecheck"
     },
     "devDependencies": {
         "@biomejs/biome": "2.5.12",

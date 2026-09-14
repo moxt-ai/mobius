@@ -102,11 +102,7 @@ function addLocalDevelopmentPort(arguments_: readonly string[]): readonly string
         return arguments_;
     }
 
-    const rawPort =
-        // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket notation for ProcessEnv.
-        process.env["MOBIUS_RELAY_PORT"] ??
-        // biome-ignore lint/complexity/useLiteralKeys: The readonly environment contract uses an index signature.
-        worktreeEnvironment["MOBIUS_RELAY_PORT"];
+    const rawPort = process.env["MOBIUS_RELAY_PORT"] ?? worktreeEnvironment["MOBIUS_RELAY_PORT"];
     if (rawPort === undefined) {
         return arguments_;
     }

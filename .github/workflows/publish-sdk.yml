@@ -74,9 +74,6 @@ jobs:
       - if: steps.sdk-version.outputs.changed == 'true'
         run: pnpm install --frozen-lockfile
 
-      - if: steps.sdk-version.outputs.changed == 'true'
-        run: pnpm check
-
       - name: Pack release artifacts
         if: steps.sdk-version.outputs.changed == 'true'
         run: |

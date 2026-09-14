@@ -1,5 +1,34 @@
 # Development Guide
 
+## Repository checks
+
+Run `pnpm check` with `VITE_CLERK_PUBLISHABLE_KEY` set for the Platform build.
+For local build-only verification, use the same fixture as CI:
+
+```bash
+VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm check
+```
+
+Lint, typechecking, builds, contract tests, and Knip run concurrently through
+pnpm's script runner, which reports failures with a nonzero exit status.
+The explicit `mobius-workspace` filter selects the five root scripts; without
+it, `--parallel` selects package scripts and omits root-only checks.
+These checks read source independently; only builds write release artifacts.
+Staged pre-commit lint runs before typechecking for quick feedback.
+Warnings also fail lint and staged pre-commit checks.
+`noUselessConstructor` is an error; constructors needed to expose a protected
+base constructor have local, documented suppressions. `useLiteralKeys` is
+disabled because it conflicts with TypeScript's `noPropertyAccessFromIndexSignature`.
+
+Builds run in dependency order with at most three workspace tasks at once.
+The Standalone and Platform build scripts each own their frontend build, so the
+root build excludes those frontend packages to avoid duplicate builds and races
+with Vite clearing their output directories.
+
+PRs and merge groups run `pnpm check` and `pnpm test:integration`. Main pushes
+deploy and publish using the merge queue's verification instead of repeating it.
+Manual CI runs still verify before deploying.
+
 ## Hosting profiles
 
 `relay-core` depends directly on Cloudflare and owns the shared Durable Objects,
@@ -192,8 +221,9 @@ Code should be self-explanatory through names, types, and structure. Implementat
 The `@moxt-ai/mobius` package is published by `.github/workflows/publish-cli.yml`
 when the version in `packages/cli/package.json` changes on `main`. The workflow
 compares the package version before and after the push, skips publication when
-the version is unchanged, and runs the full repository check before publishing
-to npm.
+the version is unchanged, and publishes to npm. Main pushes rely on the merge
+queue's checks; publishing builds the release artifacts through each package's
+`prepack` script.
 
 Before the first automated release, configure a GitHub Actions trusted publisher
 for `@moxt-ai/mobius` in npm with these values:
@@ -212,7 +242,7 @@ so it does not require an `NPM_TOKEN` repository secret.
 
 `.github/workflows/publish-sdk.yml` publishes `@moxt-ai/mobius-sdk` when the
 version in `packages/mobius-sdk/package.json` changes on `main`, following the CLI
-release policy. It runs `pnpm check`, packs the protocol and SDK with pnpm, and
+release policy. It packs the protocol and SDK with pnpm, and
 prints an npm publication dry run before publishing. pnpm packing applies
 `publishConfig` and replaces workspace dependencies with registry versions.
 

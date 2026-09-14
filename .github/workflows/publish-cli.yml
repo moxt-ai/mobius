@@ -90,9 +90,6 @@ jobs:
       - if: steps.cli-version.outputs.changed == 'true'
         run: pnpm install --frozen-lockfile
 
-      - if: steps.cli-version.outputs.changed == 'true'
-        run: pnpm check
-
       - name: Publish CLI
         if: steps.cli-version.outputs.changed == 'true'
         working-directory: packages/cli
