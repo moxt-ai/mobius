@@ -393,7 +393,31 @@ function ActivityLine({
     );
 }
 
-function ProgressUpdates({
+function ProgressUpdate({
+    activity,
+    connection,
+    sessionId,
+    streaming,
+}: {
+    readonly activity: RecordedActivity;
+    readonly connection: ChannelConnection;
+    readonly sessionId: string;
+    readonly streaming: boolean;
+}) {
+    const active = streaming && (activity.status === "pending" || activity.status === "running");
+    return (
+        <section
+            aria-label="Agent progress update"
+            aria-live={active ? "polite" : undefined}
+            className={cn("agent-progress mb-4 min-w-0", active && "agent-stream is-streaming")}
+        >
+            {activity.output.length > 0 && <AgentMarkdown markdown={activity.output} streaming={active} />}
+            <AgentRichContent connection={connection} contents={activity.content} sessionId={sessionId} />
+        </section>
+    );
+}
+
+function WorkActivityDisclosure({
     activities,
     connection,
     sessionId,
@@ -404,26 +428,52 @@ function ProgressUpdates({
     readonly sessionId: string;
     readonly streaming: boolean;
 }) {
-    if (activities.length === 0) {
-        return null;
-    }
+    const initialPresentation = describeAgentActivities(activities, streaming);
+    const [manuallyOpen, setManuallyOpen] = useState(() => !streaming && initialPresentation.defaultOpen);
+    const working =
+        streaming && activities.some((activity) => activity.status === "pending" || activity.status === "running");
+    const presentation = describeAgentActivities(activities, streaming);
+    useEffect(() => {
+        if (!streaming && presentation.defaultOpen) {
+            setManuallyOpen(true);
+        }
+    }, [presentation.defaultOpen, streaming]);
+    const open = streaming || manuallyOpen;
+    const disclosureLabel = presentation.label;
+
     return (
-        <div className="mb-4 grid gap-3">
-            {activities.map((activity) => {
-                const active = streaming && (activity.status === "pending" || activity.status === "running");
-                return (
-                    <section
-                        aria-label="Agent progress update"
-                        aria-live={active ? "polite" : undefined}
-                        className={cn("agent-progress min-w-0", active && "agent-stream is-streaming")}
-                        key={activity.activityId}
-                    >
-                        {activity.output.length > 0 && <AgentMarkdown markdown={activity.output} streaming={active} />}
-                        <AgentRichContent connection={connection} contents={activity.content} sessionId={sessionId} />
-                    </section>
-                );
-            })}
-        </div>
+        <details
+            className="group/work mb-3 min-w-0 max-w-full"
+            data-testid="agent-process-disclosure"
+            onToggle={(event) => {
+                if (!streaming) {
+                    setManuallyOpen(event.currentTarget.open);
+                }
+            }}
+            open={open}
+        >
+            <summary
+                aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
+                className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
+            >
+                <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
+                <span>{disclosureLabel}</span>
+                {working && (
+                    <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
+                )}
+            </summary>
+            <div className="mt-1.5 grid min-w-0 max-w-full gap-1">
+                {activities.map((activity) => (
+                    <ActivityLine
+                        activity={activity}
+                        connection={connection}
+                        key={`${sessionId}:${activity.activityId}`}
+                        sessionId={sessionId}
+                        streaming={streaming}
+                    />
+                ))}
+            </div>
+        </details>
     );
 }
 
@@ -438,66 +488,51 @@ export function AgentActivityList({
     readonly sessionId: string;
     readonly streaming: boolean;
 }) {
-    const progressActivities = activities.filter((activity) => activity.activityType === "progress");
-    const workActivities = activities.filter((activity) => activity.activityType !== "progress");
-    const initialPresentation = describeAgentActivities(workActivities, streaming);
-    const [manuallyOpen, setManuallyOpen] = useState(() => !streaming && initialPresentation.defaultOpen);
-    const working =
-        streaming && workActivities.some((activity) => activity.status === "pending" || activity.status === "running");
-    const presentation = describeAgentActivities(workActivities, streaming);
-    useEffect(() => {
-        if (!streaming && presentation.defaultOpen) {
-            setManuallyOpen(true);
-        }
-    }, [presentation.defaultOpen, streaming]);
     if (activities.length === 0) {
         return null;
     }
-    const open = streaming || manuallyOpen;
-    const disclosureLabel = presentation.label;
-
-    return (
-        <>
-            <ProgressUpdates
-                activities={progressActivities}
+    const timeline: ReactNode[] = [];
+    let workGroupKey = "";
+    let workActivities: RecordedActivity[] = [];
+    const flushWorkActivities = (): void => {
+        if (workActivities.length === 0) {
+            return;
+        }
+        const currentWorkActivities = workActivities;
+        const currentWorkGroupKey = workGroupKey;
+        workGroupKey = "";
+        workActivities = [];
+        timeline.push(
+            <WorkActivityDisclosure
+                activities={currentWorkActivities}
                 connection={connection}
+                key={`work:${currentWorkGroupKey}`}
                 sessionId={sessionId}
                 streaming={streaming}
-            />
-            {workActivities.length > 0 && (
-                <details
-                    className="group/work mb-3 min-w-0 max-w-full"
-                    data-testid="agent-process-disclosure"
-                    onToggle={(event) => {
-                        if (!streaming) {
-                            setManuallyOpen(event.currentTarget.open);
-                        }
-                    }}
-                    open={open}
-                >
-                    <summary
-                        aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
-                        className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
-                    >
-                        <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
-                        <span>{disclosureLabel}</span>
-                        {working && (
-                            <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
-                        )}
-                    </summary>
-                    <div className="mt-1.5 grid min-w-0 max-w-full gap-1">
-                        {workActivities.map((activity) => (
-                            <ActivityLine
-                                activity={activity}
-                                connection={connection}
-                                key={`${sessionId}:${activity.activityId}`}
-                                sessionId={sessionId}
-                                streaming={streaming}
-                            />
-                        ))}
-                    </div>
-                </details>
-            )}
-        </>
-    );
+            />,
+        );
+    };
+
+    for (const activity of activities) {
+        if (activity.activityType === "progress") {
+            flushWorkActivities();
+            timeline.push(
+                <ProgressUpdate
+                    activity={activity}
+                    connection={connection}
+                    key={`progress:${activity.activityId}`}
+                    sessionId={sessionId}
+                    streaming={streaming}
+                />,
+            );
+            continue;
+        }
+        if (workActivities.length === 0) {
+            workGroupKey = activity.activityId;
+        }
+        workActivities.push(activity);
+    }
+    flushWorkActivities();
+
+    return <>{timeline}</>;
 }

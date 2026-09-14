@@ -742,7 +742,7 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given an Agent reports progress and returns a code sample, When the turn completes, Then the progress reads as message copy and the code offers one clear copy action", async () => {
+    it("Given an Agent alternates progress updates and tool work, When the turn completes, Then the chat preserves that timeline before the final answer", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -800,6 +800,81 @@ describe.sequential("Agent interaction boundaries", () => {
             );
             await paired.daemon.sendSessionEvent(
                 prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "tool-1",
+                    activityType: "tool",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "read",
+                    output: "",
+                    sequence: 1,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Read renderer entry point",
+                    toolKind: "read",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "progress-2",
+                    activityType: "progress",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "The entry point is correct. I am checking its **streaming styles** next.",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "",
+                    output: "The entry point is correct. I am checking its **streaming styles** next.",
+                    sequence: 2,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Progress update",
+                    toolKind: "",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "tool-2",
+                    activityType: "tool",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "search",
+                    output: "",
+                    sequence: 3,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Search renderer streaming styles",
+                    toolKind: "search",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
                 encodeAgentMessageDeltaEvent({
                     commandId: prompt.commandId,
                     kind: "agent.message.delta",
@@ -828,11 +903,40 @@ describe.sequential("Agent interaction boundaries", () => {
             const agentMessage = await screen.findByRole("article", {
                 name: "Message from Codex",
             });
-            const progress = within(agentMessage).getByRole("region", {
+            const progressUpdates = within(agentMessage).getAllByRole("region", {
                 name: "Agent progress update",
             });
-            expect(within(progress).getByText("renderer")).toBeTruthy();
-            expect(within(agentMessage).queryByTestId("agent-process-disclosure")).toBeNull();
+            expect(progressUpdates).toHaveLength(2);
+            const firstProgressUpdate = progressUpdates.at(0);
+            const secondProgressUpdate = progressUpdates.at(1);
+            if (firstProgressUpdate === undefined || secondProgressUpdate === undefined) {
+                throw new Error("Expected both progress updates");
+            }
+            expect(within(firstProgressUpdate).getByText("renderer")).toBeTruthy();
+            expect(within(secondProgressUpdate).getByText("streaming styles")).toBeTruthy();
+            const workDisclosures = within(agentMessage).getAllByTestId("agent-process-disclosure");
+            expect(workDisclosures).toHaveLength(2);
+            const firstWorkDisclosure = workDisclosures.at(0);
+            const secondWorkDisclosure = workDisclosures.at(1);
+            if (firstWorkDisclosure === undefined || secondWorkDisclosure === undefined) {
+                throw new Error("Expected both work disclosures");
+            }
+            const finalAnswer = within(agentMessage).getByText("Use this entry point:");
+            const timeline = [
+                firstProgressUpdate,
+                firstWorkDisclosure,
+                secondProgressUpdate,
+                secondWorkDisclosure,
+                finalAnswer,
+            ];
+            for (let index = 1; index < timeline.length; index += 1) {
+                const previous = timeline.at(index - 1);
+                const current = timeline.at(index);
+                if (previous === undefined || current === undefined) {
+                    throw new Error("Expected adjacent timeline entries");
+                }
+                expect(previous.compareDocumentPosition(current) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+            }
             await waitFor(() => {
                 expect(within(agentMessage).getByRole("button", { name: "Copy code" }).hasAttribute("disabled")).toBe(
                     false,
