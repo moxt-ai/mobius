@@ -6,6 +6,7 @@ import {
     decodeSessionElicitationRespondCommand,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
+    decodeWorkspaceListCommand,
     MOBIUS_SESSION_EXPORT_FORMAT_VERSION,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -130,6 +131,31 @@ export function createSessionRoutes() {
                     }),
                 );
                 const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/workspace",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = context.req.valid("json");
+                assertExactKeys(body, ["directoryId"]);
+                const command = decodeWorkspaceListCommand(
+                    JSON.stringify({
+                        bindingId: "workspace",
+                        directoryId: readString(body, "directoryId", 2_048),
+                        kind: "workspace.list",
+                        requestId: crypto.randomUUID(),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.listWorkspace(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                     bearerToken(context.req.raw),

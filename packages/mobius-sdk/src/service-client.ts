@@ -4,6 +4,7 @@ import {
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionReadyEvent,
+    decodeWorkspaceEntriesEvent,
     type Interaction,
     MOBIUS_API_PREFIX,
     MOBIUS_EVENT_FORMAT_VERSION,
@@ -13,6 +14,7 @@ import {
     type NativeSessionHistory,
     type SessionConfigureCommand,
     SessionPromptDisposition,
+    type WorkspaceEntriesEvent,
 } from "@moxt-ai/mobius-protocol";
 
 import {
@@ -767,6 +769,21 @@ export class MobiusRuntimeResources {
 
     readonly list = async (signal: AbortSignal): Promise<readonly MobiusRuntimeDescriptor[]> =>
         decodeMobiusRuntimeList(await this.#executor.get(projectPath(this.#projectId, "runtimes"), signal));
+
+    readonly listWorkspace = async (
+        runtimeId: string,
+        directoryId: string,
+        signal: AbortSignal,
+    ): Promise<WorkspaceEntriesEvent> =>
+        decodeWorkspaceEntriesEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/workspace`),
+                    { directoryId },
+                    signal,
+                ),
+            ),
+        );
 
     readonly nativeSessions = async (
         runtimeId: string,

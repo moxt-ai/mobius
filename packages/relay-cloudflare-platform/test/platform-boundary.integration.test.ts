@@ -7,11 +7,13 @@ import {
     decodeNativeSessionCommand,
     decodeSessionConfigureCommand,
     decodeSessionEventAcknowledgement,
+    decodeWorkspaceListCommand,
     encodeBotExecutionBindingApprovedEvent,
     encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionEventEnvelope,
     encodeSessionOperationFailedEvent,
+    encodeWorkspaceEntriesEvent,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
@@ -917,6 +919,45 @@ it("Given a paired native Agent, When the App backend discovers sessions, Then M
             throw new Error("The session is not resumable");
         }
         expect(imported.ready.sessionId).toBe(fixture.sessionId);
+    } finally {
+        client.close();
+        fixture.socket.close();
+    }
+});
+
+it("Given a paired local Runtime, When the App backend browses its workspace, Then Mobius returns the locally authorized directories", async () => {
+    const fixture = await createReadyConversation("workspace-browser-backend");
+    const client = new MobiusClient({
+        endpoint: relayOrigin,
+        projectId: fixture.projectId,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    try {
+        const pending = client.runtimes.listWorkspace(fixture.runtimeId, "home", new AbortController().signal);
+        const request = decodeWorkspaceListCommand(await fixture.socketMessages.next());
+        expect(request).toMatchObject({
+            bindingId: "workspace",
+            directoryId: "home",
+        });
+        fixture.socket.send(
+            encodeWorkspaceEntriesEvent({
+                bindingId: request.bindingId,
+                directoryId: "home",
+                directoryLabel: "~",
+                entries: [{ directoryId: "path-L1VzZXJzL2RldmVsb3Blcg", name: "developer" }],
+                kind: "workspace.entries",
+                parentDirectoryId: "path-L1VzZXJz",
+                requestId: request.requestId,
+            }),
+        );
+
+        await expect(pending).resolves.toMatchObject({
+            directoryId: "home",
+            directoryLabel: "~",
+            entries: [{ directoryId: "path-L1VzZXJzL2RldmVsb3Blcg", name: "developer" }],
+            parentDirectoryId: "path-L1VzZXJz",
+        });
     } finally {
         client.close();
         fixture.socket.close();
