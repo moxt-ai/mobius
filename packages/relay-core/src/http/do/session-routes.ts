@@ -1,8 +1,11 @@
 import {
+    decodeNativeSessionCommand,
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionPermissionRespondCommand,
+    decodeSessionPrepareCommand,
     MOBIUS_SESSION_EXPORT_FORMAT_VERSION,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -97,6 +100,82 @@ export function createSessionRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", sessionErrorMiddleware)
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/native-sessions",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = context.req.valid("json");
+                if (body["action"] !== "list" && body["action"] !== "import") {
+                    throw new PairingDirectoryError("invalid_request", "Choose native session listing or import");
+                }
+                assertExactKeys(
+                    body,
+                    body["action"] === "list"
+                        ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
+                        : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
+                );
+                const { discoveryId, ...input } = body;
+                const sourceSessionId =
+                    input["action"] === "list" && discoveryId === null
+                        ? crypto.randomUUID()
+                        : validateIdentifier(readString(body, "discoveryId"), "discovery_id");
+                const command = decodeNativeSessionCommand(
+                    JSON.stringify({
+                        ...input,
+                        kind: "native.session.request",
+                        requestId: crypto.randomUUID(),
+                        sessionId: sourceSessionId,
+                        bindingId: "workspace",
+                        ...(body["action"] === "import" ? { targetSessionId: crypto.randomUUID() } : {}),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.requestControl(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
+        )
+        .post(
+            "/projects/:projectId/sessions/:sessionId/:operation{prepare|configuration}",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
+                const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
+                const token = bearerToken(context.req.raw);
+                const signal = context.req.raw.signal;
+                const session = await context.env.services.sessions.readSession(projectId, token, sessionId, signal);
+                const body = context.req.valid("json");
+                const prepare = context.req.param("operation") === "prepare";
+                assertExactKeys(body, prepare ? [] : ["configId", "value", "booleanValue", "valueType"]);
+                const identity = {
+                    sessionId,
+                    requestId: crypto.randomUUID(),
+                    agentId: session.agentId,
+                    bindingId: session.defaultBinding.bindingId,
+                    directoryId: session.defaultBinding.workspaceRef,
+                    additionalDirectoryIds: [],
+                };
+                const encoded = JSON.stringify({
+                    ...body,
+                    ...identity,
+                    kind: prepare ? "session.prepare" : "session.configure",
+                });
+                return context.json(
+                    await context.env.services.runtimePairings.requestControl(
+                        projectId,
+                        session.runtimeId,
+                        token,
+                        prepare ? decodeSessionPrepareCommand(encoded) : decodeSessionConfigureCommand(encoded),
+                        signal,
+                    ),
+                );
+            },
+        )
         .get("/projects/:projectId/runtimes", async (context) => {
             const useCases = context.env.services.sessions;
             return context.json({

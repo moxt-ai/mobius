@@ -21,6 +21,14 @@ import type {
     VerifiedChannelAccess,
 } from "../../entity/pairing/pairing.ts";
 export interface PairingOperations {
+    readonly openControlHost: (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        permission: ProjectPermission,
+        signal: AbortSignal,
+    ) => Promise<ChannelHostCredential>;
+    readonly closeControlHost: (access: ChannelHostCredential, signal: AbortSignal) => Promise<void>;
     readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeRuntimeCredential: (token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeHost: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelHostCredential>;

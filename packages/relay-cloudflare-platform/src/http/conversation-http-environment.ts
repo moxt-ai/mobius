@@ -1,9 +1,11 @@
 import type { BotService, RelayContext } from "@moxt-ai/mobius-relay-core";
 import type { ConversationAccessService } from "../service/conversation-access-service.ts";
 import type { ConversationStreamRegistry } from "../service/conversation-stream-service.ts";
+import type { SessionAccessService } from "../service/session-access-service.ts";
 
 export interface ConversationHttpBindings {
     readonly access: ConversationAccessService;
+    readonly sessionAccess: SessionAccessService;
     readonly allowedOrigins: ReadonlySet<string>;
     readonly bots: BotService;
     readonly nowEpochMilliseconds: () => number;

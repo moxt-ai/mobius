@@ -5,9 +5,12 @@ import {
     createWorkerContext,
     type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
+    type RelayContext,
 } from "@moxt-ai/mobius-relay-core";
+import { Hono } from "hono";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
+import { conversationErrorResponse } from "./http/conversation-error-response.ts";
 import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import {
@@ -15,10 +18,12 @@ import {
     platformAuthenticationFromEnvironment,
 } from "./infra/platform-authentication-environment.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
+import { browserCors } from "./middleware/browser-cors.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
+import { SessionAccessService } from "./service/session-access-service.ts";
 import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
@@ -27,6 +32,7 @@ import {
     PlatformStorageRegistry,
     platformDatabaseBindings,
 } from "./storage/platform-database-resolver.ts";
+import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
 export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
@@ -53,6 +59,12 @@ class DisabledPublicProjectBootstrap {
 }
 
 const projectApplication = createPlatformMobiusApplication();
+const scopedProjectApplication = new Hono<{
+    readonly Bindings: { readonly relay: RelayContext; readonly allowedOrigins: ReadonlySet<string> };
+}>()
+    .use("*", browserCors)
+    .onError(conversationErrorResponse)
+    .all("*", async (context) => await projectApplication.fetch(context.req.raw, context.env.relay));
 const botApplication = createBotApplication();
 const controlApplication = createPlatformControlApplication();
 const conversationApplication = createConversationApplication();
@@ -73,6 +85,7 @@ function isConversationPath(pathname: string): boolean {
         pathname === `${MOBIUS_API_PREFIX}/v1/client/session` ||
         pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session/`) ||
         /^\/mobius\/api\/v1\/conversations\/[^/]+\/access-credentials$/.test(pathname) ||
+        /^\/mobius\/api\/v1\/projects\/[^/]+\/sessions\/[^/]+\/access-credentials$/.test(pathname) ||
         /^\/mobius\/api\/v1\/conversation-access-credentials\/[^/]+\/(?:rotate|revoke)$/.test(pathname)
     );
 }
@@ -114,6 +127,10 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 { read: controlStorage.readProjectStoragePlacement },
                 storageRegistry,
             );
+            const sessionAccess = new SessionAccessService(
+                new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+                control,
+            );
             const cx = createWorkerContext({
                 namespaces: {
                     runtime: environment.RUNTIME_RELAY,
@@ -121,7 +138,7 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                     connections: environment.BOT_CONNECTIONS,
                 },
                 namespacePrefix: "platform",
-                authorization: control,
+                authorization: sessionAccess.authorizer(request),
                 bootstrap: new DisabledPublicProjectBootstrap(),
                 databases,
                 identityDatabases: projectDatabases,
@@ -134,6 +151,7 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                     throw new Error("Platform Bot services are unavailable");
                 }
                 return await conversationApplication.fetch(request, {
+                    sessionAccess,
                     access: new ConversationAccessService(
                         new ConversationAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
                         control,
@@ -146,7 +164,10 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
                 });
             }
             if (isVersionedSharedProjectPath(pathname)) {
-                return await projectApplication.fetch(request, cx);
+                return await scopedProjectApplication.fetch(request, {
+                    relay: cx,
+                    allowedOrigins: authentication.allowedOrigins,
+                });
             }
             if (pathname.startsWith(`${MOBIUS_API_PREFIX}/v1/`) && cx.services.bots !== null) {
                 return await botApplication.fetch(request, {

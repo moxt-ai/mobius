@@ -63,6 +63,7 @@ export type {
     MobiusHttpTransport,
     MobiusSessionEventObserver,
 } from "./service-client.ts";
+export { MobiusClient } from "./service-client.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const CONVERSATION_CREDENTIAL_PATTERN = /^mconv_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;

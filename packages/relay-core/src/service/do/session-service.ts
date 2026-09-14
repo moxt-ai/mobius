@@ -327,13 +327,21 @@ export class SessionService {
         sessionId: string,
         cursor: string,
         signal: AbortSignal,
-    ): Promise<Response> =>
-        await this.#sessionEventStreams.openEventStream(
-            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
-            sessionId,
-            cursor,
+    ): Promise<Response> => {
+        const access = await this.#pairings.authorizeProject(
+            projectId,
+            token,
+            ProjectPermission.ProjectEventsRead,
             signal,
         );
+        const streamSignal = access.lifetime.isExpiring
+            ? AbortSignal.any([
+                  signal,
+                  AbortSignal.timeout(Math.max(0, access.lifetime.expiresAtEpochMilliseconds - Date.now())),
+              ])
+            : signal;
+        return await this.#sessionEventStreams.openEventStream(access.scope, sessionId, cursor, streamSignal);
+    };
 
     readonly readTurn = async (
         projectId: string,

@@ -486,6 +486,27 @@ export class PairingStorage {
             .bind(pairingId, pollHash)
             .first<PairingChannelRow>(signal);
 
+    readonly createControlHost = (
+        channelId: string,
+        credentialId: string,
+        tokenHash: string,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        this.#database
+            .prepare(`INSERT INTO channel_host_credentials (credential_id, channel_id, token_hash, authority, created_at, last_used_at)
+            VALUES (?, ?, ?, 'linked', ?, ?)`)
+            .bind(credentialId, channelId, tokenHash, now, now)
+            .run(signal);
+
+    readonly removeControlHost = (channelId: string, credentialId: string, signal: AbortSignal) =>
+        this.#database
+            .prepare(
+                `DELETE FROM channel_host_credentials WHERE channel_id = ? AND credential_id = ? AND source_grant_id IS NULL AND authority = 'linked'`,
+            )
+            .bind(channelId, credentialId)
+            .run(signal);
+
     readonly redeemGrant = (
         channelId: string,
         grantId: string,

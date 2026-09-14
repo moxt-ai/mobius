@@ -340,6 +340,25 @@ class MobiusRecordingPolicyRequestPayload {
     }
 }
 
+export class MobiusSessionAccess {
+    readonly credential: string;
+    readonly credentialId: string;
+    readonly projectId: string;
+    readonly sessionId: string;
+    readonly expiresAt: string;
+    constructor(value: unknown) {
+        const resource = record(value, "Session access");
+        this.credential = stringField(resource, "credential", 256);
+        if (!/^msession_[A-Za-z0-9_-]{22}_[A-Za-z0-9_-]{43}$/u.test(this.credential)) {
+            throw invalidResponse("The Session credential is invalid");
+        }
+        this.credentialId = identifierField(resource, "credentialId");
+        this.projectId = identifierField(resource, "projectId");
+        this.sessionId = identifierField(resource, "sessionId");
+        this.expiresAt = validateTimestamp(stringField(resource, "expiresAt", 128), "expiresAt");
+    }
+}
+
 export interface CreateMobiusSessionRequest {
     readonly agentId: string;
     readonly bindingId: string;

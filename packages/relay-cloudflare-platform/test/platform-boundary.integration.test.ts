@@ -3,11 +3,14 @@ import {
     BotExecutionBindingApprovedEvent,
     decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
+    decodeNativeSessionCommand,
     decodeSessionConfigureCommand,
     decodeSessionEventAcknowledgement,
     encodeBotExecutionBindingApprovedEvent,
+    encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionEventEnvelope,
+    encodeSessionOperationFailedEvent,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
@@ -531,6 +534,246 @@ async function commitRuntimeEvent(fixture: PlatformConversationFixture, event: S
         sessionId: event.sessionId,
     });
 }
+
+it("Given an App-owned Session, When its backend issues browser access, Then the browser reads only that Session and cannot discover or rebind Runtime sessions", async () => {
+    const fixture = await createReadyConversation("session-scoped-browser");
+    try {
+        const issued = await json(
+            await fixture.worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/sessions/${fixture.sessionId}/access-credentials`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(fixture.appCredential),
+                        body: JSON.stringify({ expiresInSeconds: 600 }),
+                    },
+                ),
+                fixture.environment,
+            ),
+            201,
+        );
+        const headers = credentialHeaders(text(issued, "credential"));
+        const base = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}`;
+        const preflight = await fixture.worker.fetch(
+            new Request(`${base}/sessions/${fixture.sessionId}/prepare`, {
+                method: "OPTIONS",
+                headers: {
+                    origin: thirdPartyBrowserOrigin,
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "authorization,content-type",
+                },
+            }),
+            fixture.environment,
+        );
+        expect(preflight.status).toBe(204);
+        expect(preflight.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        expect(
+            (
+                await fixture.worker.fetch(
+                    new Request(`${base}/sessions/${fixture.sessionId}`, { headers }),
+                    fixture.environment,
+                )
+            ).status,
+        ).toBe(200);
+        for (const path of ["sessions", "runtimes", "sessions/another-session"]) {
+            expect(
+                (await fixture.worker.fetch(new Request(`${base}/${path}`, { headers }), fixture.environment)).status,
+            ).toBe(403);
+        }
+        expect(
+            (
+                await fixture.worker.fetch(
+                    new Request(`${base}/sessions/${fixture.sessionId}/binding`, {
+                        method: "PUT",
+                        headers,
+                        body: JSON.stringify({
+                            bindingId: "other-binding",
+                            runtimeId: fixture.runtimeId,
+                            agentRef: "codex",
+                            workspaceRef: "default",
+                            configRevision: 1,
+                        }),
+                    }),
+                    fixture.environment,
+                )
+            ).status,
+        ).toBe(403);
+        const streamController = new AbortController();
+        const streamHeaders = new Headers(headers);
+        streamHeaders.set("origin", thirdPartyBrowserOrigin);
+        streamHeaders.set("accept", "text/event-stream");
+        const stream = await fixture.worker.fetch(
+            new Request(`${base}/sessions/${fixture.sessionId}/events`, {
+                headers: streamHeaders,
+                signal: streamController.signal,
+            }),
+            fixture.environment,
+        );
+        expect(stream.status).toBe(200);
+        expect(stream.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        streamController.abort();
+        await stream.body?.cancel();
+        const browser = new MobiusClient({
+            endpoint: relayOrigin,
+            projectId: fixture.projectId,
+            credentialProvider: new StaticMobiusCredentialProvider(text(issued, "credential")),
+            transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+        });
+        try {
+            const turn = await browser.turns.submit(
+                fixture.sessionId,
+                {
+                    idempotencyKey: "scoped-message",
+                    content: "Hello native session",
+                    images: [],
+                    resources: [],
+                    artifactIds: [],
+                    additionalDirectoryIds: [],
+                },
+                new AbortController().signal,
+            );
+            expect(turn.sessionId).toBe(fixture.sessionId);
+            expect(turn.content).toBe("Hello native session");
+            await expect(
+                browser.turns.submit(
+                    "another-session",
+                    {
+                        idempotencyKey: "denied-message",
+                        content: "Denied",
+                        images: [],
+                        resources: [],
+                        artifactIds: [],
+                        additionalDirectoryIds: [],
+                    },
+                    new AbortController().signal,
+                ),
+            ).rejects.toMatchObject({ status: 403 });
+            vi.setSystemTime(new Date("2026-09-10T00:11:00.000Z"));
+            await expect(browser.sessions.read(fixture.sessionId, new AbortController().signal)).rejects.toMatchObject({
+                status: 401,
+            });
+        } finally {
+            browser.close();
+        }
+    } finally {
+        fixture.socket.close();
+    }
+});
+
+it("Given a paired native Agent, When the App backend discovers sessions, Then Mobius returns the Runtime inventory without issuing a host credential", async () => {
+    const fixture = await createReadyConversation("native-discovery-backend");
+    const client = new MobiusClient({
+        endpoint: relayOrigin,
+        projectId: fixture.projectId,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    try {
+        const pending = client.runtimes.nativeSessions(
+            fixture.runtimeId,
+            {
+                action: "list",
+                agentId: "codex",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                cursor: null,
+                discoveryId: null,
+            },
+            new AbortController().signal,
+        );
+        const request = decodeNativeSessionCommand(await fixture.socketMessages.next());
+        const agent = readyAgents[0];
+        if (agent === undefined) {
+            throw new Error("The Runtime agent is unavailable");
+        }
+        fixture.socket.send(
+            encodeNativeSessionResult({
+                kind: "native.session.result",
+                action: "list",
+                requestId: request.requestId,
+                sessionId: request.sessionId,
+                capabilities: agent.capabilities,
+                entries: [
+                    {
+                        entryId: "native-history",
+                        title: "Native history",
+                        directoryId: "default",
+                        directoryLabel: "Workspace",
+                        additionalDirectories: [],
+                        updatedAt: null,
+                    },
+                ],
+                nextCursor: null,
+            }),
+        );
+        const result = await pending;
+        expect(result.action).toBe("list");
+        expect(result).not.toHaveProperty("hostToken");
+        const importing = client.runtimes.nativeSessions(
+            fixture.runtimeId,
+            {
+                action: "import",
+                agentId: "codex",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                entryId: "native-history",
+                discoveryId: result.sessionId,
+            },
+            new AbortController().signal,
+        );
+        const selected = decodeNativeSessionCommand(await fixture.socketMessages.next());
+        if (selected.action !== "import") {
+            throw new Error("Choose a native session to import");
+        }
+        if (selected.sessionId !== request.sessionId || selected.entryId !== "native-history") {
+            fixture.socket.send(
+                encodeSessionOperationFailedEvent({
+                    kind: "session.operation.failed",
+                    requestId: selected.requestId,
+                    sessionId: selected.sessionId,
+                    code: "native_session_not_found",
+                    message: "The discovered entry is unavailable",
+                }),
+            );
+        } else {
+            fixture.socket.send(
+                encodeNativeSessionResult({
+                    kind: "native.session.result",
+                    action: "import",
+                    requestId: selected.requestId,
+                    sessionId: selected.sessionId,
+                    targetSessionId: selected.targetSessionId,
+                    title: "Native history",
+                    history: { status: "unavailable" },
+                    ready: {
+                        kind: "session.ready",
+                        requestId: selected.requestId,
+                        sessionId: fixture.sessionId,
+                        agentId: "codex",
+                        agentName: "Codex",
+                        agentVersion: "1",
+                        directoryId: "default",
+                        directoryLabel: "Workspace",
+                        additionalDirectories: [],
+                        capabilities: agent.capabilities,
+                        commands: [],
+                        configOptions: [],
+                        restored: true,
+                    },
+                }),
+            );
+        }
+        const imported = await importing;
+        expect(imported.action).toBe("import");
+        if (imported.action !== "import") {
+            throw new Error("The session is not resumable");
+        }
+        expect(imported.ready.sessionId).toBe(fixture.sessionId);
+    } finally {
+        client.close();
+        fixture.socket.close();
+    }
+});
 
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });

@@ -22,7 +22,10 @@ function browserCorsHeaders(origin: string): Headers {
 }
 
 export const browserCors = createMiddleware<BrowserCorsEnvironment>(async (context, next) => {
-    if (!context.req.path.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session`)) {
+    if (
+        !context.req.path.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session`) &&
+        !/^\/mobius\/api\/v1\/projects\/[^/]+\/sessions\/[^/]+(?:\/|$)/u.test(context.req.path)
+    ) {
         await next();
         return context.res;
     }
@@ -53,6 +56,7 @@ export const browserCors = createMiddleware<BrowserCorsEnvironment>(async (conte
     }
     await next();
     if (origin.length > 0) {
+        context.res = new Response(context.res.body, context.res);
         for (const [name, value] of browserCorsHeaders(origin)) {
             context.res.headers.set(name, value);
         }

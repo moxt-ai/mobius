@@ -1,6 +1,8 @@
+import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
+import { type RuntimeControlCommand, requestRuntimeControl } from "./runtime-control-request.ts";
 
 export class PairingService {
     readonly #channels: ChannelGateway;
@@ -22,6 +24,38 @@ export class PairingService {
         idempotencyKey: string,
         signal: AbortSignal,
     ) => this.#pairings.createProjectRuntimePairing(projectId, token, idempotencyKey, signal);
+
+    readonly requestControl = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        command: RuntimeControlCommand,
+        signal: AbortSignal,
+    ) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const access = await this.#pairings.openControlHost(
+            projectId,
+            runtimeId,
+            token,
+            command.kind === "native.session.request" && command.action === "list"
+                ? ProjectPermission.RuntimeRead
+                : ProjectPermission.SessionWrite,
+            deadline,
+        );
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            if (response.webSocket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeControl(response.webSocket, command, deadline);
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+        }
+    };
 
     readonly readProjectRuntimePairing = (projectId: string, pairingId: string, token: string, signal: AbortSignal) =>
         this.#pairings.readProjectRuntimePairing(projectId, pairingId, token, signal);

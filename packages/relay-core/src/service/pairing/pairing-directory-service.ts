@@ -54,6 +54,36 @@ export interface PairingDirectoryInfrastructure {
 }
 
 export class PairingDirectoryService implements PairingOperations {
+    readonly openControlHost: PairingOperations["openControlHost"] = async (
+        projectId,
+        runtimeId,
+        token,
+        permission,
+        signal,
+    ) => {
+        const access = await this.authorizeProject(projectId, token, permission, signal);
+        const storage = await this.projectStorage(access.scope, signal);
+        const runtime = await this.readProjectRuntime(storage, access.scope, runtimeId, signal);
+        const credentialId = `ctl_${createRandomToken(18)}`;
+        try {
+            await storage.createControlHost(
+                runtime.channelId,
+                credentialId,
+                await hashSecret(createRandomToken(32)),
+                Date.now(),
+                signal,
+            );
+        } catch (cause) {
+            await storage.removeControlHost(runtime.channelId, credentialId, AbortSignal.timeout(15000));
+            throw cause;
+        }
+        return new ChannelHostCredential(runtime.channelId, runtime.runtimeId, projectId, credentialId);
+    };
+
+    readonly closeControlHost: PairingOperations["closeControlHost"] = async (access, signal) => {
+        const storage = await this.projectStorage(new ProjectScope(access.projectId), signal);
+        await storage.removeControlHost(access.channelId, access.credentialId, signal);
+    };
     readonly #cx: PairingDirectoryInfrastructure;
 
     constructor(cx: PairingDirectoryInfrastructure) {

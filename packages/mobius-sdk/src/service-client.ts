@@ -1,12 +1,17 @@
 import {
     type Attempt,
     decodeNativeSessionHistory,
+    decodeNativeSessionResult,
+    decodeSessionConfigUpdatedEvent,
+    decodeSessionReadyEvent,
     type Interaction,
     MOBIUS_API_PREFIX,
     MOBIUS_EVENT_FORMAT_VERSION,
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
+    type NativeSessionCommand,
     type NativeSessionHistory,
+    type SessionConfigureCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 
@@ -63,6 +68,7 @@ import {
     type MobiusRuntimePairingWaitOptions,
     type MobiusServiceCapabilities,
     type MobiusSession,
+    MobiusSessionAccess,
     type MobiusSessionEvent,
     type MobiusSessionExport,
     type MobiusSessionImportBinding,
@@ -762,6 +768,29 @@ export class MobiusRuntimeResources {
     readonly list = async (signal: AbortSignal): Promise<readonly MobiusRuntimeDescriptor[]> =>
         decodeMobiusRuntimeList(await this.#executor.get(projectPath(this.#projectId, "runtimes"), signal));
 
+    readonly nativeSessions = async (
+        runtimeId: string,
+        request:
+            | (Omit<
+                  Extract<NativeSessionCommand, { readonly action: "list" }>,
+                  "kind" | "requestId" | "sessionId" | "bindingId"
+              > & { readonly discoveryId: string | null })
+            | (Omit<
+                  Extract<NativeSessionCommand, { readonly action: "import" | "fork" }>,
+                  "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
+              > & { readonly action: "import"; readonly discoveryId: string }),
+        signal: AbortSignal,
+    ) =>
+        decodeNativeSessionResult(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/native-sessions`),
+                    request,
+                    signal,
+                ),
+            ),
+        );
+
     readonly revoke = async (runtimeId: string, signal: AbortSignal): Promise<void> => {
         if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runtimeId)) {
             throw new MobiusValidationError("The Runtime identifier is invalid");
@@ -859,6 +888,31 @@ export class MobiusSessionResources {
 
     readonly create = async (request: CreateMobiusSessionRequest, signal: AbortSignal): Promise<MobiusSession> =>
         decodeMobiusSession(await this.#executor.post(projectPath(this.#projectId, "sessions"), request, signal));
+
+    readonly createAccess = async (sessionId: string, expiresInSeconds: number, signal: AbortSignal) =>
+        new MobiusSessionAccess(
+            await this.#executor.post(
+                sessionPath(this.#projectId, sessionId, "access-credentials"),
+                { expiresInSeconds },
+                signal,
+            ),
+        );
+
+    readonly prepare = async (sessionId: string, signal: AbortSignal) =>
+        decodeSessionReadyEvent(
+            JSON.stringify(await this.#executor.post(sessionPath(this.#projectId, sessionId, "prepare"), {}, signal)),
+        );
+
+    readonly updateConfiguration = async (
+        sessionId: string,
+        request: Pick<SessionConfigureCommand, "configId" | "value" | "booleanValue" | "valueType">,
+        signal: AbortSignal,
+    ) =>
+        decodeSessionConfigUpdatedEvent(
+            JSON.stringify(
+                await this.#executor.post(sessionPath(this.#projectId, sessionId, "configuration"), request, signal),
+            ),
+        );
 
     readonly configure = async (
         sessionId: string,
