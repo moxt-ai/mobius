@@ -381,7 +381,11 @@ describe.sequential("Bot management and conversations", () => {
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
             fireEvent.click(await screen.findByRole("button", { name: "New chat" }));
             expect(screen.queryByRole("textbox", { name: "Conversation title" })).toBeNull();
-            await screen.findByRole("heading", { level: 2, name: "New chat" });
+            await waitForDocumentState(
+                () => screen.queryByRole("heading", { level: 2, name: "New chat" }) !== null,
+                signal,
+            );
+            expect(screen.getByRole("heading", { level: 2, name: "New chat" })).toBeTruthy();
             const draftPath = window.location.pathname;
 
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -558,7 +562,11 @@ describe.sequential("Bot management and conversations", () => {
             await screen.findByRole("heading", { level: 1, name: "Research assistant" });
             expect(screen.getByText("Draft")).toBeTruthy();
 
-            fireEvent.change(await screen.findByRole("textbox", { name: "Behavior instructions" }), {
+            await waitForDocumentState(
+                () => screen.queryByRole("textbox", { name: "Behavior instructions" }) !== null,
+                signal,
+            );
+            fireEvent.change(screen.getByRole("textbox", { name: "Behavior instructions" }), {
                 target: { value: "Answer precisely and cite the evidence you used." },
             });
             fireEvent.click(screen.getByRole("button", { name: "Activate Bot" }));
@@ -586,7 +594,11 @@ describe.sequential("Bot management and conversations", () => {
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
             await screen.findByRole("heading", { level: 2, name: "Conversations" });
             fireEvent.click(screen.getByRole("button", { name: "New chat" }));
-            await screen.findByRole("heading", { level: 2, name: "New chat" });
+            await waitForDocumentState(
+                () => screen.queryByRole("heading", { level: 2, name: "New chat" }) !== null,
+                signal,
+            );
+            expect(screen.getByRole("heading", { level: 2, name: "New chat" })).toBeTruthy();
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation, modelConfigOptions("test-small"));
             const composer = screen.getByRole("textbox", { name: "Message Research assistant" });
@@ -695,7 +707,11 @@ describe.sequential("Bot management and conversations", () => {
             cleanup();
             await closeMobiusTransport();
             render(<App />);
-            await screen.findByRole("heading", { level: 2, name: "Summarize the launch evidence." });
+            await waitForDocumentState(
+                () => screen.queryByRole("heading", { level: 2, name: "Summarize the launch evidence." }) !== null,
+                signal,
+            );
+            expect(screen.getByRole("heading", { level: 2, name: "Summarize the launch evidence." })).toBeTruthy();
             await screen.findByText("The launch is supported by the persisted evidence.");
             await screen.findByText("Verify the durable conversation after a full browser reload.");
             expect(screen.getAllByLabelText("Message from you").map((message) => message.textContent)).toEqual([

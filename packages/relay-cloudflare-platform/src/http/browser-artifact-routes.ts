@@ -21,7 +21,7 @@ const artifactUploadSchema = v.strictObject({
 
 export function createBrowserArtifactRoutes() {
     return new Hono<ConversationHttpEnvironment>({ strict: false })
-        .post("/v1/client/session/artifacts", bodyParser(artifactUploadSchema), async (context) => {
+        .post("/artifacts", bodyParser(artifactUploadSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await context.env.access.authorize(
                 bearer(context.req.raw),
@@ -38,7 +38,7 @@ export function createBrowserArtifactRoutes() {
                 201,
             );
         })
-        .put("/v1/client/session/artifacts/:artifactId/content", async (context) => {
+        .put("/artifacts/:artifactId/content", async (context) => {
             const access = await context.env.access.authorize(
                 bearer(context.req.raw),
                 Permission.ArtifactWrite,
@@ -80,7 +80,7 @@ export function createBrowserArtifactRoutes() {
                 ),
             );
         })
-        .get("/v1/client/session/artifacts/:artifactId", async (context) => {
+        .get("/artifacts/:artifactId", async (context) => {
             const access = await context.env.access.authorize(
                 bearer(context.req.raw),
                 Permission.ArtifactRead,
@@ -95,7 +95,7 @@ export function createBrowserArtifactRoutes() {
                 ),
             );
         })
-        .get("/v1/client/session/artifacts/:artifactId/content", async (context) => {
+        .get("/artifacts/:artifactId/content", async (context) => {
             const access = await context.env.access.authorize(
                 bearer(context.req.raw),
                 Permission.ArtifactRead,

@@ -126,7 +126,7 @@ async function authorize(
 
 export function createBrowserSessionRoutes() {
     return new Hono<ConversationHttpEnvironment>({ strict: false })
-        .get("/v1/client/session", async (context) => {
+        .get("/", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json({
                 access: {
@@ -139,11 +139,11 @@ export function createBrowserSessionRoutes() {
                 session: await context.env.sessions.readConversationSession(access, context.var.signal),
             });
         })
-        .get("/v1/client/session/configuration", async (context) => {
+        .get("/configuration", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json(await context.env.sessions.readConversationConfiguration(access, context.var.signal));
         })
-        .post("/v1/client/session/configuration", bodyParser(configurationSchema), async (context) => {
+        .post("/configuration", bodyParser(configurationSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.Configure, context.var.signal);
             return context.json(
@@ -161,7 +161,7 @@ export function createBrowserSessionRoutes() {
                 202,
             );
         })
-        .get("/v1/client/session/messages", async (context) => {
+        .get("/messages", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json(
                 await context.env.sessions.readConversationMessages(
@@ -172,7 +172,7 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .post("/v1/client/session/messages", bodyParser(messageSchema), async (context) => {
+        .post("/messages", bodyParser(messageSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.MessageCreate, context.var.signal);
             return context.json(
@@ -189,7 +189,7 @@ export function createBrowserSessionRoutes() {
                 201,
             );
         })
-        .get("/v1/client/session/history", async (context) => {
+        .get("/history", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             const limit = pageLimit(context.req.query("limit"));
             const acceptedMessages = await context.env.access.listMessages(
@@ -205,7 +205,7 @@ export function createBrowserSessionRoutes() {
                 turns: turns.messages,
             });
         })
-        .get("/v1/client/session/events", async (context) => {
+        .get("/events", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.EventRead, context.var.signal);
             const after = context.req.query("after") ?? context.req.query("cursor") ?? "";
             if (context.req.header("accept")?.includes("text/event-stream") === true) {
@@ -233,7 +233,7 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .get("/v1/client/session/turns/:turnId", async (context) => {
+        .get("/turns/:turnId", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json(
                 await context.env.sessions.readConversationTurn(
@@ -243,7 +243,7 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .post("/v1/client/session/turns", bodyParser(turnSchema), async (context) => {
+        .post("/turns", bodyParser(turnSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.TurnCreate, context.var.signal);
             if ("messageId" in value) {
@@ -280,7 +280,7 @@ export function createBrowserSessionRoutes() {
             const turn = await context.env.sessions.readConversationTurn(access, accepted.turnId, context.var.signal);
             return context.json({ ...accepted, turn }, 202);
         })
-        .post("/v1/client/session/turns/:turnId/cancel", bodyParser(cancelTurnSchema), async (context) => {
+        .post("/turns/:turnId/cancel", bodyParser(cancelTurnSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.TurnCancel, context.var.signal);
             return context.json(
@@ -294,7 +294,7 @@ export function createBrowserSessionRoutes() {
                 202,
             );
         })
-        .post("/v1/client/session/turns/:turnId/promote", bodyParser(emptyBodySchema), async (context) => {
+        .post("/turns/:turnId/promote", bodyParser(emptyBodySchema), async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.TurnCreate, context.var.signal);
             return context.json(
                 await context.env.sessions.promoteConversationTurnToSteering(
@@ -305,13 +305,13 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .get("/v1/client/session/interactions", async (context) => {
+        .get("/interactions", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json({
                 interactions: await context.env.sessions.readConversationInteractions(access, context.var.signal),
             });
         })
-        .get("/v1/client/session/interactions/:interactionId", async (context) => {
+        .get("/interactions/:interactionId", async (context) => {
             const access = await authorize(context.env, context.req.raw, Permission.Read, context.var.signal);
             return context.json(
                 await context.env.sessions.readConversationInteraction(
@@ -321,45 +321,41 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .post(
-            "/v1/client/session/interactions/:interactionId/response",
-            bodyParser(interactionResponseSchema),
-            async (context) => {
-                const value = context.req.valid("json");
-                const access = await authorize(
-                    context.env,
-                    context.req.raw,
-                    Permission.InteractionRespond,
-                    context.var.signal,
+        .post("/interactions/:interactionId/response", bodyParser(interactionResponseSchema), async (context) => {
+            const value = context.req.valid("json");
+            const access = await authorize(
+                context.env,
+                context.req.raw,
+                Permission.InteractionRespond,
+                context.var.signal,
+            );
+            const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
+            if (value.kind === "permission") {
+                return context.json(
+                    await context.env.sessions.respondToConversationPermission(
+                        access,
+                        interactionId,
+                        value.optionId,
+                        value.outcome,
+                        context.env.nowEpochMilliseconds(),
+                        context.var.signal,
+                    ),
+                    202,
                 );
-                const interactionId = validateIdentifier(context.req.param("interactionId"), "interaction_id");
-                if (value.kind === "permission") {
-                    return context.json(
-                        await context.env.sessions.respondToConversationPermission(
-                            access,
-                            interactionId,
-                            value.optionId,
-                            value.outcome,
-                            context.env.nowEpochMilliseconds(),
-                            context.var.signal,
-                        ),
-                        202,
-                    );
-                }
-                if (value.kind === "elicitation") {
-                    return context.json(
-                        await context.env.sessions.respondToConversationElicitation(
-                            access,
-                            interactionId,
-                            value.action,
-                            value.content,
-                            context.env.nowEpochMilliseconds(),
-                            context.var.signal,
-                        ),
-                        202,
-                    );
-                }
-                return value satisfies never;
-            },
-        );
+            }
+            if (value.kind === "elicitation") {
+                return context.json(
+                    await context.env.sessions.respondToConversationElicitation(
+                        access,
+                        interactionId,
+                        value.action,
+                        value.content,
+                        context.env.nowEpochMilliseconds(),
+                        context.var.signal,
+                    ),
+                    202,
+                );
+            }
+            return value satisfies never;
+        });
 }

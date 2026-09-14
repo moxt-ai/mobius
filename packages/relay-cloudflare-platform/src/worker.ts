@@ -5,20 +5,17 @@ import {
     createWorkerContext,
     type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
-    type RelayContext,
 } from "@moxt-ai/mobius-relay-core";
-import { Hono } from "hono";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
-import { conversationErrorResponse } from "./http/conversation-error-response.ts";
 import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
+import { createProjectApplication } from "./http/project-routes.ts";
 import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
 } from "./infra/platform-authentication-environment.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
-import { browserCors } from "./middleware/browser-cors.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
@@ -59,12 +56,7 @@ class DisabledPublicProjectBootstrap {
 }
 
 const projectApplication = createPlatformMobiusApplication();
-const scopedProjectApplication = new Hono<{
-    readonly Bindings: { readonly relay: RelayContext; readonly allowedOrigins: ReadonlySet<string> };
-}>()
-    .use("*", browserCors)
-    .onError(conversationErrorResponse)
-    .all("*", async (context) => await projectApplication.fetch(context.req.raw, context.env.relay));
+const scopedProjectApplication = createProjectApplication();
 const botApplication = createBotApplication();
 const controlApplication = createPlatformControlApplication();
 const conversationApplication = createConversationApplication();

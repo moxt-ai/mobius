@@ -1,4 +1,3 @@
-import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { createMiddleware } from "hono/factory";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 
@@ -22,13 +21,6 @@ function browserCorsHeaders(origin: string): Headers {
 }
 
 export const browserCors = createMiddleware<BrowserCorsEnvironment>(async (context, next) => {
-    if (
-        !context.req.path.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session`) &&
-        !/^\/mobius\/api\/v1\/projects\/[^/]+\/sessions\/[^/]+(?:\/|$)/u.test(context.req.path)
-    ) {
-        await next();
-        return context.res;
-    }
     const origin = context.req.header("origin") ?? "";
     if (origin.length > 0 && !context.env.allowedOrigins.has("*") && !context.env.allowedOrigins.has(origin)) {
         throw new PlatformControlPlaneError("browser_origin_denied", "The browser origin is not allowed", 403);
