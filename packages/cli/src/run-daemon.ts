@@ -1001,6 +1001,7 @@ async function executePrompt(
     audit: AuditStore,
     sessions: AcpSessionManager,
     attemptId: string,
+    activateAttempt: () => void,
     timer: DaemonTimer,
     signal: AbortSignal,
 ): Promise<void> {
@@ -1032,6 +1033,7 @@ async function executePrompt(
             }),
             attemptId,
         );
+        activateAttempt();
         const attachments = await resolvePromptArtifacts(config, command, signal);
         let stopReason: string;
         if (command.disposition === SessionPromptDisposition.Steer) {
@@ -1168,6 +1170,7 @@ async function executeBotPrompt(
     applicator: EmbeddedBotContextApplicator,
     ipc: BotOutboundIpcServer,
     attemptId: string,
+    activateAttempt: () => void,
     timer: DaemonTimer,
     signal: AbortSignal,
 ): Promise<void> {
@@ -1256,6 +1259,7 @@ async function executeBotPrompt(
                 }),
                 attemptId,
             );
+            activateAttempt();
             const result = await sessions.runPrompt({
                 additionalDirectories: resolved.additionalDirectories,
                 agent,
@@ -1479,7 +1483,7 @@ async function runRelayConnection(
                 delivery: RuntimeDelivery,
                 command: DaemonTurnCommand,
                 trackActiveAttempt: boolean,
-                execute: (attemptId: string, signal: AbortSignal) => Promise<void>,
+                execute: (attemptId: string, activateAttempt: () => void, signal: AbortSignal) => Promise<void>,
             ): Promise<void> => {
                 if (command.sessionId !== delivery.sessionId) {
                     throw new Error("Runtime delivery Session identity does not match its payload");
@@ -1509,11 +1513,13 @@ async function runRelayConnection(
 
                 const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                 activeTurns.set(command.commandId, turn);
-                if (trackActiveAttempt) {
-                    activeAttemptIds.set(command.sessionId, receipt.attemptId);
-                }
+                const activateAttempt = (): void => {
+                    if (trackActiveAttempt) {
+                        activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                    }
+                };
                 try {
-                    await execute(receipt.attemptId, turn.signal);
+                    await execute(receipt.attemptId, activateAttempt, turn.signal);
                 } finally {
                     activeTurns.delete(command.commandId);
                     if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
@@ -1595,23 +1601,28 @@ async function runRelayConnection(
                 }
                 if (kind === BOT_SESSION_PROMPT_KIND) {
                     const command = decodeBotSessionPromptCommand(delivery.payload);
-                    await processDeliveredPrompt(delivery, command, true, (attemptId, executionSignal) =>
-                        executeBotPrompt(
-                            outbox,
-                            publisher,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            grants,
-                            contexts,
-                            applicator,
-                            ipc,
-                            attemptId,
-                            timer,
-                            executionSignal,
-                        ),
+                    await processDeliveredPrompt(
+                        delivery,
+                        command,
+                        true,
+                        (attemptId, activateAttempt, executionSignal) =>
+                            executeBotPrompt(
+                                outbox,
+                                publisher,
+                                command,
+                                config,
+                                directories,
+                                audit,
+                                sessions,
+                                grants,
+                                contexts,
+                                applicator,
+                                ipc,
+                                attemptId,
+                                activateAttempt,
+                                timer,
+                                executionSignal,
+                            ),
                     );
                     return;
                 }
@@ -1621,7 +1632,7 @@ async function runRelayConnection(
                         delivery,
                         command,
                         command.disposition !== SessionPromptDisposition.Steer,
-                        (attemptId, executionSignal) =>
+                        (attemptId, activateAttempt, executionSignal) =>
                             executePrompt(
                                 outbox,
                                 publisher,
@@ -1631,6 +1642,7 @@ async function runRelayConnection(
                                 audit,
                                 sessions,
                                 attemptId,
+                                activateAttempt,
                                 timer,
                                 executionSignal,
                             ),
@@ -2172,7 +2184,6 @@ async function runRelayConnection(
                         }
                         const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                         activeTurns.set(command.commandId, turn);
-                        activeAttemptIds.set(command.sessionId, receipt.attemptId);
                         void executeBotPrompt(
                             outbox,
                             publisher,
@@ -2186,6 +2197,7 @@ async function runRelayConnection(
                             applicator,
                             ipc,
                             receipt.attemptId,
+                            () => activeAttemptIds.set(command.sessionId, receipt.attemptId),
                             timer,
                             turn.signal,
                         )
@@ -2216,9 +2228,6 @@ async function runRelayConnection(
 
                     const turn = new ActiveDaemonTurn(command, receipt.attemptId);
                     activeTurns.set(command.commandId, turn);
-                    if (command.disposition !== SessionPromptDisposition.Steer) {
-                        activeAttemptIds.set(command.sessionId, receipt.attemptId);
-                    }
                     void executePrompt(
                         outbox,
                         publisher,
@@ -2228,6 +2237,11 @@ async function runRelayConnection(
                         audit,
                         sessions,
                         receipt.attemptId,
+                        () => {
+                            if (command.disposition !== SessionPromptDisposition.Steer) {
+                                activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                            }
+                        },
                         timer,
                         turn.signal,
                     )

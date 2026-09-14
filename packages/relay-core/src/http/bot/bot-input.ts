@@ -7,6 +7,7 @@ import { BotApiError } from "../../entity/bot/bot-error.ts";
 import type { NewBotConversation, NewBotMessage } from "../../service/bot/bot-service.ts";
 
 const IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
+const DIRECTORY_IDENTIFIER = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const TOKEN = /^[a-zA-Z0-9_-]{32,256}$/;
 const SCOPES = new Set([
     "conversation-events:read",
@@ -73,6 +74,13 @@ export function identifier(value: Readonly<Record<string, unknown>>, key: string
     const field = string(value, key, 128);
     if (!IDENTIFIER.test(field)) {
         throw new BotApiError("invalid_request", `The ${key} identifier is invalid`, "invalid-input");
+    }
+    return field;
+}
+export function directoryIdentifier(value: Readonly<Record<string, unknown>>, key: string): string {
+    const field = string(value, key, 2_048);
+    if (!DIRECTORY_IDENTIFIER.test(field)) {
+        throw new BotApiError("invalid_request", `The ${key} directory identifier is invalid`, "invalid-input");
     }
     return field;
 }

@@ -38,6 +38,7 @@ import {
     SESSION_FAILED_KIND,
     SESSION_PREPARE_KIND,
     SESSION_READY_KIND,
+    SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
@@ -178,7 +179,7 @@ async function readCompletedText(frames: ClientFrames): Promise<string> {
 }
 
 describe("daemon Bot execution boundary", () => {
-    it("Given an approved Bot binding, When the relay durably delivers a Bot turn, Then the daemon acknowledges receipt and executes the exact local target with the pinned behavior", async () => {
+    it("Given an approved Bot binding whose Agent announces setup state, When the relay durably delivers a Bot turn, Then setup stays Runtime-scoped and the Attempt starts before execution output", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -242,7 +243,7 @@ describe("daemon Bot execution boundary", () => {
                     "codex",
                     "Codex",
                     process.execPath,
-                    [fakeAgentPath, "--agent-name", "Codex"],
+                    [fakeAgentPath, "--agent-name", "Codex", "--announce-config-while-creating"],
                     {},
                     "test-adapter",
                     process.version,
@@ -346,6 +347,9 @@ describe("daemon Bot execution boundary", () => {
                     sessionId: unpreparedOverride.sessionId,
                 }),
             );
+            const announcedConfigEnvelope = decodeSessionEventEnvelope(await frames.next());
+            expect(decodeMessageKind(announcedConfigEnvelope.payload)).toBe(SESSION_CONFIG_UPDATED_KIND);
+            expect(announcedConfigEnvelope.source.kind).toBe("runtime");
             const readyEnvelope = decodeSessionEventEnvelope(await frames.next());
             expect(decodeMessageKind(readyEnvelope.payload)).toBe(SESSION_READY_KIND);
             const ready = decodeSessionReadyEvent(readyEnvelope.payload);
@@ -457,11 +461,13 @@ describe("daemon Bot execution boundary", () => {
             );
 
             const observedKinds: string[] = [];
+            const observedSourceKinds: string[] = [];
             let observedText = "";
             while (!observedKinds.includes(SESSION_COMPLETED_KIND)) {
                 const envelope = decodeSessionEventEnvelope(await frames.next());
                 const kind = decodeMessageKind(envelope.payload);
                 observedKinds.push(kind);
+                observedSourceKinds.push(envelope.source.kind);
                 const payload: unknown = JSON.parse(envelope.payload);
                 if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
                     const text = Reflect.get(payload, "text");
@@ -470,6 +476,8 @@ describe("daemon Bot execution boundary", () => {
                     }
                 }
             }
+            expect(observedKinds.slice(0, 2)).toEqual([SESSION_CONFIG_UPDATED_KIND, SESSION_STARTED_KIND]);
+            expect(observedSourceKinds.slice(0, 2)).toEqual(["runtime", "attempt"]);
             expect(observedText).toBe("0 image, 1 resource");
 
             const database = new DatabaseSync(auditDatabasePath, { readOnly: true });

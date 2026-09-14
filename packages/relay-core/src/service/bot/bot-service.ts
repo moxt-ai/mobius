@@ -1323,7 +1323,7 @@ export class BotService {
         await this.cx.gateways.channels.dispatchPending(runtimeAccess, signal);
         return {
             duplicate: accepted.duplicate,
-            eventCursor: "0",
+            eventCursor: "",
             executionId: accepted.execution.executionId,
             turnId: accepted.execution.turnId,
         };

@@ -785,6 +785,68 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it("Given a Bot binding with an invalid Runtime directory identifier, When the Platform receives it, Then it rejects the request before persisting an approval", async () => {
+        const project = await provisionPlatformProject("invalid-binding-directory");
+        const bot = await json(
+            await project.worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots`, {
+                    body: JSON.stringify({
+                        avatarRef: "",
+                        description: "Invalid binding directory test",
+                        displayName: "Invalid binding directory",
+                    }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                }),
+                project.environment,
+            ),
+            201,
+        );
+        const behavior = await json(
+            await project.worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${text(bot, "botId")}/behavior-revisions`, {
+                    body: JSON.stringify({
+                        agentConfiguration: {},
+                        expectedRevision: 0,
+                        instructions: "Run only in an approved Runtime directory.",
+                        requiredCapabilities: [],
+                    }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                }),
+                project.environment,
+            ),
+            201,
+        );
+
+        const response = await project.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${text(bot, "botId")}/execution-bindings`, {
+                body: JSON.stringify({
+                    agentConfigRevision: 1,
+                    agentRef: "codex",
+                    allowedDeliveryTargetIds: [],
+                    behaviorRevisionId: text(behavior, "behaviorRevisionId"),
+                    completionPolicy: { kind: "none" },
+                    expectedRevision: integerField(bot, "lifecycleRevision"),
+                    runtimeId: project.runtimeId,
+                    workspaceRef: ".",
+                }),
+                headers: credentialHeaders(project.appCredential),
+                method: "POST",
+            }),
+            project.environment,
+        );
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "invalid_request" } });
+        const persisted = await project.environment.D1_SHARD_APAC_01.prepare(
+            `SELECT COUNT(*) AS count FROM bot_execution_bindings WHERE bot_id = ?`,
+        )
+            .bind(text(bot, "botId"))
+            .first<{ readonly count: number }>();
+        expect(persisted?.count).toBe(0);
+    });
+
     it("Given invalid or oversized JSON, When a client posts to a Platform route, Then the request is rejected with a bounded body error", async () => {
         const worker = createPlatformWorker(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
@@ -1019,7 +1081,7 @@ describe.sequential("Platform hosting boundary", () => {
         );
     });
 
-    it("Given an approved Project Bot, When the server SDK creates and operates a Conversation, Then the exact Conversation routes persist it and dispatch configuration and Turn commands", async () => {
+    it("Given an approved Project Bot, When the server SDK creates and operates a Conversation, Then it persists the Conversation, dispatches commands, and returns a reusable event cursor", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {
             const owner = new MobiusBotOwnerClient({
@@ -1089,6 +1151,14 @@ describe.sequential("Platform hosting boundary", () => {
                 sessionId: created.sessionId,
                 turnId: accepted.turnId,
             });
+            expect(
+                await owner.readConversationEvents(
+                    fixture.botId,
+                    created.conversationId,
+                    accepted.eventCursor,
+                    AbortSignal.timeout(5_000),
+                ),
+            ).toMatchObject({ events: [], hasMore: false });
 
             expect(
                 await owner.createConversationConfigurationRevision(
