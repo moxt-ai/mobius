@@ -6,7 +6,7 @@ import type {
     PromptResource,
 } from "@moxt-ai/mobius-protocol";
 import type { ExecutionPermit } from "../authentication/project-authentication.ts";
-import { type ProjectScope, SessionRuntimeError } from "../do/session.ts";
+import { type ProjectScope, type SessionMessage, SessionRuntimeError } from "../do/session.ts";
 
 export const BOT_EXECUTION_LIFETIME_MILLISECONDS = 30 * 60 * 1_000;
 export const BOT_EXECUTION_OUTBOUND_USAGE_LIMIT = 16;
@@ -194,6 +194,70 @@ export class BotConversationEventPage {
     }
 }
 
+export const BOT_CONVERSATION_RESPONSE_LIMIT = 8 * 1024 * 1024;
+
+export class BotConversationMessage {
+    readonly activities: SessionMessage["activities"];
+    readonly attempt: SessionMessage["attempt"];
+    readonly behaviorRevisionId: string;
+    readonly clientMessageId: string;
+    readonly createdAt: string;
+    readonly executionId: string;
+    readonly messageId: string;
+    readonly prompt: string;
+    readonly response: string;
+    readonly responseTruncated: boolean;
+    readonly turnId: string;
+
+    constructor(
+        turnId: string,
+        executionId: string,
+        behaviorRevisionId: string,
+        clientMessageId: string,
+        messageId: string,
+        prompt: string,
+        response: string,
+        responseTruncated: boolean,
+        activities: SessionMessage["activities"],
+        attempt: SessionMessage["attempt"],
+        createdAt: string,
+    ) {
+        this.activities = Object.freeze([...activities]);
+        this.attempt = attempt;
+        this.behaviorRevisionId = behaviorRevisionId;
+        this.clientMessageId = clientMessageId;
+        this.createdAt = createdAt;
+        this.executionId = executionId;
+        this.messageId = messageId;
+        this.prompt = prompt;
+        this.response = response;
+        this.responseTruncated = responseTruncated;
+        this.turnId = turnId;
+    }
+}
+
+export class BotConversationMessagePage {
+    readonly conversationId: string;
+    readonly lastCommittedSequence: string;
+    readonly messages: readonly BotConversationMessage[];
+    readonly nextCursor: string;
+    readonly tailEventCursor: string;
+
+    constructor(
+        conversationId: string,
+        messages: readonly BotConversationMessage[],
+        nextCursor: string,
+        lastCommittedSequence: string,
+        tailEventCursor: string,
+    ) {
+        this.conversationId = conversationId;
+        this.lastCommittedSequence = lastCommittedSequence;
+        this.messages = Object.freeze([...messages]);
+        this.nextCursor = nextCursor;
+        this.tailEventCursor = tailEventCursor;
+    }
+}
+
 export class BotOutboundSubmission {
     readonly deliveryTargetId: string;
     readonly idempotencyKey: string;
@@ -347,6 +411,13 @@ export interface BotSessionRuntime {
         limit: number,
         signal: AbortSignal,
     ) => Promise<BotConversationEventPage>;
+    readonly readConversationMessages: (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        signal: AbortSignal,
+    ) => Promise<BotConversationMessagePage>;
     readonly markOutboundForwarded: (
         scope: ProjectScope,
         sessionId: string,

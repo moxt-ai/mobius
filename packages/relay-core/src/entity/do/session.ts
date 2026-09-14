@@ -390,6 +390,7 @@ export interface SessionMessagePage {
     readonly lastCommittedSeq: string;
     readonly messages: readonly SessionMessage[];
     readonly nextCursor: string | null;
+    readonly tailEventCursor: string;
 }
 
 export interface SessionEventPage {

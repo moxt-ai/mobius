@@ -2,6 +2,8 @@ import { ExecutionPermit } from "../../entity/authentication/project-authenticat
 import {
     BotConversationEvent,
     BotConversationEventPage,
+    BotConversationMessage,
+    BotConversationMessagePage,
     BotExecutionRecord,
     BotOutboundAcceptance,
     type BotOutboundSubmission,
@@ -15,6 +17,7 @@ import {
 import { ProjectScope } from "../../entity/do/session.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
+import { decodeRemoteActivitySummaries, decodeRemoteAttemptSummary } from "../do/remote-session-runtime.ts";
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 8 * 1024 * 1024;
 const EXECUTION_PERMIT_FIELDS = Object.freeze([
@@ -136,6 +139,25 @@ function decodeConversationEvent(value: unknown): BotConversationEvent {
     );
 }
 
+function decodeConversationMessage(value: unknown): BotConversationMessage {
+    if (!isRecord(value)) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot conversation message is invalid");
+    }
+    return new BotConversationMessage(
+        text(value, "turnId"),
+        text(value, "executionId"),
+        text(value, "behaviorRevisionId"),
+        text(value, "clientMessageId"),
+        text(value, "messageId", true),
+        text(value, "prompt", true),
+        text(value, "response", true),
+        boolean(value, "responseTruncated"),
+        decodeRemoteActivitySummaries(value["activities"]),
+        decodeRemoteAttemptSummary(value["attempt"]),
+        text(value, "createdAt"),
+    );
+}
+
 function decodeExecution(value: unknown): BotExecutionRecord {
     if (!isRecord(value)) {
         throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot execution is invalid");
@@ -205,6 +227,7 @@ function runtimeErrorCode(value: string): string {
         "execution_capability_expired",
         "execution_capability_invalid",
         "idempotency_conflict",
+        "invalid_cursor",
         "invalid_request",
         "queue_full",
         "session_busy",
@@ -320,6 +343,36 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
             text(value, "cursor", true),
             value["events"].map(decodeConversationEvent),
             boolean(value, "hasMore"),
+        );
+    };
+
+    readonly readConversationMessages = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<BotConversationMessagePage> => {
+        const value = await this.request(
+            scope,
+            sessionId,
+            "bot-conversation-messages",
+            { cursor, limit, sessionId },
+            signal,
+        );
+        if (!isRecord(value) || !Array.isArray(value["messages"])) {
+            throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot message page is invalid");
+        }
+        const lastCommittedSequence = text(value, "lastCommittedSequence");
+        if (!/^(?:0|[1-9][0-9]*)$/.test(lastCommittedSequence)) {
+            throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot message sequence is invalid");
+        }
+        return new BotConversationMessagePage(
+            text(value, "conversationId"),
+            value["messages"].map(decodeConversationMessage),
+            text(value, "nextCursor", true),
+            lastCommittedSequence,
+            text(value, "tailEventCursor"),
         );
     };
 

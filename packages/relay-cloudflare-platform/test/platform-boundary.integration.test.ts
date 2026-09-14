@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import {
+    AGENT_MESSAGE_DELTA_KIND,
     BotExecutionBindingApprovedEvent,
     decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
@@ -583,7 +584,9 @@ function attemptEvent(
 
 async function commitRuntimeEvent(fixture: PlatformConversationFixture, event: SessionEventEnvelope): Promise<void> {
     fixture.socket.send(encodeSessionEventEnvelope(event));
-    expect(decodeSessionEventAcknowledgement(await fixture.socketMessages.next())).toMatchObject({
+    const acknowledgement = await fixture.socketMessages.next();
+    expect(acknowledgement).not.toContain('"code"');
+    expect(decodeSessionEventAcknowledgement(acknowledgement)).toMatchObject({
         duplicate: false,
         eventId: event.eventId,
         sessionId: event.sessionId,
@@ -1391,7 +1394,7 @@ describe.sequential("Platform hosting boundary", () => {
         );
     });
 
-    it("Given an approved Project Bot, When the server SDK creates and operates a Conversation, Then it persists the Conversation, dispatches commands, and returns a reusable event cursor", async () => {
+    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK reads its Bot-scoped Messages snapshot, Then the complete authoritative history and opaque tail cursor are returned without Session storage details", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {
             const owner = new MobiusBotOwnerClient({
@@ -1453,7 +1456,8 @@ describe.sequential("Platform hosting boundary", () => {
                 AbortSignal.timeout(5_000),
             );
             expect(accepted).toMatchObject({ duplicate: false });
-            expect(decodeBotSessionPromptCommand(await fixture.socketMessages.next())).toMatchObject({
+            const command = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            expect(command).toMatchObject({
                 botId: fixture.botId,
                 commandId: "server-sdk-turn",
                 conversationId: created.conversationId,
@@ -1469,6 +1473,207 @@ describe.sequential("Platform hosting boundary", () => {
                     AbortSignal.timeout(5_000),
                 ),
             ).toMatchObject({ events: [], hasMore: false });
+
+            const responseChunks = Array.from(
+                { length: 205 },
+                (_, index) => `${index.toString().padStart(3, "0")}:${"response".repeat(75)}\n`,
+            );
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    command.sessionId,
+                    command.commandId,
+                    "server-sdk-started",
+                    SESSION_STARTED_KIND,
+                    "attempt-server-sdk",
+                    1,
+                ),
+            );
+            for (const [index, text] of responseChunks.entries()) {
+                await commitRuntimeEvent(fixture, {
+                    eventId: `server-sdk-delta-${index.toString()}`,
+                    kind: SESSION_EVENT_KIND,
+                    payload: JSON.stringify({
+                        commandId: command.commandId,
+                        kind: AGENT_MESSAGE_DELTA_KIND,
+                        messageId: "server-sdk-message",
+                        sessionId: command.sessionId,
+                        text,
+                    }),
+                    sessionId: command.sessionId,
+                    source: {
+                        attemptId: "attempt-server-sdk",
+                        kind: "attempt",
+                        sourceSeq: (index + 2).toString(),
+                    },
+                });
+            }
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    command.sessionId,
+                    command.commandId,
+                    "server-sdk-completed",
+                    SESSION_COMPLETED_KIND,
+                    "attempt-server-sdk",
+                    responseChunks.length + 2,
+                ),
+            );
+            const archived = await fixture.environment.R2_BUCKET_APAC.list({
+                prefix: `${fixture.projectId}/${command.sessionId}/`,
+            });
+            expect(archived.objects.length).toBeGreaterThan(0);
+
+            const messages = await owner.readConversationMessages(
+                fixture.botId,
+                created.conversationId,
+                new MobiusPageRequest(50, ""),
+                AbortSignal.timeout(5_000),
+            );
+            expect(messages).toMatchObject({
+                conversationId: created.conversationId,
+                messages: [
+                    {
+                        activities: [],
+                        behaviorRevisionId: created.behaviorRevisionId,
+                        clientMessageId: "server-sdk-turn",
+                        executionId: accepted.executionId,
+                        messageId: "server-sdk-message",
+                        prompt: "Answer through the shared server SDK contract.",
+                        response: responseChunks.join(""),
+                        responseTruncated: false,
+                        turnId: accepted.turnId,
+                    },
+                ],
+                nextCursor: "",
+            });
+            expect(BigInt(messages.lastCommittedSequence)).toBeGreaterThan(200n);
+            expect(messages.tailEventCursor).toMatch(/^bcu_[A-Za-z0-9_-]{32}$/);
+            expect(messages.tailEventCursor).not.toBe(messages.lastCommittedSequence);
+            expect(JSON.stringify(messages)).not.toContain(command.sessionId);
+
+            let replayCursor = "";
+            let replayHasMore = true;
+            let replayedMessageDeltaCount = 0;
+            for (let pageNumber = 0; pageNumber < 20 && replayHasMore; pageNumber += 1) {
+                const replayPage = await owner.readConversationEvents(
+                    fixture.botId,
+                    created.conversationId,
+                    replayCursor,
+                    AbortSignal.timeout(5_000),
+                );
+                expect(replayPage.events.length).toBeLessThanOrEqual(20);
+                replayedMessageDeltaCount += replayPage.events.filter(
+                    (event) => event.kind === AGENT_MESSAGE_DELTA_KIND,
+                ).length;
+                replayCursor = replayPage.cursor;
+                replayHasMore = replayPage.hasMore;
+            }
+            expect(replayHasMore).toBe(false);
+            expect(replayedMessageDeltaCount).toBe(responseChunks.length);
+
+            await expect(
+                owner.readConversationEvents(
+                    fixture.botId,
+                    created.conversationId,
+                    messages.tailEventCursor,
+                    AbortSignal.timeout(5_000),
+                ),
+            ).resolves.toMatchObject({ events: [], hasMore: false });
+
+            const secondAccepted = await owner.submitProjectConversationTurn(
+                created.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Prove opaque message pagination.",
+                    idempotencyKey: "server-sdk-turn-2",
+                    images: [],
+                    resources: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            const secondCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    secondCommand.sessionId,
+                    secondCommand.commandId,
+                    "server-sdk-second-started",
+                    SESSION_STARTED_KIND,
+                    "attempt-server-sdk-second",
+                    1,
+                ),
+            );
+            await commitRuntimeEvent(fixture, {
+                eventId: "server-sdk-second-delta",
+                kind: SESSION_EVENT_KIND,
+                payload: JSON.stringify({
+                    commandId: secondCommand.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "server-sdk-second-message",
+                    sessionId: secondCommand.sessionId,
+                    text: "Opaque pagination restored this response.",
+                }),
+                sessionId: secondCommand.sessionId,
+                source: { attemptId: "attempt-server-sdk-second", kind: "attempt", sourceSeq: "2" },
+            });
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    secondCommand.sessionId,
+                    secondCommand.commandId,
+                    "server-sdk-second-completed",
+                    SESSION_COMPLETED_KIND,
+                    "attempt-server-sdk-second",
+                    3,
+                ),
+            );
+            const newestPage = await owner.readConversationMessages(
+                fixture.botId,
+                created.conversationId,
+                new MobiusPageRequest(1, ""),
+                AbortSignal.timeout(5_000),
+            );
+            expect(newestPage.messages).toMatchObject([
+                {
+                    clientMessageId: "server-sdk-turn-2",
+                    executionId: secondAccepted.executionId,
+                    response: "Opaque pagination restored this response.",
+                },
+            ]);
+            expect(newestPage.nextCursor).toMatch(/^bcu_[A-Za-z0-9_-]{32}$/);
+            expect(JSON.stringify(newestPage)).not.toContain(secondCommand.sessionId);
+            const olderPage = await owner.readConversationMessages(
+                fixture.botId,
+                created.conversationId,
+                new MobiusPageRequest(1, newestPage.nextCursor),
+                AbortSignal.timeout(5_000),
+            );
+            expect(olderPage.messages).toMatchObject([{ clientMessageId: "server-sdk-turn" }]);
+            expect(olderPage.nextCursor).toBe("");
+
+            const unrelatedBot = await owner.createBot(
+                { avatarRef: "", description: "Must not inherit another Bot history", displayName: "Unrelated Bot" },
+                AbortSignal.timeout(5_000),
+            );
+            await expect(
+                owner.readConversationMessages(
+                    unrelatedBot.botId,
+                    created.conversationId,
+                    new MobiusPageRequest(50, ""),
+                    AbortSignal.timeout(5_000),
+                ),
+            ).rejects.toMatchObject({ code: "conversation_access_denied" });
+            const otherApp = await provisionPlatformProject("server-sdk-other-app-history");
+            const otherAppResponse = await fixture.worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/bots/${fixture.botId}/conversations/${created.conversationId}/messages`,
+                    { headers: credentialHeaders(otherApp.appCredential) },
+                ),
+                fixture.environment,
+            );
+            expect(otherAppResponse.status).toBe(403);
 
             expect(
                 await owner.createConversationConfigurationRevision(

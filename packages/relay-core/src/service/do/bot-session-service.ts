@@ -19,11 +19,14 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
+    BOT_CONVERSATION_RESPONSE_LIMIT,
     BOT_EXECUTION_LIFETIME_MILLISECONDS,
     BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
     BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS,
     BotConversationEvent,
     BotConversationEventPage,
+    BotConversationMessage,
+    BotConversationMessagePage,
     BotExecutionRecord,
     BotOutboundAcceptance,
     type BotOutboundSubmission,
@@ -52,10 +55,12 @@ import {
 const MAX_OUTBOUND_MESSAGE_LENGTH = 10_000;
 const MAX_ACTOR_REFERENCE_LENGTH = 500;
 const MAX_PENDING_OUTBOUND_BATCH = 100;
+const BOT_CLIENT_CURSOR_PATTERN = /^bcu_[A-Za-z0-9_-]{32}$/;
 
 interface BotBackingSessionRuntime {
     readonly createSession: SessionCommandGateway["createSession"];
     readonly readEvents: SessionQueryGateway["readEvents"];
+    readonly readMessages: SessionQueryGateway["readMessages"];
     readonly readSession: SessionQueryGateway["readSession"];
 }
 
@@ -763,10 +768,11 @@ export class BotSessionService {
             throw new BotSessionRuntimeError("conversation_access_denied", "The Bot conversation does not exist");
         }
         const context = contextFromRow(contextRow);
+        const internalCursor = this.resolveClientCursor(key, sessionId, "event", cursor);
         const page = await this.#sessions.readEvents(
             scope,
             sessionId,
-            cursor.length === 0 ? null : cursor,
+            internalCursor.length === 0 ? null : internalCursor,
             limit,
             signal,
         );
@@ -797,7 +803,123 @@ export class BotSessionService {
                 ),
             );
         }
-        return new BotConversationEventPage(page.cursor, events, page.hasMore);
+        return new BotConversationEventPage(
+            this.publishClientCursor(key, sessionId, "event", page.cursor),
+            events,
+            page.hasMore,
+        );
+    };
+
+    readonly readConversationMessages = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<BotConversationMessagePage> => {
+        signal.throwIfAborted();
+        const key = scopeKey(scope);
+        const contextRow = this.#storage.readContext({ scopeKey: key, sessionId })[0];
+        if (contextRow === undefined) {
+            throw new BotSessionRuntimeError("conversation_access_denied", "The Bot conversation does not exist");
+        }
+        const context = contextFromRow(contextRow);
+        const internalCursor = this.resolveClientCursor(key, sessionId, "message", cursor);
+        const page = await this.#sessions.readMessages(
+            scope,
+            sessionId,
+            internalCursor.length === 0 ? null : internalCursor,
+            limit,
+            signal,
+        );
+        const messages = page.messages.map((message) => {
+            const executionRow = this.#storage.readCommandExecution({
+                commandId: message.commandId,
+                scopeKey: key,
+                sessionId,
+            })[0];
+            if (executionRow === undefined) {
+                throw new BotSessionRuntimeError(
+                    "session_storage_unavailable",
+                    "The Bot message execution does not exist",
+                );
+            }
+            const executionBotId = rowText(executionRow, "bot_id");
+            const executionConversationId = rowText(executionRow, "conversation_id");
+            const executionSessionId = rowText(executionRow, "session_id");
+            if (
+                executionBotId !== context.botId ||
+                executionConversationId !== context.conversationId ||
+                executionSessionId !== sessionId
+            ) {
+                throw new BotSessionRuntimeError(
+                    "session_storage_unavailable",
+                    "The Bot message execution scope is invalid",
+                );
+            }
+            const responseTruncated = message.response.length > BOT_CONVERSATION_RESPONSE_LIMIT;
+            return new BotConversationMessage(
+                rowText(executionRow, "turn_id"),
+                rowText(executionRow, "execution_id"),
+                rowText(executionRow, "behavior_revision_id"),
+                message.commandId,
+                message.messageId,
+                message.prompt,
+                responseTruncated ? message.response.slice(0, BOT_CONVERSATION_RESPONSE_LIMIT) : message.response,
+                responseTruncated,
+                message.activities,
+                message.attempt,
+                message.createdAt,
+            );
+        });
+        return new BotConversationMessagePage(
+            context.conversationId,
+            messages,
+            page.nextCursor === null ? "" : this.publishClientCursor(key, sessionId, "message", page.nextCursor),
+            page.lastCommittedSeq,
+            this.publishClientCursor(key, sessionId, "event", page.tailEventCursor),
+        );
+    };
+
+    private readonly publishClientCursor = (
+        key: string,
+        sessionId: string,
+        cursorKind: string,
+        internalCursor: string,
+    ): string => {
+        const row = this.#storage.registerClientCursor({
+            createdAt: Date.now(),
+            cursorKind,
+            cursorToken: `bcu_${createRandomToken(24)}`,
+            internalCursor,
+            scopeKey: key,
+            sessionId,
+        });
+        return rowText(row, "cursor_token");
+    };
+
+    private readonly resolveClientCursor = (
+        key: string,
+        sessionId: string,
+        cursorKind: string,
+        cursor: string,
+    ): string => {
+        if (cursor.length === 0) {
+            return "";
+        }
+        if (!BOT_CLIENT_CURSOR_PATTERN.test(cursor)) {
+            throw new BotSessionRuntimeError("invalid_cursor", "The Bot conversation cursor is invalid");
+        }
+        const row = this.#storage.readClientCursor({
+            cursorKind,
+            cursorToken: cursor,
+            scopeKey: key,
+            sessionId,
+        })[0];
+        if (row === undefined) {
+            throw new BotSessionRuntimeError("invalid_cursor", "The Bot conversation cursor is invalid");
+        }
+        return rowText(row, "internal_cursor");
     };
 
     readonly markOutboundForwarded = async (

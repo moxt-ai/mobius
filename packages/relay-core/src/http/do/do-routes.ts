@@ -440,6 +440,18 @@ class DoRoutes {
                     ),
                 );
             }
+            if (operation === "bot-conversation-messages") {
+                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#bots.readConversationMessages(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "cursor", 512, true),
+                        readInteger(body, "limit"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "bot-outbound-forwarded") {
                 assertExactKeys(body, ["now", "outboundMessageId", "scope", "sessionId"]);
                 await this.#bots.markOutboundForwarded(

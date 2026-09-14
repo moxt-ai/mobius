@@ -28,6 +28,16 @@ export function initializeBotSessionSchema(database: DoSqlDatabase): void {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS bot_session_context_bot
         ON bot_session_context(scope_key, bot_id, created_at, session_id);
+      CREATE TABLE IF NOT EXISTS bot_client_cursors (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        cursor_token TEXT NOT NULL,
+        cursor_kind TEXT NOT NULL CHECK (cursor_kind IN ('event', 'message')),
+        internal_cursor TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, cursor_token),
+        UNIQUE (scope_key, session_id, cursor_kind, internal_cursor)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS bot_executions (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

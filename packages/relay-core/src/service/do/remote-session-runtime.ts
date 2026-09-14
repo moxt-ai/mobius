@@ -223,7 +223,7 @@ function decodeConfiguration(value: unknown): SessionConfigurationSnapshot {
     }
 }
 
-function decodeAttempt(value: unknown): SessionMessage["attempt"] {
+export function decodeRemoteAttemptSummary(value: unknown): SessionMessage["attempt"] {
     if (value === null) {
         return null;
     }
@@ -307,11 +307,11 @@ function decodeAttempt(value: unknown): SessionMessage["attempt"] {
     throw new SessionRuntimeError("session_storage_unavailable", "The session attempt state is invalid");
 }
 
-function decodeMessage(value: unknown): SessionMessage {
-    if (!isRecord(value) || !Array.isArray(value["activities"])) {
-        throw new SessionRuntimeError("session_storage_unavailable", "The session message is invalid");
+export function decodeRemoteActivitySummaries(value: unknown): SessionMessage["activities"] {
+    if (!Array.isArray(value)) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The session activities are invalid");
     }
-    const activities = value["activities"].map((activity) => {
+    return value.map((activity) => {
         if (!isRecord(activity) || !Array.isArray(activity["locations"])) {
             throw new SessionRuntimeError("session_storage_unavailable", "The activity summary is invalid");
         }
@@ -344,11 +344,18 @@ function decodeMessage(value: unknown): SessionMessage {
             toolKind: readString(activity, "toolKind", true),
         };
     });
+}
+
+function decodeMessage(value: unknown): SessionMessage {
+    if (!isRecord(value) || !Array.isArray(value["activities"])) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The session message is invalid");
+    }
+    const activities = decodeRemoteActivitySummaries(value["activities"]);
     return {
         activities,
         additionalDirectoryIds: readDirectoryIdentifiers(value, "additionalDirectoryIds"),
         agentId: readString(value, "agentId"),
-        attempt: decodeAttempt(value["attempt"]),
+        attempt: decodeRemoteAttemptSummary(value["attempt"]),
         commandId: readString(value, "commandId"),
         createdAt: readString(value, "createdAt"),
         disposition: readString(value, "disposition"),
@@ -378,6 +385,7 @@ function decodeMessages(value: unknown): SessionMessagePage {
         lastCommittedSeq,
         messages: value["messages"].map(decodeMessage),
         nextCursor,
+        tailEventCursor: readString(value, "tailEventCursor"),
     };
 }
 
@@ -598,7 +606,10 @@ function decodeExport(value: unknown): SessionExport {
                 command: decodeSessionPromptCommand(JSON.stringify(command["command"])),
                 createdAt: readString(command, "createdAt"),
                 response: readString(command, "response", true),
-                state: state["kind"] === "queued" ? { kind: "queued" } : (decodeAttempt(state) ?? { kind: "queued" }),
+                state:
+                    state["kind"] === "queued"
+                        ? { kind: "queued" }
+                        : (decodeRemoteAttemptSummary(state) ?? { kind: "queued" }),
                 turn: decodeTurn(command["turn"]),
                 updatedAt: readString(command, "updatedAt"),
             };

@@ -1526,7 +1526,7 @@ export class MobiusIndeterminateAttemptSummary extends MobiusPresentAttemptSumma
     }
 }
 
-function decodeAttemptSummary(value: unknown): MobiusAttemptSummary {
+export function decodeMobiusAttemptSummary(value: unknown): MobiusAttemptSummary {
     if (value === null) {
         return new MobiusNoAttemptSummary();
     }
@@ -1646,7 +1646,7 @@ export class MobiusActivitySummary {
     }
 }
 
-function decodeActivitySummary(value: unknown): MobiusActivitySummary {
+export function decodeMobiusActivitySummary(value: unknown): MobiusActivitySummary {
     const activity = record(value, "Activity summary");
     return new MobiusActivitySummary(
         identifierField(activity, "activityId"),
@@ -1722,7 +1722,7 @@ export class MobiusMessage {
 function decodeMobiusMessage(value: unknown): MobiusMessage {
     const message = record(value, "Session message");
     return new MobiusMessage(
-        arrayField(message, "activities", 10_000).map(decodeActivitySummary),
+        arrayField(message, "activities", 10_000).map(decodeMobiusActivitySummary),
         arrayField(message, "additionalDirectoryIds", 100).map((directoryId) => {
             if (typeof directoryId !== "string") {
                 throw invalidResponse("The service returned an invalid additional directory identifier");
@@ -1730,7 +1730,7 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
             return identifierField({ directoryId }, "directoryId");
         }),
         identifierField(message, "agentId"),
-        decodeAttemptSummary(message["attempt"]),
+        decodeMobiusAttemptSummary(message["attempt"]),
         identifierField(message, "commandId"),
         validateTimestamp(stringField(message, "createdAt", 128), "createdAt"),
         stringField(message, "disposition", 16),

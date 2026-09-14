@@ -337,8 +337,9 @@ export class SessionQueryService {
         const pageRows = rows.slice(0, limit);
         const messages = pageRows.map((row) => this.messageFromRow(scope, sessionId, row));
         const last = pageRows.at(-1);
+        const lastCommittedSequence = rowNumber(session, "next_sequence") - 1;
         return {
-            lastCommittedSeq: (rowNumber(session, "next_sequence") - 1).toString(),
+            lastCommittedSeq: lastCommittedSequence.toString(),
             messages,
             nextCursor:
                 rows.length > limit && last !== undefined
@@ -349,6 +350,7 @@ export class SessionQueryService {
                           sessionId,
                       })
                     : null,
+            tailEventCursor: eventCursor(scope, sessionId, lastCommittedSequence),
         };
     };
 

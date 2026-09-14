@@ -133,7 +133,7 @@ function botSessionErrorStatus(code: string): number {
     if (code === "idempotency_conflict" || code === "session_busy") {
         return 409;
     }
-    if (code === "invalid_request") {
+    if (code === "invalid_cursor" || code === "invalid_request") {
         return 400;
     }
     return 503;

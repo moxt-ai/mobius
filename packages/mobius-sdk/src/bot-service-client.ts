@@ -29,6 +29,7 @@ import {
     MobiusBotConnectionCredential,
     MobiusBotConnectionCredentialRotation,
     MobiusBotConversationEventPage,
+    MobiusBotConversationMessagePage,
     MobiusBotDeliveryAcknowledgement,
     MobiusBotDeliveryTarget,
     MobiusBotOutboundEventPage,
@@ -47,7 +48,7 @@ import {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
-import { decodeMobiusTurn, type MobiusTurn } from "./resources.ts";
+import { decodeMobiusTurn, type MobiusPageRequest, type MobiusTurn } from "./resources.ts";
 import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
 
 export const MOBIUS_BOT_API_VERSION = "v1";
@@ -862,6 +863,29 @@ export class MobiusBotOwnerClient {
             path.searchParams.set("after", boundedText(after, "Bot event cursor", 512));
         }
         return new MobiusBotConversationEventPage(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+        );
+    };
+
+    readonly readConversationMessages = async (
+        botId: string,
+        conversationId: string,
+        page: MobiusPageRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusBotConversationMessagePage> => {
+        const path = new URL(
+            projectBotPath(
+                this.#projectId,
+                botId,
+                `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/messages`,
+            ),
+            "https://mobius.invalid/",
+        );
+        path.searchParams.set("limit", boundedInteger(page.limit, "message page limit", 1, 100).toString());
+        if (page.cursor.length > 0) {
+            path.searchParams.set("cursor", boundedText(page.cursor, "message cursor", 512));
+        }
+        return new MobiusBotConversationMessagePage(
             await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
         );
     };

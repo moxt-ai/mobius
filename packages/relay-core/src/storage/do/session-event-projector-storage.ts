@@ -223,7 +223,7 @@ export class SessionEventProjectorStorage {
     }): { readonly changes: number } =>
         this.#database.run(
             `UPDATE turns
-         SET response = substr(response || ?, 1, 100000), updated_at = ?
+         SET response = response || ?, updated_at = ?
          WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
             [input.text, input.updatedAt, input.scopeKey, input.sessionId, input.commandId],
         );

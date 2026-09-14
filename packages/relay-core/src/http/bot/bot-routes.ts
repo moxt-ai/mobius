@@ -20,6 +20,8 @@ import {
     identifier,
     identifiers,
     integer,
+    messageCursor,
+    messagePageLimit,
     messageRequest,
     object,
     pageLimit,
@@ -426,6 +428,20 @@ function createBotConversationRoutes() {
                 201,
             ),
         )
+        .get("/bots/:botId/conversations/:conversationId/messages", async (c) => {
+            const url = new URL(c.req.url);
+            return c.json(
+                await c.var.bots.readConversationMessages(
+                    pathIdentifier(c.req.param("botId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    pathIdentifier(c.req.param("conversationId")),
+                    messageCursor(url),
+                    messagePageLimit(url),
+                    c.var.signal,
+                ),
+            );
+        })
         .post("/bots/:botId/conversations/:conversationId/messages", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const submission = messageRequest(c.var.body);
             return c.json(

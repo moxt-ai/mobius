@@ -1,4 +1,12 @@
 import { MobiusProtocolError } from "./errors.ts";
+import {
+    decodeMobiusActivitySummary,
+    decodeMobiusAttemptSummary,
+    type MobiusActivitySummary,
+    type MobiusAttemptSummary,
+} from "./resources.ts";
+
+const BOT_CONVERSATION_RESPONSE_LIMIT = 8 * 1024 * 1024;
 
 function invalid(name: string): MobiusProtocolError {
     return new MobiusProtocolError(`The service returned an invalid ${name}`);
@@ -358,6 +366,90 @@ export class MobiusBotConversationEventPage {
         this.cursor = text(resource, "cursor", "Bot conversation event page");
         this.events = Object.freeze(events.map((event) => new MobiusBotConversationEvent(event)));
         this.hasMore = boolean(resource, "hasMore", "Bot conversation event page");
+    }
+}
+
+export class MobiusBotConversationMessage {
+    readonly activities: readonly MobiusActivitySummary[];
+    readonly attempt: MobiusAttemptSummary;
+    readonly behaviorRevisionId: string;
+    readonly clientMessageId: string;
+    readonly createdAt: string;
+    readonly executionId: string;
+    readonly messageId: string;
+    readonly prompt: string;
+    readonly response: string;
+    readonly responseTruncated: boolean;
+    readonly turnId: string;
+
+    constructor(value: unknown) {
+        const resource = record(value, "Bot conversation message");
+        exact(
+            resource,
+            [
+                "activities",
+                "attempt",
+                "behaviorRevisionId",
+                "clientMessageId",
+                "createdAt",
+                "executionId",
+                "messageId",
+                "prompt",
+                "response",
+                "responseTruncated",
+                "turnId",
+            ],
+            "Bot conversation message",
+        );
+        const activities = resource["activities"];
+        if (!Array.isArray(activities) || activities.length > 10_000) {
+            throw invalid("Bot conversation message");
+        }
+        const response = text(resource, "response", "Bot conversation message");
+        if (response.length > BOT_CONVERSATION_RESPONSE_LIMIT) {
+            throw invalid("Bot conversation message");
+        }
+        this.activities = Object.freeze(activities.map(decodeMobiusActivitySummary));
+        this.attempt = decodeMobiusAttemptSummary(resource["attempt"]);
+        this.behaviorRevisionId = nonemptyText(resource, "behaviorRevisionId", "Bot conversation message");
+        this.clientMessageId = nonemptyText(resource, "clientMessageId", "Bot conversation message");
+        this.createdAt = timestamp(resource, "createdAt", "Bot conversation message");
+        this.executionId = nonemptyText(resource, "executionId", "Bot conversation message");
+        this.messageId = text(resource, "messageId", "Bot conversation message");
+        this.prompt = text(resource, "prompt", "Bot conversation message");
+        this.response = response;
+        this.responseTruncated = boolean(resource, "responseTruncated", "Bot conversation message");
+        this.turnId = nonemptyText(resource, "turnId", "Bot conversation message");
+    }
+}
+
+export class MobiusBotConversationMessagePage {
+    readonly conversationId: string;
+    readonly lastCommittedSequence: string;
+    readonly messages: readonly MobiusBotConversationMessage[];
+    readonly nextCursor: string;
+    readonly tailEventCursor: string;
+
+    constructor(value: unknown) {
+        const resource = record(value, "Bot conversation message page");
+        exact(
+            resource,
+            ["conversationId", "lastCommittedSequence", "messages", "nextCursor", "tailEventCursor"],
+            "Bot conversation message page",
+        );
+        const messages = resource["messages"];
+        const lastCommittedSequence = nonemptyText(resource, "lastCommittedSequence", "Bot conversation message page");
+        if (!Array.isArray(messages) || messages.length > 100 || !/^(?:0|[1-9][0-9]*)$/.test(lastCommittedSequence)) {
+            throw invalid("Bot conversation message page");
+        }
+        this.conversationId = nonemptyText(resource, "conversationId", "Bot conversation message page");
+        this.lastCommittedSequence = lastCommittedSequence;
+        this.messages = Object.freeze(messages.map((message) => new MobiusBotConversationMessage(message)));
+        this.nextCursor = text(resource, "nextCursor", "Bot conversation message page");
+        this.tailEventCursor = nonemptyText(resource, "tailEventCursor", "Bot conversation message page");
+        if (this.nextCursor.length > 512 || this.tailEventCursor.length > 512) {
+            throw invalid("Bot conversation message page");
+        }
     }
 }
 

@@ -238,3 +238,19 @@ export function pageLimit(url: URL): number {
     }
     return Number(value);
 }
+
+export function messageCursor(url: URL): string {
+    const value = url.searchParams.get("cursor") ?? "";
+    if (value.length > 512) {
+        throw new BotApiError("invalid_request", "The message cursor is invalid", "invalid-input");
+    }
+    return value;
+}
+
+export function messagePageLimit(url: URL): number {
+    const value = url.searchParams.get("limit") ?? "50";
+    if (!/^[1-9][0-9]{0,2}$/.test(value) || Number(value) > 100) {
+        throw new BotApiError("invalid_request", "The message page limit is invalid", "invalid-input");
+    }
+    return Number(value);
+}

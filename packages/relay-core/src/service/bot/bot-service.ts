@@ -50,6 +50,7 @@ import type { BotTargetService } from "./bot-target-service.ts";
 
 const BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS = 5 * 60 * 1_000;
+const BOT_CONVERSATION_EVENT_PAGE_LIMIT = 20;
 
 function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit, now: number): void {
     if (
@@ -1357,10 +1358,44 @@ export class BotService {
             access.scope,
             conversation.sessionId,
             after,
-            100,
+            BOT_CONVERSATION_EVENT_PAGE_LIMIT,
             signal,
         );
         return access instanceof BotConnectionAccess ? connectorEventPage(page) : page;
+    };
+    readonly readConversationMessages = async (
+        botId: string,
+        token: string,
+        actorReference: string,
+        conversationId: string,
+        cursor: string,
+        limit: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            ProjectPermission.ConversationRead,
+            "conversation-messages:read",
+            actorReference,
+            signal,
+        );
+        if (access instanceof BotConnectionAccess) {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "Bot connection credentials cannot read authoritative conversation history",
+                "access-denied",
+            );
+        }
+        const cx = await this.projectContext(access.scope, signal);
+        const conversation = await this.authorizeConversation(cx, access, conversationId, signal);
+        return await this.cx.gateways.botSessions.readConversationMessages(
+            access.scope,
+            conversation.sessionId,
+            cursor,
+            limit,
+            signal,
+        );
     };
     readonly cancelTurn = async (
         botId: string,

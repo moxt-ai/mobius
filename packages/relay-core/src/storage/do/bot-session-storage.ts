@@ -172,6 +172,54 @@ export class BotSessionStorage {
             ],
         );
 
+    readonly registerClientCursor = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly cursorToken: string;
+        readonly cursorKind: string;
+        readonly internalCursor: string;
+        readonly createdAt: number;
+    }): DoSqlRow =>
+        this.#database.transaction(() => {
+            this.#database.run(
+                `INSERT OR IGNORE INTO bot_client_cursors (
+                   scope_key, session_id, cursor_token, cursor_kind,
+                   internal_cursor, created_at
+                 ) VALUES (?, ?, ?, ?, ?, ?)`,
+                [
+                    input.scopeKey,
+                    input.sessionId,
+                    input.cursorToken,
+                    input.cursorKind,
+                    input.internalCursor,
+                    input.createdAt,
+                ],
+            );
+            const row = this.#database.query(
+                `SELECT * FROM bot_client_cursors
+                  WHERE scope_key = ? AND session_id = ?
+                    AND cursor_kind = ? AND internal_cursor = ?`,
+                [input.scopeKey, input.sessionId, input.cursorKind, input.internalCursor],
+            )[0];
+            if (row === undefined) {
+                throw new DatabaseError("database_unavailable", "The Bot client cursor was not committed");
+            }
+            return row;
+        });
+
+    readonly readClientCursor = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly cursorToken: string;
+        readonly cursorKind: string;
+    }) =>
+        this.#database.query(
+            `SELECT * FROM bot_client_cursors
+              WHERE scope_key = ? AND session_id = ?
+                AND cursor_token = ? AND cursor_kind = ?`,
+            [input.scopeKey, input.sessionId, input.cursorToken, input.cursorKind],
+        );
+
     private readonly readTurnReceipt = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
