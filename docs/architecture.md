@@ -167,10 +167,12 @@ cursors, then consume the same committed-event envelope live.
 
 Daemon-to-Relay replay is fair across event sources: the connection window is 16
 events and 32 MiB, with at most four unacknowledged events from one source. Each
-ACK advances only that source. The SQLite outbox admits 10,000 ordinary events or
-128 MiB and reserves an additional 128 events or 8 MiB for terminal outcomes.
-Once the reserved capacity is exhausted, the local execution boundary fails
-admission explicitly instead of consuming unbounded disk.
+ACK advances only that source. Event count is not an admission limit, so a
+continuously acknowledged task does not fail because of its duration. The SQLite
+outbox admits up to 128 MiB of ordinary events and reserves an additional 8 MiB
+for terminal outcomes. Once the reserved byte capacity is exhausted, the local
+execution boundary fails admission explicitly instead of consuming unbounded
+disk.
 
 For Relay-to-daemon PendingWork, a receipt-capable connection receives a
 `runtime.delivery` envelope with a stable delivery ID. The daemon validates and
@@ -204,8 +206,17 @@ Activity summaries are bounded separately from recorded details. Full permitted
 details are captured before summarization, split into bounded compressed segments,
 and loaded only when a user expands an activity. Archive manifests are published
 only after all immutable segments pass integrity checks; hot content remains
-queryable until that commit. Failed jobs survive restart and apply explicit
-backpressure when their bounded queue is full.
+queryable until that commit. Archive admission is bounded by pending bytes rather
+than event count. Recovery takes up to 256 jobs per pass, writes up to four jobs
+concurrently, and schedules the next pass after one second while it is
+successfully draining work. Each recovery invocation has an owned 60-second
+deadline; failed storage attempts retain the slower retry path.
+When the byte boundary is reached, Relay sends `session.event.deferred`, preserves
+the blocked source order, and keeps the multiplexed Runtime connection online.
+The daemon retains the event in its SQLite outbox and retries it on that same
+connection after the bounded delay. Failed jobs survive restart, so task duration
+itself is not a storage limit; actual disk/object capacity and sustained storage
+availability remain explicit safety boundaries.
 
 Every session operation receives Tenant / Project from verified credentials.
 Recording level, retention, hot event capacity, detail size, and active-session

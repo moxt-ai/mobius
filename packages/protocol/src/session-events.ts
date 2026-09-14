@@ -56,6 +56,7 @@ import {
 export const SESSION_EVENT_KIND = "session.event";
 export const SESSION_EVENT_ACK_KIND = "session.event.ack";
 export const SESSION_EVENT_COMMITTED_KIND = "session.event.committed";
+export const SESSION_EVENT_DEFERRED_KIND = "session.event.deferred";
 export const SESSION_EVENT_REJECTED_KIND = "session.event.rejected";
 
 export const SessionEventRejectionCode = {
@@ -121,6 +122,15 @@ const eventAcknowledgementSchema = z
     })
     .readonly();
 
+const eventDeferredSchema = z
+    .strictObject({
+        eventId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+        kind: z.literal(SESSION_EVENT_DEFERRED_KIND),
+        retryAfterMilliseconds: z.number().int().min(100).max(60_000),
+        sessionId: z.string().min(1).max(128).regex(IDENTIFIER_PATTERN),
+    })
+    .readonly();
+
 const eventRejectionSchema = z
     .strictObject({
         code: z.enum(SessionEventRejectionCode),
@@ -133,6 +143,7 @@ const eventRejectionSchema = z
 export type SessionEventEnvelope = z.infer<typeof eventEnvelopeSchema>;
 export type CommittedSessionEvent = z.infer<typeof committedEventSchema>;
 export type SessionEventAcknowledgement = z.infer<typeof eventAcknowledgementSchema>;
+export type SessionEventDeferred = z.infer<typeof eventDeferredSchema>;
 export type SessionEventRejection = z.infer<typeof eventRejectionSchema>;
 
 export type RecordedSessionEvent =
@@ -195,6 +206,12 @@ export const decodeSessionEventAcknowledgement = (encoded: string): SessionEvent
 
 export const encodeSessionEventAcknowledgement = (message: SessionEventAcknowledgement): string =>
     encode(message, eventAcknowledgementSchema);
+
+export const decodeSessionEventDeferred = (encoded: string): SessionEventDeferred =>
+    decode(encoded, eventDeferredSchema);
+
+export const encodeSessionEventDeferred = (message: SessionEventDeferred): string =>
+    encode(message, eventDeferredSchema);
 
 export const decodeSessionEventRejection = (encoded: string): SessionEventRejection =>
     decode(encoded, eventRejectionSchema);

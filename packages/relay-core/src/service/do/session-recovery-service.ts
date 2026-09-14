@@ -7,6 +7,9 @@ import type { BotTargetService } from "../bot/bot-target-service.ts";
 import type { BotSessionService } from "./bot-session-service.ts";
 import type { SqliteSessionRuntime } from "./sqlite-session-runtime.ts";
 
+const ARCHIVE_CONTINUATION_DELAY_MILLISECONDS = 1_000;
+const RECOVERY_RETRY_DELAY_MILLISECONDS = 30_000;
+
 interface SessionRecoveryContext {
     readonly runtime: SqliteSessionRuntime;
     readonly bots: BotSessionService;
@@ -30,14 +33,17 @@ export class SessionRecoveryService {
     readonly recover = async (signal: AbortSignal): Promise<void> => {
         const rows = this.#cx.runtime.listRecoverySessions();
         let pending = false;
+        let continueArchive = false;
         for (const { scope, sessionId, lifecycle } of rows) {
             signal.throwIfAborted();
             try {
                 if (lifecycle === "deleting") {
                     await this.#cx.runtime.deleteSession(scope, sessionId, Date.now(), signal);
                 } else {
-                    await this.#cx.runtime.runArchiveWork(scope, sessionId, signal);
-                    pending = this.#cx.runtime.hasPendingArchiveWork(scope, sessionId) || pending;
+                    const archived = await this.#cx.runtime.runArchiveWork(scope, sessionId, signal);
+                    const archivePending = this.#cx.runtime.hasPendingArchiveWork(scope, sessionId);
+                    continueArchive = (archivePending && archived > 0) || continueArchive;
+                    pending = archivePending || pending;
                 }
                 const outbound = await this.#cx.bots.listPendingOutbound(scope, sessionId, 100, Date.now(), signal);
                 await this.reconcile(scope, sessionId, outbound, signal);
@@ -49,7 +55,11 @@ export class SessionRecoveryService {
             }
         }
         if (pending) {
-            await this.#cx.schedule(Date.now() + 30_000, signal);
+            await this.#cx.schedule(
+                Date.now() +
+                    (continueArchive ? ARCHIVE_CONTINUATION_DELAY_MILLISECONDS : RECOVERY_RETRY_DELAY_MILLISECONDS),
+                signal,
+            );
         }
     };
 

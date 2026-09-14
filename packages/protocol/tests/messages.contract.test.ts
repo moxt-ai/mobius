@@ -15,6 +15,7 @@ import {
     decodeRuntimeLivenessReadyEvent,
     decodeSessionCancelCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
     decodeSessionEventRejection,
     decodeSessionPromptCommand,
@@ -27,6 +28,7 @@ import {
     encodeRuntimeLivenessReadyEvent,
     encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
+    encodeSessionEventDeferred,
     encodeSessionEventEnvelope,
     encodeSessionEventRejection,
     encodeSessionPromptCommand,
@@ -46,6 +48,7 @@ import {
     type RuntimeLivenessReadyEvent,
     SESSION_CANCEL_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_PROMPT_KIND,
@@ -137,6 +140,17 @@ describe("reliable session event protocol", () => {
         } as const;
 
         expect(decodeSessionEventRejection(encodeSessionEventRejection(rejection))).toEqual(rejection);
+    });
+
+    it("Given Relay archive storage applies backpressure, When it defers one durable event, Then the retry identity and bounded delay round-trip exactly", () => {
+        const deferred = {
+            eventId: "event-1",
+            kind: SESSION_EVENT_DEFERRED_KIND,
+            retryAfterMilliseconds: 1_000,
+            sessionId: "session-1",
+        } as const;
+
+        expect(decodeSessionEventDeferred(encodeSessionEventDeferred(deferred))).toEqual(deferred);
     });
 });
 

@@ -26,6 +26,7 @@ import {
 } from "./session-archive-codec.ts";
 import {
     MAX_ARCHIVE_BATCH_SIZE,
+    MAX_ARCHIVE_CONCURRENCY,
     MAX_PENDING_ARCHIVE_BYTE_LIMIT,
     MIN_PENDING_ARCHIVE_BYTE_LIMIT,
     type PreparedEvent,
@@ -46,41 +47,84 @@ export class SessionArchiveService {
     }
 
     readonly runWork = async (scope: ProjectScope, sessionId: string, signal: AbortSignal): Promise<number> => {
+        signal.throwIfAborted();
         const jobs = this.#storage.listArchiveJobs({
             scopeKey: scopeKey(scope),
             sessionId: sessionId,
             limit: MAX_ARCHIVE_BATCH_SIZE,
         });
-        let completed = 0;
-        for (const job of jobs) {
-            signal.throwIfAborted();
-            try {
-                await this.archiveJob(scope, sessionId, job, signal);
-                completed += 1;
-            } catch (error) {
-                if (signal.aborted) {
-                    throw error;
-                }
-                this.#storage.recordArchiveFailure({
-                    lastError: error instanceof Error ? error.message.slice(0, 500) : "Archive upload failed",
-                    scopeKey: scopeKey(scope),
-                    sessionId: sessionId,
-                    targetId: rowString(job, "target_id"),
-                });
-                if (error instanceof ContentQuotaExceededError) {
-                    throw new SessionRuntimeError("session_quota_exceeded", "The session archive quota is exhausted", {
-                        cause: error,
-                    });
-                }
-                throw new SessionRuntimeError(
-                    "session_storage_unavailable",
-                    "The session archive could not be written",
-                    { cause: error },
-                );
-            }
-        }
         signal.throwIfAborted();
-        return completed;
+        if (jobs.length === 0) {
+            return 0;
+        }
+        let completed = 0;
+        let failed = false;
+        let failure: unknown;
+        let nextJobIndex = 0;
+        const controller = new AbortController();
+        const abort = (): void => controller.abort(signal.reason);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) {
+            abort();
+        }
+        const runWorker = async (): Promise<void> => {
+            while (!controller.signal.aborted) {
+                const job = jobs[nextJobIndex];
+                nextJobIndex += 1;
+                if (job === undefined) {
+                    return;
+                }
+                try {
+                    await this.archiveJob(scope, sessionId, job, controller.signal);
+                    completed += 1;
+                } catch (error) {
+                    if (signal.aborted || controller.signal.aborted) {
+                        return;
+                    }
+                    let cause = error;
+                    try {
+                        this.#storage.recordArchiveFailure({
+                            lastError: error instanceof Error ? error.message.slice(0, 500) : "Archive upload failed",
+                            scopeKey: scopeKey(scope),
+                            sessionId: sessionId,
+                            targetId: rowString(job, "target_id"),
+                        });
+                    } catch (recordFailure) {
+                        cause = recordFailure;
+                    }
+                    failed = true;
+                    failure =
+                        error instanceof ContentQuotaExceededError
+                            ? new SessionRuntimeError(
+                                  "session_quota_exceeded",
+                                  "The session archive quota is exhausted",
+                                  { cause },
+                              )
+                            : new SessionRuntimeError(
+                                  "session_storage_unavailable",
+                                  "The session archive could not be written",
+                                  { cause },
+                              );
+                    controller.abort(failure);
+                    return;
+                }
+            }
+        };
+        try {
+            await Promise.all(
+                Array.from({ length: Math.min(MAX_ARCHIVE_CONCURRENCY, jobs.length) }, async () => {
+                    await runWorker();
+                }),
+            );
+            signal.throwIfAborted();
+            if (failed) {
+                throw failure;
+            }
+            return completed;
+        } finally {
+            signal.removeEventListener("abort", abort);
+            controller.abort();
+        }
     };
 
     readonly hasPendingWork = (scope: ProjectScope, sessionId: string): boolean =>
@@ -110,11 +154,7 @@ export class SessionArchiveService {
             MAX_PENDING_ARCHIVE_BYTE_LIMIT,
             Math.max(MIN_PENDING_ARCHIVE_BYTE_LIMIT, rowNumber(session, "content_limit_bytes") * 4),
         );
-        const jobLimit = Math.max(20, rowNumber(session, "hot_event_limit") * 2);
-        if (
-            rowNumber(backlog, "pending_jobs") + incomingPayloads.length > jobLimit ||
-            rowNumber(backlog, "pending_bytes") + incomingBytes > byteLimit
-        ) {
+        if (rowNumber(backlog, "pending_bytes") + incomingBytes > byteLimit) {
             throw new SessionRuntimeError(
                 "session_busy",
                 "The session archive backlog is full; event ingestion is paused until archiving recovers",

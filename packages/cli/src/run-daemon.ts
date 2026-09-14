@@ -37,6 +37,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
     decodeSessionEventRejection,
     decodeSessionPermissionRespondCommand,
@@ -84,6 +85,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
@@ -560,11 +562,14 @@ function sessionEventSourceKey(envelope: ReturnType<typeof decodeSessionEventEnv
 class DaemonSessionEventPublisher {
     readonly #outbox: SessionEventOutbox;
     readonly #inFlightEvents = new Map<string, InFlightSessionEvent>();
+    readonly #pausedSources = new Map<string, DaemonScheduledTask>();
+    readonly #timer: DaemonTimer;
     #inFlightBytes = 0;
     #connection: DaemonSessionEventConnectionState = new DisconnectedDaemonSessionEventState();
 
-    constructor(outbox: SessionEventOutbox) {
+    constructor(outbox: SessionEventOutbox, timer: DaemonTimer) {
         this.#outbox = outbox;
+        this.#timer = timer;
     }
 
     readonly connect = (socket: WebSocket): void => {
@@ -614,6 +619,32 @@ class DaemonSessionEventPublisher {
         return true;
     };
 
+    readonly defer = (deferred: ReturnType<typeof decodeSessionEventDeferred>): void => {
+        const inFlight = this.#inFlightEvents.get(deferred.eventId);
+        if (inFlight === undefined) {
+            return;
+        }
+        this.#clearInFlightSource(inFlight.sourceKey);
+        if (!this.#pausedSources.has(inFlight.sourceKey)) {
+            this.#pausedSources.set(
+                inFlight.sourceKey,
+                this.#timer.schedule(() => {
+                    this.#pausedSources.delete(inFlight.sourceKey);
+                    this.#publishNextBatch();
+                }, deferred.retryAfterMilliseconds),
+            );
+        }
+        this.#publishNextBatch();
+    };
+
+    readonly close = (): void => {
+        for (const task of this.#pausedSources.values()) {
+            task.cancel();
+        }
+        this.#pausedSources.clear();
+        this.#clearInFlight();
+    };
+
     readonly #publishNextBatch = (): void => {
         while (this.#inFlightEvents.size < SESSION_EVENT_REPLAY_WINDOW) {
             const sourceCounts = new Map<string, number>();
@@ -626,7 +657,7 @@ class DaemonSessionEventPublisher {
             const batch = this.#outbox.pendingSourceHeads(
                 SESSION_EVENT_REPLAY_WINDOW - this.#inFlightEvents.size,
                 [...this.#inFlightEvents.keys()],
-                saturatedSources,
+                [...this.#pausedSources.keys(), ...saturatedSources],
             );
             let sent = 0;
             for (const encoded of batch) {
@@ -667,6 +698,16 @@ class DaemonSessionEventPublisher {
     readonly #clearInFlight = (): void => {
         this.#inFlightEvents.clear();
         this.#inFlightBytes = 0;
+    };
+
+    readonly #clearInFlightSource = (sourceKey: string): void => {
+        for (const [eventId, inFlight] of this.#inFlightEvents) {
+            if (inFlight.sourceKey !== sourceKey) {
+                continue;
+            }
+            this.#inFlightEvents.delete(eventId);
+            this.#inFlightBytes -= inFlight.byteLength;
+        }
     };
 }
 
@@ -1786,6 +1827,10 @@ async function runRelayConnection(
                         publisher.acknowledge(decodeSessionEventAcknowledgement(encoded));
                         return;
                     }
+                    if (kind === SESSION_EVENT_DEFERRED_KIND) {
+                        publisher.defer(decodeSessionEventDeferred(encoded));
+                        return;
+                    }
                     if (kind === SESSION_EVENT_REJECTED_KIND) {
                         const rejection = decodeSessionEventRejection(encoded);
                         if (publisher.quarantine(rejection)) {
@@ -2323,7 +2368,7 @@ export async function runDaemon(
     });
     const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
     const outbox = new SessionEventOutbox(config.auditDatabasePath);
-    const publisher = new DaemonSessionEventPublisher(outbox);
+    const publisher = new DaemonSessionEventPublisher(outbox, timer);
     const grants = new LocalBotGrantStore(config.auditDatabasePath);
     const contexts = new BotExecutionContextRegistry();
     const applicator = new EmbeddedBotContextApplicator();
@@ -2424,7 +2469,11 @@ export async function runDaemon(
                             try {
                                 grants.close();
                             } finally {
-                                outbox.close();
+                                try {
+                                    publisher.close();
+                                } finally {
+                                    outbox.close();
+                                }
                             }
                         }
                     }

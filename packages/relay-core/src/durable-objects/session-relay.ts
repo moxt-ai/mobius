@@ -1,5 +1,7 @@
 import type { DurableObjectContext } from "../di/create-durable-object-dependencies.ts";
 
+const SESSION_RECOVERY_TIMEOUT_MILLISECONDS = 60_000;
+
 export class SessionRelay {
     readonly #dependencies: DurableObjectContext;
 
@@ -15,7 +17,7 @@ export class SessionRelay {
         const controller = new AbortController();
         const timer = setTimeout(
             () => controller.abort(new DOMException("Session recovery timed out", "TimeoutError")),
-            15_000,
+            SESSION_RECOVERY_TIMEOUT_MILLISECONDS,
         );
         try {
             await this.#dependencies.services.sessionRecovery.recover(controller.signal);

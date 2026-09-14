@@ -13,20 +13,16 @@ import {
 
 const DEFAULT_OUTBOX_LIMITS: SessionEventOutboxLimits = {
     criticalEventBytes: 136 * 1024 * 1024,
-    criticalEventCount: 10_128,
     runtimeDeliveryBytes: 64 * 1024 * 1024,
     runtimeDeliveryCount: 64,
     standardEventBytes: 128 * 1024 * 1024,
-    standardEventCount: 10_000,
 };
 
 export interface SessionEventOutboxLimits {
     readonly criticalEventBytes: number;
-    readonly criticalEventCount: number;
     readonly runtimeDeliveryBytes: number;
     readonly runtimeDeliveryCount: number;
     readonly standardEventBytes: number;
-    readonly standardEventCount: number;
 }
 
 export class SessionEventOutboxCapacityError extends Error {
@@ -361,23 +357,11 @@ export class SessionEventOutbox {
     };
 
     readonly enqueue = (sessionId: string, payload: string, attemptId: string | null = null): string => {
-        return this.#enqueueBounded(
-            sessionId,
-            payload,
-            attemptId ?? "",
-            this.#limits.standardEventCount,
-            this.#limits.standardEventBytes,
-        );
+        return this.#enqueueBounded(sessionId, payload, attemptId ?? "", this.#limits.standardEventBytes);
     };
 
     readonly enqueueCritical = (sessionId: string, payload: string, attemptId = ""): string =>
-        this.#enqueueBounded(
-            sessionId,
-            payload,
-            attemptId,
-            this.#limits.criticalEventCount,
-            this.#limits.criticalEventBytes,
-        );
+        this.#enqueueBounded(sessionId, payload, attemptId, this.#limits.criticalEventBytes);
 
     readonly claimRuntimeDelivery = (delivery: RuntimeDelivery): StoredRuntimeDelivery => {
         const payloadBytes = new TextEncoder().encode(delivery.payload).byteLength;
@@ -515,7 +499,6 @@ export class SessionEventOutbox {
         sessionId: string,
         payload: string,
         attemptId: string,
-        maximumEventCount: number,
         maximumEventBytes: number,
     ): string => {
         const sourceKey = attemptId.length === 0 ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
@@ -551,15 +534,12 @@ export class SessionEventOutbox {
             const byteLength = new TextEncoder().encode(encoded).byteLength;
             const state = this.#database
                 .prepare(
-                    `SELECT event_count, total_bytes
+                    `SELECT total_bytes
                      FROM relay_session_event_outbox_state
                      WHERE singleton = 1`,
                 )
                 .get();
-            if (
-                rowNumber(state, "event_count") + 1 > maximumEventCount ||
-                rowNumber(state, "total_bytes") + byteLength > maximumEventBytes
-            ) {
+            if (rowNumber(state, "total_bytes") + byteLength > maximumEventBytes) {
                 throw new SessionEventOutboxCapacityError();
             }
             this.#database
@@ -725,19 +705,14 @@ export class SessionEventOutbox {
 function validateLimits(limits: SessionEventOutboxLimits): void {
     const values = [
         limits.criticalEventBytes,
-        limits.criticalEventCount,
         limits.runtimeDeliveryBytes,
         limits.runtimeDeliveryCount,
         limits.standardEventBytes,
-        limits.standardEventCount,
     ];
     if (values.some((value) => !Number.isSafeInteger(value) || value < 1)) {
         throw new Error("Session event outbox limits must be positive integers");
     }
-    if (
-        limits.criticalEventBytes < limits.standardEventBytes ||
-        limits.criticalEventCount < limits.standardEventCount
-    ) {
+    if (limits.criticalEventBytes < limits.standardEventBytes) {
         throw new Error("Critical Session event capacity must include the standard capacity");
     }
 }

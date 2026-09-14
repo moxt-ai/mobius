@@ -31,9 +31,7 @@ describe("durable daemon session event outbox", () => {
         createdDirectories.push(directory);
         const databasePath = join(directory, "audit.sqlite");
         const limits = {
-            criticalEventCount: 3,
             criticalEventBytes: 4_096,
-            standardEventCount: 2,
             standardEventBytes: 2_048,
             runtimeDeliveryCount: 2,
             runtimeDeliveryBytes: 8_192,
@@ -118,28 +116,29 @@ describe("durable daemon session event outbox", () => {
         migrated.close();
     });
 
-    it("Given Relay acknowledgements stop draining the local event outbox, When its bounded admission policy is exhausted, Then ordinary events are rejected while reserved terminal capacity remains usable", async () => {
+    it("Given Relay acknowledgements stop draining the local event outbox, When compact events accumulate and then exhaust its byte capacity, Then event count stays independent from task duration while reserved terminal capacity remains usable", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-event-outbox-capacity-"));
         createdDirectories.push(directory);
         const outbox = new SessionEventOutbox(join(directory, "audit.sqlite"), {
-            criticalEventCount: 3,
             criticalEventBytes: 4_096,
-            standardEventCount: 2,
             standardEventBytes: 2_048,
             runtimeDeliveryCount: 4,
             runtimeDeliveryBytes: 8_192,
         });
         outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "first" }));
         outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "second" }));
+        expect(() =>
+            outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "third" })),
+        ).not.toThrow();
 
         expect(() =>
-            outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "blocked" })),
+            outbox.enqueue("session-a", JSON.stringify({ kind: "agent.message.delta", text: "x".repeat(2_048) })),
         ).toThrowError(SessionEventOutboxCapacityError);
         expect(() =>
             outbox.enqueueCritical("session-a", JSON.stringify({ kind: "session.failed", message: "bounded" })),
         ).not.toThrow();
 
-        for (const [index, encoded] of outbox.pending().slice(0, 2).entries()) {
+        for (const [index, encoded] of outbox.pending().slice(0, 3).entries()) {
             const event = decodeSessionEventEnvelope(encoded);
             outbox.acknowledge({
                 cursor: `cursor-capacity-${index.toString()}`,

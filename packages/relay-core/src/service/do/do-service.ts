@@ -52,7 +52,15 @@ export class DoService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const result = await this.#services.runtime.commitEvent(scope, runtimeId, envelope, now, signal);
+        let result: Awaited<ReturnType<SqliteSessionRuntime["commitEvent"]>>;
+        try {
+            result = await this.#services.runtime.commitEvent(scope, runtimeId, envelope, now, signal);
+        } catch (error) {
+            if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_busy") {
+                await this.#services.recovery.schedule(signal);
+            }
+            throw error;
+        }
         if (!result.duplicate) {
             const kind = decodeMessageKind(envelope.payload);
             if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {

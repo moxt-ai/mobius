@@ -22,6 +22,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCancelCommand,
     encodeSessionEventAcknowledgement,
+    encodeSessionEventDeferred,
     encodeSessionEventRejection,
     encodeSessionInfoUpdatedEvent,
     encodeSessionPromptCommand,
@@ -35,6 +36,7 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -408,6 +410,192 @@ describe("daemon relay connection liveness", () => {
             for (const removeObserver of removeObservers) {
                 removeObserver();
             }
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
+            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
+            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given Relay applies archive backpressure to one durable event, When the retry delay expires, Then the daemon resends it on the same connection and retires it only after acknowledgement", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-session-backpressure-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/backpressure-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const daemonSockets: Duplex[] = [];
+        const observedEnvelopes: ReturnType<typeof decodeSessionEventEnvelope>[] = [];
+        let removeObserver = (): void => undefined;
+        let resolveFirstAttempt = (): void => undefined;
+        let resolveRetry = (): void => undefined;
+        const firstAttempt = new Promise<void>((resolve) => {
+            resolveFirstAttempt = resolve;
+        });
+        const retry = new Promise<void>((resolve) => {
+            resolveRetry = resolve;
+        });
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            removeObserver = observeClientFrames(socket, (frame) => {
+                if (frame.opcode !== 1) {
+                    return;
+                }
+                const kind = decodeMessageKind(frame.text);
+                if (kind === WORKSPACE_ENTRIES_KIND) {
+                    resolveRetry();
+                    return;
+                }
+                if (kind !== SESSION_EVENT_KIND) {
+                    return;
+                }
+                const event = decodeSessionEventEnvelope(frame.text);
+                observedEnvelopes.push(event);
+                if (observedEnvelopes.length === 1) {
+                    writeServerTextFrame(
+                        socket,
+                        encodeSessionEventDeferred({
+                            eventId: event.eventId,
+                            kind: SESSION_EVENT_DEFERRED_KIND,
+                            retryAfterMilliseconds: 1_000,
+                            sessionId: event.sessionId,
+                        }),
+                    );
+                    resolveFirstAttempt();
+                    return;
+                }
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionEventAcknowledgement({
+                        cursor: "backpressure-cursor",
+                        duplicate: false,
+                        eventId: event.eventId,
+                        kind: SESSION_EVENT_ACK_KIND,
+                        sequence: "1",
+                        sessionId: event.sessionId,
+                    }),
+                );
+                writeServerTextFrame(
+                    socket,
+                    encodeWorkspaceListCommand({
+                        bindingId: "workspace",
+                        directoryId: "default",
+                        kind: WORKSPACE_LIST_KIND,
+                        requestId: "after-session-backpressure",
+                    }),
+                );
+            });
+            respondToClientClose(socket);
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const seededOutbox = new SessionEventOutbox(auditDatabasePath);
+        seededOutbox.enqueue(
+            "backpressure-session",
+            JSON.stringify({ kind: "session.info.updated", title: "Long task" }),
+        );
+        seededOutbox.close();
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
+        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
+        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
+        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
+        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            auditDatabasePath,
+            channelId: "backpressure-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/backpressure-channel/daemon`,
+            ),
+        });
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await firstAttempt;
+            const retryTask = await timer.waitForTask(1_000);
+            expect(daemonSockets).toHaveLength(1);
+            retryTask.run();
+            await retry;
+            expect(observedEnvelopes).toHaveLength(2);
+            expect(observedEnvelopes[1]).toEqual(observedEnvelopes[0]);
+            expect(daemonSockets).toHaveLength(1);
+            expect(daemonSockets[0]?.destroyed).toBe(false);
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                expect(
+                    database.prepare("SELECT COUNT(*) AS count FROM relay_session_event_outbox").get(),
+                ).toMatchObject({ count: 0 });
+            } finally {
+                database.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            removeObserver();
             for (const socket of sockets) {
                 socket.destroy();
             }

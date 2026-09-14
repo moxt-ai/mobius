@@ -37,7 +37,8 @@ import type {
     TurnRecord,
 } from "../../entity/do/session-records.ts";
 
-export const MAX_ARCHIVE_BATCH_SIZE = 32;
+export const MAX_ARCHIVE_BATCH_SIZE = 256;
+export const MAX_ARCHIVE_CONCURRENCY = 4;
 export const MAX_EXPORT_BYTE_LENGTH = 64 * 1024 * 1024;
 export const MIN_PENDING_ARCHIVE_BYTE_LIMIT = 8 * 1024 * 1024;
 export const MAX_PENDING_ARCHIVE_BYTE_LIMIT = 128 * 1024 * 1024;

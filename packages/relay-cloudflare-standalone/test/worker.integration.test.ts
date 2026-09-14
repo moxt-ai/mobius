@@ -18,6 +18,7 @@ import {
     decodeRuntimeLivenessReadyEvent,
     decodeRuntimeStatusEvent,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventDeferred,
     decodeSessionEventRejection,
     decodeSessionFailedEvent,
     decodeSessionPrepareCommand,
@@ -40,6 +41,7 @@ import {
     RUNTIME_HEARTBEAT_KIND,
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_INFO_UPDATED_KIND,
@@ -1776,6 +1778,218 @@ describe.sequential("Cloudflare session deployment", () => {
             host.socket.close(1000, "Heartbeat backlog test complete");
             daemon.socket.close(1000, "Heartbeat backlog test complete");
         }
+    });
+
+    it("Given a long Session has more pending archive rows than its hot window, When its next event arrives, Then the event commits without disconnecting the Runtime", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "long-session-count-backlog";
+        expect((await createSession(pairing.created, sessionId, { hotEventLimit: 10 })).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const sessionStub = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+            );
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                for (let index = 0; index < 20; index += 1) {
+                    state.storage.sql.exec(
+                        `INSERT INTO archive_work (
+                            scope_key, session_id, target_id, archive_kind, owner_id,
+                            media_type, hot_payload
+                         ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                        pairing.created.projectId,
+                        sessionId,
+                        `long-session-pending-${index.toString()}`,
+                        `long-session-owner-${index.toString()}`,
+                        JSON.stringify({ index }),
+                    );
+                }
+                await state.storage.deleteAlarm();
+            });
+
+            const nextEvent = envelope(sessionId, "long-session-next-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId,
+                title: "Still running",
+                updatedAt: "2026-09-14T00:00:00.000Z",
+            });
+            const response = receiveMessageBeforeClose(daemon.socket);
+            daemon.socket.send(encodeSessionEventEnvelope(nextEvent));
+            expect(decodeSessionEventAcknowledgement(await response)).toMatchObject({
+                eventId: nextEvent.eventId,
+                sessionId,
+            });
+            expect(decodeCommittedSessionEvent(await host.messages.next())).toMatchObject({
+                eventId: nextEvent.eventId,
+                sessionId,
+            });
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            host.socket.close(1000, "Long Session count backlog test complete");
+            daemon.socket.close(1000, "Long Session count backlog test complete");
+        }
+    });
+
+    it("Given a Session archive reaches its byte safety boundary, When a durable event is deferred and storage recovers, Then the same Runtime connection retries and commits it", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "long-session-byte-backpressure";
+        expect(
+            (
+                await createSession(pairing.created, sessionId, {
+                    contentLimitBytes: 1_024,
+                    hotEventLimit: 10,
+                })
+            ).status,
+        ).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const sessionStub = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+            );
+            const backlogPayload = "x".repeat(128 * 1024);
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                for (let index = 0; index < 65; index += 1) {
+                    state.storage.sql.exec(
+                        `INSERT INTO archive_work (
+                            scope_key, session_id, target_id, archive_kind, owner_id,
+                            media_type, hot_payload
+                         ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                        pairing.created.projectId,
+                        sessionId,
+                        `long-session-byte-pending-${index.toString()}`,
+                        `long-session-byte-owner-${index.toString()}`,
+                        backlogPayload,
+                    );
+                }
+                await state.storage.deleteAlarm();
+            });
+
+            const deferredEvents = Array.from({ length: 4 }, (_, index) =>
+                envelope(sessionId, `long-session-deferred-event-${index.toString()}`, {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId,
+                    title: `Backpressure recovered ${index.toString()}`,
+                    updatedAt: "2026-09-14T00:00:00.000Z",
+                }),
+            );
+            for (const event of deferredEvents) {
+                daemon.socket.send(encodeSessionEventEnvelope(event));
+            }
+            for (const event of deferredEvents) {
+                expect(decodeSessionEventDeferred(await daemon.messages.next())).toEqual({
+                    eventId: event.eventId,
+                    kind: SESSION_EVENT_DEFERRED_KIND,
+                    retryAfterMilliseconds: 1_000,
+                    sessionId,
+                });
+            }
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+
+            await runInDurableObject(sessionStub, async (instance, state) => {
+                if (instance.alarm === undefined) {
+                    throw new Error("Expected the Session Durable Object alarm handler");
+                }
+                await state.storage.deleteAlarm();
+                await instance.alarm();
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count,
+                                COALESCE(SUM(length(CAST(hot_payload AS BLOB))), 0) AS bytes
+                             FROM archive_work
+                             WHERE scope_key = ? AND session_id = ?`,
+                            pairing.created.projectId,
+                            sessionId,
+                        )
+                        .one(),
+                ).toMatchObject({ bytes: 0, count: 0 });
+            });
+
+            for (const event of deferredEvents) {
+                daemon.socket.send(encodeSessionEventEnvelope(event));
+            }
+            for (const event of deferredEvents) {
+                expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                    eventId: event.eventId,
+                    sessionId,
+                });
+                expect(decodeCommittedSessionEvent(await host.messages.next())).toMatchObject({
+                    eventId: event.eventId,
+                    sessionId,
+                });
+            }
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            host.socket.close(1000, "Long Session byte backpressure test complete");
+            daemon.socket.close(1000, "Long Session byte backpressure test complete");
+        }
+    });
+
+    it("Given a sustained Session has a deep archive queue, When recovery runs, Then it drains a production-sized batch and records the continuation alarm", async () => {
+        const pairing = await pairChannel();
+        const sessionId = "long-session-archive-drain";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const sessionStub = env.SESSION_RELAY.get(
+            env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+        );
+
+        await runInDurableObject(sessionStub, async (instance, state) => {
+            if (instance.alarm === undefined) {
+                throw new Error("Expected the Session Durable Object alarm handler");
+            }
+            for (let index = 0; index < 300; index += 1) {
+                state.storage.sql.exec(
+                    `INSERT INTO archive_work (
+                        scope_key, session_id, target_id, archive_kind, owner_id,
+                        media_type, hot_payload
+                     ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                    pairing.created.projectId,
+                    sessionId,
+                    `archive-drain-${index.toString()}`,
+                    `archive-drain-owner-${index.toString()}`,
+                    JSON.stringify({ index }),
+                );
+            }
+            await state.storage.deleteAlarm();
+            await instance.alarm();
+            expect(
+                state.storage.sql
+                    .exec(
+                        `SELECT COUNT(*) AS count FROM archive_work
+                         WHERE scope_key = ? AND session_id = ?`,
+                        pairing.created.projectId,
+                        sessionId,
+                    )
+                    .one(),
+            ).toMatchObject({ count: 44 });
+            await expect(state.storage.getAlarm()).resolves.not.toBeNull();
+
+            await state.storage.deleteAlarm();
+            await instance.alarm();
+            expect(
+                state.storage.sql
+                    .exec(
+                        `SELECT COUNT(*) AS count FROM archive_work
+                         WHERE scope_key = ? AND session_id = ?`,
+                        pairing.created.projectId,
+                        sessionId,
+                    )
+                    .one(),
+            ).toMatchObject({ count: 0 });
+        });
     });
 
     it("Given one Session sends a long ordered event burst, When another Session sends an event on the same Runtime connection, Then the second Session commits before the first burst drains", async () => {

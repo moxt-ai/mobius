@@ -36,6 +36,7 @@ import {
     encodeRuntimeDeliveryCommitted,
     encodeRuntimeStatusEvent,
     encodeSessionEventAcknowledgement,
+    encodeSessionEventDeferred,
     encodeSessionEventRejection,
     encodeSessionFailedEvent,
     encodeSessionOperationFailedEvent,
@@ -55,6 +56,7 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_ELICITATION_RESPOND_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
@@ -62,6 +64,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    type SessionEventEnvelope,
     SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
@@ -81,6 +84,7 @@ const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
 const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
 const RUNTIME_DELIVERY_WINDOW = 16;
 const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
+const SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 
 function reconcileNativeHistoryCoverage(
     history: NativeSessionHistory,
@@ -172,6 +176,7 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
+    readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
     readonly #commands: SessionCommandGateway;
     readonly #peers: ChannelPeers;
@@ -237,6 +242,7 @@ export class ChannelActor {
         if (anotherDaemonOnline) {
             return;
         }
+        this.#backpressuredEventBySource.clear();
         await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         this.broadcastRuntimeStatus(false);
     };
@@ -288,6 +294,12 @@ export class ChannelActor {
             }
             if (kind === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(message);
+                const sourceKey = this.sessionEventSourceKey(envelope);
+                const backpressuredEventId = this.#backpressuredEventBySource.get(sourceKey);
+                if (backpressuredEventId !== undefined && backpressuredEventId !== envelope.eventId) {
+                    this.deferSessionEvent(socket, envelope);
+                    return;
+                }
                 let result: Awaited<ReturnType<SessionCommandGateway["commitEvent"]>>;
                 try {
                     result = await this.#commands.commitEvent(
@@ -298,6 +310,14 @@ export class ChannelActor {
                         signal,
                     );
                 } catch (error) {
+                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_busy") {
+                        this.#backpressuredEventBySource.set(sourceKey, envelope.eventId);
+                        this.deferSessionEvent(socket, envelope);
+                        return;
+                    }
+                    if (backpressuredEventId === envelope.eventId) {
+                        this.#backpressuredEventBySource.delete(sourceKey);
+                    }
                     if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_deleted") {
                         socket.send(
                             encodeSessionEventRejection({
@@ -332,6 +352,9 @@ export class ChannelActor {
                         return;
                     }
                     throw error;
+                }
+                if (backpressuredEventId === envelope.eventId) {
+                    this.#backpressuredEventBySource.delete(sourceKey);
                 }
                 socket.send(
                     encodeSessionEventAcknowledgement({
@@ -422,6 +445,22 @@ export class ChannelActor {
             );
         }
     };
+
+    private readonly deferSessionEvent = (socket: ChannelSocket, envelope: SessionEventEnvelope): void => {
+        socket.send(
+            encodeSessionEventDeferred({
+                eventId: envelope.eventId,
+                kind: SESSION_EVENT_DEFERRED_KIND,
+                retryAfterMilliseconds: SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS,
+                sessionId: envelope.sessionId,
+            }),
+        );
+    };
+
+    private readonly sessionEventSourceKey = (envelope: SessionEventEnvelope): string =>
+        envelope.source.kind === "attempt"
+            ? `attempt:${envelope.sessionId}:${envelope.source.attemptId}`
+            : `runtime:${envelope.sessionId}`;
 
     readonly receiveHostMessage = async (
         socket: ChannelSocket,
