@@ -309,16 +309,19 @@ async function createBehavior(
     expectedRevision = 0,
 ): Promise<CreatedBehavior> {
     const value = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/behavior-revisions`, {
-            body: JSON.stringify({
-                agentConfiguration: {},
-                expectedRevision,
-                instructions: `You are ${name}.`,
-                requiredCapabilities: ["embedded-context"],
-            }),
-            headers: ownerHeaders(pairing),
-            method: "POST",
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/behavior-revisions`,
+            {
+                body: JSON.stringify({
+                    agentConfiguration: {},
+                    expectedRevision,
+                    instructions: `You are ${name}.`,
+                    requiredCapabilities: ["embedded-context"],
+                }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
         201,
     );
     expect(value["lifecycle"]).toBe("proposed");
@@ -332,16 +335,19 @@ async function createConnectionGrant(
     scopes: readonly string[] = connectorScopeList,
 ): Promise<CreatedConnectionGrant> {
     const grant = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connection-grants`, {
-            body: JSON.stringify({
-                audience: "test-connector",
-                expiresInSeconds: 600,
-                label: `Connection ${label}`,
-                scopes,
-            }),
-            headers: ownerHeaders(pairing),
-            method: "POST",
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/connection-grants`,
+            {
+                body: JSON.stringify({
+                    audience: "test-connector",
+                    expiresInSeconds: 600,
+                    label: `Connection ${label}`,
+                    scopes,
+                }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
         201,
     );
     return {
@@ -399,7 +405,7 @@ async function createTarget(
     const deliveryTargetId = stringField(target, "deliveryTargetId");
     await json(
         await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/delivery-targets/${deliveryTargetId}/approve`,
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/delivery-targets/${deliveryTargetId}/approve`,
             {
                 body: JSON.stringify({ expectedPolicyRevision: 0 }),
                 headers: ownerHeaders(pairing),
@@ -421,20 +427,23 @@ async function approveBinding(
     policy: Readonly<Record<string, unknown>> = { kind: "none" },
 ): Promise<CreatedBinding> {
     const response = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`, {
-            body: JSON.stringify({
-                agentConfigRevision: 1,
-                agentRef: "codex",
-                allowedDeliveryTargetIds: [target.deliveryTargetId],
-                behaviorRevisionId: behavior.behaviorRevisionId,
-                completionPolicy: policy,
-                expectedRevision,
-                runtimeId: pairing.runtimeId,
-                workspaceRef: "default",
-            }),
-            headers: ownerHeaders(pairing),
-            method: "POST",
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
+            {
+                body: JSON.stringify({
+                    agentConfigRevision: 1,
+                    agentRef: "codex",
+                    allowedDeliveryTargetIds: [target.deliveryTargetId],
+                    behaviorRevisionId: behavior.behaviorRevisionId,
+                    completionPolicy: policy,
+                    expectedRevision,
+                    runtimeId: pairing.runtimeId,
+                    workspaceRef: "default",
+                }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
         202,
     );
     const request = decodeBotExecutionBindingApprovalRequest(await daemon.messages.next());
@@ -458,9 +467,12 @@ async function approveBinding(
     daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
     expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
     const active = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
-            headers: ownerHeaders(pairing),
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}`,
+            {
+                headers: ownerHeaders(pairing),
+            },
+        ),
         200,
     );
     expect(active).toMatchObject({
@@ -472,9 +484,12 @@ async function approveBinding(
     daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
     expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
     const replayed = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
-            headers: ownerHeaders(pairing),
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}`,
+            {
+                headers: ownerHeaders(pairing),
+            },
+        ),
         200,
     );
     expect(integerField(replayed, "lifecycleRevision")).toBe(approvedLifecycleRevision);
@@ -485,21 +500,25 @@ async function approveBinding(
 }
 
 async function createConnectedConversation(
+    pairing: CreatedPairing,
     bot: CreatedBot,
     connection: RedeemedConnection,
     target: CreatedTarget,
     key: string,
 ): Promise<CreatedConversation> {
     const response = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-            body: JSON.stringify({
-                clientConversationKey: key,
-                replyDeliveryTargetId: target.deliveryTargetId,
-                title: `Conversation ${key}`,
-            }),
-            headers: connectorHeaders(connection),
-            method: "POST",
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+            {
+                body: JSON.stringify({
+                    clientConversationKey: key,
+                    replyDeliveryTargetId: target.deliveryTargetId,
+                    title: `Conversation ${key}`,
+                }),
+                headers: connectorHeaders(connection),
+                method: "POST",
+            },
+        ),
         201,
     );
     expect(response["creatorKind"]).toBe("connection");
@@ -514,11 +533,14 @@ async function createConnectedConversation(
 
 async function createConversation(pairing: CreatedPairing, bot: CreatedBot, key: string): Promise<CreatedConversation> {
     const response = await json(
-        await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-            body: JSON.stringify({ clientConversationKey: key }),
-            headers: ownerHeaders(pairing),
-            method: "POST",
-        }),
+        await exports.default.fetch(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+            {
+                body: JSON.stringify({ clientConversationKey: key }),
+                headers: ownerHeaders(pairing),
+                method: "POST",
+            },
+        ),
         201,
     );
     expect(response["lifecycle"]).toBe("active");
@@ -540,7 +562,7 @@ async function submitMessage(
 ): Promise<AcceptedMessage> {
     const response = await json(
         await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
             {
                 body: JSON.stringify({
                     actorRef: "project-owner",
@@ -677,7 +699,7 @@ async function expectConversationEvents(
 ): Promise<void> {
     const page = await json(
         await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/events`,
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/events`,
             { headers: ownerHeaders(pairing) },
         ),
         200,
@@ -711,7 +733,7 @@ describe.sequential("Provider-neutral Bot API", () => {
     it("Given a bot needing setup, When its owner configures an execution target and the runtime approves it, Then setup progresses from unconfigured to awaiting approval to ready", async () => {
         const pairing = await pairRuntime();
         const bot = await createBot(pairing, "Setup acceptance");
-        const setupUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/setup`;
+        const setupUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/setup`;
         const initial = await json(await exports.default.fetch(setupUrl, { headers: ownerHeaders(pairing) }), 200);
         expect(initial).toMatchObject({
             behaviorRevision: 0,
@@ -723,7 +745,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         try {
             await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
                     {
                         method: "POST",
                         headers: ownerHeaders(pairing),
@@ -791,7 +813,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
             const behaviors = await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/behavior-revisions`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/behavior-revisions`,
                     { headers: ownerHeaders(pairing) },
                 ),
                 200,
@@ -802,7 +824,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
             const bindings = await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
                     { headers: ownerHeaders(pairing) },
                 ),
                 200,
@@ -814,9 +836,12 @@ describe.sequential("Provider-neutral Bot API", () => {
             expect(binding).not.toHaveProperty("workspaceIdentityDigest");
 
             const conversations = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    headers: ownerHeaders(pairing),
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        headers: ownerHeaders(pairing),
+                    },
+                ),
                 200,
             );
             expect(recordArrayField(conversations, "conversations")).toMatchObject([
@@ -824,9 +849,12 @@ describe.sequential("Provider-neutral Bot API", () => {
             ]);
 
             const connectionDirectory = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections`, {
-                    headers: ownerHeaders(pairing),
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/connections`,
+                    {
+                        headers: ownerHeaders(pairing),
+                    },
+                ),
                 200,
             );
             expect(recordArrayField(connectionDirectory, "connections")).toMatchObject([
@@ -837,50 +865,65 @@ describe.sequential("Provider-neutral Bot API", () => {
             ]);
 
             const active = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}`, {
-                    headers: ownerHeaders(pairing),
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}`,
+                    {
+                        headers: ownerHeaders(pairing),
+                    },
+                ),
                 200,
             );
             const suspended = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
-                    body: JSON.stringify({ expectedRevision: integerField(active, "lifecycleRevision") }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/suspend`,
+                    {
+                        body: JSON.stringify({ expectedRevision: integerField(active, "lifecycleRevision") }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 200,
             );
             expect(suspended["lifecycle"]).toBe("suspended");
             const resumed = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/resume`, {
-                    body: JSON.stringify({ expectedRevision: integerField(suspended, "lifecycleRevision") }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/resume`,
+                    {
+                        body: JSON.stringify({ expectedRevision: integerField(suspended, "lifecycleRevision") }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 200,
             );
             expect(resumed["lifecycle"]).toBe("active");
             const suspendedAgain = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
-                    body: JSON.stringify({ expectedRevision: integerField(resumed, "lifecycleRevision") }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/suspend`,
+                    {
+                        body: JSON.stringify({ expectedRevision: integerField(resumed, "lifecycleRevision") }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 200,
             );
             const resumedAgain = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/resume`, {
-                    body: JSON.stringify({ expectedRevision: integerField(suspendedAgain, "lifecycleRevision") }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/resume`,
+                    {
+                        body: JSON.stringify({ expectedRevision: integerField(suspendedAgain, "lifecycleRevision") }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 200,
             );
             expect(resumedAgain["lifecycle"]).toBe("active");
 
             await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections/${connection.connectionId}/revoke`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/connections/${connection.connectionId}/revoke`,
                     {
                         body: JSON.stringify({ expectedRevision: 1 }),
                         headers: ownerHeaders(pairing),
@@ -890,9 +933,12 @@ describe.sequential("Provider-neutral Bot API", () => {
                 200,
             );
             const revokedDirectory = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/connections`, {
-                    headers: ownerHeaders(pairing),
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/connections`,
+                    {
+                        headers: ownerHeaders(pairing),
+                    },
+                ),
                 200,
             );
             expect(recordArrayField(revokedDirectory, "connections")).toMatchObject([
@@ -917,19 +963,25 @@ describe.sequential("Provider-neutral Bot API", () => {
             await approveBinding(pairing, daemon, bot, behavior, target);
 
             const first = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 201,
             );
             const reopened = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ clientConversationKey: "owner-draft-two" }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ clientConversationKey: "owner-draft-two" }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 201,
             );
             expect(first["title"]).toBe("New chat");
@@ -950,9 +1002,12 @@ describe.sequential("Provider-neutral Bot API", () => {
             await daemon.messages.next();
 
             const afterPrompt = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    headers: ownerHeaders(pairing),
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        headers: ownerHeaders(pairing),
+                    },
+                ),
                 200,
             );
             expect(recordArrayField(afterPrompt, "conversations")).toMatchObject([
@@ -963,21 +1018,27 @@ describe.sequential("Provider-neutral Bot API", () => {
             ]);
 
             const nextDraft = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ clientConversationKey: "owner-draft-three" }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ clientConversationKey: "owner-draft-three" }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 201,
             );
             expect(stringField(nextDraft, "conversationId")).not.toBe(conversation.conversationId);
             expect(nextDraft["title"]).toBe("New chat");
             const originalReplay = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ clientConversationKey: "owner-draft-one" }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 201,
             );
             expect(originalReplay).toMatchObject({
@@ -1000,11 +1061,14 @@ describe.sequential("Provider-neutral Bot API", () => {
         const bot = await createBot(pairing, "Unbound");
         const validConversation = { clientConversationKey: "unbound-conversation" };
         await expectApiError(
-            await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                body: JSON.stringify(validConversation),
-                headers: ownerHeaders(pairing),
-                method: "POST",
-            }),
+            await exports.default.fetch(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                {
+                    body: JSON.stringify(validConversation),
+                    headers: ownerHeaders(pairing),
+                    method: "POST",
+                },
+            ),
             409,
             "binding_not_approved",
         );
@@ -1023,14 +1087,17 @@ describe.sequential("Provider-neutral Bot API", () => {
         ];
         for (const field of forbiddenFields) {
             await expectApiError(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ ...validConversation, [field]: "untrusted" }),
-                    headers: {
-                        authorization: `Bearer ${"z".repeat(43)}`,
-                        "content-type": "application/json",
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ ...validConversation, [field]: "untrusted" }),
+                        headers: {
+                            authorization: `Bearer ${"z".repeat(43)}`,
+                            "content-type": "application/json",
+                        },
+                        method: "POST",
                     },
-                    method: "POST",
-                }),
+                ),
                 400,
                 "invalid_request",
             );
@@ -1057,7 +1124,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             };
             await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
                     {
                         body: JSON.stringify(requestBodyValue),
                         headers: ownerHeaders(pairing),
@@ -1068,7 +1135,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             await expectApiError(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
                     {
                         body: JSON.stringify(requestBodyValue),
                         headers: ownerHeaders(pairing),
@@ -1098,7 +1165,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
         await expectApiError(
             await exports.default.fetch(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/delivery-targets/${target.deliveryTargetId}/approve`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/delivery-targets/${target.deliveryTargetId}/approve`,
                 {
                     body: JSON.stringify({ expectedPolicyRevision: 0 }),
                     headers: ownerHeaders(pairing),
@@ -1222,15 +1289,18 @@ describe.sequential("Provider-neutral Bot API", () => {
                     method: "POST",
                 },
             ),
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                body: JSON.stringify({
-                    clientConversationKey: "revoked-inbound",
-                    replyDeliveryTargetId: stringField(overlapTarget, "deliveryTargetId"),
-                    title: "Revoked inbound",
-                }),
-                headers: connectorHeaders(rotated),
-                method: "POST",
-            }),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                {
+                    body: JSON.stringify({
+                        clientConversationKey: "revoked-inbound",
+                        replyDeliveryTargetId: stringField(overlapTarget, "deliveryTargetId"),
+                        title: "Revoked inbound",
+                    }),
+                    headers: connectorHeaders(rotated),
+                    method: "POST",
+                },
+            ),
         ];
         for (const operation of revokedOperations) {
             await expectApiError(await exports.default.fetch(operation), 401, "connection_revoked");
@@ -1350,7 +1420,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             expect(revoked.status).toBe(204);
             const unavailable = await exports.default.fetch(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${botA.botId}/conversations/${conversationA.conversationId}/messages`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${runtimeA.projectId}/bots/${botA.botId}/conversations/${conversationA.conversationId}/messages`,
                 {
                     body: JSON.stringify({
                         actorRef: "project-owner",
@@ -1383,7 +1453,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         const bot = await createBot(owner, "Project-isolated Bot");
         const behavior = await createBehavior(owner, bot, "Project-isolated Bot");
         const response = await exports.default.fetch(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/execution-bindings`,
+            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${owner.projectId}/bots/${bot.botId}/execution-bindings`,
             {
                 body: JSON.stringify({
                     agentConfigRevision: 1,
@@ -1758,7 +1828,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             expect(executionCount?.count).toBe(1);
 
             const changedInbound = await exports.default.fetch(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
                 {
                     body: JSON.stringify({
                         actorRef: "project-owner",
@@ -1870,16 +1940,19 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
 
             await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/suspend`, {
-                    body: JSON.stringify({ expectedRevision: 2 }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/suspend`,
+                    {
+                        body: JSON.stringify({ expectedRevision: 2 }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 200,
             );
             await expectApiError(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
                     {
                         body: JSON.stringify({
                             actorRef: "project-owner",
@@ -1923,11 +1996,11 @@ describe.sequential("Provider-neutral Bot API", () => {
             const target = await createTarget(pairing, bot, connection, "reply-target");
             const behavior = await createBehavior(pairing, bot, "Sanitized events");
             await approveBinding(pairing, daemon, bot, behavior, target);
-            const conversation = await createConnectedConversation(bot, connection, target, "external-thread");
+            const conversation = await createConnectedConversation(pairing, bot, connection, target, "external-thread");
 
             await expectApiError(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
                     {
                         body: JSON.stringify({
                             actorRef: "project-owner-administrator",
@@ -1945,7 +2018,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
             const accepted = await json(
                 await exports.default.fetch(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/messages`,
                     {
                         body: JSON.stringify({
                             actorRef: "external-user-42",
@@ -1977,7 +2050,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 activityEnvelope(command.sessionId, command.commandId, attemptId, "event-sensitive-activity", 2),
             );
 
-            const eventUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations/${conversation.conversationId}/events`;
+            const eventUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/events`;
             const ownerPage = await json(
                 await exports.default.fetch(eventUrl, { headers: ownerHeaders(pairing) }),
                 200,
@@ -2072,11 +2145,14 @@ describe.sequential("Provider-neutral Bot API", () => {
             await approveBinding(pairing, daemon, bot, secondBehavior, target, 2);
 
             const replayed = await json(
-                await exports.default.fetch(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${bot.botId}/conversations`, {
-                    body: JSON.stringify({ clientConversationKey: "stable-conversation" }),
-                    headers: ownerHeaders(pairing),
-                    method: "POST",
-                }),
+                await exports.default.fetch(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations`,
+                    {
+                        body: JSON.stringify({ clientConversationKey: "stable-conversation" }),
+                        headers: ownerHeaders(pairing),
+                        method: "POST",
+                    },
+                ),
                 201,
             );
             expect(replayed).toMatchObject({

@@ -136,6 +136,12 @@ export class BotService {
         this.cx = cx;
     }
 
+    readonly forProject = (projectId: string): BotService =>
+        new BotService({
+            ...this.cx,
+            services: { authorization: this.cx.services.authorization.forProject(projectId) },
+        });
+
     private readonly context = async (projectId: string, signal: AbortSignal) => {
         const project = await this.cx.gateways.projects.resolve(projectId, signal);
         signal.throwIfAborted();
@@ -1023,6 +1029,7 @@ export class BotService {
             label: grant.label,
             lifecycle: "active",
             lifecycleRevision: 1,
+            projectId: grant.project_id,
             scopes: stringArray(grant.scopes_json, "The Bot connection grant is invalid"),
         };
     };

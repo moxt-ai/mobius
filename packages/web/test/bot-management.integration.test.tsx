@@ -726,6 +726,7 @@ describe.sequential("Bot management and conversations", () => {
                 connectionId: redeemed.connectionId,
                 credentialProvider: new StaticMobiusCredentialProvider(redeemed.credential),
                 endpoint: window.location.origin,
+                projectId: redeemed.projectId,
             });
             await connector.deliveryTargets.create({ alias: "launch-updates" }, AbortSignal.timeout(8_000));
 

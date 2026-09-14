@@ -1,4 +1,5 @@
 import { parseMobiusApiPrefix } from "@moxt-ai/mobius-protocol";
+import { BotApiError } from "../entity/bot/bot-error.ts";
 import type { SessionQuotaPolicyProvider } from "../entity/do/session.ts";
 import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
@@ -136,6 +137,18 @@ function createBots(
             authorization: new BotAuthorization(
                 [...new Set(cx.identityDatabases)].map((database) => new BotCredentialStorage(database)),
                 cx.authentication.projects,
+                async (scope, signal) => {
+                    const project = await cx.projects.resolve(scope.projectId, signal);
+                    signal.throwIfAborted();
+                    if (project.projectId !== scope.projectId) {
+                        throw new BotApiError(
+                            "bot_service_unavailable",
+                            "The Project placement is invalid",
+                            "unavailable",
+                        );
+                    }
+                    return new BotCredentialStorage(cx.databases.resolve(project.storagePlacement));
+                },
             ),
         },
         gateways: {

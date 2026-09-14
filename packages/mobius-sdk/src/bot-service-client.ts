@@ -66,6 +66,7 @@ export interface MobiusBotApiOptions {
 export interface MobiusBotConnectorClientOptions extends MobiusBotApiOptions {
     readonly connectionId: string;
     readonly credentialProvider: MobiusCredentialProvider;
+    readonly projectId: string;
 }
 
 export interface MobiusBotOwnerClientOptions extends MobiusBotApiOptions {
@@ -482,8 +483,9 @@ class BotRequestExecutor {
     };
 }
 
-function botPath(botId: string, resource: string): string {
-    return `${MOBIUS_BOT_API_VERSION}/bots/${encodeURIComponent(identifier(botId, "Bot"))}/${resource}`;
+function projectBotPath(projectId: string, botId: string, resource: string): string {
+    const base = `${projectBotsPath(projectId)}/${encodeURIComponent(identifier(botId, "Bot"))}`;
+    return resource.length === 0 ? base : `${base}/${resource}`;
 }
 
 function projectBotsPath(projectId: string): string {
@@ -494,8 +496,8 @@ function projectConversationsPath(projectId: string): string {
     return `${MOBIUS_BOT_API_VERSION}/projects/${encodeURIComponent(identifier(projectId, "project"))}/conversations`;
 }
 
-function conversationPath(conversationId: string, resource: string): string {
-    const base = `${MOBIUS_BOT_API_VERSION}/conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}`;
+function conversationPath(projectId: string, conversationId: string, resource: string): string {
+    const base = `${projectConversationsPath(projectId)}/${encodeURIComponent(identifier(conversationId, "conversation"))}`;
     return resource.length === 0 ? base : `${base}/${resource}`;
 }
 
@@ -582,7 +584,7 @@ export class MobiusBotOwnerClient {
     };
 
     readonly readBot = async (botId: string, signal: AbortSignal): Promise<MobiusBot> =>
-        decodeMobiusBot(await this.#executor.get(botPath(botId, ""), signal));
+        decodeMobiusBot(await this.#executor.get(projectBotPath(this.#projectId, botId, ""), signal));
 
     readonly reviseProfile = async (
         botId: string,
@@ -596,7 +598,7 @@ export class MobiusBotOwnerClient {
         );
         return new MobiusBotProfileRevision(
             await this.#executor.post(
-                botPath(botId, "profile-revisions"),
+                projectBotPath(this.#projectId, botId, "profile-revisions"),
                 {
                     avatarRef: boundedText(value["avatarRef"], "Bot avatar reference", 4_096, true),
                     description: boundedText(value["description"], "Bot description", 2_000, true),
@@ -614,7 +616,9 @@ export class MobiusBotOwnerClient {
     };
 
     readonly listBehaviors = async (botId: string, signal: AbortSignal): Promise<MobiusBotBehaviorDirectory> =>
-        new MobiusBotBehaviorDirectory(await this.#executor.get(botPath(botId, "behavior-revisions"), signal));
+        new MobiusBotBehaviorDirectory(
+            await this.#executor.get(projectBotPath(this.#projectId, botId, "behavior-revisions"), signal),
+        );
 
     readonly createBehavior = async (
         botId: string,
@@ -632,7 +636,7 @@ export class MobiusBotOwnerClient {
         }
         return decodeMobiusBotBehavior(
             await this.#executor.post(
-                botPath(botId, "behavior-revisions"),
+                projectBotPath(this.#projectId, botId, "behavior-revisions"),
                 {
                     agentConfiguration: Object.freeze(Object.fromEntries(Object.entries(configuration))),
                     expectedRevision: boundedInteger(
@@ -650,7 +654,9 @@ export class MobiusBotOwnerClient {
     };
 
     readonly listBindings = async (botId: string, signal: AbortSignal): Promise<MobiusBotBindingDirectory> =>
-        new MobiusBotBindingDirectory(await this.#executor.get(botPath(botId, "execution-bindings"), signal));
+        new MobiusBotBindingDirectory(
+            await this.#executor.get(projectBotPath(this.#projectId, botId, "execution-bindings"), signal),
+        );
 
     readonly createBinding = async (
         botId: string,
@@ -677,7 +683,7 @@ export class MobiusBotOwnerClient {
         }
         return new MobiusBotBindingRequestAcceptance(
             await this.#executor.post(
-                botPath(botId, "execution-bindings"),
+                projectBotPath(this.#projectId, botId, "execution-bindings"),
                 {
                     agentConfigRevision: boundedInteger(
                         value["agentConfigRevision"],
@@ -713,7 +719,9 @@ export class MobiusBotOwnerClient {
         await this.transitionBot(botId, "archive", expectedRevision, signal);
 
     readonly listConversations = async (botId: string, signal: AbortSignal): Promise<MobiusBotConversationDirectory> =>
-        new MobiusBotConversationDirectory(await this.#executor.get(botPath(botId, "conversations"), signal));
+        new MobiusBotConversationDirectory(
+            await this.#executor.get(projectBotPath(this.#projectId, botId, "conversations"), signal),
+        );
 
     readonly createConversation = async (
         botId: string,
@@ -723,7 +731,7 @@ export class MobiusBotOwnerClient {
         const value = requestRecord(request, ["clientConversationKey"], "owner Bot conversation request");
         return decodeMobiusOwnerBotConversation(
             await this.#executor.post(
-                botPath(botId, "conversations"),
+                projectBotPath(this.#projectId, botId, "conversations"),
                 {
                     clientConversationKey: identifier(value["clientConversationKey"], "client conversation"),
                 },
@@ -764,7 +772,9 @@ export class MobiusBotOwnerClient {
         conversationId: string,
         signal: AbortSignal,
     ): Promise<MobiusProjectConversation> =>
-        new MobiusProjectConversation(await this.#executor.get(conversationPath(conversationId, ""), signal));
+        new MobiusProjectConversation(
+            await this.#executor.get(conversationPath(this.#projectId, conversationId, ""), signal),
+        );
 
     readonly submitProjectConversationTurn = async (
         conversationId: string,
@@ -778,7 +788,7 @@ export class MobiusBotOwnerClient {
         );
         return new MobiusProjectConversationTurnAcceptance(
             await this.#executor.post(
-                conversationPath(conversationId, "turns"),
+                conversationPath(this.#projectId, conversationId, "turns"),
                 {
                     additionalDirectoryIds: identifiers(value["additionalDirectoryIds"], "additional directory", 16),
                     artifactIds: identifiers(value["artifactIds"], "artifact", 16),
@@ -799,7 +809,7 @@ export class MobiusBotOwnerClient {
     ): Promise<MobiusConversationConfigurationAcceptance> =>
         new MobiusConversationConfigurationAcceptance(
             await this.#executor.post(
-                conversationPath(conversationId, "configuration-revisions"),
+                conversationPath(this.#projectId, conversationId, "configuration-revisions"),
                 serializedConversationConfiguration(request),
                 signal,
             ),
@@ -818,7 +828,8 @@ export class MobiusBotOwnerClient {
         );
         return new MobiusBotTurnAcceptance(
             await this.#executor.post(
-                botPath(
+                projectBotPath(
+                    this.#projectId,
                     botId,
                     `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/messages`,
                 ),
@@ -840,7 +851,11 @@ export class MobiusBotOwnerClient {
         signal: AbortSignal,
     ): Promise<MobiusBotConversationEventPage> => {
         const path = new URL(
-            botPath(botId, `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`),
+            projectBotPath(
+                this.#projectId,
+                botId,
+                `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`,
+            ),
             "https://mobius.invalid/",
         );
         if (after.length > 0) {
@@ -859,14 +874,20 @@ export class MobiusBotOwnerClient {
     ): Promise<MobiusBotTurnCancellationAcceptance> =>
         new MobiusBotTurnCancellationAcceptance(
             await this.#executor.post(
-                botPath(botId, `turns/${encodeURIComponent(identifier(turnId, "turn"))}/cancel`),
+                projectBotPath(
+                    this.#projectId,
+                    botId,
+                    `turns/${encodeURIComponent(identifier(turnId, "turn"))}/cancel`,
+                ),
                 { idempotencyKey: identifier(idempotencyKey, "cancellation idempotency key") },
                 signal,
             ),
         );
 
     readonly listConnections = async (botId: string, signal: AbortSignal): Promise<MobiusBotConnectionDirectory> =>
-        new MobiusBotConnectionDirectory(await this.#executor.get(botPath(botId, "connections"), signal));
+        new MobiusBotConnectionDirectory(
+            await this.#executor.get(projectBotPath(this.#projectId, botId, "connections"), signal),
+        );
 
     readonly createConnectionGrant = async (
         botId: string,
@@ -880,7 +901,7 @@ export class MobiusBotOwnerClient {
         );
         return new MobiusBotConnectionGrant(
             await this.#executor.post(
-                botPath(botId, "connection-grants"),
+                projectBotPath(this.#projectId, botId, "connection-grants"),
                 {
                     audience: identifier(value["audience"], "connector audience"),
                     expiresInSeconds: boundedInteger(value["expiresInSeconds"], "connection grant lifetime", 60, 3_600),
@@ -899,7 +920,8 @@ export class MobiusBotOwnerClient {
         signal: AbortSignal,
     ): Promise<void> => {
         await this.#executor.post(
-            botPath(
+            projectBotPath(
+                this.#projectId,
                 botId,
                 `delivery-targets/${encodeURIComponent(identifier(deliveryTargetId, "delivery target"))}/approve`,
             ),
@@ -923,7 +945,11 @@ export class MobiusBotOwnerClient {
     ): Promise<MobiusRevokedBotConnection> =>
         new MobiusRevokedBotConnection(
             await this.#executor.post(
-                botPath(botId, `connections/${encodeURIComponent(identifier(connectionId, "connection"))}/revoke`),
+                projectBotPath(
+                    this.#projectId,
+                    botId,
+                    `connections/${encodeURIComponent(identifier(connectionId, "connection"))}/revoke`,
+                ),
                 {
                     expectedRevision: boundedInteger(
                         expectedRevision,
@@ -944,7 +970,7 @@ export class MobiusBotOwnerClient {
     ): Promise<MobiusBot> =>
         decodeMobiusBot(
             await this.#executor.post(
-                botPath(botId, action),
+                projectBotPath(this.#projectId, botId, action),
                 {
                     expectedRevision: boundedInteger(
                         expectedRevision,
@@ -1023,9 +1049,11 @@ export class MobiusBotDeliveryTargetResources {
 
 export class MobiusBotConversationResources {
     readonly #executor: BotRequestExecutor;
+    readonly #projectId: string;
 
-    constructor(executor: BotRequestExecutor) {
+    constructor(executor: BotRequestExecutor, projectId: string) {
         this.#executor = executor;
+        this.#projectId = projectId;
     }
 
     readonly create = async (
@@ -1040,7 +1068,7 @@ export class MobiusBotConversationResources {
         );
         return new MobiusConnectedBotConversation(
             await this.#executor.post(
-                botPath(botId, "conversations"),
+                projectBotPath(this.#projectId, botId, "conversations"),
                 {
                     clientConversationKey: identifier(value["clientConversationKey"], "client conversation"),
                     replyDeliveryTargetId: identifier(value["replyDeliveryTargetId"], "reply delivery target"),
@@ -1064,7 +1092,8 @@ export class MobiusBotConversationResources {
         );
         return new MobiusBotTurnAcceptance(
             await this.#executor.post(
-                botPath(
+                projectBotPath(
+                    this.#projectId,
                     botId,
                     `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/messages`,
                 ),
@@ -1086,7 +1115,11 @@ export class MobiusBotConversationResources {
         signal: AbortSignal,
     ): Promise<MobiusBotConversationEventPage> => {
         const path = new URL(
-            botPath(botId, `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`),
+            projectBotPath(
+                this.#projectId,
+                botId,
+                `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`,
+            ),
             "https://mobius.invalid/",
         );
         if (after.length > 0) {
@@ -1105,7 +1138,11 @@ export class MobiusBotConversationResources {
     ): Promise<MobiusBotTurnCancellationAcceptance> =>
         new MobiusBotTurnCancellationAcceptance(
             await this.#executor.post(
-                botPath(botId, `turns/${encodeURIComponent(identifier(turnId, "turn"))}/cancel`),
+                projectBotPath(
+                    this.#projectId,
+                    botId,
+                    `turns/${encodeURIComponent(identifier(turnId, "turn"))}/cancel`,
+                ),
                 { idempotencyKey: identifier(idempotencyKey, "cancellation idempotency key") },
                 signal,
             ),
@@ -1194,13 +1231,14 @@ export class MobiusBotConnectorClient {
 
     constructor(options: MobiusBotConnectorClientOptions) {
         const connectionId = identifier(options.connectionId, "connection");
+        const projectId = identifier(options.projectId, "project");
         const executor = new BotRequestExecutor(
             options,
             new CredentialBotRequestAuthentication(options.credentialProvider),
             "",
         );
         this.connection = new MobiusBotConnectionResources(executor, connectionId);
-        this.conversations = new MobiusBotConversationResources(executor);
+        this.conversations = new MobiusBotConversationResources(executor, projectId);
         this.deliveryTargets = new MobiusBotDeliveryTargetResources(executor, connectionId);
         this.outboundMessages = new MobiusBotOutboundMessageResources(executor, connectionId);
     }

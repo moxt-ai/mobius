@@ -36,7 +36,8 @@ Listing does not grant mutation rights. An authenticated read requires
 an accountless owner or a least-privilege Project application or exchanged
 external credential.
 
-Callers with `bot:read` can read `GET /mobius/api/v1/bots/:botId/setup` to inspect lifecycle and
+Callers with `bot:read` can read
+`GET /mobius/api/v1/projects/:projectId/bots/:botId/setup` to inspect lifecycle and
 behavior revisions plus the latest execution-binding state and configuration.
 Consumers use those revisions with the existing behavior-revision and
 execution-binding endpoints. A requested binding becomes approved only after
@@ -179,20 +180,23 @@ turn completes, even if the Agent never invokes the CLI.
 ## HTTP API
 
 All routes below are beneath the configured Mobius API prefix, normally
-`/mobius/api`. Owner routes require an owner application credential.
+`/mobius/api`. Owner routes require an owner application credential. Every Bot
+and Conversation route is scoped beneath the Project that owns it; callers pass
+`projectId` and the relay resolves the Bot's shard directly instead of
+searching every shard.
 
 Owner control plane:
 
 ```text
 POST /v1/projects/{projectId}/bots
-GET  /v1/bots/{botId}
-POST /v1/bots/{botId}/profile-revisions
-POST /v1/bots/{botId}/behavior-revisions
-POST /v1/bots/{botId}/execution-bindings
-POST /v1/bots/{botId}/connection-grants
-POST /v1/bots/{botId}/delivery-targets/{deliveryTargetId}/approve
-POST /v1/bots/{botId}/suspend
-POST /v1/bots/{botId}/archive
+GET  /v1/projects/{projectId}/bots/{botId}
+POST /v1/projects/{projectId}/bots/{botId}/profile-revisions
+POST /v1/projects/{projectId}/bots/{botId}/behavior-revisions
+POST /v1/projects/{projectId}/bots/{botId}/execution-bindings
+POST /v1/projects/{projectId}/bots/{botId}/connection-grants
+POST /v1/projects/{projectId}/bots/{botId}/delivery-targets/{deliveryTargetId}/approve
+POST /v1/projects/{projectId}/bots/{botId}/suspend
+POST /v1/projects/{projectId}/bots/{botId}/archive
 ```
 
 Connection establishment and management:
@@ -208,10 +212,10 @@ POST /v1/bot-connections/{connectionId}/delivery-targets/{deliveryTargetId}/disa
 Inbound connector data plane:
 
 ```text
-POST /v1/bots/{botId}/conversations
-POST /v1/bots/{botId}/conversations/{conversationId}/messages
-GET  /v1/bots/{botId}/conversations/{conversationId}/events?after={cursor}
-POST /v1/bots/{botId}/turns/{turnId}/cancel
+POST /v1/projects/{projectId}/bots/{botId}/conversations
+POST /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/events?after={cursor}
+POST /v1/projects/{projectId}/bots/{botId}/turns/{turnId}/cancel
 ```
 
 The initial connector scopes are `inbound-conversation:create`,
@@ -272,6 +276,7 @@ const connector = createMobiusBotConnectorClient({
   connectionId: redeemed.connectionId,
   credentialProvider: new StaticMobiusCredentialProvider(redeemed.credential),
   endpoint: "https://mobius.example.com",
+  projectId: redeemed.projectId,
 });
 
 const target = await connector.deliveryTargets.create(

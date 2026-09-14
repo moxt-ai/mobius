@@ -81,6 +81,7 @@ export class MobiusBotConnectionCredential {
     readonly label: string;
     readonly lifecycle = "active";
     readonly lifecycleRevision: number;
+    readonly projectId: string;
     readonly scopes: readonly string[];
 
     constructor(value: unknown) {
@@ -98,6 +99,7 @@ export class MobiusBotConnectionCredential {
                 "label",
                 "lifecycle",
                 "lifecycleRevision",
+                "projectId",
                 "scopes",
             ],
             "Bot connection credential",
@@ -114,6 +116,7 @@ export class MobiusBotConnectionCredential {
         this.credentialId = nonemptyText(resource, "credentialId", "Bot connection credential");
         this.label = nonemptyText(resource, "label", "Bot connection credential");
         this.lifecycleRevision = integer(resource, "lifecycleRevision", "Bot connection credential");
+        this.projectId = nonemptyText(resource, "projectId", "Bot connection credential");
         this.scopes = texts(resource, "scopes", "Bot connection credential");
     }
 }

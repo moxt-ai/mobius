@@ -470,16 +470,19 @@ async function createReadyConversation(label: string): Promise<PlatformConversat
     const botId = text(bot, "botId");
     const behavior = await json(
         await project.worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${botId}/behavior-revisions`, {
-                body: JSON.stringify({
-                    agentConfiguration: {},
-                    expectedRevision: 0,
-                    instructions: "Answer from the approved local Runtime.",
-                    requiredCapabilities: ["embedded-context"],
-                }),
-                headers: credentialHeaders(project.appCredential),
-                method: "POST",
-            }),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${botId}/behavior-revisions`,
+                {
+                    body: JSON.stringify({
+                        agentConfiguration: {},
+                        expectedRevision: 0,
+                        instructions: "Answer from the approved local Runtime.",
+                        requiredCapabilities: ["embedded-context"],
+                    }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                },
+            ),
             project.environment,
         ),
         201,
@@ -499,20 +502,23 @@ async function createReadyConversation(label: string): Promise<PlatformConversat
     socket.accept();
     await json(
         await project.worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${botId}/execution-bindings`, {
-                body: JSON.stringify({
-                    agentConfigRevision: 1,
-                    agentRef: "codex",
-                    allowedDeliveryTargetIds: [],
-                    behaviorRevisionId: text(behavior, "behaviorRevisionId"),
-                    completionPolicy: { kind: "none" },
-                    expectedRevision: integerField(bot, "lifecycleRevision"),
-                    runtimeId: project.runtimeId,
-                    workspaceRef: "default",
-                }),
-                headers: credentialHeaders(project.appCredential),
-                method: "POST",
-            }),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${botId}/execution-bindings`,
+                {
+                    body: JSON.stringify({
+                        agentConfigRevision: 1,
+                        agentRef: "codex",
+                        allowedDeliveryTargetIds: [],
+                        behaviorRevisionId: text(behavior, "behaviorRevisionId"),
+                        completionPolicy: { kind: "none" },
+                        expectedRevision: integerField(bot, "lifecycleRevision"),
+                        runtimeId: project.runtimeId,
+                        workspaceRef: "default",
+                    }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                },
+            ),
             project.environment,
         ),
         202,
@@ -532,11 +538,14 @@ async function createReadyConversation(label: string): Promise<PlatformConversat
     expect(await socketMessages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
     const conversation = await json(
         await project.worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${botId}/conversations`, {
-                body: JSON.stringify({ clientConversationKey: `conversation-${label}` }),
-                headers: credentialHeaders(project.appCredential),
-                method: "POST",
-            }),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${botId}/conversations`,
+                {
+                    body: JSON.stringify({ clientConversationKey: `conversation-${label}` }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                },
+            ),
             project.environment,
         ),
         201,
@@ -831,6 +840,133 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it("Given a Project Bot and an uninitialized unrelated shard, When its owner reads and updates it using the Project endpoint and SDK, Then the Bot remains available in its own Project", async () => {
+        const fixture = await provisionPlatformProject("project-routed-bot");
+        const environment = { ...fixture.environment, D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD };
+        const owner = new MobiusBotOwnerClient({
+            credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+            endpoint: relayOrigin,
+            projectId: fixture.projectId,
+            transport: new PlatformWorkerTransport(fixture.worker, environment),
+        });
+        const signal = AbortSignal.timeout(5_000);
+        const bot = await owner.createBot({ displayName: "Routed Bot", description: "", avatarRef: "" }, signal);
+        const response = await fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/bots/${bot.botId}`, {
+                headers: credentialHeaders(fixture.appCredential),
+            }),
+            environment,
+        );
+        expect(await json(response, 200)).toMatchObject({ botId: bot.botId, projectId: fixture.projectId });
+        expect(await owner.readBot(bot.botId, signal)).toMatchObject({ displayName: "Routed Bot" });
+        await owner.reviseProfile(
+            bot.botId,
+            { displayName: "Updated routed Bot", description: "Project-scoped", avatarRef: "", expectedRevision: 1 },
+            signal,
+        );
+        expect(await owner.readBot(bot.botId, signal)).toMatchObject({ displayName: "Updated routed Bot" });
+        expect(await owner.listBindings(bot.botId, signal)).toMatchObject({ executionBindings: [] });
+        expect(await owner.listConversations(bot.botId, signal)).toMatchObject({ conversations: [] });
+    });
+
+    it("Given two Projects sharing a shard, When an owner supplies the other Project's Bot ID, Then reads and updates are rejected and the Bot is unchanged", async () => {
+        const fixture = await provisionPlatformProject("project-routing-isolation");
+        const transport = new PlatformWorkerTransport(fixture.worker, fixture.environment);
+        const app = new MobiusPlatformAppClient({
+            credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+            endpoint: relayOrigin,
+            transport,
+        });
+        const signal = AbortSignal.timeout(5_000);
+        const other = await app.createProject(
+            fixture.appId,
+            {
+                clientReference: "other-project",
+                idempotencyKey: "other-project",
+                displayName: "Other",
+                locationHint: "apac",
+            },
+            signal,
+        );
+        const owner = new MobiusBotOwnerClient({
+            credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+            endpoint: relayOrigin,
+            projectId: fixture.projectId,
+            transport,
+        });
+        const otherOwner = new MobiusBotOwnerClient({
+            credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+            endpoint: relayOrigin,
+            projectId: other.projectId,
+            transport,
+        });
+        const bot = await otherOwner.createBot({ displayName: "Other Bot", description: "", avatarRef: "" }, signal);
+        await expect(owner.readBot(bot.botId, signal)).rejects.toMatchObject({ status: 404, code: "bot_not_found" });
+        await expect(
+            owner.reviseProfile(
+                bot.botId,
+                { displayName: "Wrong Project", description: "", avatarRef: "", expectedRevision: 1 },
+                signal,
+            ),
+        ).rejects.toMatchObject({ status: 404, code: "bot_not_found" });
+        expect(await otherOwner.readBot(bot.botId, signal)).toMatchObject({
+            displayName: "Other Bot",
+            projectId: other.projectId,
+        });
+        const grant = await json(
+            await fixture.worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${other.projectId}/bots/${bot.botId}/connection-grants`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(fixture.appCredential),
+                        body: JSON.stringify({
+                            audience: "routing-test",
+                            label: "Routing",
+                            scopes: ["inbound-conversation:create"],
+                            expiresInSeconds: 600,
+                        }),
+                    },
+                ),
+                fixture.environment,
+            ),
+            201,
+        );
+        const connection = await json(
+            await fixture.worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-connection-grants/redeem`, {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({
+                        audience: "routing-test",
+                        connectorPrincipalId: "routing-connector",
+                        grantId: text(grant, "grantId"),
+                        grantSecret: text(grant, "grantSecret"),
+                    }),
+                }),
+                fixture.environment,
+            ),
+            201,
+        );
+        const denied = await fixture.worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/bots/${bot.botId}/conversations`,
+                {
+                    method: "POST",
+                    headers: credentialHeaders(text(connection, "credential")),
+                    body: JSON.stringify({
+                        clientConversationKey: "wrong-project",
+                        replyDeliveryTargetId: "target_missing",
+                        title: "Wrong Project",
+                    }),
+                },
+            ),
+            fixture.environment,
+        );
+        expect(denied.status).toBe(403);
+        await expect(denied.json()).resolves.toMatchObject({ error: { code: "conversation_access_denied" } });
+    });
+
     it("Given a Bot binding with an invalid Runtime directory identifier, When the Platform receives it, Then it rejects the request before persisting an approval", async () => {
         const project = await provisionPlatformProject("invalid-binding-directory");
         const bot = await json(
@@ -850,36 +986,42 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const behavior = await json(
             await project.worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${text(bot, "botId")}/behavior-revisions`, {
-                    body: JSON.stringify({
-                        agentConfiguration: {},
-                        expectedRevision: 0,
-                        instructions: "Run only in an approved Runtime directory.",
-                        requiredCapabilities: [],
-                    }),
-                    headers: credentialHeaders(project.appCredential),
-                    method: "POST",
-                }),
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${text(bot, "botId")}/behavior-revisions`,
+                    {
+                        body: JSON.stringify({
+                            agentConfiguration: {},
+                            expectedRevision: 0,
+                            instructions: "Run only in an approved Runtime directory.",
+                            requiredCapabilities: [],
+                        }),
+                        headers: credentialHeaders(project.appCredential),
+                        method: "POST",
+                    },
+                ),
                 project.environment,
             ),
             201,
         );
 
         const response = await project.worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${text(bot, "botId")}/execution-bindings`, {
-                body: JSON.stringify({
-                    agentConfigRevision: 1,
-                    agentRef: "codex",
-                    allowedDeliveryTargetIds: [],
-                    behaviorRevisionId: text(behavior, "behaviorRevisionId"),
-                    completionPolicy: { kind: "none" },
-                    expectedRevision: integerField(bot, "lifecycleRevision"),
-                    runtimeId: project.runtimeId,
-                    workspaceRef: ".",
-                }),
-                headers: credentialHeaders(project.appCredential),
-                method: "POST",
-            }),
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${text(bot, "botId")}/execution-bindings`,
+                {
+                    body: JSON.stringify({
+                        agentConfigRevision: 1,
+                        agentRef: "codex",
+                        allowedDeliveryTargetIds: [],
+                        behaviorRevisionId: text(behavior, "behaviorRevisionId"),
+                        completionPolicy: { kind: "none" },
+                        expectedRevision: integerField(bot, "lifecycleRevision"),
+                        runtimeId: project.runtimeId,
+                        workspaceRef: ".",
+                    }),
+                    headers: credentialHeaders(project.appCredential),
+                    method: "POST",
+                },
+            ),
             project.environment,
         );
 
@@ -1846,11 +1988,14 @@ describe.sequential("Platform hosting boundary", () => {
 
             const secondConversation = await json(
                 await fixture.worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/bots/${fixture.botId}/conversations`, {
-                        body: JSON.stringify({ clientConversationKey: "conversation-browser-access-second" }),
-                        headers: credentialHeaders(fixture.appCredential),
-                        method: "POST",
-                    }),
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/bots/${fixture.botId}/conversations`,
+                        {
+                            body: JSON.stringify({ clientConversationKey: "conversation-browser-access-second" }),
+                            headers: credentialHeaders(fixture.appCredential),
+                            method: "POST",
+                        },
+                    ),
                     fixture.environment,
                 ),
                 201,

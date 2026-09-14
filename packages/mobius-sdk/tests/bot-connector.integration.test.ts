@@ -90,6 +90,7 @@ describe("provider-neutral Bot connector client", () => {
                         label: "Production Slack",
                         lifecycle: "active",
                         lifecycleRevision: 1,
+                        projectId: "prj_alpha",
                         scopes: [
                             "inbound-conversation:create",
                             "inbound-message:create",
@@ -216,6 +217,7 @@ describe("provider-neutral Bot connector client", () => {
                 connectionId: redeemed.connectionId,
                 credentialProvider: new StaticMobiusCredentialProvider(redeemed.credential),
                 endpoint,
+                projectId: redeemed.projectId,
             });
             const target = await client.deliveryTargets.create({ alias: "current" }, signal);
             const conversation = await client.conversations.create(
@@ -276,9 +278,9 @@ describe("provider-neutral Bot connector client", () => {
             expect(requests.map((request) => request["path"])).toEqual([
                 "/mobius/api/v1/bot-connection-grants/redeem",
                 "/mobius/api/v1/bot-connections/bcn_alpha/delivery-targets",
-                "/mobius/api/v1/bots/bot_alpha/conversations",
-                "/mobius/api/v1/bots/bot_alpha/conversations/bcv_1/messages",
-                "/mobius/api/v1/bots/bot_alpha/conversations/bcv_1/events?after=cursor-0",
+                "/mobius/api/v1/projects/prj_alpha/bots/bot_alpha/conversations",
+                "/mobius/api/v1/projects/prj_alpha/bots/bot_alpha/conversations/bcv_1/messages",
+                "/mobius/api/v1/projects/prj_alpha/bots/bot_alpha/conversations/bcv_1/events?after=cursor-0",
                 "/mobius/api/v1/bot-connections/bcn_alpha/outbound-events?after=0&limit=100",
                 "/mobius/api/v1/bot-connections/bcn_alpha/outbound-messages/out_1/delivered",
             ]);

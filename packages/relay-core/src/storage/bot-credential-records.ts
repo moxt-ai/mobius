@@ -5,7 +5,7 @@ export interface InboundCredentialPlaneRecord {
     readonly plane: string;
 }
 
-export interface BotProjectScopeRecord {
+interface BotProjectScopeRecord {
     readonly project_id: string;
 }
 
@@ -14,30 +14,14 @@ export interface BotConversationScopeRecord extends BotProjectScopeRecord {
     readonly session_id: string;
 }
 
-export abstract class BotProjectScopeLookup {}
+export class MissingBotConversationScope {}
 
-export class MissingBotProjectScope extends BotProjectScopeLookup {}
-
-export class FoundBotProjectScope extends BotProjectScopeLookup {
-    readonly projectId: string;
-
-    constructor(projectId: string) {
-        super();
-        this.projectId = projectId;
-    }
-}
-
-export abstract class BotConversationScopeLookup {}
-
-export class MissingBotConversationScope extends BotConversationScopeLookup {}
-
-export class FoundBotConversationScope extends BotConversationScopeLookup {
+export class FoundBotConversationScope {
     readonly botId: string;
     readonly projectId: string;
     readonly sessionId: string;
 
     constructor(projectId: string, botId: string, sessionId: string) {
-        super();
         this.projectId = projectId;
         this.botId = botId;
         this.sessionId = sessionId;
@@ -47,11 +31,10 @@ export class FoundBotConversationScope extends BotConversationScopeLookup {
 export interface BotCredentialRecords {
     readonly botExists: (botId: string, signal: AbortSignal) => Promise<boolean>;
     readonly botExistsInProject: (botId: string, projectId: string, signal: AbortSignal) => Promise<boolean>;
-    readonly readBotProjectScope: (botId: string, signal: AbortSignal) => Promise<BotProjectScopeLookup>;
     readonly readConversationProjectScope: (
         conversationId: string,
         signal: AbortSignal,
-    ) => Promise<BotConversationScopeLookup>;
+    ) => Promise<FoundBotConversationScope | MissingBotConversationScope>;
     readonly readConnector: (
         connectionId: string,
         tokenDigest: string,

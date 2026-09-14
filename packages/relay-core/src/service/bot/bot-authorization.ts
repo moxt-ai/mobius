@@ -14,15 +14,7 @@ import { BotApiError } from "../../entity/bot/bot-error.ts";
 import { ProjectScope } from "../../entity/do/session.ts";
 import { hashSecret, validateIdentifier, validateToken } from "../../entity/pairing/pairing.ts";
 import type { ProjectAccessAuthorizer } from "../../gateway/project-access-authorizer.ts";
-import {
-    type BotConversationScopeLookup,
-    type BotProjectScopeLookup,
-    FoundBotConversationScope,
-    FoundBotProjectScope,
-    type InboundCredentialPlaneRecord,
-    MissingBotConversationScope,
-    MissingBotProjectScope,
-} from "../../storage/bot-credential-records.ts";
+import { FoundBotConversationScope } from "../../storage/bot-credential-records.ts";
 import type { BotCredentialStorage } from "../../storage/bot-credential-storage.ts";
 
 function decodeScopes(encoded: string): readonly string[] {
@@ -43,11 +35,28 @@ function decodeScopes(encoded: string): readonly string[] {
 export class BotAuthorization {
     readonly #credentials: readonly BotCredentialStorage[];
     readonly #projectAuthentication: ProjectAccessAuthorizer;
+    readonly #projectCredentials: (scope: ProjectScope, signal: AbortSignal) => Promise<BotCredentialStorage>;
+    readonly #requestedProject: ProjectScope | null;
 
-    constructor(credentials: readonly BotCredentialStorage[], projectAuthentication: ProjectAccessAuthorizer) {
+    constructor(
+        credentials: readonly BotCredentialStorage[],
+        projectAuthentication: ProjectAccessAuthorizer,
+        projectCredentials: (scope: ProjectScope, signal: AbortSignal) => Promise<BotCredentialStorage>,
+        requestedProject: ProjectScope | null = null,
+    ) {
         this.#credentials = credentials;
         this.#projectAuthentication = projectAuthentication;
+        this.#projectCredentials = projectCredentials;
+        this.#requestedProject = requestedProject;
     }
+
+    readonly forProject = (projectId: string): BotAuthorization =>
+        new BotAuthorization(
+            this.#credentials,
+            this.#projectAuthentication,
+            this.#projectCredentials,
+            new ProjectScope(validateIdentifier(projectId, "project_id")),
+        );
 
     private readonly findCredential = async <Value>(
         read: (storage: BotCredentialStorage) => Promise<Value | null>,
@@ -96,8 +105,24 @@ export class BotAuthorization {
         permission: ProjectPermission,
         actorReference: string,
         signal: AbortSignal,
-    ): Promise<ProjectAccessContext> =>
-        await this.#projectAuthentication.authorizeProject(projectId, token, permission, actorReference, signal);
+    ): Promise<ProjectAccessContext> => {
+        const normalizedProjectId = validateIdentifier(projectId, "project_id");
+        if (this.#requestedProject !== null && this.#requestedProject.projectId !== normalizedProjectId) {
+            throw new BotApiError("bot_not_found", "The Bot does not exist in this Project", "not-found");
+        }
+        const access = await this.#projectAuthentication.authorizeProject(
+            normalizedProjectId,
+            token,
+            permission,
+            actorReference,
+            signal,
+        );
+        signal.throwIfAborted();
+        if (access.scope.projectId !== normalizedProjectId) {
+            throw new BotApiError("bot_service_unavailable", "The Project authorization is invalid", "unavailable");
+        }
+        return access;
+    };
 
     readonly authorizeProjectBot = async (
         botId: string,
@@ -108,37 +133,22 @@ export class BotAuthorization {
     ): Promise<ProjectBotAccess> => {
         const normalizedBotId = validateIdentifier(botId, "bot_id");
         decodeProjectCredential(token);
-        let scope: BotProjectScopeLookup = new MissingBotProjectScope();
-        for (const storage of this.#credentials) {
+        if (this.#requestedProject !== null) {
+            const access = await this.authorizeProject(
+                this.#requestedProject.projectId,
+                token,
+                permission,
+                actorReference,
+                signal,
+            );
+            const storage = await this.#projectCredentials(access.scope, signal);
+            if (!(await storage.botExistsInProject(normalizedBotId, access.scope.projectId, signal))) {
+                throw new BotApiError("bot_not_found", "The Bot does not exist in this Project", "not-found");
+            }
             signal.throwIfAborted();
-            const candidate = await storage.readBotProjectScope(normalizedBotId, signal);
-            signal.throwIfAborted();
-            if (candidate instanceof MissingBotProjectScope) {
-                continue;
-            }
-            if (!(candidate instanceof FoundBotProjectScope)) {
-                throw new BotApiError("bot_service_unavailable", "The Bot Project scope is invalid", "unavailable");
-            }
-            if (scope instanceof FoundBotProjectScope) {
-                throw new BotApiError("credential_invalid", "The Bot credential is ambiguous", "unauthenticated");
-            }
-            scope = candidate;
+            return new ProjectBotAccess(access, normalizedBotId);
         }
-        if (!(scope instanceof FoundBotProjectScope)) {
-            throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
-        }
-        const access = await this.#projectAuthentication.authorizeProject(
-            scope.projectId,
-            token,
-            permission,
-            actorReference,
-            signal,
-        );
-        signal.throwIfAborted();
-        if (access.scope.projectId !== scope.projectId) {
-            throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
-        }
-        return new ProjectBotAccess(access, normalizedBotId);
+        throw new BotApiError("invalid_request", "A Project-scoped endpoint is required", "invalid-input");
     };
 
     readonly authorizeProjectConversation = async (
@@ -150,44 +160,23 @@ export class BotAuthorization {
     ): Promise<ProjectConversationAccess> => {
         const normalizedConversationId = validateIdentifier(conversationId, "conversation_id");
         decodeProjectCredential(token);
-        let scope: BotConversationScopeLookup = new MissingBotConversationScope();
-        for (const storage of this.#credentials) {
+        if (this.#requestedProject !== null) {
+            const access = await this.authorizeProject(
+                this.#requestedProject.projectId,
+                token,
+                permission,
+                actorReference,
+                signal,
+            );
+            const storage = await this.#projectCredentials(access.scope, signal);
+            const scope = await storage.readConversationProjectScope(normalizedConversationId, signal);
             signal.throwIfAborted();
-            const candidate = await storage.readConversationProjectScope(normalizedConversationId, signal);
-            signal.throwIfAborted();
-            if (candidate instanceof MissingBotConversationScope) {
-                continue;
+            if (!(scope instanceof FoundBotConversationScope) || scope.projectId !== access.scope.projectId) {
+                throw new BotApiError("bot_not_found", "The Conversation does not exist in this Project", "not-found");
             }
-            if (!(candidate instanceof FoundBotConversationScope)) {
-                throw new BotApiError(
-                    "bot_service_unavailable",
-                    "The Conversation Project scope is invalid",
-                    "unavailable",
-                );
-            }
-            if (scope instanceof FoundBotConversationScope) {
-                throw new BotApiError(
-                    "credential_invalid",
-                    "The Conversation credential is ambiguous",
-                    "unauthenticated",
-                );
-            }
-            scope = candidate;
+            return new ProjectConversationAccess(access, scope.botId, normalizedConversationId, scope.sessionId);
         }
-        if (!(scope instanceof FoundBotConversationScope)) {
-            throw new BotApiError("bot_not_found", "The Conversation does not exist", "not-found");
-        }
-        const access = await this.#projectAuthentication.authorizeProject(
-            scope.projectId,
-            token,
-            permission,
-            actorReference,
-            signal,
-        );
-        if (access.scope.projectId !== scope.projectId) {
-            throw new BotApiError("bot_not_found", "The Conversation does not exist", "not-found");
-        }
-        return new ProjectConversationAccess(access, scope.botId, normalizedConversationId, scope.sessionId);
+        throw new BotApiError("invalid_request", "A Project-scoped endpoint is required", "invalid-input");
     };
 
     readonly authorizeConnector = async (
@@ -252,17 +241,55 @@ export class BotAuthorization {
         );
     };
 
-    private readonly inboundCredentialPlanes = async (
+    private readonly authorizeConnectorIn = async (
+        storage: BotCredentialStorage,
+        projectId: string,
         botId: string,
-        tokenDigest: string,
-        now: number,
+        connectionId: string,
+        token: string,
+        requiredScope: string,
         signal: AbortSignal,
-    ): Promise<readonly InboundCredentialPlaneRecord[]> => {
-        const pages = await Promise.all(
-            this.#credentials.map((storage) => storage.readInboundCredentialPlanes(botId, tokenDigest, now, signal)),
-        );
+    ): Promise<BotConnectionAccess> => {
         signal.throwIfAborted();
-        return pages.flat();
+        const normalizedConnectionId = validateIdentifier(connectionId, "connection_id");
+        const tokenDigest = await hashSecret(validateToken(token));
+        signal.throwIfAborted();
+        const now = Date.now();
+        const row = await storage.readConnector(normalizedConnectionId, tokenDigest, now, signal);
+        signal.throwIfAborted();
+        if (row === null) {
+            const lifecycle = await storage.readConnectionLifecycle(normalizedConnectionId, signal);
+            signal.throwIfAborted();
+            if (lifecycle === "revoked") {
+                throw new BotApiError("connection_revoked", "The Bot connection was revoked", "unauthenticated");
+            }
+            throw new BotApiError("credential_invalid", "The Bot connection credential is invalid", "unauthenticated");
+        }
+        if (row.project_id !== projectId || row.bot_id !== botId) {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "The Bot conversation is not accessible",
+                "access-denied",
+            );
+        }
+        const scopes = decodeScopes(row.scopes_json);
+        if (!scopes.includes(requiredScope)) {
+            throw new BotApiError("scope_denied", "The Bot connection scope is not granted", "access-denied");
+        }
+        const touched = await storage.recordConnectionUse(row.credential_id, row.connection_id, now, signal);
+        signal.throwIfAborted();
+        if (!touched) {
+            throw new BotApiError("credential_invalid", "The Bot connection credential is invalid", "unauthenticated");
+        }
+        return new BotConnectionAccess(
+            new ProjectScope(row.project_id),
+            row.bot_id,
+            row.connection_id,
+            row.credential_id,
+            row.connector_principal_id,
+            row.audience,
+            scopes,
+        );
     };
 
     readonly authorizeInbound = async (
@@ -273,11 +300,16 @@ export class BotAuthorization {
         actorReference: string,
         signal: AbortSignal,
     ): Promise<BotConversationAuthorization> => {
+        if (this.#requestedProject === null) {
+            throw new BotApiError("invalid_request", "A Project-scoped endpoint is required", "invalid-input");
+        }
         decodeProjectCredential(token);
         const normalizedBotId = validateIdentifier(botId, "bot_id");
         const tokenDigest = await hashSecret(validateToken(token));
         signal.throwIfAborted();
-        const planes = await this.inboundCredentialPlanes(normalizedBotId, tokenDigest, Date.now(), signal);
+        const storage = await this.#projectCredentials(this.#requestedProject, signal);
+        const planes = await storage.readInboundCredentialPlanes(normalizedBotId, tokenDigest, Date.now(), signal);
+        signal.throwIfAborted();
         if (planes.length === 0) {
             return await this.authorizeProjectBot(botId, token, requiredProjectPermission, actorReference, signal);
         }
@@ -305,7 +337,15 @@ export class BotAuthorization {
                 "access-denied",
             );
         }
-        return await this.authorizeConnector(plane.connection_id, token, requiredConnectorScope, signal);
+        return await this.authorizeConnectorIn(
+            storage,
+            this.#requestedProject.projectId,
+            normalizedBotId,
+            plane.connection_id,
+            token,
+            requiredConnectorScope,
+            signal,
+        );
     };
 
     readonly authorizeRuntimeExecution = async (

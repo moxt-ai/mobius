@@ -35,6 +35,7 @@ interface BotHttpEnvironment {
         };
     };
     readonly Variables: {
+        readonly bots: BotService;
         readonly body: Readonly<Record<string, unknown>>;
         readonly signal: AbortSignal;
     };
@@ -46,9 +47,17 @@ export function createBotApplication() {
         .onError(rethrowHonoError)
         .use("*", botErrorMiddleware<BotHttpEnvironment>())
         .use("*", requestTimeoutMiddleware<BotHttpEnvironment>(15_000))
+        .use("*", async (c, next) => {
+            c.set("bots", c.env.services.bots);
+            await next();
+        })
+        .use("/projects/:projectId/*", async (c, next) => {
+            c.set("bots", c.env.services.bots.forProject(pathIdentifier(c.req.param("projectId"))));
+            await next();
+        })
         .get("/projects/:projectId/bots", async (c) =>
             c.json(
-                await c.env.services.bots.listOwnedBots(
+                await c.var.bots.listOwnedBots(
                     pathIdentifier(c.req.param("projectId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -59,7 +68,7 @@ export function createBotApplication() {
         .post("/projects/:projectId/bots", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["avatarRef", "description", "displayName"]);
             return c.json(
-                await c.env.services.bots.createBot(
+                await c.var.bots.createBot(
                     pathIdentifier(c.req.param("projectId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -81,7 +90,7 @@ export function createBotApplication() {
                 "title",
             ]);
             const configuration = conversationConfiguration(value);
-            const conversation = await c.env.services.bots.createProjectConversationResource(
+            const conversation = await c.var.bots.createProjectConversationResource(
                 pathIdentifier(c.req.param("projectId")),
                 identifier(value, "botId"),
                 bearer(c.req.raw),
@@ -96,7 +105,7 @@ export function createBotApplication() {
             if (typeof conversationId !== "string") {
                 throw new Error("The created Conversation identifier is unavailable");
             }
-            await c.env.services.bots.configureProjectConversation(
+            await c.var.bots.configureProjectConversation(
                 conversationId,
                 bearer(c.req.raw),
                 actorReference(c.req.raw),
@@ -111,9 +120,16 @@ export function createBotApplication() {
             );
             return c.json(conversation, 201);
         })
+        .route("/projects/:projectId", createBotOwnerRoutes())
+        .route("/projects/:projectId", createBotConversationRoutes())
+        .route("/", createBotConnectorRoutes());
+}
+
+function createBotOwnerRoutes() {
+    return new Hono<BotHttpEnvironment>({ strict: false })
         .get("/bots/:botId", async (c) =>
             c.json(
-                await c.env.services.bots.readBot(
+                await c.var.bots.readBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -123,7 +139,7 @@ export function createBotApplication() {
         )
         .get("/conversations/:conversationId", async (c) =>
             c.json(
-                await c.env.services.bots.readProjectConversationResource(
+                await c.var.bots.readProjectConversationResource(
                     pathIdentifier(c.req.param("conversationId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -141,7 +157,7 @@ export function createBotApplication() {
                 "resources",
             ]);
             return c.json(
-                await c.env.services.bots.submitProjectConversationTurn(
+                await c.var.bots.submitProjectConversationTurn(
                     pathIdentifier(c.req.param("conversationId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -170,7 +186,7 @@ export function createBotApplication() {
                     "valueType",
                 ]);
                 return c.json(
-                    await c.env.services.bots.configureProjectConversation(
+                    await c.var.bots.configureProjectConversation(
                         pathIdentifier(c.req.param("conversationId")),
                         bearer(c.req.raw),
                         actorReference(c.req.raw),
@@ -189,7 +205,7 @@ export function createBotApplication() {
         )
         .get("/bots/:botId/behavior-revisions", async (c) =>
             c.json(
-                await c.env.services.bots.listBehaviorRevisions(
+                await c.var.bots.listBehaviorRevisions(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -199,7 +215,7 @@ export function createBotApplication() {
         )
         .get("/bots/:botId/execution-bindings", async (c) =>
             c.json(
-                await c.env.services.bots.listExecutionBindings(
+                await c.var.bots.listExecutionBindings(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -209,7 +225,7 @@ export function createBotApplication() {
         )
         .get("/bots/:botId/connections", async (c) =>
             c.json(
-                await c.env.services.bots.listConnections(
+                await c.var.bots.listConnections(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -219,7 +235,7 @@ export function createBotApplication() {
         )
         .get("/bots/:botId/conversations", async (c) =>
             c.json(
-                await c.env.services.bots.listConversations(
+                await c.var.bots.listConversations(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -229,7 +245,7 @@ export function createBotApplication() {
         )
         .get("/bots/:botId/setup", async (c) =>
             c.json(
-                await c.env.services.bots.readSetup(
+                await c.var.bots.readSetup(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -240,7 +256,7 @@ export function createBotApplication() {
         .post("/bots/:botId/profile-revisions", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["avatarRef", "description", "displayName", "expectedRevision"]);
             return c.json(
-                await c.env.services.bots.createProfileRevision(
+                await c.var.bots.createProfileRevision(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -262,7 +278,7 @@ export function createBotApplication() {
                 "requiredCapabilities",
             ]);
             return c.json(
-                await c.env.services.bots.createBehaviorRevision(
+                await c.var.bots.createBehaviorRevision(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -288,7 +304,7 @@ export function createBotApplication() {
                 "workspaceRef",
             ]);
             return c.json(
-                await c.env.services.bots.createExecutionBinding(
+                await c.var.bots.createExecutionBinding(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -309,7 +325,7 @@ export function createBotApplication() {
         .post("/bots/:botId/connection-grants", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["audience", "expiresInSeconds", "label", "scopes"]);
             return c.json(
-                await c.env.services.bots.createGrant(
+                await c.var.bots.createGrant(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -326,7 +342,7 @@ export function createBotApplication() {
         .post("/bots/:botId/delivery-targets/:targetId/approve", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["expectedPolicyRevision"]);
             return c.json(
-                await c.env.services.bots.approveTarget(
+                await c.var.bots.approveTarget(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -340,7 +356,7 @@ export function createBotApplication() {
         .post("/bots/:botId/suspend", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["expectedRevision"]);
             return c.json(
-                await c.env.services.bots.transitionBot(
+                await c.var.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -354,7 +370,7 @@ export function createBotApplication() {
         .post("/bots/:botId/connections/:connectionId/revoke", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["expectedRevision"]);
             return c.json(
-                await c.env.services.bots.revokeConnectionForOwner(
+                await c.var.bots.revokeConnectionForOwner(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -368,7 +384,7 @@ export function createBotApplication() {
         .post("/bots/:botId/archive", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["expectedRevision"]);
             return c.json(
-                await c.env.services.bots.transitionBot(
+                await c.var.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -382,7 +398,7 @@ export function createBotApplication() {
         .post("/bots/:botId/resume", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["expectedRevision"]);
             return c.json(
-                await c.env.services.bots.transitionBot(
+                await c.var.bots.transitionBot(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -392,10 +408,14 @@ export function createBotApplication() {
                     c.var.signal,
                 ),
             );
-        })
+        });
+}
+
+function createBotConversationRoutes() {
+    return new Hono<BotHttpEnvironment>({ strict: false })
         .post("/bots/:botId/conversations", botBodyParser<BotHttpEnvironment>(), async (c) =>
             c.json(
-                await c.env.services.bots.createConversation(
+                await c.var.bots.createConversation(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -409,7 +429,7 @@ export function createBotApplication() {
         .post("/bots/:botId/conversations/:conversationId/messages", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const submission = messageRequest(c.var.body);
             return c.json(
-                await c.env.services.bots.submitMessage(
+                await c.var.bots.submitMessage(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -423,7 +443,7 @@ export function createBotApplication() {
         })
         .get("/bots/:botId/conversations/:conversationId/events", async (c) =>
             c.json(
-                await c.env.services.bots.readConversationEvents(
+                await c.var.bots.readConversationEvents(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -436,7 +456,7 @@ export function createBotApplication() {
         .post("/bots/:botId/turns/:turnId/cancel", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["idempotencyKey"]);
             return c.json(
-                await c.env.services.bots.cancelTurn(
+                await c.var.bots.cancelTurn(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
@@ -447,7 +467,11 @@ export function createBotApplication() {
                 ),
                 202,
             );
-        })
+        });
+}
+
+function createBotConnectorRoutes() {
+    return new Hono<BotHttpEnvironment>({ strict: false })
         .post("/bot-connection-grants/redeem", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["audience", "connectorPrincipalId", "grantId", "grantSecret"]);
             return c.json(

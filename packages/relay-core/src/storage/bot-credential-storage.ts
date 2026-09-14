@@ -3,12 +3,9 @@ import type { SqlDatabase } from "../infra/sql-database.ts";
 import {
     type BotConversationScopeRecord,
     type BotCredentialRecords,
-    type BotProjectScopeRecord,
     FoundBotConversationScope,
-    FoundBotProjectScope,
     type InboundCredentialPlaneRecord,
     MissingBotConversationScope,
-    MissingBotProjectScope,
 } from "./bot-credential-records.ts";
 
 export class BotCredentialStorage implements BotCredentialRecords {
@@ -46,14 +43,6 @@ export class BotCredentialStorage implements BotCredentialRecords {
             .prepare("SELECT 1 AS present FROM bots WHERE bot_id = ? AND project_id = ?")
             .bind(botId, projectId)
             .first(signal)) !== null;
-
-    readonly readBotProjectScope: BotCredentialRecords["readBotProjectScope"] = async (botId, signal) => {
-        const row = await this.#database
-            .prepare("SELECT project_id FROM bots WHERE bot_id = ?")
-            .bind(botId)
-            .first<BotProjectScopeRecord>(signal);
-        return row === null ? new MissingBotProjectScope() : new FoundBotProjectScope(row.project_id);
-    };
 
     readonly readConversationProjectScope: BotCredentialRecords["readConversationProjectScope"] = async (
         conversationId,
