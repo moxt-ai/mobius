@@ -308,6 +308,53 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
     };
 }
 
+it("Given existing App keys with past expiration dates, When storage is migrated and the keys are used, Then the active key authenticates and the revoked key stays rejected", async () => {
+    const fixture = await provisionPlatformProject("legacy-app-keys");
+    const developer = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    const revoked = await developer.issueAppCredential(
+        fixture.appId,
+        { permissions: ["bot:read"], projectIds: [fixture.projectId] },
+        AbortSignal.timeout(5_000),
+    );
+    await developer.revokeAppCredential(revoked.credentialId, AbortSignal.timeout(5_000));
+    const migration = env.TEST_PLATFORM_MIGRATIONS.find((item) => item.name === "0005_non_expiring_app_keys.sql");
+    if (migration === undefined) {
+        throw new Error("Missing non-expiring App keys migration");
+    }
+    const database = env.PLATFORM_DIRECTORY_DATABASE;
+    // Recreate the legacy persisted representation before applying the real migration.
+    // The batch rolls back the schema and data together if any migration statement fails.
+    await database.batch([
+        database.prepare("ALTER TABLE platform_app_credentials ADD COLUMN expires_at INTEGER NOT NULL DEFAULT 0"),
+        database.prepare("DROP INDEX platform_app_credentials_lookup"),
+        database.prepare(
+            "CREATE INDEX platform_app_credentials_lookup ON platform_app_credentials(public_credential_id, revoked_at, expires_at, overlap_ends_at)",
+        ),
+        database
+            .prepare("UPDATE platform_app_credentials SET expires_at = ? WHERE app_id = ?")
+            .bind(Date.parse("2026-09-09T00:00:00.000Z"), fixture.appId),
+        ...migration.queries.map((query) => database.prepare(query)),
+    ]);
+    vi.setSystemTime(new Date("2036-09-14T00:00:00.000Z"));
+    for (const { credential, status } of [
+        { credential: fixture.appCredential, status: 200 },
+        { credential: revoked.credential, status: 401 },
+    ]) {
+        const response = await fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/bots`, {
+                headers: credentialHeaders(credential),
+            }),
+            fixture.environment,
+        );
+        expect(response.status).toBe(status);
+    }
+});
+
 it("Given an App-wide server credential, When its backend provisions a user Project twice, Then the same Project is returned without developer sign-in", async () => {
     const fixture = await provisionPlatformProject("app-provision");
     const request = () =>
@@ -370,7 +417,6 @@ it("Given an App-wide server credential, When its backend provisions a user Proj
                 method: "POST",
                 headers: developerHeaders(),
                 body: JSON.stringify({
-                    expiresInSeconds: 3600,
                     permissions: ["project:read"],
                     projectIds: [fixture.projectId],
                 }),
@@ -888,7 +934,7 @@ describe.sequential("Platform hosting boundary", () => {
         for (const [path, body] of [
             ["/v1/platform/tenants", { displayName: 12 }],
             ["/v1/apps/app-test/projects", { displayName: "Project", idempotencyKey: false }],
-            ["/v1/apps/app-test/credentials", { expiresInSeconds: 10, permissions: [], projectIds: [12] }],
+            ["/v1/apps/app-test/credentials", { permissions: [], projectIds: [12] }],
             [
                 "/v1/client/session/configuration",
                 {
@@ -1016,13 +1062,12 @@ describe.sequential("Platform hosting boundary", () => {
         const scoped = await developer.issueAppCredential(
             app.appId,
             {
-                expiresInSeconds: 3_600,
                 permissions: ["bot:read", "conversation:read"],
                 projectIds: [project.projectId],
             },
             AbortSignal.timeout(5_000),
         );
-        const rotated = await developer.rotateAppCredential(scoped.credentialId, 3_600, 60, AbortSignal.timeout(5_000));
+        const rotated = await developer.rotateAppCredential(scoped.credentialId, 60, AbortSignal.timeout(5_000));
         expect(rotated.replacedCredentialId).toBe(scoped.credentialId);
         expect(
             (await developer.revokeAppCredential(rotated.credentialId, AbortSignal.timeout(5_000))).credentialId,
@@ -1055,17 +1100,21 @@ describe.sequential("Platform hosting boundary", () => {
         const app = await developer.createApp(tenant.tenantId, "First app", AbortSignal.timeout(5_000));
         expect(app.appId).toMatch(/^app_/);
         expect(app.defaultCredential.credential).toMatch(/^mapp_/);
+        expect(app.defaultCredential).not.toHaveProperty("expiresAt");
         expect((await developer.updateApp(app.appId, "Renamed app", AbortSignal.timeout(5_000))).displayName).toBe(
             "Renamed app",
         );
         const second = await developer.issueAppCredential(
             app.appId,
-            { expiresInSeconds: 3_600, permissions: ["project:read"], projectIds: [] },
+            { permissions: ["project:read"], projectIds: [] },
             AbortSignal.timeout(5_000),
         );
         expect(second.credential).toMatch(/^mapp_/);
         expect(second.credential).not.toBe(app.defaultCredential.credential);
         const credentials = await developer.listAppCredentials(app.appId, AbortSignal.timeout(5_000));
+        for (const credential of credentials) {
+            expect(credential).not.toHaveProperty("expiresAt");
+        }
         expect(credentials.map((credential) => credential.credentialId)).toEqual(
             expect.arrayContaining([second.credentialId, app.defaultCredential.credentialId]),
         );
@@ -1467,7 +1516,7 @@ describe.sequential("Platform hosting boundary", () => {
         await expect(denied.json()).resolves.toMatchObject({ error: { code: "project_access_denied" } });
     });
 
-    it("Given an AppCredential with one Project and read-only permission, When it is used, rotated, and revoked, Then scope, permission, overlap, and revocation are enforced", async () => {
+    it("Given a non-expiring App key with one Project and read-only permission, When years pass and it is rotated and revoked, Then access persists while scope, permission, overlap, and revocation are enforced", async () => {
         const worker = createPlatformWorker(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
         );
@@ -1529,7 +1578,6 @@ describe.sequential("Platform hosting boundary", () => {
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${appId}/credentials`, {
                     body: JSON.stringify({
-                        expiresInSeconds: 3600,
                         permissions: ["bot:read"],
                         projectIds: [text(firstProject, "projectId")],
                     }),
@@ -1542,6 +1590,8 @@ describe.sequential("Platform hosting boundary", () => {
         );
         const originalCredential = text(issued, "credential");
         const credentialId = text(issued, "credentialId");
+        expect(issued).not.toHaveProperty("expiresAt");
+        vi.setSystemTime(new Date("2036-09-14T00:00:00.000Z"));
         expect(
             (
                 await worker.fetch(
@@ -1583,7 +1633,7 @@ describe.sequential("Platform hosting boundary", () => {
         const rotated = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/app-credentials/${credentialId}/rotate`, {
-                    body: JSON.stringify({ expiresInSeconds: 3600, overlapSeconds: 60 }),
+                    body: JSON.stringify({ overlapSeconds: 60 }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),
@@ -1592,7 +1642,8 @@ describe.sequential("Platform hosting boundary", () => {
             201,
         );
         const replacementCredential = text(rotated, "credential");
-        vi.setSystemTime(Date.now() + 60_001);
+        expect(rotated).not.toHaveProperty("expiresAt");
+        vi.setSystemTime(new Date("2046-09-14T00:00:00.000Z"));
         expect(
             (
                 await worker.fetch(

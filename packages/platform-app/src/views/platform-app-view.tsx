@@ -210,7 +210,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
         void perform("issue-key", async () => {
             const created = await client().issueAppCredential(
                 selectedApp.appId,
-                { expiresInSeconds: 90 * 24 * 60 * 60, permissions: APP_PERMISSIONS, projectIds: [] },
+                { permissions: APP_PERMISSIONS, projectIds: [] },
                 AbortSignal.timeout(20_000),
             );
             setCredentials(await client().listAppCredentials(selectedApp.appId, AbortSignal.timeout(20_000)));
@@ -552,7 +552,10 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                     <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
                                         <div>
                                             <h3 id="app-keys-title">App keys</h3>
-                                            <p>Use these only on trusted servers. Secrets cannot be viewed again.</p>
+                                            <p>
+                                                Keys do not expire. Use these only on trusted servers. Secrets cannot be
+                                                viewed again.
+                                            </p>
                                         </div>
                                         <button
                                             type="button"
@@ -564,21 +567,19 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                         </button>
                                     </div>
                                     <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
-                                        <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
+                                        <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
                                             <span>Key</span>
                                             <span>Created</span>
-                                            <span>Expires</span>
                                             <span>Status</span>
                                             <span />
                                         </div>
                                         {credentials.map((credential) => (
                                             <div
-                                                className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0 [&>code]:text-[11px] [&>code]:text-[#34423a]"
+                                                className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0 [&>code]:text-[11px] [&>code]:text-[#34423a]"
                                                 key={credential.credentialId}
                                             >
                                                 <code>{credential.publicCredentialId}</code>
                                                 <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
-                                                <span>{new Date(credential.expiresAt).toLocaleDateString()}</span>
                                                 <span
                                                     className={
                                                         credential.revokedAt.length > 0

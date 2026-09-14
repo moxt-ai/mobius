@@ -47,7 +47,6 @@ export const CredentialRowSchema = v.object({
     app_id: v.string(),
     app_lifecycle: v.string(),
     credential_id: v.string(),
-    expires_at: nonNegativeInteger,
     issued_at: nonNegativeInteger,
     last_used_at: nonNegativeInteger,
     overlap_ends_at: v.nullable(nonNegativeInteger),
@@ -73,7 +72,6 @@ export interface PlatformAppCredentialInsert {
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
-    readonly expiresAt: number;
     readonly issuedAt: number;
     readonly permissionsJson: string;
     readonly publicCredentialId: string;

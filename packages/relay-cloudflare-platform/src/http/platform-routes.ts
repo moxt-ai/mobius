@@ -34,11 +34,10 @@ const createProjectBody = v.strictObject({
     locationHint: requiredString,
 });
 const issueCredentialBody = v.strictObject({
-    expiresInSeconds: safeInteger,
     permissions: v.array(v.string()),
     projectIds: v.array(v.string()),
 });
-const rotateCredentialBody = v.strictObject({ expiresInSeconds: safeInteger, overlapSeconds: safeInteger });
+const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment;
@@ -261,7 +260,6 @@ export function createPlatformControlApplication() {
                     result.app,
                     value.permissions,
                     value.projectIds,
-                    value.expiresInSeconds,
                     context.var.signal,
                 ),
                 201,
@@ -297,7 +295,6 @@ export function createPlatformControlApplication() {
                     await context.env.control.rotateAppCredential(
                         identity,
                         path(context.req.param("credentialId")),
-                        value.expiresInSeconds,
                         value.overlapSeconds,
                         context.var.signal,
                     ),

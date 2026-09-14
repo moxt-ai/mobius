@@ -98,10 +98,13 @@ credential:
 | authorized browser | `mconv_...` ConversationAccessCredential | one server-bound Conversation and Session under `/v1/client/session/*` |
 | local daemon | Runtime credential | one Runtime Relay connection and its lease/fence |
 
+App keys (AppCredentials) do not expire, including previously issued keys after
+the `0005_non_expiring_app_keys.sql` migration. Issuance and rotation no longer
+accept `expiresInSeconds`, and AppCredential responses omit `expiresAt`.
 AppCredential secrets and Conversation credential secrets are returned only
 when issued. D1 stores their digests. Rotation creates a new credential revision;
 the old AppCredential remains valid only for its explicit overlap. Revocation,
-expiry, parent AppCredential revision, App lifecycle, Project lifecycle, and
+Conversation credential expiry, parent AppCredential revision, App lifecycle, Project lifecycle, and
 Conversation lifecycle are rechecked for every browser request. Active browser
 event streams close on explicit revocation and periodically reauthorize so a
 cross-isolate or parent lifecycle change also terminates the stream.

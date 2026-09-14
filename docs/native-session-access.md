@@ -21,7 +21,8 @@ Browser <-> Mobius <-> Runtime: history, turns, configuration, events, cancellat
   canonical Session or a read-only preview.
 - `client.sessions.createAccess(sessionId, expiresInSeconds, signal)` issues an
   `msession_…` credential for an existing Session in the App's Project. Supported
-  lifetimes are 60–3600 seconds, bounded by the parent AppCredential lifetime.
+  lifetimes are 60–3600 seconds. Parent App keys do not expire; their revocation
+  and rotation overlap are still enforced.
 - Discovery uses a server-owned control connection, which is closed and its
   internal credential removed on completion, failure, or cancellation. No Runtime
   host token is returned to the application or browser.

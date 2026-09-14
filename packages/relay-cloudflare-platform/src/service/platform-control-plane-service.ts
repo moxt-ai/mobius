@@ -4,9 +4,9 @@ import {
     createRandomToken,
     type decodeProjectCredential,
     decodeProjectPermissions,
-    ExpiringProjectAccessLifetime,
     ExternalIdentityCredential,
     hashSecret,
+    PerpetualProjectAccessLifetime,
     type ProjectAccessAuthorizer,
     ProjectAccessContext,
     ProjectAuthenticationError,
@@ -38,9 +38,6 @@ import type {
 import type { PlatformControlPlaneStorage } from "../storage/platform-control-plane-storage.ts";
 import type { AppCredentialAuthenticationService } from "./app-credential-authentication-service.ts";
 
-const DEFAULT_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
-const MINIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 60 * 1_000;
-const MAXIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS = 365 * 24 * 60 * 60 * 1_000;
 const MAXIMUM_CREDENTIAL_OVERLAP_MILLISECONDS = 60 * 60 * 1_000;
 
 type ProjectProvisioningActor =
@@ -112,7 +109,6 @@ class CreatedAppCredential {
     readonly credential: string;
     readonly credentialId: string;
     readonly digest: string;
-    readonly expiresAt: number;
     readonly issuedAt: number;
     readonly permissions: ReadonlySet<ProjectPermission>;
     readonly publicCredentialId: string;
@@ -127,7 +123,6 @@ class CreatedAppCredential {
         permissions: ReadonlySet<ProjectPermission>,
         revision: number,
         issuedAt: number,
-        expiresAt: number,
     ) {
         this.appId = appId;
         this.credential = credential;
@@ -137,14 +132,12 @@ class CreatedAppCredential {
         this.permissions = new Set(permissions);
         this.revision = revision;
         this.issuedAt = issuedAt;
-        this.expiresAt = expiresAt;
     }
 
     readonly resource = (): object => ({
         appId: this.appId,
         credential: this.credential,
         credentialId: this.credentialId,
-        expiresAt: iso(this.expiresAt),
         issuedAt: iso(this.issuedAt),
         permissions: permissionValues(this.permissions),
         publicCredentialId: this.publicCredentialId,
@@ -155,7 +148,6 @@ class CreatedAppCredential {
         allProjects,
         appId: this.appId,
         credentialId: this.credentialId,
-        expiresAt: this.expiresAt,
         issuedAt: this.issuedAt,
         permissionsJson: JSON.stringify(permissionValues(this.permissions)),
         publicCredentialId: this.publicCredentialId,
@@ -215,28 +207,6 @@ function appPermissions(value: unknown): ReadonlySet<ProjectPermission> {
         }
     }
     return decoded;
-}
-
-function lifetimeMilliseconds(expiresInSeconds: number): number {
-    if (!Number.isSafeInteger(expiresInSeconds)) {
-        throw new PlatformControlPlaneError(
-            "app_credential_lifetime_invalid",
-            "The AppCredential lifetime is invalid",
-            400,
-        );
-    }
-    const lifetime = expiresInSeconds * 1_000;
-    if (
-        lifetime < MINIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS ||
-        lifetime > MAXIMUM_APP_CREDENTIAL_LIFETIME_MILLISECONDS
-    ) {
-        throw new PlatformControlPlaneError(
-            "app_credential_lifetime_invalid",
-            "The AppCredential lifetime is invalid",
-            400,
-        );
-    }
-    return lifetime;
 }
 
 function overlapMilliseconds(overlapSeconds: number): number {
@@ -665,13 +635,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         }
         const appId = `app_${createRandomToken(18)}`;
         const normalizedDisplayName = displayName(requestedDisplayName);
-        const created = await this.createCredential(
-            appId,
-            new Set(PLATFORM_SERVER_PROJECT_PERMISSIONS),
-            1,
-            now,
-            DEFAULT_APP_CREDENTIAL_LIFETIME_MILLISECONDS,
-        );
+        const created = await this.createCredential(appId, new Set(PLATFORM_SERVER_PROJECT_PERMISSIONS), 1, now);
         const appRow: AppRow = {
             app_id: appId,
             created_at: now,
@@ -1048,7 +1012,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         app: AppRow,
         requestedPermissions: unknown,
         projectIds: readonly string[],
-        expiresInSeconds: number,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
@@ -1059,13 +1022,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         const normalizedProjectIds = await this.validateProjectScope(app.app_id, projectIds, signal);
         const now = Date.now();
         const revision = await this.nextCredentialRevision(app.app_id, signal);
-        const created = await this.createCredential(
-            app.app_id,
-            grantedPermissions,
-            revision,
-            now,
-            lifetimeMilliseconds(expiresInSeconds),
-        );
+        const created = await this.createCredential(app.app_id, grantedPermissions, revision, now);
         const issued = await this.#storage.issueAppCredential(
             created.storageRecord(normalizedProjectIds.length === 0),
             normalizedProjectIds,
@@ -1105,7 +1062,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                 allProjects: row.all_projects === 1,
                 appId: row.app_id,
                 credentialId: row.credential_id,
-                expiresAt: iso(row.expires_at),
                 issuedAt: iso(row.issued_at),
                 lastUsedAt: iso(row.last_used_at),
                 overlapEndsAt: typeof row.overlap_ends_at === "number" ? iso(row.overlap_ends_at) : "",
@@ -1123,7 +1079,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     readonly rotateAppCredential = async (
         identity: VerifiedExternalIdentity,
         credentialId: string,
-        expiresInSeconds: number,
         overlapSeconds: number,
         signal: AbortSignal,
     ): Promise<object> => {
@@ -1138,7 +1093,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             permissions(source.permissions_json),
             source.revision + 1,
             now,
-            lifetimeMilliseconds(expiresInSeconds),
         );
         const overlapEndsAt = now + overlapMilliseconds(overlapSeconds);
         const rotated = await this.#storage.rotateAppCredential(
@@ -1314,7 +1268,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             new AuditActor(AuditActorKind.Application, row.app_id),
             row.credential_id,
             now,
-            new ExpiringProjectAccessLifetime(row.expires_at),
+            new PerpetualProjectAccessLifetime(),
         );
     };
 
@@ -1336,7 +1290,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         grantedPermissions: ReadonlySet<ProjectPermission>,
         revision: number,
         now: number,
-        lifetime: number,
     ): Promise<CreatedAppCredential> => {
         const publicCredentialId = createRandomToken(16);
         const credentialId = `pac_${publicCredentialId}`;
@@ -1350,7 +1303,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             grantedPermissions,
             revision,
             now,
-            now + lifetime,
         );
     };
 

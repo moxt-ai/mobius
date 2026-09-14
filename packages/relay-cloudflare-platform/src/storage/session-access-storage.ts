@@ -49,7 +49,7 @@ export class SessionAccessStorage {
             JOIN platform_apps a ON a.app_id = p.app_id
             JOIN platform_tenants t ON t.tenant_id = a.tenant_id
             WHERE s.credential_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
-              AND c.revoked_at IS NULL AND c.expires_at > ? AND c.revision = s.parent_revision
+              AND c.revoked_at IS NULL AND c.revision = s.parent_revision
               AND (c.replaced_by_credential_id IS NULL OR c.overlap_ends_at > ?)
               AND p.lifecycle = 'active' AND a.lifecycle = 'active' AND t.lifecycle = 'active'
               AND (c.all_projects = 1 OR EXISTS (SELECT 1 FROM platform_app_credential_projects cp
@@ -60,7 +60,7 @@ export class SessionAccessStorage {
               AND EXISTS (SELECT 1 FROM json_each(c.permissions_json) WHERE value = 'conversation:turn:cancel')
               AND EXISTS (SELECT 1 FROM json_each(c.permissions_json) WHERE value = 'project:event:read')
             `)
-            .bind(id, now, now, now)
+            .bind(id, now, now)
             .first();
         signal.throwIfAborted();
         return value === null ? null : v.parse(sessionAccessRecordSchema, value);

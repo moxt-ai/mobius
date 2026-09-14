@@ -755,10 +755,10 @@ export class PlatformControlPlaneStorage {
                 this.#database
                     .prepare(
                         `UPDATE platform_app_credentials SET last_used_at = ?
-                          WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?
+                          WHERE credential_id = ? AND revoked_at IS NULL
                             AND (replaced_by_credential_id IS NULL OR overlap_ends_at > ?)`,
                     )
-                    .bind(now, credentialId, now, now)
+                    .bind(now, credentialId, now)
                     .run(),
             signal,
         );
@@ -883,8 +883,8 @@ export class PlatformControlPlaneStorage {
             .prepare(
                 `INSERT INTO platform_app_credentials (
                    credential_id, public_credential_id, app_id, secret_digest, permissions_json,
-                   all_projects, revision, issued_at, expires_at, last_used_at
-                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                   all_projects, revision, issued_at, last_used_at
+                 ) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
                    WHERE EXISTS (SELECT 1 FROM platform_apps WHERE app_id = ?)`,
             )
             .bind(
@@ -896,7 +896,6 @@ export class PlatformControlPlaneStorage {
                 credential.allProjects ? 1 : 0,
                 credential.revision,
                 credential.issuedAt,
-                credential.expiresAt,
                 credential.issuedAt,
                 credential.appId,
             );

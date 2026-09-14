@@ -12,7 +12,6 @@ export const ConversationCredentialRowSchema = v.object({
     expires_at: timestamp,
     parent_credential_id: v.string(),
     parent_credential_revision: v.pipe(v.number(), v.safeInteger(), v.minValue(1)),
-    parent_expires_at: timestamp,
     parent_overlap_ends_at: v.nullable(timestamp),
     parent_replaced_by_credential_id: v.nullable(v.string()),
     parent_revoked_at: v.nullable(timestamp),

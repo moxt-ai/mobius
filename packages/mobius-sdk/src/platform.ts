@@ -206,7 +206,6 @@ export class MobiusPlatformAppCredential {
     readonly appId: string;
     readonly credential: string;
     readonly credentialId: string;
-    readonly expiresAt: string;
     readonly issuedAt: string;
     readonly permissions: readonly string[];
     readonly publicCredentialId: string;
@@ -219,7 +218,6 @@ export class MobiusPlatformAppCredential {
             throw new MobiusProtocolError("The Platform returned an invalid AppCredential");
         }
         this.credentialId = identifier(value, "credentialId");
-        this.expiresAt = timestamp(value, "expiresAt");
         this.issuedAt = timestamp(value, "issuedAt");
         this.permissions = strings(value, "permissions");
         this.publicCredentialId = string(value, "publicCredentialId", 64);
@@ -231,7 +229,6 @@ export class MobiusPlatformAppCredentialMetadata {
     readonly allProjects: boolean;
     readonly appId: string;
     readonly credentialId: string;
-    readonly expiresAt: string;
     readonly issuedAt: string;
     readonly lastUsedAt: string;
     readonly overlapEndsAt: string;
@@ -249,7 +246,6 @@ export class MobiusPlatformAppCredentialMetadata {
         this.allProjects = value["allProjects"];
         this.appId = identifier(value, "appId");
         this.credentialId = identifier(value, "credentialId");
-        this.expiresAt = timestamp(value, "expiresAt");
         this.issuedAt = timestamp(value, "issuedAt");
         this.lastUsedAt = timestamp(value, "lastUsedAt");
         this.overlapEndsAt = timestamp(value, "overlapEndsAt");
@@ -392,7 +388,6 @@ export interface MobiusCreatePlatformProjectRequest {
 }
 
 export interface MobiusIssueAppCredentialRequest {
-    readonly expiresInSeconds: number;
     readonly permissions: readonly string[];
     readonly projectIds: readonly string[];
 }
@@ -628,11 +623,6 @@ export class MobiusPlatformDeveloperClient {
                 await this.#executor.post(
                     `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
                     {
-                        expiresInSeconds: requestedLifetime(
-                            request.expiresInSeconds,
-                            365 * 24 * 60 * 60,
-                            "AppCredential",
-                        ),
                         permissions: requestedPermissions(request.permissions),
                         projectIds: Object.freeze(
                             request.projectIds.map((projectId) => requestedIdentifier(projectId, "Project identifier")),
@@ -668,7 +658,6 @@ export class MobiusPlatformDeveloperClient {
 
     readonly rotateAppCredential = async (
         credentialId: string,
-        expiresInSeconds: number,
         overlapSeconds: number,
         signal: AbortSignal,
     ): Promise<MobiusRotatedPlatformAppCredential> => {
@@ -680,7 +669,6 @@ export class MobiusPlatformDeveloperClient {
                 await this.#executor.post(
                     `v1/platform/app-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "AppCredential identifier"))}/rotate`,
                     {
-                        expiresInSeconds: requestedLifetime(expiresInSeconds, 365 * 24 * 60 * 60, "AppCredential"),
                         overlapSeconds,
                     },
                     signal,

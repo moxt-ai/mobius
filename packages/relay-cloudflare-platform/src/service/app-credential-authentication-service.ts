@@ -54,7 +54,6 @@ export class AppCredentialAuthenticationService {
         const now = Date.now();
         if (
             row.revoked_at !== null ||
-            row.expires_at <= now ||
             (row.replaced_by_credential_id !== null &&
                 (typeof row.overlap_ends_at !== "number" || row.overlap_ends_at <= now)) ||
             row.app_lifecycle !== "active" ||

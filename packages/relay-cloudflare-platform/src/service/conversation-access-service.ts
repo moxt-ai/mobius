@@ -396,7 +396,6 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             row.revoked_at !== null ||
             row.expires_at <= now ||
             row.parent_revoked_at !== null ||
-            row.parent_expires_at <= now ||
             row.parent_revision !== row.parent_credential_revision ||
             (row.parent_replaced_by_credential_id !== null &&
                 (typeof row.parent_overlap_ends_at !== "number" || row.parent_overlap_ends_at <= now)) ||

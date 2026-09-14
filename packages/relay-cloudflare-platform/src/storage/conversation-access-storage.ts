@@ -116,7 +116,6 @@ export class ConversationAccessStorage {
                     this.#platformDatabase
                         .prepare(
                             `SELECT access.*, parent.revision AS parent_revision,
-                                parent.expires_at AS parent_expires_at,
                                 parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
                                 parent.overlap_ends_at AS parent_overlap_ends_at,
                                 parent.revoked_at AS parent_revoked_at,
@@ -148,7 +147,6 @@ export class ConversationAccessStorage {
                     this.#platformDatabase
                         .prepare(
                             `SELECT access.*, parent.revision AS parent_revision,
-                                parent.expires_at AS parent_expires_at,
                                 parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
                                 parent.overlap_ends_at AS parent_overlap_ends_at,
                                 parent.revoked_at AS parent_revoked_at,
