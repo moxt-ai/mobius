@@ -281,7 +281,9 @@ describe.sequential("Native Session boundaries", () => {
         }
     });
 
-    it("Given an Agent has saved history with image references, When a user previews that session, Then the Web app shows only a safe recent transcript", async () => {
+    it("Given an Agent has saved history with image references, When a user previews that session, Then the Web app shows only a safe recent transcript", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -390,7 +392,11 @@ describe.sequential("Native Session boundaries", () => {
                 }),
             );
 
-            const history = await within(sessionsDialog).findByRole("region", {
+            await waitForDocumentState(
+                () => within(sessionsDialog).queryByRole("region", { name: "Previous conversation history" }) !== null,
+                signal,
+            );
+            const history = within(sessionsDialog).getByRole("region", {
                 name: "Previous conversation history",
             });
             expect(history.textContent).toContain("Showing the last 10 messages");

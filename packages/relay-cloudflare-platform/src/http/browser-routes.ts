@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
-import { browserCors } from "../middleware/browser-cors.ts";
+import { createBrowserCors } from "../middleware/browser-cors.ts";
 import { createBrowserArtifactRoutes } from "./browser-artifact-routes.ts";
 import { createBrowserSessionRoutes } from "./browser-session-routes.ts";
 import type { ConversationHttpEnvironment } from "./conversation-http-environment.ts";
@@ -27,7 +27,7 @@ export function createBrowserRoutes() {
             await next();
             return context.res;
         })
-        .use("*", browserCors)
+        .use("*", createBrowserCors(["GET", "POST", "PUT"], ["authorization", "content-type", "x-mobius-upload-token"]))
         .route("/", createBrowserSessionRoutes())
         .route("/", createBrowserArtifactRoutes());
 }

@@ -590,6 +590,115 @@ async function commitRuntimeEvent(fixture: PlatformConversationFixture, event: S
     });
 }
 
+it.each([[thirdPartyBrowserOrigin], ["*"]])(
+    "Given a permitted Platform browser origin %j, When a developer preflights and manages tenants and apps, Then CORS permits the requests while authentication remains required",
+    async (allowedOrigin) => {
+        const worker = createPlatformWorker(
+            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(), new Set([allowedOrigin])),
+        );
+        const environment = bindings();
+        const headers = new Headers(developerHeaders());
+        headers.set("origin", thirdPartyBrowserOrigin);
+        const base = `${relayOrigin}${MOBIUS_API_PREFIX}`;
+        for (const route of [
+            "/v1/platform/tenants",
+            "/v1/apps",
+            "/v1/apps/example/credentials",
+            "/v1/platform/app-credentials/example/revoke",
+        ]) {
+            for (const method of ["GET", "POST", "PUT", "DELETE"]) {
+                const response = await worker.fetch(
+                    new Request(`${base}${route}`, {
+                        method: "OPTIONS",
+                        headers: {
+                            origin: thirdPartyBrowserOrigin,
+                            "access-control-request-method": method,
+                            "access-control-request-headers": "Authorization, Content-Type, X-Mobius-Oidc-Provider",
+                        },
+                    }),
+                    environment,
+                );
+                expect(response.status).toBe(204);
+                expect(response.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+                expect(response.headers.get("access-control-allow-methods")).toContain(method);
+                expect(response.headers.get("access-control-allow-headers")).toContain("x-mobius-oidc-provider");
+                expect(response.headers.get("vary")).toContain("Origin");
+            }
+        }
+        const unauthenticated = await worker.fetch(
+            new Request(`${base}/v1/platform/tenants`, { headers: { origin: thirdPartyBrowserOrigin } }),
+            environment,
+        );
+        expect(unauthenticated.status).toBe(401);
+        expect(unauthenticated.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        const tenantResponse = await worker.fetch(
+            new Request(`${base}/v1/platform/tenants`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ displayName: "Browser workspace" }),
+            }),
+            environment,
+        );
+        expect(tenantResponse.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        const tenant = await json(tenantResponse, 201);
+        const appResponse = await worker.fetch(
+            new Request(`${base}/v1/apps`, {
+                method: "POST",
+                headers,
+                body: JSON.stringify({ displayName: "Browser app", tenantId: text(tenant, "tenantId") }),
+            }),
+            environment,
+        );
+        expect(appResponse.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        const app = await json(appResponse, 201);
+        const appUrl = `${base}/v1/apps/${text(app, "appId")}`;
+        const renamed = await worker.fetch(
+            new Request(appUrl, {
+                method: "PUT",
+                headers,
+                body: JSON.stringify({ displayName: "Renamed browser app" }),
+            }),
+            environment,
+        );
+        expect(renamed.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        expect(await json(renamed, 200)).toMatchObject({ displayName: "Renamed browser app" });
+        const removed = await worker.fetch(new Request(appUrl, { method: "DELETE", headers }), environment);
+        expect(removed.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+        await json(removed, 200);
+    },
+);
+
+it("Given a Platform origin allowlist, When a browser requests an untrusted origin or unsupported preflight, Then the control API rejects it without CORS permission", async () => {
+    const worker = createPlatformWorker(
+        new PlatformAuthenticationConfiguration(
+            new DeveloperAuthenticator(),
+            new Set(),
+            new Set([thirdPartyBrowserOrigin]),
+        ),
+    );
+    const cases: readonly (readonly [string, string, string, string])[] = [
+        ["https://untrusted.example.test", "POST", "authorization", "browser_origin_denied"],
+        ["", "POST", "authorization", "browser_origin_denied"],
+        [thirdPartyBrowserOrigin, "PATCH", "authorization", "browser_preflight_denied"],
+        [thirdPartyBrowserOrigin, "POST", "x-untrusted-header", "browser_preflight_denied"],
+    ];
+    for (const [origin, method, requestedHeaders, code] of cases) {
+        const response = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
+                method: "OPTIONS",
+                headers: {
+                    origin,
+                    "access-control-request-method": method,
+                    "access-control-request-headers": requestedHeaders,
+                },
+            }),
+            bindings(),
+        );
+        expect(response.headers.get("access-control-allow-origin")).toBeNull();
+        expect(await json(response, 403)).toMatchObject({ error: { code } });
+    }
+});
+
 it("Given an App-owned Session, When its backend issues browser access, Then the browser reads only that Session and cannot discover or rebind Runtime sessions", async () => {
     const fixture = await createReadyConversation("session-scoped-browser");
     try {

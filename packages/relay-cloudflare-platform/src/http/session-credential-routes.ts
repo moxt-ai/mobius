@@ -2,7 +2,7 @@ import { validateIdentifier } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { bodyParser } from "../middleware/body-parser.ts";
-import { browserCors } from "../middleware/browser-cors.ts";
+import { createBrowserCors } from "../middleware/browser-cors.ts";
 import type { ConversationHttpEnvironment } from "./conversation-http-environment.ts";
 import { bearer } from "./conversation-request.ts";
 
@@ -13,7 +13,7 @@ const issueSessionCredentialSchema = v.strictObject({
 export function createSessionCredentialRoutes() {
     return new Hono<ConversationHttpEnvironment>({ strict: false })
         .basePath("/v1/projects/:projectId/sessions/:sessionId/access-credentials")
-        .use("*", browserCors)
+        .use("*", createBrowserCors(["GET", "POST", "PUT"], ["authorization", "content-type", "x-mobius-upload-token"]))
         .post("/", bodyParser(issueSessionCredentialSchema), async (context) => {
             const projectId = validateIdentifier(context.req.param("projectId"), "project_id");
             const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");

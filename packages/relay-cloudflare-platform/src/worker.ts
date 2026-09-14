@@ -112,7 +112,11 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
             );
             const pathname = new URL(request.url).pathname;
             if (isControlPath(pathname) && !isConversationPath(pathname)) {
-                return await controlApplication.fetch(request, { control, appAuthentication });
+                return await controlApplication.fetch(request, {
+                    control,
+                    appAuthentication,
+                    allowedOrigins: authentication.allowedOrigins,
+                });
             }
             const databases = new PlatformDatabaseResolver(environment);
             const projects = new PlatformProjectStorageDirectory(

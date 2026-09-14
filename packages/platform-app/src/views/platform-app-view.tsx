@@ -1,6 +1,7 @@
-import { AppWindow, Building2, Check, Clipboard, LoaderCircle, Pencil, Plus, Trash2, X } from "lucide-react";
-import { type FormEvent, type ReactNode, useCallback, useEffect } from "react";
+import { AppWindow, Building2, Check, Clipboard, Pencil, Plus, Trash2, X } from "lucide-react";
+import { type ReactNode, useCallback, useEffect } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
+import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
 import { createPlatformClient } from "../services/platform-client.ts";
 import { usePlatformStore } from "../view-models/platform-app-view-model.ts";
@@ -71,10 +72,6 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
         setSelectedTenantId,
         selectedAppId,
         setSelectedAppId,
-        tenantName,
-        setTenantName,
-        appName,
-        setAppName,
         rename,
         setRename,
         busy,
@@ -91,14 +88,24 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
 
     const client = useCallback(() => createPlatformClient(endpoint, getToken), [endpoint, getToken]);
 
-    const perform = async (operation: string, action: () => Promise<void>): Promise<void> => {
+    useEffect(() => {
+        if (notice === null) {
+            return;
+        }
+        const timer = window.setTimeout(() => setNotice(""), 4_000);
+        return () => window.clearTimeout(timer);
+    }, [notice, setNotice]);
+
+    const perform = async (operation: string, action: () => Promise<void>): Promise<boolean> => {
         setBusy(operation);
         setError("");
         setNotice("");
         try {
             await action();
+            return true;
         } catch (cause) {
             setError(cause instanceof Error ? cause.message : "The Platform operation failed");
+            return false;
         } finally {
             setBusy("");
         }
@@ -171,28 +178,23 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
     const selectedTenant = tenants.find((tenant) => tenant.tenantId === selectedTenantId);
     const selectedApp = apps.find((app) => app.appId === selectedAppId);
 
-    const createTenant = (event: FormEvent): void => {
-        event.preventDefault();
-        void perform("create-tenant", async () => {
-            const created = await client().createTenant(tenantName, AbortSignal.timeout(20_000));
-            setTenantName("");
+    const createTenant = (name: string): Promise<boolean> =>
+        perform("create-tenant", async () => {
+            const created = await client().createTenant(name, AbortSignal.timeout(20_000));
             await loadTenants();
             setSelectedTenantId(created.tenantId);
             setNotice(`Tenant “${created.displayName}” created.`);
         });
-    };
 
-    const createApp = (event: FormEvent): void => {
-        event.preventDefault();
+    const createApp = async (name: string): Promise<boolean> => {
         if (selectedTenant === undefined) {
-            return;
+            return false;
         }
-        void perform("create-app", async () => {
-            const created = await client().createApp(selectedTenant.tenantId, appName, AbortSignal.timeout(20_000));
+        return perform("create-app", async () => {
+            const created = await client().createApp(selectedTenant.tenantId, name, AbortSignal.timeout(20_000));
             const listed = await client().listApps(selectedTenant.tenantId, AbortSignal.timeout(20_000));
             setApps(listed);
             setSelectedAppId(created.appId);
-            setAppName("");
             setSecret({
                 appId: created.appId,
                 credentialId: created.defaultCredential.credentialId,
@@ -233,31 +235,33 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
 
     return (
         <div className="min-h-screen bg-[#f4f6f4] text-[#17221d]">
-            <header className="flex h-[66px] items-center justify-between border-b border-[#dde3df] bg-white/95 px-4 md:px-[30px]">
+            <header className="sticky top-0 z-40 flex h-[66px] items-center justify-between border-b border-[#dde3df] bg-white px-4 md:px-[30px]">
                 <a
                     href="#workspace"
                     className="flex items-center gap-2 text-[17px] font-bold text-[#17221d] no-underline [&>small]:border-l [&>small]:border-[#dde3df] [&>small]:pl-2 [&>small]:text-[13px] [&>small]:font-medium [&>small]:text-[#819087] [&>span]:grid [&>span]:size-[31px] [&>span]:place-items-center [&>span]:rounded-lg [&>span]:bg-[#168247] [&>span]:font-extrabold [&>span]:text-white"
                 >
                     <span>M</span> Mobius <small>Platform</small>
                 </a>
-                <div className="flex items-center gap-5">
-                    <span className="hidden items-center gap-2 text-xs text-[#66756c] md:flex [&>i]:size-[7px] [&>i]:rounded-full [&>i]:bg-[#22a25b] [&>i]:shadow-[0_0_0_3px_#e1f3e7]">
-                        <i /> All systems operational
-                    </span>
-                    {userControl}
-                </div>
+                {userControl}
             </header>
             <div className="min-h-[calc(100vh-66px)] md:grid md:grid-cols-[254px_minmax(0,1fr)]" id="workspace">
                 <aside className="border-b border-[#dde3df] bg-[#fafbfa] p-4 md:border-r md:border-b-0 md:px-4 md:py-6">
                     <div className="flex items-center justify-between px-2 pb-3 text-[11px] font-bold uppercase tracking-[.1em] text-[#7a8780] [&>button]:grid [&>button]:size-[30px] [&>button]:place-items-center [&>button]:rounded-lg [&>button]:border-0 [&>button]:bg-transparent hover:[&>button]:bg-[#eaf3ed] hover:[&>button]:text-[#168247]">
                         <span>Tenants</span>
-                        <button
-                            type="button"
-                            onClick={() => document.getElementById("tenant-name")?.focus()}
-                            aria-label="Create tenant"
+                        <CreateNameDialog
+                            title="Create tenant"
+                            description="A tenant groups the applications your team builds on Mobius."
+                            label="Tenant name"
+                            placeholder="Company name"
+                            busy={busy.length > 0}
+                            error={error}
+                            onOpen={() => setError("")}
+                            onCreate={createTenant}
                         >
-                            <Plus size={16} />
-                        </button>
+                            <button type="button" aria-label="Create tenant" disabled={busy.length > 0}>
+                                <Plus size={16} />
+                            </button>
+                        </CreateNameDialog>
                     </div>
                     <nav aria-label="Tenants">
                         {tenants.map((tenant) => (
@@ -276,34 +280,9 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                             </button>
                         ))}
                     </nav>
-                    <form
-                        className="mt-5 hidden border-t border-[#dde3df] px-2 pt-4 md:block [&>label]:mb-2 [&>label]:block [&>label]:text-[11px] [&>label]:font-bold [&>label]:text-[#7a8780] [&>div]:grid [&>div]:grid-cols-[1fr_34px] [&_input]:min-w-0 [&_input]:rounded-l-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-2 [&_input]:py-2 [&_button]:rounded-r-lg [&_button]:border-0 [&_button]:bg-[#168247] [&_button]:text-white"
-                        onSubmit={createTenant}
-                    >
-                        <label htmlFor="tenant-name">New tenant</label>
-                        <div>
-                            <input
-                                id="tenant-name"
-                                value={tenantName}
-                                onChange={(event) => setTenantName(event.target.value)}
-                                maxLength={120}
-                                placeholder="Company name"
-                                required
-                            />
-                            <button type="submit" disabled={busy.length > 0} aria-label="Add tenant">
-                                <Plus size={16} />
-                            </button>
-                        </div>
-                    </form>
                 </aside>
                 <main className="mx-auto w-full max-w-[1240px] px-4 py-8 md:px-12 md:py-12">
                     <ErrorBanner message={error} onClose={() => setError("")} />
-                    {notice.length > 0 ? (
-                        <div className="mb-4 flex items-center gap-2 rounded-lg border border-[#c9e1d1] bg-[#edf7f0] px-3 py-2.5 text-sm text-[#176d3d]">
-                            <Check size={16} />
-                            {notice}
-                        </div>
-                    ) : null}
                     {selectedTenant === undefined ? (
                         <EmptyState>
                             <Building2 size={34} />
@@ -396,30 +375,25 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                         <h2>Your apps</h2>
                                         <p>Each app has a stable ID and its own server credentials.</p>
                                     </div>
-                                    <form
-                                        className="flex w-full flex-col gap-2 md:w-auto md:flex-row [&_input]:min-w-0 [&_input]:rounded-lg [&_input]:border [&_input]:border-[#ccd5cf] [&_input]:px-3 [&_input]:py-2 md:[&_input]:w-[220px]"
-                                        onSubmit={createApp}
+                                    <CreateNameDialog
+                                        title="Create app"
+                                        description={`Create an application in ${selectedTenant.displayName}. You’ll receive its App ID and first secret.`}
+                                        label="Application name"
+                                        placeholder="My application"
+                                        busy={busy.length > 0}
+                                        error={error}
+                                        onOpen={() => setError("")}
+                                        onCreate={createApp}
                                     >
-                                        <input
-                                            value={appName}
-                                            onChange={(event) => setAppName(event.target.value)}
-                                            maxLength={120}
-                                            placeholder="New app name"
-                                            required
-                                        />
                                         <button
                                             className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                            type="submit"
+                                            type="button"
                                             disabled={busy.length > 0}
                                         >
-                                            {busy === "create-app" ? (
-                                                <LoaderCircle className="animate-spin" size={16} />
-                                            ) : (
-                                                <Plus size={16} />
-                                            )}{" "}
+                                            <Plus size={16} />
                                             Create app
                                         </button>
-                                    </form>
+                                    </CreateNameDialog>
                                 </div>
                                 {apps.length === 0 ? (
                                     <EmptyState>
@@ -575,10 +549,23 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                         </div>
                                         {credentials.map((credential) => (
                                             <div
-                                                className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0 [&>code]:text-[11px] [&>code]:text-[#34423a]"
+                                                className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
                                                 key={credential.credentialId}
                                             >
-                                                <code>{credential.publicCredentialId}</code>
+                                                <div className="flex min-w-0 items-center gap-2">
+                                                    <code className="text-[11px] text-[#34423a]">
+                                                        ••••••••{credential.publicCredentialId.slice(-4)}
+                                                    </code>
+                                                    <button
+                                                        type="button"
+                                                        className="grid size-[30px] shrink-0 place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247]"
+                                                        aria-label={`Copy key ID ending in ${credential.publicCredentialId.slice(-4)}`}
+                                                        title="Copy key ID"
+                                                        onClick={() => copy(credential.publicCredentialId, "Key ID")}
+                                                    >
+                                                        <Clipboard size={15} />
+                                                    </button>
+                                                </div>
                                                 <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
                                                 <span
                                                     className={
@@ -592,7 +579,7 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                                                 <button
                                                     type="button"
                                                     className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
-                                                    aria-label={`Revoke ${credential.publicCredentialId}`}
+                                                    aria-label={`Revoke key ending in ${credential.publicCredentialId.slice(-4)}`}
                                                     disabled={credential.revokedAt.length > 0 || busy.length > 0}
                                                     onClick={() =>
                                                         void perform(`revoke-${credential.credentialId}`, async () => {
@@ -619,6 +606,27 @@ export function PlatformApp({ endpoint, getToken, userControl }: PlatformAppProp
                         </>
                     )}
                 </main>
+            </div>
+            <div
+                className="fixed right-4 bottom-4 left-4 z-[60] pointer-events-none sm:left-auto sm:max-w-sm"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+            >
+                {notice === null ? null : (
+                    <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-[#c9e1d1] bg-white px-4 py-3 text-sm text-[#176d3d] shadow-lg">
+                        <Check size={18} className="shrink-0" />
+                        <span className="flex-1">{notice.message}</span>
+                        <button
+                            type="button"
+                            aria-label="Dismiss notification"
+                            onClick={() => setNotice("")}
+                            className="rounded-md p-1 text-[#69766f] hover:bg-[#eff2f0]"
+                        >
+                            <X size={16} />
+                        </button>
+                    </div>
+                )}
             </div>
             <SecretDialog
                 secret={secret}

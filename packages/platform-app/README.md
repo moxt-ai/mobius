@@ -39,3 +39,25 @@ and displayed only when created; subsequent reads expose metadata only.
 
 `platform-app` owns its Vite and Clerk composition together with its UI,
 view-models, services, and Platform SDK integration.
+
+## Creation flow acceptance
+
+After this, a user can click Create tenant or Create app, enter a name in a
+dialog, and see the new tenant or the application's first secret.
+
+Verify these scenarios with `agent-browser` against the running app at desktop
+and mobile widths:
+
+- Given the workspace, When Create tenant is clicked, Then a dialog opens with
+  Tenant name focused. Enter a name and submit; the dialog closes and the new
+  tenant is selected with a creation notice.
+- Given a selected tenant, When Create app is clicked, Then a dialog opens with
+  Application name focused and identifies the destination tenant. Submit a name;
+  the app appears and Save your app secret replaces the name dialog.
+- Given either name dialog, When Cancel, Escape, or the close button is used,
+  Then no resource is created, focus returns to the trigger, and reopening starts
+  with an empty name.
+- Given either name dialog, When the name is empty or whitespace-only, Then
+  creation is disabled. While creation is pending, the form shows Creating… and
+  prevents duplicate submission. If creation fails, the name and error remain
+  visible in the dialog for retry.

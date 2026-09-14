@@ -10,6 +10,7 @@ import {
     type PlatformAuthenticationEnvironment,
 } from "../middleware/authentication.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
+import { createBrowserCors } from "../middleware/browser-cors.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -40,7 +41,9 @@ const issueCredentialBody = v.strictObject({
 const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 
-type PlatformHttpEnvironment = PlatformAuthenticationEnvironment;
+type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
+    readonly Bindings: { readonly allowedOrigins: ReadonlySet<string> };
+};
 
 function errorResponse(error: unknown): Response {
     if (error instanceof PlatformControlPlaneError) {
@@ -79,6 +82,13 @@ function queryLimit(value: unknown): number {
 export function createPlatformControlApplication() {
     return new Hono<PlatformHttpEnvironment>({ strict: false })
         .basePath(MOBIUS_API_PREFIX)
+        .use(
+            "*",
+            createBrowserCors(
+                ["GET", "POST", "PUT", "DELETE"],
+                ["authorization", "content-type", "x-mobius-oidc-provider"],
+            ),
+        )
         .use("*", async (context, next) => {
             context.set(
                 "signal",

@@ -14,7 +14,7 @@ export function ConfirmAction({ children, description, onConfirm, title }: Confi
             <AlertDialog.Trigger asChild>{children}</AlertDialog.Trigger>
             <AlertDialog.Portal>
                 <AlertDialog.Overlay className="fixed inset-0 z-50 grid place-items-center bg-[#121d17]/60 p-5 backdrop-blur-sm">
-                    <AlertDialog.Content className="w-full max-w-[440px] rounded-2xl bg-white p-7 shadow-2xl [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:font-bold [&_p]:my-5 [&_p]:text-sm [&_p]:leading-6 [&_p]:text-[#69766f]">
+                    <AlertDialog.Content className="w-full max-w-[440px] rounded-2xl bg-white p-7 text-[#17221d] shadow-2xl [&_h2]:m-0 [&_h2]:text-2xl [&_h2]:font-bold [&_p]:my-5 [&_p]:text-sm [&_p]:leading-6 [&_p]:text-[#69766f]">
                         <AlertDialog.Title>{title}</AlertDialog.Title>
                         <AlertDialog.Description>{description}</AlertDialog.Description>
                         <div className="flex flex-wrap gap-2">
