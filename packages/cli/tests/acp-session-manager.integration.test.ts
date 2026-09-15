@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +14,21 @@ import { LocalAgentDefinition } from "../src/config.ts";
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function processExists(pid: number): boolean {
+    if (process.platform === "linux") {
+        try {
+            const encoded = readFileSync(join("/proc", pid.toString(), "stat"), "utf8");
+            const closingParenthesis = encoded.lastIndexOf(")");
+            const state = encoded
+                .slice(closingParenthesis + 1)
+                .trimStart()
+                .charAt(0);
+            if (state === "Z" || state === "X") {
+                return false;
+            }
+        } catch {
+            // Fall through when procfs is unavailable or the process has already exited.
+        }
+    }
     try {
         process.kill(pid, 0);
         return true;
