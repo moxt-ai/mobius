@@ -1,12 +1,21 @@
+import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { ConversationAccessError } from "@moxt-ai/mobius-relay-core";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 
 export function requestedProjectId(request: Request): string {
-    const values = new URL(request.url).searchParams.getAll("project_id");
-    const projectId = values[0];
-    if (values.length !== 1 || projectId === undefined || decodePlatformProjectPlacement(projectId) === null) {
-        throw new PlatformControlPlaneError("invalid_request", "A valid project_id is required", 400);
+    const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
+    const url = new URL(request.url);
+    let projectId = "";
+    try {
+        if (url.pathname.startsWith(prefix)) {
+            projectId = decodeURIComponent(url.pathname.slice(prefix.length).split("/")[0] ?? "");
+        }
+    } catch (cause) {
+        throw new PlatformControlPlaneError("invalid_request", "A valid Project ID is required", 400, { cause });
+    }
+    if (url.searchParams.has("project_id") || decodePlatformProjectPlacement(projectId) === null) {
+        throw new PlatformControlPlaneError("invalid_request", "A valid Project ID path is required", 400);
     }
     return projectId;
 }

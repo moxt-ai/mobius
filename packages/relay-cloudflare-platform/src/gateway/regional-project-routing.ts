@@ -25,24 +25,12 @@ export async function routeRegionalProject(
     const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
     const url = new URL(request.url);
     const path = url.pathname;
-    const queryScoped =
-        path.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session`) ||
-        path.startsWith(`${MOBIUS_API_PREFIX}/v1/conversations/`) ||
-        path.startsWith(`${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/`) ||
-        (path.startsWith(`${MOBIUS_API_PREFIX}/v1/platform/tenants/`) &&
-            path.endsWith("/audit-events") &&
-            url.searchParams.has("project_id"));
-    if (!path.startsWith(prefix) && !queryScoped) {
+    if (!path.startsWith(prefix)) {
         return null;
     }
     let projectId: string;
     try {
-        if (queryScoped && url.searchParams.getAll("project_id").length !== 1) {
-            return failure("invalid_request", 400);
-        }
-        projectId = queryScoped
-            ? (url.searchParams.get("project_id") ?? "")
-            : decodeURIComponent(path.slice(prefix.length).split("/")[0] ?? "");
+        projectId = decodeURIComponent(path.slice(prefix.length).split("/")[0] ?? "");
     } catch {
         return failure("project_id_invalid", 400);
     }

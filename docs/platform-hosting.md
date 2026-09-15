@@ -107,7 +107,7 @@ other Platform operations continue to use OIDC authentication.
 
 Allowed browser origins are exact `http` or `https` origins. Wildcards, URL
 paths, credentials, query strings, and fragments are rejected. The allowlist is
-applied only to `/mobius/api/v1/client/session/*`; CORS is a browser hardening
+applied to `/mobius/api/v1/projects/:projectId/client/session/*`; CORS is a browser hardening
 layer and never substitutes for the Conversation credential check.
 
 Build either profile independently:
@@ -174,7 +174,7 @@ credential:
 | --- | --- | --- |
 | Platform developer | verified Clerk token with active organization plus `x-mobius-oidc-provider: clerk` | Organization-scoped App, Project, and AppCredential provisioning |
 | trusted App backend | `mapp_...` AppCredential | explicitly scoped shared Project/Runtime/Bot/Conversation operations |
-| authorized browser | `mconv_...` ConversationAccessCredential | one server-bound Conversation and Session under `/v1/client/session/*` |
+| authorized browser | `mconv_...` ConversationAccessCredential | one server-bound Conversation and Session under `/v1/projects/:projectId/client/session/*` |
 | local daemon | Runtime credential | one Runtime Relay connection and its lease/fence |
 
 App keys (AppCredentials) do not expire, including previously issued keys after

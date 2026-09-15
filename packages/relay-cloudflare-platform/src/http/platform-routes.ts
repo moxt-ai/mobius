@@ -167,6 +167,9 @@ export function createPlatformControlApplication() {
             return context.json(await context.env.control.readTenantUsage(access, context.var.signal));
         })
         .get("/v1/platform/tenants/:tenantId/audit-events", async (context) => {
+            if (context.req.query("project_id") !== undefined) {
+                throw new PlatformControlPlaneError("invalid_request", "Use the Project audit-events endpoint", 400);
+            }
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             const access = await context.env.control.requireTenantDeveloper(
                 identity,
@@ -176,7 +179,19 @@ export function createPlatformControlApplication() {
             return context.json(
                 await context.env.control.listTenantAuditEvents(
                     access,
-                    context.req.query("project_id") === undefined ? null : requestedProjectId(context.req.raw),
+                    null,
+                    queryLimit(context.req.query("limit")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .get("/v1/projects/:projectId/audit-events", async (context) => {
+            const projectId = requestedProjectId(context.req.raw);
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.control.listProjectAuditEvents(
+                    identity,
+                    projectId,
                     queryLimit(context.req.query("limit")),
                     context.var.signal,
                 ),

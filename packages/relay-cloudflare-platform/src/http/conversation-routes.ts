@@ -15,7 +15,7 @@ export function createConversationApplication() {
         .use("*", errorMiddleware)
         .use("*", async (context, next) => {
             const stream =
-                context.req.path === `${MOBIUS_API_PREFIX}/v1/client/session/events` &&
+                /^\/mobius\/api\/v1\/projects\/[^/]+\/client\/session\/events\/?$/.test(context.req.path) &&
                 context.req.header("accept")?.includes("text/event-stream") === true;
             context.set(
                 "signal",
@@ -28,5 +28,5 @@ export function createConversationApplication() {
         })
         .route("/", createConversationCredentialRoutes())
         .route("/", createSessionCredentialRoutes())
-        .route("/v1/client/session", createBrowserRoutes());
+        .route("/v1/projects/:projectId/client/session", createBrowserRoutes());
 }

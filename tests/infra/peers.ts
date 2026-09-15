@@ -46,6 +46,7 @@ class TestSocket implements RuntimeSocket {
 export class TestRuntimePeers implements RuntimePeers, AsyncDisposable {
     readonly #sockets = new Set<TestSocket>();
     readonly #pending = new Set<Promise<void>>();
+    readonly #closing = new Set<Promise<void>>();
     readonly #runtime: () => RuntimeService;
     readonly #signal: AbortSignal;
     constructor(runtime: () => RuntimeService, signal: AbortSignal) {
@@ -58,6 +59,8 @@ export class TestRuntimePeers implements RuntimePeers, AsyncDisposable {
     readonly accept: RuntimePeers["accept"] = (identity) => {
         const pair = new WebSocketPair();
         const socket = new TestSocket(identity, pair[1]);
+        const closed = Promise.withResolvers<void>();
+        this.#closing.add(closed.promise);
         this.#sockets.add(socket);
         const track = (operation: Promise<void>) => {
             this.#pending.add(operation);
@@ -71,6 +74,8 @@ export class TestRuntimePeers implements RuntimePeers, AsyncDisposable {
         pair[1].addEventListener("close", () => {
             this.#sockets.delete(socket);
             track(this.#runtime().detach(socket.identity(), socket, this.#signal));
+            closed.resolve();
+            this.#closing.delete(closed.promise);
         });
         pair[1].accept();
         return { socket, response: new SocketResponse(pair[0]) };
@@ -79,6 +84,7 @@ export class TestRuntimePeers implements RuntimePeers, AsyncDisposable {
         for (const socket of this.#sockets) {
             socket.close(1000, "Test completed");
         }
+        await Promise.all(this.#closing);
         await Promise.all(this.#pending);
     }
 }

@@ -1522,8 +1522,8 @@ export class MobiusFixedSessionEventResources {
         if (cursor.length > 512) {
             throw new MobiusValidationError("The Session event cursor is invalid");
         }
-        const path = `v1/client/session/events?project_id=${encodeURIComponent(this.#projectId)}`;
-        const streamPath = cursor.length === 0 ? path : `${path}&after=${encodeURIComponent(cursor)}`;
+        const path = `v1/projects/${encodeURIComponent(this.#projectId)}/client/session/events`;
+        const streamPath = cursor.length === 0 ? path : `${path}?after=${encodeURIComponent(cursor)}`;
         const controller = new AbortController();
         const abortFromExternal = (): void => controller.abort(signal.reason);
         if (signal.aborted) {
@@ -1557,11 +1557,16 @@ export class MobiusFixedSessionEventResources {
     };
 
     readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusEventPage> => {
-        const query = new URLSearchParams({ limit: page.limit.toString(), project_id: this.#projectId });
+        const query = new URLSearchParams({ limit: page.limit.toString() });
         if (page.cursor.length > 0) {
             query.set("after", page.cursor);
         }
-        return decodeMobiusEventPage(await this.#executor.get(`v1/client/session/events?${query.toString()}`, signal));
+        return decodeMobiusEventPage(
+            await this.#executor.get(
+                `v1/projects/${encodeURIComponent(this.#projectId)}/client/session/events?${query.toString()}`,
+                signal,
+            ),
+        );
     };
 
     readonly close = (): void => {

@@ -17,7 +17,7 @@ const emptyBodySchema = v.strictObject({});
 export function createConversationCredentialRoutes() {
     return new Hono<ConversationHttpEnvironment>({ strict: false })
         .post(
-            "/v1/conversations/:conversationId/access-credentials",
+            "/v1/projects/:projectId/conversations/:conversationId/access-credentials",
             bodyParser(issueConversationCredentialSchema),
             async (context) => {
                 const value = context.req.valid("json");
@@ -36,7 +36,7 @@ export function createConversationCredentialRoutes() {
             },
         )
         .post(
-            "/v1/conversation-access-credentials/:credentialId/rotate",
+            "/v1/projects/:projectId/conversation-access-credentials/:credentialId/rotate",
             bodyParser(rotateCredentialSchema),
             async (context) => {
                 const value = context.req.valid("json");
@@ -53,7 +53,7 @@ export function createConversationCredentialRoutes() {
             },
         )
         .post(
-            "/v1/conversation-access-credentials/:credentialId/revoke",
+            "/v1/projects/:projectId/conversation-access-credentials/:credentialId/revoke",
             bodyParser(emptyBodySchema),
             async (context) => {
                 const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");

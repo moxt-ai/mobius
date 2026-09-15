@@ -757,7 +757,7 @@ export class MobiusPlatformAppClient {
         new MobiusConversationAccessCredential(
             record(
                 await this.#executor.post(
-                    `v1/conversations/${encodeURIComponent(requestedIdentifier(conversationId, "Conversation identifier"))}/access-credentials?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
+                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversations/${encodeURIComponent(requestedIdentifier(conversationId, "Conversation identifier"))}/access-credentials`,
                     {
                         actorRef: request.actorRef,
                         expiresInSeconds: requestedLifetime(
@@ -782,7 +782,7 @@ export class MobiusPlatformAppClient {
         new MobiusRotatedConversationAccessCredential(
             record(
                 await this.#executor.post(
-                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/rotate?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
+                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/rotate`,
                     { expiresInSeconds: requestedLifetime(expiresInSeconds, 3_600, "ConversationAccessCredential") },
                     signal,
                 ),
@@ -798,7 +798,7 @@ export class MobiusPlatformAppClient {
         new MobiusCredentialRevocation(
             record(
                 await this.#executor.post(
-                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/revoke?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
+                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/revoke`,
                     {},
                     signal,
                 ),

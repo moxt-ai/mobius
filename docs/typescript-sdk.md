@@ -16,7 +16,7 @@ Use the entry point that matches the caller's trust boundary:
 
 The browser entry does not export Project, Runtime, Bot, Tenant, App, or
 credential-management clients. Its requests target only
-`/mobius/api/v1/client/session/*`; the server derives Conversation and Session
+`/mobius/api/v1/projects/:projectId/client/session/*`; the server derives Conversation and Session
 identity from the credential record rather than a URL, query, body, or custom
 header target.
 

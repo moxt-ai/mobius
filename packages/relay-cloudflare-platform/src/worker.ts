@@ -147,7 +147,9 @@ export function createPlatformApplication(
                     "/projects/:projectId",
                     new Hono<DispatchEnvironment>()
                         .all("/storage-placement", controlHandler)
-                        .all("/storage-placement/", controlHandler),
+                        .all("/storage-placement/", controlHandler)
+                        .all("/audit-events", controlHandler)
+                        .all("/audit-events/", controlHandler),
                 ),
         );
     const projectRoutes = new Hono<DispatchEnvironment>()
@@ -160,15 +162,15 @@ export function createPlatformApplication(
         .all("/browser-credentials/*", projectHandler)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
-        .all("/session-imports/*", projectHandler);
-    const versionedRoutes = new Hono<DispatchEnvironment>()
-        .route("/projects/:projectId", projectRoutes)
+        .all("/session-imports/*", projectHandler)
         .all("/client/session/*", conversationHandler)
         .all("/conversations/:conversationId/access-credentials", conversationHandler)
         .route(
             "/conversation-access-credentials/:credentialId",
             new Hono<DispatchEnvironment>().all("/rotate", conversationHandler).all("/revoke", conversationHandler),
-        )
+        );
+    const versionedRoutes = new Hono<DispatchEnvironment>()
+        .route("/projects/:projectId", projectRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/connect", projectHandler)
         .all("/*", (context) => {

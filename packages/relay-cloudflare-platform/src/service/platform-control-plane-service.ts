@@ -972,6 +972,20 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         };
     };
 
+    readonly listProjectAuditEvents = async (
+        identity: VerifiedExternalIdentity,
+        projectId: string,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<object> => {
+        const project = await this.#projectAuthorization.read(projectId, signal);
+        if (project === null) {
+            throw new PlatformControlPlaneError("project_not_found", "The Project is unavailable", 404);
+        }
+        const access = await this.requireTenantDeveloper(identity, project.tenant_id, signal);
+        return await this.listTenantAuditEvents(access, projectId, limit, signal);
+    };
+
     readonly listTenantAuditEvents = async (
         access: PlatformDeveloperAccess,
         projectId: string | null,

@@ -16,7 +16,8 @@ export function createTestGateways(options: {
     readonly projects: ProjectStorageDirectory;
     readonly signal: AbortSignal;
 }) {
-    const resources = new AsyncDisposableStack();
+    const databases = new AsyncDisposableStack();
+    const connections = new AsyncDisposableStack();
     const actors = new Map<string, DurableObjectContext>();
     const alarms = new Map<string, number>();
     function actor(key: string): DurableObjectContext {
@@ -24,8 +25,8 @@ export function createTestGateways(options: {
         if (existing !== undefined) {
             return existing;
         }
-        const database = resources.use(new TestSqliteDatabase());
-        const peers = resources.use(new TestRuntimePeers(() => context.services.runtime, options.signal));
+        const database = databases.use(new TestSqliteDatabase());
+        const peers = connections.use(new TestRuntimePeers(() => context.services.runtime, options.signal));
         const context = createDurableObjectDependencies({
             doDatabase: database,
             quota: DEFAULT_SESSION_QUOTA_POLICY,
@@ -173,6 +174,13 @@ export function createTestGateways(options: {
                 }
             }
         },
-        [Symbol.asyncDispose]: () => resources.disposeAsync(),
+        [Symbol.asyncDispose]: async () => {
+            // Runtime disconnects can still write to Session actors during teardown.
+            try {
+                await connections.disposeAsync();
+            } finally {
+                await databases.disposeAsync();
+            }
+        },
     };
 }

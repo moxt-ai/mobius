@@ -98,14 +98,24 @@ Platform-owned SQL is grouped under `packages/relay-cloudflare-platform/migratio
 `sharding/` stores Project credential scopes, Session and Conversation credentials,
 and Project audit events; `dashboard/` stores the administrative directory and
 `platform_dashboard_audit_events` for events without a Project. Project rows route
-by their encoded Project ID. Tenant audit reads return dashboard events; supplying
-`project_id` returns only that Project's audit events from its shard. Parent App credentials and lifecycle checks still
+by their encoded Project ID. Tenant audit reads return dashboard events;
+`GET /mobius/api/v1/projects/:projectId/audit-events` returns only that Project's
+audit events after verifying developer membership in its owning tenant. Parent App credentials and lifecycle checks still
 use the dashboard directory, so revocation is authoritative without cross-shard
 revocation writes. Conversation issuance, rotation, revocation, and browser-session
-requests require a `project_id` query parameter and access only the corresponding
+requests use `/mobius/api/v1/projects/:projectId/...` and access only the corresponding
 shard. The SDK requires `projectId` and includes it directly in resource request
 paths, including SSE reconnects and artifacts. Session lookup uses the Project ID
 in its URL path. Neither credential type discovers its Project by scanning shards.
+
+All Project-scoped endpoints share that prefix, including
+`conversations/:conversationId/access-credentials`,
+`conversation-access-credentials/:credentialId/rotate` and `/revoke`, and
+`client/session` with its messages, history, events, configuration, Turns,
+interactions, and artifacts. Regional routing extracts one Project path segment;
+resource-specific query parameters never select a region. The old unscoped
+Conversation/browser URLs are removed, and `project_id` query scoping is rejected.
+Deploy the updated SDK consumers together with Platform for this URL cutover.
 
 This credential cutover assumes a clean reset: dashboard migration
 `0009_shard_project_credentials.sql` discards old scopes, access credentials, and
