@@ -201,6 +201,45 @@ the server reads the exact IDs from the credential record. Turn and artifact IDs
 are subordinate resources of that already-fixed Session and are reauthorized by
 the Session service.
 
+### Project-ID regional routing
+
+After this, a backend can call the public Project API and have its request
+authorized and executed by the Worker assigned to the Project's region.
+The public Worker decodes the Project ID and forwards Project-scoped HTTP
+requests with service-binding `fetch()` to `mobius-platform-<environment>-apac`
+or `mobius-platform-<environment>-wnam`. No directory query is needed to route.
+Credentials, bodies, streaming responses, and WebSocket upgrades remain on the
+normal product boundary; the destination performs the existing authorization.
+A backend rejects a Project from the other logical region with HTTP 421.
+Requests without a Project in the URL continue through the public Worker.
+
+`regional-placement.json` specifies explicit placement hints, separate from
+logical shard names. Platform staging's WNAM shard is physically in APAC, so
+both staging backends currently target Singapore. Production WNAM targets the
+western US; its two database primaries need not occupy the same city. Placement
+hints select nearby Cloudflare execution and are not data-center guarantees.
+
+Each product owns a small regional override template in `wrangler.regional.template.json`.
+It contains only the Worker name, entrypoint, placement hint, logical region, and
+deployment flags. Shared bindings and settings are inherited from the existing
+Wrangler configuration. The renderer JSON-encodes `<%% name %%>` substitutions
+and validates the rendered overrides before merging them. Public routes, assets,
+router service bindings, migrations, and queue consumers are excluded from the
+inherited settings; Durable Objects reference their existing owner Worker.
+
+`pnpm wrangler deploy --config packages/relay-cloudflare-platform/wrangler.jsonc
+--env staging` applies migrations, generates regional configurations under
+`.wrangler/regional/staging`, deploys both backends, and finally deploys the public
+router. `--dry-run` validates all three bundles. Regional Workers share the
+existing D1/R2/KV resources and reference Durable Objects owned by the public
+Worker; they do not create new Durable Object namespaces or queue consumers.
+The same generator is used by Mobius Chat after its Vite build.
+
+Public routing uses `MOBIUS_WORKER_REGION=edge`; backends use `apac` or `wnam`.
+Unset means the existing single-Worker local-development mode. These are
+deployment bindings, never request-header overrides. Regional fetches propagate
+cancellation and bound the wait for response headers to two minutes.
+
 ### Shard-local Project authorization
 
 After this, an App-wide backend can read a provisioned Project while the control

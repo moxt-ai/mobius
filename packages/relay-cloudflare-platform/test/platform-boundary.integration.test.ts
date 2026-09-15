@@ -160,6 +160,34 @@ function developerHeaders(): HeadersInit {
 }
 
 it.each(["apac", "wnam"])(
+    "Given regional Project backends for %s, When an edge request reads runtimes, Then the selected backend authorizes it without edge database access",
+    async (region) => {
+        const fixture = await provisionPlatformProject(`regional-${region}`, region);
+        const regional = (location: string) => ({
+            fetch: (request: Request) =>
+                fixture.worker.fetch(request, { ...fixture.environment, MOBIUS_WORKER_REGION: location }),
+        });
+        const edge = {
+            ...fixture.environment,
+            MOBIUS_WORKER_REGION: "edge",
+            MOBIUS_REGIONAL_APAC: regional("apac"),
+            MOBIUS_REGIONAL_WNAM: regional("wnam"),
+            PLATFORM_DIRECTORY_DATABASE: env.TEST_UNINITIALIZED_SHARD,
+            D1_SHARD_APAC_01: env.TEST_UNINITIALIZED_SHARD,
+            D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD,
+        };
+        const request = (secret: string) =>
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
+                headers: credentialHeaders(secret),
+            });
+        expect((await fixture.worker.fetch(request(fixture.appCredential), edge)).status).toBe(200);
+        expect((await fixture.worker.fetch(request("x".repeat(48)), edge)).status).toBe(401);
+        const wrong = region === "apac" ? "wnam" : "apac";
+        expect((await regional(wrong).fetch(request(fixture.appCredential))).status).toBe(421);
+    },
+);
+
+it.each(["apac", "wnam"])(
     "Given shard-local Project ownership in %s and an authenticated App, When the control plane is unavailable, Then Project reads succeed from the selected shard",
     async (location) => {
         const fixture = await provisionPlatformProject(`shard-project-scope-${location}`, location);

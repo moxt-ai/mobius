@@ -277,6 +277,50 @@ async function run(signal: AbortSignal): Promise<void> {
         await applyD1Migrations("--remote", wranglerArguments, target, signal);
     }
 
+    if (
+        target === platformTarget &&
+        !temporaryDeployment &&
+        (environment === "staging" || environment === "production")
+    ) {
+        const regionalDirectory = resolve(repositoryRoot, ".wrangler/regional", environment);
+        await runPnpm(
+            [
+                "--filter",
+                target.packageName,
+                "exec",
+                "node",
+                "scripts/regional-workers.ts",
+                "--template",
+                resolve(target.configDirectory, "wrangler.regional.template.json"),
+                "--config",
+                resolve(target.configDirectory, "wrangler.jsonc"),
+                "--env",
+                environment,
+                "--placement",
+                resolve(target.configDirectory, "regional-placement.json"),
+                "--output",
+                regionalDirectory,
+            ],
+            signal,
+        );
+        for (const region of ["apac", "wnam"]) {
+            await runPnpm(
+                [
+                    "--filter",
+                    target.packageName,
+                    "exec",
+                    "wrangler",
+                    "deploy",
+                    "--config",
+                    resolve(regionalDirectory, `${region}.json`),
+                    ...(dryRun ? ["--dry-run"] : []),
+                    ...selectWranglerOptions(wranglerArguments, ["--message"]),
+                ],
+                signal,
+            );
+        }
+    }
+
     const output = await runPnpm(deploymentArguments, signal);
     if (dryRun) {
         process.stdout.write("\nMobius deployment dry-run completed.\n");

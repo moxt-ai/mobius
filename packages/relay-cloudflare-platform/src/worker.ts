@@ -14,6 +14,7 @@ import {
 import { type Handler, Hono } from "hono";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
+import { type RegionalProjectBindings, routeRegionalProject } from "./gateway/regional-project-routing.ts";
 import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
@@ -43,7 +44,10 @@ import {
 import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
 import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
-export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
+export interface PlatformRelayBindings
+    extends LiteSessionConfigurationEnvironment,
+        PlatformStorageBindings,
+        RegionalProjectBindings {
     readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
@@ -172,6 +176,13 @@ export function createPlatformApplication(
         });
 
     const application = new Hono<DispatchEnvironment>()
+        .use("*", async (context, next) => {
+            const routed = await routeRegionalProject(context.req.raw, context.env);
+            if (routed !== null) {
+                return routed;
+            }
+            return await next();
+        })
         .onError((error) => {
             throw error;
         })

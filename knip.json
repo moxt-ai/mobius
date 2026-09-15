@@ -23,6 +23,7 @@
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/relay-cloudflare-platform": {
+            "entry": ["scripts/regional-workers.ts"],
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/mobius-sdk": {

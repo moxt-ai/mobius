@@ -56,6 +56,11 @@
     "env": {
         "staging": {
             "name": "mobius-platform-staging",
+            "placement": { "mode": "off" },
+            "services": [
+                { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-staging-apac" },
+                { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-staging-wnam" }
+            ],
             "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "04588dbeba594690b790fcb087ddeb23" }],
             "workers_dev": false,
             "preview_urls": false,
@@ -95,6 +100,7 @@
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
             ],
             "vars": {
+                "MOBIUS_WORKER_REGION": "edge",
                 "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
                 "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://smashing-spider-8574.clerk.accounts.dev\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://smashing-spider-8574.clerk.accounts.dev/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
                 "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
@@ -104,6 +110,11 @@
         },
         "production": {
             "name": "mobius-platform-production",
+            "placement": { "mode": "off" },
+            "services": [
+                { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-production-apac" },
+                { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-production-wnam" }
+            ],
             "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "b15cc4481591452392682c2ff0793196" }],
             "workers_dev": false,
             "preview_urls": false,
@@ -156,6 +167,7 @@
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
             ],
             "vars": {
+                "MOBIUS_WORKER_REGION": "edge",
                 "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
                 "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://clerk.mobius.moxt.ai\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://clerk.mobius.moxt.ai/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
                 "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
