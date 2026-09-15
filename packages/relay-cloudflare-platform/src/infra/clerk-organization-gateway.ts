@@ -11,8 +11,10 @@ const membershipsSchema = v.object({ data: v.array(membershipSchema) });
 
 export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
     private readonly secret: string | undefined;
-    constructor(secret: string | undefined) {
+    private readonly transport: typeof fetch;
+    constructor(secret: string | undefined, transport: typeof fetch = globalThis.fetch.bind(globalThis)) {
         this.secret = secret;
+        this.transport = transport;
     }
 
     private readonly request = async (path: string, signal: AbortSignal, body?: unknown): Promise<Response> => {
@@ -25,12 +27,13 @@ export class ClerkOrganizationGateway implements OrganizationMembershipGateway {
             );
         }
         try {
-            return await fetch(`https://api.clerk.com/v1/organizations/${path}`, {
+            return await this.transport(`https://api.clerk.com/v1/organizations/${path}`, {
                 method: body === undefined ? "GET" : "POST",
                 headers: { authorization: `Bearer ${this.secret}`, "content-type": "application/json" },
                 ...(body === undefined ? {} : { body: JSON.stringify(body) }),
                 signal,
-                redirect: "error",
+                // Workers support only follow/manual. Non-2xx responses are rejected below.
+                redirect: "manual",
             });
         } catch (cause) {
             signal.throwIfAborted();
