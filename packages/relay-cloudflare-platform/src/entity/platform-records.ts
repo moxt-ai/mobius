@@ -58,13 +58,6 @@ export const CredentialRowSchema = v.object({
 });
 export type CredentialRow = Readonly<v.InferOutput<typeof CredentialRowSchema>>;
 
-export const MembershipRowSchema = v.object({
-    membership_id: v.string(),
-    role: v.picklist(["owner", "developer"]),
-    tenant_id: v.string(),
-});
-export type MembershipRow = Readonly<v.InferOutput<typeof MembershipRowSchema>>;
-
 export interface PlatformAppCredentialInsert {
     readonly allProjects: boolean;
     readonly appId: string;
@@ -88,15 +81,6 @@ export interface PlatformAuditRecord {
     readonly projectId: string;
     readonly recordedAt: number;
     readonly subjectId: string;
-    readonly tenantId: string;
-}
-
-export interface PlatformDeveloperMembershipInsert {
-    readonly createdAt: number;
-    readonly issuer: string;
-    readonly membershipId: string;
-    readonly providerId: string;
-    readonly subject: string;
     readonly tenantId: string;
 }
 

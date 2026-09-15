@@ -39,16 +39,32 @@ Configure these JSON-encoded Worker variables:
 {
   "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"https://app.example.com\"]",
   "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://issuer.example.com\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://issuer.example.com/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
-  "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[\"oidc-subject-allowed-to-create-tenants\"]"
+  "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[\"oidc-subject-allowed-to-read-platform-configuration\"]"
 }
 ```
 
 OIDC provider IDs, issuers, audiences, algorithms, and JWKS URLs are deployment
 configuration, never request input. The Worker verifies the provider registry,
-signature, issuer, audience, lifetime, and subject before consulting Platform
-developer membership. An OIDC identity is not a Tenant member merely because it
-is valid. Operator subjects can create the first Tenant; subsequent Tenant/App
-access comes from persisted developer membership.
+signature, issuer, audience, lifetime, and subject before authorizing organization
+access. Platform uses the configured `clerk` provider and the active organization
+in its signed token: `tenantId` is exactly the Clerk organization ID (`org_...`).
+Clerk v2 `o.id`/`o.rol` and v1 `org_id`/`org_role` claims are supported. Include
+those claims and the configured audience in the Clerk session token. Pending
+sessions and sessions without an active organization cannot access tenant resources.
+
+Create, select, rename, and manage organization membership through Clerk. The
+Platform UI's selected tenant is Clerk's active organization. Organization members
+share apps; `org:admin` authorizes the existing owner-only App operations. Every
+developer request checks the requested resource against the verified active
+organization. A request body or header cannot override that organization.
+
+Platform lazily records organization-scoped quota, lifecycle, and audit data;
+it does not generate tenant IDs or persist developer memberships. Tenant creation,
+rename, and deletion endpoints and SDK methods have been removed. `listTenants`
+returns the active organization only; Clerk provides the organization selector.
+Migration `0007_clerk_organizations.sql` drops the old membership table. Existing
+`ten_...` resource records are not automatically assigned to an organization:
+moving existing data requires an explicit old-ID-to-Clerk-organization mapping.
 
 Allowed browser origins are exact `http` or `https` origins. Wildcards, URL
 paths, credentials, query strings, and fragments are rejected. The allowlist is
@@ -98,7 +114,7 @@ credential:
 
 | Caller | Credential | Routes and authority |
 | --- | --- | --- |
-| Platform developer | configured OIDC token plus `x-mobius-oidc-provider` | Tenant, App, Project, and AppCredential provisioning |
+| Platform developer | verified Clerk token with active organization plus `x-mobius-oidc-provider: clerk` | Organization-scoped App, Project, and AppCredential provisioning |
 | trusted App backend | `mapp_...` AppCredential | explicitly scoped shared Project/Runtime/Bot/Conversation operations |
 | authorized browser | `mconv_...` ConversationAccessCredential | one server-bound Conversation and Session under `/v1/client/session/*` |
 | local daemon | Runtime credential | one Runtime Relay connection and its lease/fence |
@@ -131,7 +147,7 @@ written on each request. Project ownership, lifecycle, and selected-Project
 scope are still authorized against D1 on every Project request.
 
 Revocation commits to D1, then deletes the hash-keyed cache record. Rotation
-deletes the old credential's record; App or Tenant deletion invalidates all
+deletes the old credential's record; App deletion invalidates all
 affected credentials. The next miss reloads current D1 state, including revoked
 status. Invalid or expired cache records and failed KV reads fall back to D1.
 Failed cache fills do not reject an otherwise valid D1 authentication; failed
@@ -151,7 +167,8 @@ the Session service.
 
 ## Backend flow
 
-Use `@moxt-ai/mobius-sdk/platform` with OIDC to create a Tenant and App. App
+Use `@moxt-ai/mobius-sdk/platform` with a Clerk token for the selected organization
+to create an App. Pass the Clerk organization ID as `tenantId`. App
 creation returns its default AppCredential once. The same default credential can
 provision multiple Projects and use `@moxt-ai/mobius-sdk/server` for Project,
 Runtime pairing, Bot, Conversation, Turn, Interaction, Event, and Artifact

@@ -412,18 +412,6 @@ export class MobiusPlatformDeveloperClient {
         this.#executor = new MobiusRequestExecutor(options);
     }
 
-    readonly createTenant = async (displayName: string, signal: AbortSignal): Promise<MobiusPlatformTenant> =>
-        new MobiusPlatformTenant(
-            record(
-                await this.#executor.post(
-                    "v1/platform/tenants",
-                    { displayName: requestedDisplayName(displayName) },
-                    signal,
-                ),
-                "Tenant",
-            ),
-        );
-
     readonly listTenants = async (signal: AbortSignal): Promise<readonly MobiusPlatformTenant[]> => {
         const value = record(await this.#executor.get("v1/platform/tenants", signal), "Tenant list");
         const tenants = value["tenants"];
@@ -437,33 +425,6 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformTenant(
             record(
                 await this.#executor.get(
-                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
-                    signal,
-                ),
-                "Tenant",
-            ),
-        );
-
-    readonly updateTenant = async (
-        tenantId: string,
-        displayName: string,
-        signal: AbortSignal,
-    ): Promise<MobiusPlatformTenant> =>
-        new MobiusPlatformTenant(
-            record(
-                await this.#executor.put(
-                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
-                    { displayName: requestedDisplayName(displayName) },
-                    signal,
-                ),
-                "Tenant",
-            ),
-        );
-
-    readonly deleteTenant = async (tenantId: string, signal: AbortSignal): Promise<MobiusPlatformTenant> =>
-        new MobiusPlatformTenant(
-            record(
-                await this.#executor.delete(
                     `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
                     signal,
                 ),

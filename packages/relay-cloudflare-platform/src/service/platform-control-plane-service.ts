@@ -394,22 +394,22 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         }
     };
 
-    readonly createTenant = async (
+    private readonly ensureOrganization = async (
         identity: VerifiedExternalIdentity,
-        requestedDisplayName: string,
-        requestedQuotas: unknown,
         signal: AbortSignal,
-    ): Promise<object> => {
+    ): Promise<void> => {
         signal.throwIfAborted();
         const now = Date.now();
-        const tenantId = `ten_${createRandomToken(18)}`;
-        const membershipId = `pdm_${createRandomToken(18)}`;
-        const normalizedDisplayName = displayName(requestedDisplayName);
-        const quotas = JSON.stringify(tenantQuotas(requestedQuotas));
+        const tenantId = this.organization(identity).tenantId;
+        const existing = await this.#storage.readTenant(tenantId, signal);
+        if (existing !== null) {
+            return;
+        }
+        const quotas = JSON.stringify(tenantQuotas(undefined));
         const tenant: TenantRow = {
             created_at: now,
             deleted_at: null,
-            display_name: normalizedDisplayName,
+            display_name: tenantId,
             lifecycle: "active",
             quotas_json: quotas,
             suspended_at: null,
@@ -418,14 +418,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         };
         const created = await this.#storage.createTenant(
             tenant,
-            {
-                createdAt: now,
-                issuer: identity.issuer,
-                membershipId,
-                providerId: identity.providerId,
-                subject: identity.subject,
-                tenantId,
-            },
             this.auditRecord(
                 tenantId,
                 "",
@@ -444,18 +436,14 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         if (!created) {
             throw new PlatformControlPlaneError("platform_write_failed", "The Tenant could not be created", 503);
         }
-        return tenantResource(tenant);
     };
 
     readonly listTenants = async (identity: VerifiedExternalIdentity, signal: AbortSignal): Promise<object> => {
         signal.throwIfAborted();
-        const rows = await this.#storage.listDeveloperTenants(
-            identity.providerId,
-            identity.issuer,
-            identity.subject,
-            signal,
-        );
-        return { tenants: rows.map(tenantResource) };
+        const { tenantId } = this.organization(identity);
+        await this.ensureOrganization(identity, signal);
+        const tenant = await this.readTenant(tenantId, signal);
+        return { tenants: [tenantResource(tenant)] };
     };
 
     readonly readTenantResource = async (
@@ -467,69 +455,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         return tenantResource(await this.readTenant(access.tenantId, signal));
     };
 
-    readonly updateTenant = async (
-        access: PlatformDeveloperAccess,
-        requestedDisplayName: string,
-        signal: AbortSignal,
-    ): Promise<object> => {
-        this.requireOwner(access);
-        const now = Date.now();
-        const updated = await this.#storage.updateTenant(
-            access.tenantId,
-            displayName(requestedDisplayName),
-            now,
-            this.auditRecord(
-                access.tenantId,
-                "",
-                "",
-                "platform_developer",
-                access.identity.subject,
-                "",
-                "tenant.updated",
-                access.tenantId,
-                "succeeded",
-                {},
-                now,
-            ),
-            signal,
-        );
-        if (!updated) {
-            throw new PlatformControlPlaneError("platform_write_failed", "The Tenant could not be updated", 503);
-        }
-        return tenantResource(await this.readTenant(access.tenantId, signal));
-    };
-
-    readonly deleteTenant = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<object> => {
-        this.requireOwner(access);
-        const tenant = await this.readTenant(access.tenantId, signal);
-        const now = Date.now();
-        const deleted = await this.#storage.deleteTenant(
-            access.tenantId,
-            now,
-            this.auditRecord(
-                access.tenantId,
-                "",
-                "",
-                "platform_developer",
-                access.identity.subject,
-                "",
-                "tenant.deleted",
-                access.tenantId,
-                "succeeded",
-                {},
-                now,
-            ),
-            signal,
-        );
-        if (!deleted) {
-            throw new PlatformControlPlaneError("tenant_not_found", "The Tenant was not found", 404);
-        }
-        for (const credential of await this.#storage.listTenantCredentials(access.tenantId, signal)) {
-            await this.#appAuthentication.invalidate(credential, signal);
-        }
-        return { ...tenantResource(tenant), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
-    };
-
     readonly requireTenantDeveloper = async (
         identity: VerifiedExternalIdentity,
         tenantId: string,
@@ -537,21 +462,29 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     ): Promise<PlatformDeveloperAccess> => {
         signal.throwIfAborted();
         const normalizedTenantId = validateIdentifier(tenantId, "tenant_id");
-        const membership = await this.#storage.readDeveloperMembership(
-            identity.providerId,
-            identity.issuer,
-            identity.subject,
-            normalizedTenantId,
-            signal,
-        );
-        if (membership === null) {
+        const organization = this.organization(identity);
+        if (organization.tenantId !== normalizedTenantId) {
             throw new PlatformControlPlaneError(
                 "tenant_access_denied",
                 "The developer is not authorized for this Tenant",
                 403,
             );
         }
-        return new PlatformDeveloperAccess(identity, membership.membership_id, membership.tenant_id, membership.role);
+        await this.ensureOrganization(identity, signal);
+        await this.readTenant(organization.tenantId, signal);
+        return new PlatformDeveloperAccess(identity, organization.tenantId, organization.role);
+    };
+
+    private readonly organization = (
+        identity: VerifiedExternalIdentity,
+    ): { readonly tenantId: string; readonly role: string } => {
+        if (identity.providerId !== "clerk" || identity.organization.kind === "none") {
+            throw new PlatformControlPlaneError("organization_required", "Select a Clerk organization", 403);
+        }
+        return {
+            tenantId: identity.organization.id,
+            role: identity.organization.role === "org:admin" ? "owner" : "developer",
+        };
     };
 
     readonly resolveProjectPlacement = (projectId: string, signal: AbortSignal): { readonly location: string } => {

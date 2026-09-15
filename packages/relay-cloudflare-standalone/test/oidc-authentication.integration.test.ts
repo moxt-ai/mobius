@@ -105,6 +105,54 @@ afterEach(() => {
 });
 
 describe.sequential("OIDC external identity authentication", () => {
+    it("Given signed Clerk organization sessions, When tokens are verified, Then v1 and v2 claims identify the organization and malformed, pending, or forged tokens are rejected", async () => {
+        const key = await rsaKey("organization-key");
+        const otherKey = await rsaKey("organization-key");
+        const source = new StatefulJwksSource(new OidcJwksResponse({ keys: [key.jwk] }, 600_000));
+        const authenticator = new OidcExternalIdentityAuthenticator(configuration(), source);
+        const now = Date.now() / 1_000;
+        const claims = {
+            aud: "mobius-relay",
+            exp: now + 600,
+            iat: now,
+            iss: "https://identity.example.test",
+            sub: "user_member",
+        };
+        const verify = async (organization: Readonly<Record<string, unknown>>, signingKey = key.privateKey) =>
+            await authenticator.authenticate(
+                new ExternalIdentityCredential(
+                    "clerk",
+                    await jwt(signingKey, "organization-key", { ...claims, ...organization }),
+                ),
+                AbortSignal.timeout(5_000),
+            );
+        for (const organization of [
+            { org_id: "org_team", org_role: "org:admin" },
+            { v: 2, sts: "active", o: { id: "org_team", rol: "admin" } },
+        ]) {
+            expect((await verify(organization)).organization).toEqual({
+                kind: "organization",
+                id: "org_team",
+                role: "org:admin",
+            });
+        }
+        expect((await verify({})).organization).toEqual({ kind: "none" });
+        for (const organization of [
+            { o: "org_team" },
+            { o: { id: "org_team", rol: 123 } },
+            { org_id: "ten_local", org_role: "org:admin" },
+            { org_id: "org_team" },
+        ]) {
+            await expect(verify(organization)).rejects.toMatchObject({ code: "external_claims_invalid" });
+        }
+        await expect(verify({ sts: "pending", o: { id: "org_team", rol: "admin" } })).rejects.toMatchObject({
+            code: "external_identity_not_active",
+        });
+        await expect(verify({ o: { id: "org_team", rol: "admin" } }, otherKey.privateKey)).rejects.toBeInstanceOf(
+            ProjectAuthenticationError,
+        );
+    });
+
     it("Given an issuer serving signing keys over HTTP, When a Worker authenticates its signed token, Then the identity is verified and redirected key endpoints are rejected", async () => {
         const key = await rsaKey("http-key");
         const signal = AbortSignal.timeout(5_000);
@@ -148,7 +196,7 @@ describe.sequential("OIDC external identity authentication", () => {
             iat: nowSeconds,
             iss: "https://identity.example.test",
             name: "Mobius Developer",
-            org_id: "untrusted-organization",
+            unrelated_claim: "ignored",
             sub: "user_123",
         };
         const verified = await authenticator.authenticate(

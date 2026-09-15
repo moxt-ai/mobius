@@ -1,13 +1,15 @@
 import { createServer, type ServerResponse } from "node:http";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { PlatformApp } from "../../platform-app/src/views/platform-app-view.tsx";
 
 // A stateful Platform HTTP peer keeps credential reads pending until released,
 // avoiding hosted Clerk credentials and nondeterministic network throttling.
-it("Given an application's keys are visible, When a user switches applications, Then loading replaces the old keys until the selected application's keys arrive", async () => {
+it("Given an organization's application keys are visible, When a user switches applications and then organizations, Then only the selected tenant's applications and keys are displayed", async () => {
     const timestamp = "2026-01-01T00:00:00.000Z";
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(timestamp));
     const lifecycle = {
         createdAt: timestamp,
         updatedAt: timestamp,
@@ -15,7 +17,7 @@ it("Given an application's keys are visible, When a user switches applications, 
         suspendedAt: "",
         lifecycle: "active",
     };
-    const tenant = { ...lifecycle, tenantId: "tenant-one", displayName: "Team", quotas: {} };
+    const tenant = { ...lifecycle, tenantId: "org_team", displayName: "Team", quotas: {} };
     const apps = ["Alpha", "Beta"].map((displayName) => ({
         ...lifecycle,
         appId: displayName,
@@ -34,7 +36,7 @@ it("Given an application's keys are visible, When a user switches applications, 
         } else if (request.url?.endsWith("/tenants")) {
             response.end(JSON.stringify({ tenants: [tenant] }));
         } else if (request.url?.endsWith("/apps")) {
-            response.end(JSON.stringify({ apps }));
+            response.end(JSON.stringify({ apps: request.url.includes("/org_team/") ? apps : [] }));
         } else {
             const app = apps.find((entry) => request.url?.endsWith(`/apps/${entry.appId}/credentials`));
             if (app === undefined) {
@@ -90,9 +92,12 @@ it("Given an application's keys are visible, When a user switches applications, 
         flushSync(() =>
             root.render(
                 <PlatformApp
+                    key={tenant.tenantId}
                     endpoint={`http://127.0.0.1:${address.port}`}
                     getToken={async () => "developer"}
                     userControl={null}
+                    organization={{ id: tenant.tenantId, name: tenant.displayName }}
+                    organizationControl={null}
                 />,
             ),
         );
@@ -116,6 +121,26 @@ it("Given an application's keys are visible, When a user switches applications, 
         await betaRendered;
         expect(container.textContent).not.toContain("Loading application");
         expect(container.textContent).not.toContain("Active");
+        const organizationRendered = rendered("No applications yet");
+        flushSync(() =>
+            root.render(
+                <PlatformApp
+                    key="org_other"
+                    endpoint={`http://127.0.0.1:${address.port}`}
+                    getToken={async () => "other-organization"}
+                    userControl={null}
+                    organization={{ id: "org_other", name: "Other team" }}
+                    organizationControl={null}
+                />,
+            ),
+        );
+        expect(container.querySelector('[aria-label="Revoke key 1"]')).toBeNull();
+        await organizationRendered;
+        expect(container.textContent).toContain("Other team");
+        expect(container.textContent).toContain("org_other");
+        expect(container.textContent).not.toContain("Alpha");
+        expect(container.textContent).not.toContain("Beta");
+        expect(container.querySelector('[aria-label="Create tenant"]')).toBeNull();
     } finally {
         flushSync(() => root.unmount());
         container.remove();
@@ -124,5 +149,6 @@ it("Given an application's keys are visible, When a user switches applications, 
         }
         server.closeAllConnections();
         await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+        vi.useRealTimers();
     }
 });

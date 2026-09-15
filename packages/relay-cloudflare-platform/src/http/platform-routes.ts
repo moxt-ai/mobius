@@ -16,16 +16,6 @@ const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
 const requiredString = v.pipe(v.string(), v.minLength(1));
 const safeInteger = v.pipe(v.number(), v.safeInteger());
-const createTenantBody = v.strictObject({
-    displayName: requiredString,
-    quotas: v.optional(
-        v.strictObject({
-            activeApps: v.number(),
-            activeProjects: v.number(),
-            activeSessions: v.number(),
-        }),
-    ),
-});
 const createAppBody = v.strictObject({ displayName: requiredString, tenantId: requiredString });
 const updateDisplayNameBody = v.strictObject({ displayName: requiredString });
 const createProjectBody = v.strictObject({
@@ -123,14 +113,6 @@ export function createPlatformControlApplication() {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(await context.env.control.readPlatformConfiguration(identity, context.var.signal));
         })
-        .post("/v1/platform/tenants", bodyParser(createTenantBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            return context.json(
-                await context.env.control.createTenant(identity, value.displayName, value.quotas, context.var.signal),
-                201,
-            );
-        })
         .get("/v1/platform/tenants", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(await context.env.control.listTenants(identity, context.var.signal));
@@ -144,25 +126,6 @@ export function createPlatformControlApplication() {
                     context.var.signal,
                 ),
             );
-        })
-        .put("/v1/platform/tenants/:tenantId", bodyParser(updateDisplayNameBody), async (context) => {
-            const value = context.req.valid("json");
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const access = await context.env.control.requireTenantDeveloper(
-                identity,
-                path(context.req.param("tenantId")),
-                context.var.signal,
-            );
-            return context.json(await context.env.control.updateTenant(access, value.displayName, context.var.signal));
-        })
-        .delete("/v1/platform/tenants/:tenantId", async (context) => {
-            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
-            const access = await context.env.control.requireTenantDeveloper(
-                identity,
-                path(context.req.param("tenantId")),
-                context.var.signal,
-            );
-            return context.json(await context.env.control.deleteTenant(access, context.var.signal));
         })
         .get("/v1/platform/tenants/:tenantId/usage", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);

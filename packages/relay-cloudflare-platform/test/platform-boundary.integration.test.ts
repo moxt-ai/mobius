@@ -244,37 +244,30 @@ it("Given a cached scoped App credential, When it is rotated, Then its cached re
     expect((await read(rotated.credential)).status).toBe(200);
 });
 
-it.each(["App", "Tenant"])(
-    "Given a cached App credential, When its %s is deleted, Then the old secret fails authentication",
-    async (resource) => {
-        const fixture = await provisionPlatformProject(`kv-delete-${resource}`);
-        const developer = new MobiusPlatformDeveloperClient({
-            authenticationProviderId: "clerk",
-            credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
-            endpoint: relayOrigin,
-            transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
-        });
-        if (resource === "App") {
-            await developer.deleteApp(fixture.appId, AbortSignal.timeout(5_000));
-        } else {
-            await developer.deleteTenant(fixture.tenantId, AbortSignal.timeout(5_000));
-        }
-        const response = await fixture.worker.fetch(
-            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
-                method: "POST",
-                headers: credentialHeaders(fixture.appCredential),
-                body: JSON.stringify({
-                    displayName: "After delete",
-                    idempotencyKey: "after-delete",
-                    locationHint: "apac",
-                }),
+it("Given a cached App credential, When its App is deleted, Then the old secret fails authentication", async () => {
+    const fixture = await provisionPlatformProject("kv-delete-App");
+    const developer = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    await developer.deleteApp(fixture.appId, AbortSignal.timeout(5_000));
+    const response = await fixture.worker.fetch(
+        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
+            method: "POST",
+            headers: credentialHeaders(fixture.appCredential),
+            body: JSON.stringify({
+                displayName: "After delete",
+                idempotencyKey: "after-delete",
+                locationHint: "apac",
             }),
-            fixture.environment,
-        );
-        expect(response.status).toBe(401);
-        await expect(response.json()).resolves.toMatchObject({ error: { code: "credential_revoked" } });
-    },
-);
+        }),
+        fixture.environment,
+    );
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toMatchObject({ error: { code: "credential_revoked" } });
+});
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -286,6 +279,14 @@ function record(value: unknown): Readonly<Record<string, unknown>> {
 function text(value: Readonly<Record<string, unknown>>, name: string): string {
     const field = value[name];
     if (typeof field !== "string" || field.length === 0) {
+        throw new Error(`Expected ${name}`);
+    }
+    return field;
+}
+
+function list(value: Readonly<Record<string, unknown>>, name: string): readonly unknown[] {
+    const field = value[name];
+    if (!Array.isArray(field)) {
         throw new Error(`Expected ${name}`);
     }
     return field;
@@ -318,15 +319,13 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
     const tenant = await json(
         await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
-                body: JSON.stringify({ displayName: `Tenant ${label}` }),
                 headers: developerHeaders(),
-                method: "POST",
             }),
             environment,
         ),
-        201,
+        200,
     );
-    const tenantId = text(tenant, "tenantId");
+    const tenantId = text(record(list(tenant, "tenants")[0]), "tenantId");
     const app = await json(
         await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
@@ -725,14 +724,12 @@ it.each([[thirdPartyBrowserOrigin], ["*"]])(
         expect(unauthenticated.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
         const tenantResponse = await worker.fetch(
             new Request(`${base}/v1/platform/tenants`, {
-                method: "POST",
                 headers,
-                body: JSON.stringify({ displayName: "Browser workspace" }),
             }),
             environment,
         );
         expect(tenantResponse.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
-        const tenant = await json(tenantResponse, 201);
+        const tenant = record(list(await json(tenantResponse, 200), "tenants")[0]);
         const appResponse = await worker.fetch(
             new Request(`${base}/v1/apps`, {
                 method: "POST",
@@ -1091,6 +1088,39 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it("Given developers in Clerk organizations, When they create and list apps, Then teammates share the organization tenant and other organizations are denied", async () => {
+        const identity = new DeveloperAuthenticator();
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(identity, new Set()),
+            createPlatformGateways,
+        );
+        const transport = new PlatformWorkerTransport(worker, bindings());
+        const client = (subject: string, organizationId: string, role = "org:admin") =>
+            new MobiusPlatformDeveloperClient({
+                authenticationProviderId: "clerk",
+                credentialProvider: new MobiusOidcCredentialProvider(identity.session(subject, organizationId, role)),
+                endpoint: relayOrigin,
+                transport,
+            });
+        const owner = client("user_owner", "org_team");
+        const teammate = client("user_teammate", "org_team", "org:member");
+        const outsider = client("user_owner", "org_other");
+        const app = await owner.createApp("org_team", "Shared app", AbortSignal.timeout(5_000));
+        expect(app.tenantId).toBe("org_team");
+        expect((await teammate.listApps("org_team", AbortSignal.timeout(5_000))).map((value) => value.appId)).toContain(
+            app.appId,
+        );
+        await expect(teammate.deleteApp(app.appId, AbortSignal.timeout(5_000))).rejects.toMatchObject({
+            code: "tenant_owner_required",
+        });
+        await expect(outsider.readApp(app.appId, AbortSignal.timeout(5_000))).rejects.toMatchObject({
+            code: "tenant_access_denied",
+        });
+        await expect(
+            client("user_personal", "").createApp("org_team", "Denied", AbortSignal.timeout(5_000)),
+        ).rejects.toMatchObject({ code: "organization_required" });
+    });
+
     it.each([
         ["a01", "apac"],
         ["w01", "wnam"],
@@ -1355,7 +1385,6 @@ describe.sequential("Platform hosting boundary", () => {
             createPlatformGateways,
         );
         for (const [path, body] of [
-            ["/v1/platform/tenants", { displayName: 12 }],
             ["/v1/apps/app-test/projects", { displayName: "Project", idempotencyKey: false }],
             ["/v1/apps/app-test/credentials", { permissions: [], projectIds: [12] }],
             [
@@ -1426,9 +1455,7 @@ describe.sequential("Platform hosting boundary", () => {
         };
         const configuredAuthentication = await configuredPlatformWorker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
-                body: JSON.stringify({ displayName: "Configured tenant" }),
                 headers: developerHeaders(),
-                method: "POST",
             }),
             configuredEnvironment,
         );
@@ -1451,7 +1478,10 @@ describe.sequential("Platform hosting boundary", () => {
             endpoint: relayOrigin,
             transport,
         });
-        const tenant = await developer.createTenant("SDK tenant", AbortSignal.timeout(5_000));
+        const tenant = (await developer.listTenants(AbortSignal.timeout(5_000)))[0];
+        if (tenant === undefined) {
+            throw new Error("Missing organization");
+        }
         const app = await developer.createApp(tenant.tenantId, "SDK app", AbortSignal.timeout(5_000));
         expect((await developer.readApp(app.appId, AbortSignal.timeout(5_000))).appId).toBe(app.appId);
         const configuration = await developer.readConfiguration(AbortSignal.timeout(5_000));
@@ -1500,7 +1530,7 @@ describe.sequential("Platform hosting boundary", () => {
         service.close();
     });
 
-    it("Given an authenticated developer, When they manage Tenants, Apps, and keys, Then only their active resources and secret-on-create credentials are exposed", async () => {
+    it("Given an authenticated organization member, When they manage Apps and keys, Then only their active resources and secret-on-create credentials are exposed", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
             createPlatformGateways,
@@ -1512,16 +1542,16 @@ describe.sequential("Platform hosting boundary", () => {
             transport: new PlatformWorkerTransport(worker, bindings()),
         });
 
-        const tenant = await developer.createTenant("First tenant", AbortSignal.timeout(5_000));
+        const tenant = (await developer.listTenants(AbortSignal.timeout(5_000)))[0];
+        if (tenant === undefined) {
+            throw new Error("Missing organization");
+        }
         expect((await developer.listTenants(AbortSignal.timeout(5_000))).map((item) => item.tenantId)).toContain(
             tenant.tenantId,
         );
-        expect((await developer.readTenant(tenant.tenantId, AbortSignal.timeout(5_000))).displayName).toBe(
-            "First tenant",
+        expect((await developer.readTenant(tenant.tenantId, AbortSignal.timeout(5_000))).tenantId).toBe(
+            tenant.tenantId,
         );
-        expect(
-            (await developer.updateTenant(tenant.tenantId, "Renamed tenant", AbortSignal.timeout(5_000))).displayName,
-        ).toBe("Renamed tenant");
 
         const app = await developer.createApp(tenant.tenantId, "First app", AbortSignal.timeout(5_000));
         expect(app.appId).toMatch(/^app_/);
@@ -1549,11 +1579,6 @@ describe.sequential("Platform hosting boundary", () => {
         const deletedApp = await developer.deleteApp(app.appId, AbortSignal.timeout(5_000));
         expect(deletedApp.lifecycle).toBe("deleted");
         expect(await developer.listApps(tenant.tenantId, AbortSignal.timeout(5_000))).toEqual([]);
-        const deletedTenant = await developer.deleteTenant(tenant.tenantId, AbortSignal.timeout(5_000));
-        expect(deletedTenant.lifecycle).toBe("deleted");
-        expect((await developer.listTenants(AbortSignal.timeout(5_000))).map((item) => item.tenantId)).not.toContain(
-            tenant.tenantId,
-        );
     });
 
     it("Given an approved Project Bot with more than 200 response deltas, When the server SDK reads its Bot-scoped Messages snapshot, Then the complete authoritative history and opaque tail cursor are returned without Session storage details", async () => {
@@ -1862,7 +1887,7 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
-    it("Given a Platform operator configures bounded Tenant capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
+    it("Given an organization with bounded capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(
                 new DeveloperAuthenticator(),
@@ -1875,18 +1900,18 @@ describe.sequential("Platform hosting boundary", () => {
         const tenant = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
-                    body: JSON.stringify({
-                        displayName: "Bounded tenant",
-                        quotas: { activeApps: 1, activeProjects: 1, activeSessions: 1 },
-                    }),
                     headers: developerHeaders(),
-                    method: "POST",
                 }),
                 environment,
             ),
-            201,
+            200,
         );
-        const tenantId = text(tenant, "tenantId");
+        const tenantId = text(record(list(tenant, "tenants")[0]), "tenantId");
+        await environment.PLATFORM_DIRECTORY_DATABASE.prepare(
+            "UPDATE platform_tenants SET quotas_json = ? WHERE tenant_id = ?",
+        )
+            .bind(JSON.stringify({ activeApps: 1, activeProjects: 1, activeSessions: 1 }), tenantId)
+            .run();
         const [firstAppResponse, secondAppResponse] = await Promise.all([
             worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
@@ -2056,15 +2081,13 @@ describe.sequential("Platform hosting boundary", () => {
         const tenant = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
-                    body: JSON.stringify({ displayName: "Acme" }),
                     headers: developerHeaders(),
-                    method: "POST",
                 }),
                 environment,
             ),
-            201,
+            200,
         );
-        const tenantId = text(tenant, "tenantId");
+        const tenantId = text(record(list(tenant, "tenants")[0]), "tenantId");
         const app = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
@@ -2155,18 +2178,19 @@ describe.sequential("Platform hosting boundary", () => {
         const tenant = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
-                    body: JSON.stringify({ displayName: "Credential Tenant" }),
                     headers: developerHeaders(),
-                    method: "POST",
                 }),
                 environment,
             ),
-            201,
+            200,
         );
         const app = await json(
             await worker.fetch(
                 new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps`, {
-                    body: JSON.stringify({ displayName: "Scoped App", tenantId: text(tenant, "tenantId") }),
+                    body: JSON.stringify({
+                        displayName: "Scoped App",
+                        tenantId: text(record(list(tenant, "tenants")[0]), "tenantId"),
+                    }),
                     headers: developerHeaders(),
                     method: "POST",
                 }),

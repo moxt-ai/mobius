@@ -14,7 +14,10 @@ const developers = new MobiusPlatformDeveloperClient({
     endpoint,
 });
 
-const tenant = await developers.createTenant("Example tenant", signal);
+const tenant = (await developers.listTenants(signal))[0];
+if (tenant === undefined) {
+    throw new Error("Select a Clerk organization before running this example");
+}
 const app = await developers.createApp(tenant.tenantId, "Example app", signal);
 const project = await developers.createProject(
     app.appId,

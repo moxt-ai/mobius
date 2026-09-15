@@ -1,13 +1,15 @@
 import {
     ClerkProvider,
+    OrganizationSwitcher,
     SignedIn,
     SignedOut,
     SignInButton,
     SignUpButton,
     UserButton,
     useAuth,
+    useOrganization,
 } from "@clerk/clerk-react";
-import { StrictMode } from "react";
+import { StrictMode, useCallback } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
 import { PlatformApp } from "./views/platform-app-view.tsx";
@@ -20,16 +22,33 @@ if (typeof publishableKey !== "string" || publishableKey.length === 0) {
 
 function AuthenticatedPlatformApp() {
     const { getToken } = useAuth();
+    const { organization, isLoaded } = useOrganization();
+    const token = useCallback(async () => {
+        const value = await getToken();
+        if (value === null) {
+            throw new Error("Your Clerk session is unavailable. Please sign in again.");
+        }
+        return value;
+    }, [getToken]);
+    if (!isLoaded) {
+        return <main>Loading organization…</main>;
+    }
+    if (organization === null || organization === undefined) {
+        return (
+            <main className="grid min-h-screen place-content-center gap-6 text-center">
+                <h1>Select or create an organization</h1>
+                <OrganizationSwitcher hidePersonal />
+                <UserButton />
+            </main>
+        );
+    }
     return (
         <PlatformApp
+            key={organization.id}
             endpoint={platformEndpoint}
-            getToken={async () => {
-                const token = await getToken();
-                if (token === null) {
-                    throw new Error("Your Clerk session is unavailable. Please sign in again.");
-                }
-                return token;
-            }}
+            getToken={token}
+            organization={{ id: organization.id, name: organization.name }}
+            organizationControl={<OrganizationSwitcher hidePersonal />}
             userControl={<UserButton />}
         />
     );
@@ -53,7 +72,7 @@ createRoot(root).render(
                             Mobius Platform
                         </p>
                         <h1>Build on Mobius.</h1>
-                        <p>Create tenants, applications, and server credentials from one secure workspace.</p>
+                        <p>Manage your organization’s applications and server credentials from one secure workspace.</p>
                         <div className="mt-7 grid grid-cols-1 gap-2 sm:grid-cols-2 [&_button]:w-full">
                             <SignInButton mode="modal">
                                 <button

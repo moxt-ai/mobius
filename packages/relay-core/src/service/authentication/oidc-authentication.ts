@@ -712,6 +712,33 @@ export class OidcExternalIdentityAuthenticator implements ExternalIdentityAuthen
             }
             metadata.set(claim, value);
         }
+        let organization: VerifiedExternalIdentity["organization"] = { kind: "none" };
+        if (this.#configuration.providerId === "clerk") {
+            const organizationClaims =
+                claims["o"] === undefined
+                    ? null
+                    : record(claims["o"], "external_claims_invalid", "The Clerk organization is invalid");
+            const id = organizationClaims === null ? claims["org_id"] : organizationClaims["id"];
+            const role = organizationClaims === null ? claims["org_role"] : organizationClaims["rol"];
+            if (claims["sts"] === "pending") {
+                throw new ProjectAuthenticationError("external_identity_not_active", "The Clerk session is pending");
+            }
+            if (id !== undefined && id !== null) {
+                if (
+                    typeof id !== "string" ||
+                    !/^org_[a-zA-Z0-9]+$/.test(id) ||
+                    id.length > 128 ||
+                    typeof role !== "string" ||
+                    !/^(org:)?[a-zA-Z0-9_-]+$/.test(role)
+                ) {
+                    throw new ProjectAuthenticationError(
+                        "external_claims_invalid",
+                        "The Clerk organization is invalid",
+                    );
+                }
+                organization = { kind: "organization", id, role: role.startsWith("org:") ? role : `org:${role}` };
+            }
+        }
         return new VerifiedExternalIdentity(
             this.#configuration.providerId,
             this.#configuration.issuer,
@@ -719,6 +746,7 @@ export class OidcExternalIdentityAuthenticator implements ExternalIdentityAuthen
             metadata,
             issuedAt,
             expiresAt,
+            organization,
         );
     };
 }

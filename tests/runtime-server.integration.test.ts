@@ -34,7 +34,10 @@ it("Given a Platform Project, When its owner pairs a local Runtime, Then that Pr
         credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
         transport: { fetch: async (request) => await app.request(request) },
     });
-    const tenant = await developer.createTenant("Runtime test", signal);
+    const tenant = (await developer.listTenants(signal))[0];
+    if (tenant === undefined) {
+        throw new Error("Missing organization");
+    }
     const application = await developer.createApp(tenant.tenantId, "Runtime test", signal);
     const project = await developer.createProject(
         application.appId,

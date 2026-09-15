@@ -38,7 +38,10 @@ a separate Cloudflare adapter package. Platform and Standalone compose this
 shared implementation and inject their Project authorization gateway.
 
 Cloudflare Platform and Standalone are separate products at their public entry
-points. Platform owns OIDC, Tenant, App, AppCredential, and
+points. Platform uses Clerk organizations as tenants (`tenantId = org_...`) and
+verified active-organization claims for developer membership. Clerk owns
+organization selection, creation, naming, and membership; Platform retains local
+quota, lifecycle, and audit records. Platform owns OIDC, App, AppCredential, and
 ConversationAccessCredential. Standalone owns accountless Project bootstrap and
 Owner Capability. Shared Relay services consume normalized access contexts and
 an opaque storage locator; they do not decide which hosting credential is valid.

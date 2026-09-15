@@ -213,6 +213,9 @@ export class VerifiedExternalIdentity {
     readonly expiresAtEpochMilliseconds: number;
     readonly issuer: string;
     readonly metadata: ReadonlyMap<string, string>;
+    readonly organization:
+        | { readonly kind: "none" }
+        | { readonly kind: "organization"; readonly id: string; readonly role: string };
     readonly providerId: string;
     readonly subject: string;
 
@@ -223,6 +226,7 @@ export class VerifiedExternalIdentity {
         metadata: ReadonlyMap<string, string>,
         authenticatedAtEpochMilliseconds: number,
         expiresAtEpochMilliseconds: number,
+        organization: VerifiedExternalIdentity["organization"] = { kind: "none" },
     ) {
         if (
             !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(providerId) ||
@@ -258,6 +262,15 @@ export class VerifiedExternalIdentity {
         this.issuer = issuer;
         this.subject = subject;
         this.metadata = new Map(metadata);
+        if (
+            organization.kind === "organization" &&
+            (!/^org_[a-zA-Z0-9]+$/.test(organization.id) ||
+                organization.id.length > 128 ||
+                !/^org:[a-zA-Z0-9_-]+$/.test(organization.role))
+        ) {
+            throw new ProjectAuthenticationError("external_identity_invalid", "The verified organization is invalid");
+        }
+        this.organization = Object.freeze({ ...organization });
         this.authenticatedAtEpochMilliseconds = authenticatedAtEpochMilliseconds;
         this.expiresAtEpochMilliseconds = expiresAtEpochMilliseconds;
     }
