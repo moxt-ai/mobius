@@ -45,15 +45,19 @@ jobs:
           SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
           SESSION_ARCHIVE_BYTES_PER_SESSION: ${{ vars.SESSION_ARCHIVE_BYTES_PER_SESSION }}
 
-  check:
-    name: check
+  checks:
+    name: ${{ matrix.task }}
     permissions:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: check-${{ github.workflow }}-${{ github.ref }}
+      group: check-${{ matrix.task }}-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:e2e", "test:web", "test:standalone", "test:platform"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -80,14 +84,83 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm check
+      - name: Run static check
+        if: matrix.task == 'lint' || matrix.task == 'typecheck' || matrix.task == 'knip'
+        run: pnpm "$TASK"
+        env:
+          TASK: ${{ matrix.task }}
+          # Knip loads the Platform Vite configuration.
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+
+      - name: Build test assets
+        if: startsWith(matrix.task, 'test:')
+        run: pnpm build
         env:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
-      - run: pnpm test:integration:cli
+      - name: Run coverage suite
+        id: suite
+        if: startsWith(matrix.task, 'test:')
+        run: |
+          suite="${TASK#test:}"
+          echo "name=$suite" >> "$GITHUB_OUTPUT"
+          pnpm test:coverage:suite "$suite"
+        env:
+          TASK: ${{ matrix.task }}
 
-      - run: pnpm test:integration
+      - name: Save suite coverage
+        if: ${{ !cancelled() && steps.suite.outputs.name != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-suite-${{ steps.suite.outputs.name }}
+          path: coverage/${{ steps.suite.outputs.name }}/coverage-final.json
+          if-no-files-found: error
+          retention-days: 14
+
+  check:
+    name: check
+    needs: checks
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm
+        id: pnpm
+        run: |
+          corepack enable
+          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store-path }}
+          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Download suite coverage
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: coverage-suite-*
+          path: coverage-suites/
+
+      - name: Merge coverage
+        run: |
+          for suite in cli sdk integration e2e web standalone platform; do
+            mkdir -p "coverage/$suite"
+            cp "coverage-suites/coverage-suite-$suite/coverage-final.json" "coverage/$suite/coverage-final.json"
+          done
+          pnpm test:coverage:merge
 
       - name: Save coverage report
         if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
@@ -97,6 +170,12 @@ jobs:
           name: coverage-report
           path: coverage/
           retention-days: 14
+
+      - name: Require every check to pass
+        if: always()
+        run: test "$CHECKS_RESULT" = success
+        env:
+          CHECKS_RESULT: ${{ needs.checks.result }}
 
   deploy-cloudflare:
     name: deploy Cloudflare

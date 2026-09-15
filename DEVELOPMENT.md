@@ -24,9 +24,13 @@ The Standalone and Platform build scripts each own their frontend build, so the
 root build excludes those frontend packages to avoid duplicate builds and races
 with Vite clearing their output directories.
 
-PRs, merge groups, main pushes, and manual CI runs execute `pnpm check`, including
-all integration/e2e suites and the combined coverage report. Coverage percentages
-are advisory. CI saves the report as an artifact without blocking on upload failures.
+PRs, merge groups, main pushes, and manual CI runs execute the components of
+`pnpm check` in ten parallel jobs: lint, typecheck, Knip, and seven coverage
+suites. Each coverage job owns its build outputs. CLI, SDK, integration, E2E,
+and web suites each use up to four file workers; builds use three workspace tasks.
+The required `check` status merges coverage and requires every job to succeed.
+Coverage percentages are advisory. CI saves the report as an artifact without
+blocking on upload failures. See `TESTING.md` for focused suite commands.
 
 ## Hosting profiles
 

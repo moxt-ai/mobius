@@ -27,6 +27,7 @@ import {
     saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
+    waitForDocumentState,
 } from "./app-integration-harness.ts";
 
 const environment = setupWebIntegrationEnvironment();
@@ -92,7 +93,9 @@ function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
 }
 
 describe.sequential("Session persistence boundaries", () => {
-    it("Given a Session contains more recorded events than the browser stream buffer, When the user starts another Agent turn, Then the complete response appears without an event-stream recovery failure", async () => {
+    it("Given a Session contains more recorded events than the browser stream buffer, When the user starts another Agent turn, Then the complete response appears without an event-stream recovery failure", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -100,12 +103,15 @@ describe.sequential("Session persistence boundaries", () => {
         render(<App />);
 
         try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            const initialPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
             await sendReadySession(paired.daemon, initialPreparation);
             await closeMobiusTransport();
             cleanup();
 
-            const recordedEventCount = 400;
+            // Cross the 256-event stream capacity with the smallest overflowing backlog.
+            const recordedEventCount = 257;
             const batchSize = 10;
             for (let offset = 0; offset < recordedEventCount; offset += batchSize) {
                 const count = Math.min(batchSize, recordedEventCount - offset);
@@ -120,13 +126,17 @@ describe.sequential("Session persistence boundaries", () => {
                                 title: `Recorded backlog ${eventIndex.toString()}`,
                                 updatedAt: new Date(Date.UTC(2026, 8, 8, 0, 0, 0, eventIndex)).toISOString(),
                             }),
+                            signal,
                         );
                     }),
                 );
             }
 
+            signal.throwIfAborted();
             render(<App />);
-            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            const resumedPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
             await sendReadySession(paired.daemon, resumedPreparation);
             await completeRenderedPrompt(
                 paired.daemon,
@@ -137,13 +147,15 @@ describe.sequential("Session persistence boundaries", () => {
             expect(screen.queryByText(/The Mobius event stream could not recover/u)).toBeNull();
             expect(screen.queryByText(/Agent response failed/u)).toBeNull();
         } finally {
-            await closeMobiusTransport();
             cleanup();
             paired.daemon.close();
+            await closeMobiusTransport();
         }
     }, 45_000);
 
-    it("Given Cloudflare resets the Runtime while Agent settings are loading, When the daemon and browser reconnect, Then the interrupted preparation resumes without a permanent connection error", async () => {
+    it("Given Cloudflare resets the Runtime while Agent settings are loading, When the daemon and browser reconnect, Then the interrupted preparation resumes without a permanent connection error", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -158,6 +170,7 @@ describe.sequential("Session persistence boundaries", () => {
             await environment.evictRuntime(paired.channelId);
             await paired.daemon.waitForClose();
             await vi.advanceTimersByTimeAsync(0);
+            await waitForDocumentState(() => screen.queryByRole("status", { name: "Reconnecting" }) !== null, signal);
             expect(screen.getByRole("status", { name: "Reconnecting" })).toBeDefined();
             expect(screen.queryByRole("status", { name: "Runtime offline" })).toBeNull();
             reconnectedDaemon = await paired.reconnectDaemon();
@@ -176,10 +189,10 @@ describe.sequential("Session persistence boundaries", () => {
             expect(screen.queryByText(/connection_closed/u)).toBeNull();
         } finally {
             vi.useRealTimers();
-            await closeMobiusTransport();
             cleanup();
             paired.daemon.close();
             reconnectedDaemon.close();
+            await closeMobiusTransport();
         }
     }, 45_000);
 

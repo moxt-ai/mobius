@@ -205,7 +205,8 @@ export class StatefulDaemon {
 
     readonly waitForClose = async (): Promise<void> => await this.#closed;
 
-    readonly receive = (kind: string): Promise<string> => {
+    readonly receive = (kind: string, cancellation?: AbortSignal): Promise<string> => {
+        cancellation?.throwIfAborted();
         const existingIndex = this.#messages.findIndex((message) => decodeMessageKind(message) === kind);
         if (existingIndex >= 0) {
             const message = this.#messages.splice(existingIndex, 1)[0];
@@ -215,7 +216,8 @@ export class StatefulDaemon {
             return Promise.resolve(message);
         }
         return new Promise((resolve, reject) => {
-            const signal = AbortSignal.timeout(8_000);
+            const deadline = AbortSignal.timeout(8_000);
+            const signal = cancellation === undefined ? deadline : AbortSignal.any([cancellation, deadline]);
             const pending: PendingMessage = {
                 kind,
                 reject: (error) => {
@@ -232,7 +234,9 @@ export class StatefulDaemon {
                 if (index >= 0) {
                     this.#pending.splice(index, 1);
                 }
-                reject(new Error(`The local daemon did not receive ${kind}`));
+                reject(
+                    cancellation?.aborted ? cancellation.reason : new Error(`The local daemon did not receive ${kind}`),
+                );
             };
             this.#pending.push(pending);
             signal.addEventListener("abort", handleAbort, { once: true });
@@ -243,7 +247,8 @@ export class StatefulDaemon {
         this.#socket.send(message);
     };
 
-    readonly sendSessionEvent = async (sessionId: string, payload: string): Promise<string> => {
+    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
+        signal?.throwIfAborted();
         const eventId = crypto.randomUUID();
         if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
             const started = decodeSessionStartedEvent(payload);
@@ -273,7 +278,7 @@ export class StatefulDaemon {
                           },
             }),
         );
-        const acknowledgement = decodeSessionEventAcknowledgement(await this.receive(SESSION_EVENT_ACK_KIND));
+        const acknowledgement = decodeSessionEventAcknowledgement(await this.receive(SESSION_EVENT_ACK_KIND, signal));
         if (
             acknowledgement.eventId !== eventId ||
             acknowledgement.sessionId !== sessionId ||

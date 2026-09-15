@@ -648,8 +648,12 @@ describe.sequential("Bot management and conversations", () => {
             );
 
             fireEvent.click(screen.getByRole("button", { name: "Refresh conversation" }));
-            await screen.findByText("The launch is supported by the persisted evidence.");
-            await screen.findByText("Response completed.");
+            await waitForDocumentState(
+                () =>
+                    screen.queryByText("The launch is supported by the persisted evidence.") !== null &&
+                    screen.queryByText("Response completed.") !== null,
+                signal,
+            );
             expect(screen.queryByText("Message accepted. The approved local runtime is working.")).toBeNull();
             expect(screen.getByRole("heading", { level: 2, name: "Summarize the launch evidence." })).toBeTruthy();
             await waitFor(() => {
@@ -698,7 +702,10 @@ describe.sequential("Bot management and conversations", () => {
                 }),
             );
             fireEvent.click(screen.getByRole("button", { name: "Refresh conversation" }));
-            await screen.findByText("Verify the durable conversation after a full browser reload.");
+            await waitForDocumentState(
+                () => screen.queryByText("Verify the durable conversation after a full browser reload.") !== null,
+                signal,
+            );
             expect(screen.getAllByLabelText("Message from you").map((message) => message.textContent)).toEqual([
                 "Summarize the launch evidence.",
                 "List the next verification step.",

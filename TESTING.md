@@ -15,9 +15,10 @@ provisional native-session link. The fake Agent exposes a paused-load checkpoint
 so cancellation scenarios synchronize without sleeps or polling.
 
 `pnpm check` runs static checks, builds assets, and executes `pnpm test:coverage`.
-Coverage runs all root CLI/SDK/protocol/integration/e2e tests, web integration,
+Coverage runs CLI, SDK, protocol/cross-package integration, E2E, web integration,
 Standalone Worker, and Platform Worker suites, sequentially after assets are built.
-No integration/e2e exclusion is applied to the root suite. Each suite writes its
+The four suites using the root configuration partition its complete test set.
+Each suite writes its
 own Istanbul map; the maps are merged into `coverage/lcov.info`,
 `coverage/coverage-summary.json`, and an HTML report in `coverage/`.
 
@@ -45,6 +46,29 @@ and main runs, retained for 14 days. Upload failures are non-blocking. This uses
 the permitted GitHub-owned artifact action and does not require a Codecov account
 or changes to the repository's Actions allowlist. If Codecov uploads are enabled
 later, `codecov.yml` marks both project and patch coverage as informational.
+
+CI runs lint, typecheck, Knip, `test:cli`, `test:sdk`, `test:integration`,
+`test:e2e`, `test:web`, `test:standalone`, and `test:platform` as ten
+independent jobs with fail-fast disabled. Each
+coverage job builds its own assets before `pnpm test:coverage:suite <suite>`;
+builds already run up to three dependency-ordered workspace tasks concurrently.
+CLI, SDK, integration, E2E, and web tests each use up to four isolated file workers.
+E2E currently has one file, so only one worker is occupied by that suite.
+Worker suites retain their single-worker, shared-runtime configuration, but
+Standalone and Platform run simultaneously on separate runners.
+The required `check` job downloads all seven execution maps and runs
+`pnpm test:coverage:merge`. Failed or cancelled jobs and missing or empty maps
+remain blocking. Combined report upload is non-blocking.
+CLI, web, and Worker integration tests are included in these coverage suites,
+so CI does not repeat the hosting integration commands afterward.
+
+After `pnpm build`, use `pnpm test:cli`, `pnpm test:sdk`,
+`pnpm test:integration`, or `pnpm test:e2e` for the corresponding coverage suite.
+CLI selects `packages/cli/tests/`; SDK selects `packages/mobius-sdk/tests/`;
+E2E selects `e2e/`. Integration owns the remaining root-discovered files,
+including protocol contracts and cross-package Runtime integration tests.
+Each suite writes a separate coverage directory so they can run concurrently
+after the shared build completes.
 
 ## Architecture enforcement
 
@@ -179,10 +203,10 @@ Worker integration scenarios belong in
 `--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
 integration currently requires shared, serialized storage for Durable Object
 WebSocket tests. `pnpm check` includes these suites with coverage;
-`pnpm test:integration` remains available for focused verification without the
+`pnpm test:integration:hosting` remains available for focused verification without the
 aggregate coverage report.
 
-The root `pnpm test:integration` command first builds and tests Web, then runs
+The root `pnpm test:integration:hosting` command first builds and tests Web, then runs
 at most two independent Cloudflare package suites concurrently. Web must finish
 its build before the other harnesses read its assets; overlapping those steps
 would race Vite's cleanup of `packages/web/dist`. Each Cloudflare suite retains

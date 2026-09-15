@@ -1,6 +1,6 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
-import { expect, it, vi } from "vitest";
+import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformBindings } from "../../../tests/infra/cloudflare.ts";
 import { TestDeveloperAuthenticator } from "../../../tests/infra/identity.ts";
 import { TestClerkOrganizations } from "../../../tests/infra/organizations.ts";
@@ -14,36 +14,34 @@ import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
 } from "../../relay-cloudflare-platform/src/worker.ts";
+import { waitForDocumentState } from "./app-integration-harness.ts";
 
-it("Given an organization admin, When they share an invite link and a new user accepts it, Then the new user opens the organization's Platform dashboard", async () => {
+let bindings: Awaited<ReturnType<typeof createTestMobiusPlatformBindings>> | undefined;
+
+beforeAll(async () => {
+    bindings = await createTestMobiusPlatformBindings();
+});
+
+afterAll(async () => {
+    await bindings?.[Symbol.asyncDispose]();
+});
+
+it("Given an organization admin, When they share an invite link and a new user accepts it, Then the new user opens the organization's Platform dashboard", async ({
+    signal,
+}) => {
+    if (bindings === undefined) {
+        throw new Error("The Platform test bindings are not ready");
+    }
+    const env = bindings.env;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-15T00:00:00Z"));
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = createRoot(container);
     const controller = new AbortController();
-    const rendered = async (text: string) => {
-        if (document.body.textContent?.includes(text)) {
-            return;
-        }
-        await new Promise<void>((resolve) => {
-            const observer = new MutationObserver(() => {
-                if (document.body.textContent?.includes(text)) {
-                    observer.disconnect();
-                    resolve();
-                }
-            });
-            observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-            controller.signal.addEventListener(
-                "abort",
-                () => {
-                    observer.disconnect();
-                    resolve();
-                },
-                { once: true },
-            );
-        });
-    };
+    const cancellation = AbortSignal.any([signal, controller.signal]);
+    const rendered = async (text: string) =>
+        await waitForDocumentState(() => document.body.textContent?.includes(text) === true, cancellation);
     const click = (text: string) => {
         const button = Array.from(document.querySelectorAll("button")).find((entry) => entry.textContent === text);
         if (button === undefined) {
@@ -52,7 +50,6 @@ it("Given an organization admin, When they share an invite link and a new user a
         flushSync(() => button.click());
     };
     try {
-        await using bindings = await createTestMobiusPlatformBindings();
         const identity = new TestDeveloperAuthenticator();
         const clerk = new TestClerkOrganizations();
         const app = createPlatformApplication(
@@ -61,8 +58,8 @@ it("Given an organization admin, When they share an invite link and a new user a
             () => clerk,
         );
         await using server = await serveTestApp({
-            app: { request: (request) => app.fetch(request, bindings.env) },
-            signal: controller.signal,
+            app: { request: (request) => app.fetch(request, env) },
+            signal: cancellation,
             onServerMessage: () => {},
         });
         try {
@@ -129,7 +126,7 @@ it("Given an organization admin, When they share an invite link and a new user a
             await createPlatformClient(server.origin, adminToken).createApp(
                 "org_invites",
                 "Shared application",
-                AbortSignal.timeout(15_000),
+                cancellation,
             );
             click("Join organization");
             await rendered("Shared application");

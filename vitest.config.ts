@@ -8,7 +8,8 @@ export default defineConfig({
         },
     },
     test: {
-        fileParallelism: false,
+        fileParallelism: true,
+        maxWorkers: 4,
         include: [
             "tests/**/*.integration.test.ts",
             "packages/*/tests/**/*.contract.test.ts",
