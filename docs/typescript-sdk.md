@@ -462,17 +462,18 @@ Project. A client-supplied `tenantId` is never accepted as authority. The same
 authorization applies to execution, history, Interactions, uploads, downloads,
 exports, imports, and deletion.
 
-## Shared Node and browser example
+## Reference Node and browser workflow
 
-The runnable examples use one shared workflow in
+The repository reference implementations use one shared workflow in
 [`workflow.ts`](../packages/mobius-sdk/examples/workflow.ts). The
 [`Node example`](../packages/mobius-sdk/examples/node.ts) reads its endpoint and
 application credential from environment variables. The
 [`browser example`](../packages/mobius-sdk/examples/browser.ts) receives a
-short-lived credential provider from its host application.
+short-lived credential provider from its host application. These files are not
+published as `@moxt-ai/mobius-sdk` entry points; copy or adapt them from the
+repository when useful.
 
-After installing the package, the Node entry point can be run with the six
-documented environment values:
+The Node reference expects these six environment values:
 
 ```sh
 MOBIUS_ENDPOINT=https://mobius.example.com \
@@ -480,13 +481,11 @@ MOBIUS_CREDENTIAL=server-credential \
 MOBIUS_PROJECT_ID=project-id \
 MOBIUS_RUNTIME_ID=runtime-id \
 MOBIUS_AGENT_ID=codex \
-MOBIUS_WORKSPACE_REF=workspace-ref \
-node --input-type=module --eval \
-  'await import("@moxt-ai/mobius-sdk/examples/node")'
+MOBIUS_WORKSPACE_REF=workspace-ref
 ```
 
-The Node example is a Node.js client for an existing Relay deployment; it does
-not provide a Node Relay implementation. Neither example imports D1, R2,
+It is a Node.js client for an existing Relay deployment; it does not provide a
+Node Relay implementation. Neither reference implementation imports D1, R2,
 Durable Object, SQLite, filesystem, or deployment-specific types. The Node
 example's 120-second signal is an application-level local wait deadline; it does
 not request remote cancellation if it expires.

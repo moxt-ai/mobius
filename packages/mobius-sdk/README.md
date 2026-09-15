@@ -10,13 +10,10 @@ pnpm add @moxt-ai/mobius-sdk
 ```
 
 See the [TypeScript SDK guide](https://github.com/moxt-ai/mobius/blob/main/docs/typescript-sdk.md)
-and the runnable [Node](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/node.ts)
+and the repository [Node](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/node.ts)
 and [browser](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/browser.ts)
-examples. Both entry points execute the same shared resource workflow. The
-browser and shared workflow modules are also exported as
-`@moxt-ai/mobius-sdk/examples/browser` and
-`@moxt-ai/mobius-sdk/examples/workflow`. The packaged Node entry point is
-`@moxt-ai/mobius-sdk/examples/node`. The [Bot connector
+reference implementations. They share one resource workflow but are not part
+of the published SDK API. The [Bot connector
 guide](https://github.com/moxt-ai/mobius/blob/main/docs/bots.md) documents grant
 redemption, scoped credentials, connected conversations, cursor recovery,
 outbound acknowledgement, and connection revocation.

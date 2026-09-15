@@ -9,12 +9,7 @@
         "./browser": "./src/browser.ts",
         "./channel": "./src/channel.ts",
         "./platform": "./src/platform.ts",
-        "./server": "./src/server.ts",
-        "./examples/browser": "./examples/browser.ts",
-        "./examples/moxt-server": "./examples/moxt-server.ts",
-        "./examples/node": "./examples/node.ts",
-        "./examples/platform-server": "./examples/platform-server.ts",
-        "./examples/workflow": "./examples/workflow.ts"
+        "./server": "./src/server.ts"
     },
     "files": [
         "dist",
@@ -46,26 +41,6 @@
             "./server": {
                 "types": "./dist/server.d.ts",
                 "import": "./dist/server.js"
-            },
-            "./examples/browser": {
-                "types": "./dist/examples/browser.d.ts",
-                "import": "./dist/examples/browser.js"
-            },
-            "./examples/moxt-server": {
-                "types": "./dist/examples/moxt-server.d.ts",
-                "import": "./dist/examples/moxt-server.js"
-            },
-            "./examples/node": {
-                "types": "./dist/examples/node.d.ts",
-                "import": "./dist/examples/node.js"
-            },
-            "./examples/platform-server": {
-                "types": "./dist/examples/platform-server.d.ts",
-                "import": "./dist/examples/platform-server.js"
-            },
-            "./examples/workflow": {
-                "types": "./dist/examples/workflow.d.ts",
-                "import": "./dist/examples/workflow.js"
             }
         }
     },
@@ -75,7 +50,7 @@
         "directory": "packages/mobius-sdk"
     },
     "scripts": {
-        "build": "tsc --project tsconfig.build.json && tsc --project tsconfig.examples.json",
+        "build": "tsc --project tsconfig.build.json",
         "prepack": "pnpm build",
         "typecheck": "tsc --project tsconfig.json"
     },
