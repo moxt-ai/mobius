@@ -5,7 +5,6 @@ import {
     type PromptResource,
 } from "@moxt-ai/mobius-protocol";
 import {
-    type ConversationAccessAuthorizer,
     ConversationAccessContext,
     ConversationAccessError,
     ConversationPermission,
@@ -240,7 +239,7 @@ function messageResource(row: ConversationMessageRow): ConversationAcceptedMessa
     return new ConversationAcceptedMessage(row, images, resources, decodedArtifactIds(row.artifact_ids_json));
 }
 
-export class ConversationAccessService implements ConversationAccessAuthorizer {
+export class ConversationAccessService {
     readonly #control: PlatformControlPlaneService;
     readonly #storage: ConversationAccessStorage;
 
@@ -250,6 +249,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     }
 
     readonly issueForConversation = async (
+        projectId: string,
         conversationId: string,
         appCredential: string,
         requestedActorReference: string,
@@ -259,7 +259,11 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     ): Promise<object> => {
         signal.throwIfAborted();
         const normalizedConversationId = validateIdentifier(conversationId, "conversation_id");
-        const directory = await this.#storage.readActiveConversationDirectory(normalizedConversationId, signal);
+        const directory = await this.#storage.readActiveConversationDirectory(
+            projectId,
+            normalizedConversationId,
+            signal,
+        );
         if (directory === null) {
             throw new PlatformControlPlaneError("conversation_not_found", "The Conversation was not found", 404);
         }
@@ -293,13 +297,14 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     };
 
     readonly rotate = async (
+        projectId: string,
         credentialId: string,
         appCredential: string,
         expiresInSeconds: number,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
-        const source = await this.readById(validateIdentifier(credentialId, "credential_id"), signal);
+        const source = await this.readById(projectId, validateIdentifier(credentialId, "credential_id"), signal);
         const parent = await this.#control.authorizePlatformCredential(
             source.project_id,
             appCredential,
@@ -341,9 +346,14 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
         return { ...replacement.resource, replacedCredentialId: source.credential_id };
     };
 
-    readonly revoke = async (credentialId: string, appCredential: string, signal: AbortSignal): Promise<object> => {
+    readonly revoke = async (
+        projectId: string,
+        credentialId: string,
+        appCredential: string,
+        signal: AbortSignal,
+    ): Promise<object> => {
         signal.throwIfAborted();
-        const source = await this.readById(validateIdentifier(credentialId, "credential_id"), signal);
+        const source = await this.readById(projectId, validateIdentifier(credentialId, "credential_id"), signal);
         const parent = await this.#control.authorizePlatformCredential(
             source.project_id,
             appCredential,
@@ -359,7 +369,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
             );
         }
         const now = Date.now();
-        const revoked = await this.#storage.revokeCredential(source.credential_id, now, signal);
+        const revoked = await this.#storage.revokeCredential(projectId, source.credential_id, now, signal);
         if (!revoked) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_not_found",
@@ -371,6 +381,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     };
 
     readonly authorize = async (
+        projectId: string,
         credential: string,
         requiredPermission: ConversationPermission,
         signal: AbortSignal,
@@ -384,7 +395,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
                 "The Conversation credential is invalid",
             );
         }
-        const row = await this.#storage.readCredentialByPublicId(publicCredentialId, signal);
+        const row = await this.#storage.readCredentialByPublicId(projectId, publicCredentialId, signal);
         if (row === null || !constantTimeEqual(await hashSecret(credential), row.secret_digest)) {
             throw new ConversationAccessError(
                 "conversation_credential_invalid",
@@ -415,7 +426,7 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
                 "The Conversation credential does not grant this operation",
             );
         }
-        const touched = await this.#storage.touchCredential(row.credential_id, now, signal);
+        const touched = await this.#storage.touchCredential(projectId, row.credential_id, now, signal);
         if (!touched) {
             throw new ConversationAccessError(
                 "conversation_credential_revoked",
@@ -651,10 +662,11 @@ export class ConversationAccessService implements ConversationAccessAuthorizer {
     };
 
     private readonly readById = async (
+        projectId: string,
         credentialId: string,
         signal: AbortSignal,
     ): Promise<ConversationCredentialRow> => {
-        const row = await this.#storage.readCredentialById(credentialId, signal);
+        const row = await this.#storage.readCredentialById(projectId, credentialId, signal);
         if (row === null || row.revoked_at !== null) {
             throw new PlatformControlPlaneError(
                 "conversation_credential_not_found",

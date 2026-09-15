@@ -94,6 +94,25 @@ authorization fallback or Project KV cache. App deletion installs
 shard-local App tombstones, including protection against late provisioning.
 Migration `0011_platform_project_authorizations.sql` assumes a clean data reset;
 existing central Project rows are not backfilled.
+Platform-owned SQL is grouped under `packages/relay-cloudflare-platform/migrations`:
+`sharding/` stores Project credential scopes, Session and Conversation credentials,
+and Project audit events; `dashboard/` stores the administrative directory and
+`platform_dashboard_audit_events` for events without a Project. Project rows route
+by their encoded Project ID. Tenant audit reads return dashboard events; supplying
+`project_id` returns only that Project's audit events from its shard. Parent App credentials and lifecycle checks still
+use the dashboard directory, so revocation is authoritative without cross-shard
+revocation writes. Conversation issuance, rotation, revocation, and browser-session
+requests require a `project_id` query parameter and access only the corresponding
+shard. The SDK requires `projectId` and includes it directly in resource request
+paths, including SSE reconnects and artifacts. Session lookup uses the Project ID
+in its URL path. Neither credential type discovers its Project by scanning shards.
+
+This credential cutover assumes a clean reset: dashboard migration
+`0009_shard_project_credentials.sql` discards old scopes, access credentials, and
+audit history. Reissue scoped App credentials and browser access after rollout.
+The Platform Wrangler wrapper applies shared Relay migrations, then Platform
+`sharding/` migrations using `platform_sharding_migrations`, then `dashboard/`
+migrations before deployment. Standalone does not apply Platform sharding SQL.
 Placement is derived only from the encoded ID; migration
 `0006_drop_project_storage_placements.sql` removes the redundant placement table.
 

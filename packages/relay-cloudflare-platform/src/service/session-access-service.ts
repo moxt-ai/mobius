@@ -89,7 +89,7 @@ export class SessionAccessService {
             if (match === null || match[1] === undefined || match[2] === undefined) {
                 throw new ProjectAuthenticationError("project_credential_invalid", "The Session credential is invalid");
             }
-            const row = await this.storage.readActive(`sac_${match[1]}`, Date.now(), signal);
+            const row = await this.storage.readActive(projectId, `sac_${match[1]}`, Date.now(), signal);
             const digest = await hashSecret(match[2]);
             signal.throwIfAborted();
             let mismatch = (row?.secret_digest.length ?? 0) ^ digest.length;

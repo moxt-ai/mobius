@@ -34,7 +34,7 @@
         },
         {
             "binding": "PLATFORM_DIRECTORY_DATABASE",
-            "migrations_dir": "migrations/d1"
+            "migrations_dir": "migrations/dashboard"
         }
     ],
     "r2_buckets": [{ "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-local-apac-objects" }],
@@ -93,7 +93,7 @@
                     "database_name": "mobius-platform-staging-control-plane-wnam",
                     // Created with --location=wnam; primary verified in SJC.
                     "database_id": "2068a52c-5681-4e0f-b00d-4f2cc980b89a",
-                    "migrations_dir": "migrations/d1"
+                    "migrations_dir": "migrations/dashboard"
                 }
             ],
             "r2_buckets": [
@@ -154,7 +154,7 @@
                     "database_name": "mobius-platform-production-control-plane-wnam",
                     // Created with --location=wnam; primary verified in DEN.
                     "database_id": "f7035824-ba09-4042-8599-9c32ca16c13d",
-                    "migrations_dir": "migrations/d1"
+                    "migrations_dir": "migrations/dashboard"
                 }
             ],
             "r2_buckets": [

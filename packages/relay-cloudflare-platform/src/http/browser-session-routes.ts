@@ -13,7 +13,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { bodyParser } from "../middleware/body-parser.ts";
 import type { ConversationHttpBindings, ConversationHttpEnvironment } from "./conversation-http-environment.ts";
-import { bearer } from "./conversation-request.ts";
+import { bearer, requestedProjectId } from "./conversation-request.ts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAXIMUM_PAGE_SIZE = 500;
@@ -121,7 +121,7 @@ async function authorize(
     permission: ConversationPermission,
     signal: AbortSignal,
 ) {
-    return await bindings.access.authorize(bearer(request), permission, signal);
+    return await bindings.access.authorize(requestedProjectId(request), bearer(request), permission, signal);
 }
 
 export function createBrowserSessionRoutes() {
@@ -212,7 +212,10 @@ export function createBrowserSessionRoutes() {
                 const lease = context.env.streams.open(
                     access,
                     bearer(context.req.raw),
-                    context.env.access,
+                    {
+                        authorize: (credential, permission, signal) =>
+                            context.env.access.authorize(access.scope.projectId, credential, permission, signal),
+                    },
                     context.var.signal,
                 );
                 try {

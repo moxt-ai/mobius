@@ -71,11 +71,15 @@ export async function createTestMobiusPlatformBindings() {
         for (const database of [env.D1_SHARD_APAC_01, env.D1_SHARD_WNAM_01]) {
             if (database !== undefined) {
                 await migrate(database, new NodeURL("../../packages/relay-core/migrations/d1", import.meta.url));
+                await migrate(
+                    database,
+                    new NodeURL("../../packages/relay-cloudflare-platform/migrations/sharding", import.meta.url),
+                );
             }
         }
         await migrate(
             env.PLATFORM_DIRECTORY_DATABASE,
-            new NodeURL("../../packages/relay-cloudflare-platform/migrations/d1", import.meta.url),
+            new NodeURL("../../packages/relay-cloudflare-platform/migrations/dashboard", import.meta.url),
         );
         return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
     } catch (cause) {

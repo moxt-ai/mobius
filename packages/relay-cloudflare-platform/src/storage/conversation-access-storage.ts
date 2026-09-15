@@ -1,3 +1,4 @@
+import * as v from "valibot";
 import type {
     ConversationCredentialInsert,
     ConversationCredentialRow,
@@ -10,52 +11,58 @@ import {
     ConversationDirectoryRowSchema,
     ConversationMessageRowSchema,
 } from "../entity/conversation-records.ts";
+import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
+import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
+import { type PlatformDatabaseBinding, projectDatabase } from "./platform-database-resolver.ts";
+import { PlatformProjectAuthorizationStorage } from "./platform-project-authorization-storage.ts";
 
-async function waitForD1<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
-    signal.throwIfAborted();
-    const result = await operation();
-    signal.throwIfAborted();
-    return result;
-}
+const storedCredentialSchema = v.omit(ConversationCredentialRowSchema, [
+    "parent_revision",
+    "parent_replaced_by_credential_id",
+    "parent_overlap_ends_at",
+    "parent_revoked_at",
+    "app_lifecycle",
+    "project_lifecycle",
+    "tenant_lifecycle",
+]);
 
 export class ConversationAccessStorage {
     readonly #platformDatabase: D1Database;
-    readonly #projectDatabases: readonly D1Database[];
+    readonly #shards: readonly PlatformDatabaseBinding[];
+    readonly #control: PlatformControlPlaneStorage;
+    readonly #projects: PlatformProjectAuthorizationStorage;
 
-    constructor(platformDatabase: D1Database, projectDatabases: readonly D1Database[]) {
+    constructor(platformDatabase: D1Database, shards: readonly PlatformDatabaseBinding[]) {
         this.#platformDatabase = platformDatabase;
-        this.#projectDatabases = projectDatabases;
+        this.#shards = shards;
+        this.#control = new PlatformControlPlaneStorage(platformDatabase, shards);
+        this.#projects = new PlatformProjectAuthorizationStorage(shards);
     }
 
     readonly readActiveConversationDirectory = async (
+        projectId: string,
         conversationId: string,
         signal: AbortSignal,
     ): Promise<ConversationDirectoryRow | null> => {
-        const matches = await Promise.all(
-            this.#projectDatabases.map(async (database) =>
-                decodeOptionalStorageRecord(
-                    ConversationDirectoryRowSchema,
-                    await waitForD1(
-                        () =>
-                            database
-                                .prepare(
-                                    `SELECT conversations.conversation_id, conversations.session_id,
+        return decodeOptionalStorageRecord(
+            ConversationDirectoryRowSchema,
+            await waitForD1(
+                () =>
+                    projectDatabase(this.#shards, projectId)
+                        .prepare(
+                            `SELECT conversations.conversation_id, conversations.session_id,
                                  bots.project_id
                            FROM bot_conversations AS conversations
-                           JOIN bots ON bots.bot_id = conversations.bot_id
+                            JOIN bots ON bots.bot_id = conversations.bot_id
                           WHERE conversations.conversation_id = ? AND conversations.lifecycle = 'active'
-                            AND bots.lifecycle = 'active'`,
-                                )
-                                .bind(conversationId)
-                                .first(),
-                        signal,
-                    ),
-                ),
+                             AND bots.lifecycle = 'active' AND bots.project_id = ?`,
+                        )
+                        .bind(conversationId, projectId)
+                        .first(),
+                signal,
             ),
         );
-        const records = matches.filter((record): record is ConversationDirectoryRow => record !== null);
-        return records.length === 1 ? (records[0] ?? null) : null;
     };
 
     readonly insertCredential = async (
@@ -72,15 +79,16 @@ export class ConversationAccessStorage {
         revokedAt: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
+        const database = projectDatabase(this.#shards, credential.projectId);
         const results = await waitForD1(
             () =>
-                this.#platformDatabase.batch([
+                database.batch([
                     this.credentialInsertStatement(credential),
-                    this.#platformDatabase
+                    database
                         .prepare(
-                            "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
+                            "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
                         )
-                        .bind(revokedAt, sourceCredentialId),
+                        .bind(revokedAt, sourceCredentialId, credential.projectId),
                 ]),
             signal,
         );
@@ -88,17 +96,18 @@ export class ConversationAccessStorage {
     };
 
     readonly revokeCredential = async (
+        projectId: string,
         credentialId: string,
         revokedAt: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                this.#platformDatabase
+                projectDatabase(this.#shards, projectId)
                     .prepare(
-                        "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
+                        "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
                     )
-                    .bind(revokedAt, credentialId)
+                    .bind(revokedAt, credentialId, projectId)
                     .run(),
             signal,
         );
@@ -106,76 +115,79 @@ export class ConversationAccessStorage {
     };
 
     readonly readCredentialByPublicId = async (
+        projectId: string,
         publicCredentialId: string,
         signal: AbortSignal,
     ): Promise<ConversationCredentialRow | null> =>
-        decodeOptionalStorageRecord(
-            ConversationCredentialRowSchema,
-            await waitForD1(
-                () =>
-                    this.#platformDatabase
-                        .prepare(
-                            `SELECT access.*, parent.revision AS parent_revision,
-                                parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
-                                parent.overlap_ends_at AS parent_overlap_ends_at,
-                                parent.revoked_at AS parent_revoked_at,
-                                apps.lifecycle AS app_lifecycle,
-                                projects.lifecycle AS project_lifecycle,
-                                tenants.lifecycle AS tenant_lifecycle
-                           FROM conversation_access_credentials AS access
-                           JOIN platform_app_credentials AS parent
-                             ON parent.credential_id = access.parent_credential_id
-                           JOIN platform_apps AS apps ON apps.app_id = access.app_id
-                           JOIN platform_projects AS projects ON projects.project_id = access.project_id
-                           JOIN platform_tenants AS tenants ON tenants.tenant_id = access.tenant_id
-                          WHERE access.public_credential_id = ?`,
-                        )
-                        .bind(publicCredentialId)
-                        .first(),
-                signal,
-            ),
-        );
+        this.readCredential(projectId, "public_credential_id", publicCredentialId, signal);
 
     readonly readCredentialById = async (
+        projectId: string,
         credentialId: string,
         signal: AbortSignal,
     ): Promise<ConversationCredentialRow | null> =>
-        decodeOptionalStorageRecord(
-            ConversationCredentialRowSchema,
+        this.readCredential(projectId, "credential_id", credentialId, signal);
+
+    private readonly readCredential = async (
+        projectId: string,
+        column: "credential_id" | "public_credential_id",
+        id: string,
+        signal: AbortSignal,
+    ): Promise<ConversationCredentialRow | null> => {
+        const row = decodeOptionalStorageRecord(
+            storedCredentialSchema,
             await waitForD1(
                 () =>
-                    this.#platformDatabase
-                        .prepare(
-                            `SELECT access.*, parent.revision AS parent_revision,
-                                parent.replaced_by_credential_id AS parent_replaced_by_credential_id,
-                                parent.overlap_ends_at AS parent_overlap_ends_at,
-                                parent.revoked_at AS parent_revoked_at,
-                                apps.lifecycle AS app_lifecycle,
-                                projects.lifecycle AS project_lifecycle,
-                                tenants.lifecycle AS tenant_lifecycle
-                           FROM conversation_access_credentials AS access
-                           JOIN platform_app_credentials AS parent
-                             ON parent.credential_id = access.parent_credential_id
-                           JOIN platform_apps AS apps ON apps.app_id = access.app_id
-                           JOIN platform_projects AS projects ON projects.project_id = access.project_id
-                           JOIN platform_tenants AS tenants ON tenants.tenant_id = access.tenant_id
-                          WHERE access.credential_id = ?`,
-                        )
-                        .bind(credentialId)
+                    projectDatabase(this.#shards, projectId)
+                        .prepare(`SELECT * FROM conversation_access_credentials WHERE project_id = ? AND ${column} = ?`)
+                        .bind(projectId, id)
                         .first(),
                 signal,
             ),
         );
+        if (row === null) {
+            return null;
+        }
+        const parent = await this.#control.readCredentialById(row.parent_credential_id, signal);
+        const project = await this.#projects.read(row.project_id, signal);
+        if (
+            parent === null ||
+            project === null ||
+            parent.app_id !== row.app_id ||
+            parent.tenant_id !== row.tenant_id ||
+            project.app_id !== row.app_id ||
+            project.tenant_id !== row.tenant_id ||
+            (parent.all_projects !== 1 &&
+                !(await this.#control.credentialHasProject(parent.credential_id, row.project_id, signal)))
+        ) {
+            return null;
+        }
+        return v.parse(ConversationCredentialRowSchema, {
+            ...row,
+            parent_revision: parent.revision,
+            parent_replaced_by_credential_id: parent.replaced_by_credential_id,
+            parent_overlap_ends_at: parent.overlap_ends_at,
+            parent_revoked_at: parent.revoked_at,
+            app_lifecycle: parent.app_lifecycle,
+            tenant_lifecycle: parent.tenant_lifecycle,
+            project_lifecycle: project.lifecycle,
+        });
+    };
 
-    readonly touchCredential = async (credentialId: string, now: number, signal: AbortSignal): Promise<boolean> => {
+    readonly touchCredential = async (
+        projectId: string,
+        credentialId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                this.#platformDatabase
+                projectDatabase(this.#shards, projectId)
                     .prepare(
                         `UPDATE conversation_access_credentials SET last_used_at = ?
-                          WHERE credential_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+                          WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL AND expires_at > ?`,
                     )
-                    .bind(now, credentialId, now)
+                    .bind(now, credentialId, projectId, now)
                     .run(),
             signal,
         );
@@ -295,7 +307,7 @@ export class ConversationAccessStorage {
     };
 
     private readonly credentialInsertStatement = (credential: ConversationCredentialInsert): D1PreparedStatement =>
-        this.#platformDatabase
+        projectDatabase(this.#shards, credential.projectId)
             .prepare(
                 `INSERT INTO conversation_access_credentials (
                    credential_id, public_credential_id, parent_credential_id,

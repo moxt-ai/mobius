@@ -14,13 +14,17 @@ the legacy compatibility entry while migrating an older deployment.
 
 ## Cloudflare resources
 
-Create two D1 databases before the first remote deployment:
+Create the directory database and configured Project shards before the first remote deployment:
 
-- `DIRECTORY_DATABASE` stores shared Project resources and uses
-  `packages/relay-core/migrations/d1`.
+- `D1_SHARD_APAC_01` and the other configured `D1_SHARD_*` bindings store Project
+  resources. Apply shared `packages/relay-core/migrations/d1`, then
+  `packages/relay-cloudflare-platform/migrations/sharding` using the independent
+  `platform_sharding_migrations` history table.
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
-  ConversationAccessCredential, and Platform audit records and uses
-  `packages/relay-cloudflare-platform/migrations/d1`.
+  and dashboard audit records and uses
+  `packages/relay-cloudflare-platform/migrations/dashboard`.
+  Session/Conversation access credentials, App credential Project scopes, and
+  Project audit events belong to the encoded Project shard.
 
 Copy `packages/relay-cloudflare-platform/wrangler.jsonc` into deployment-owned
 configuration and add each database's `database_name` and `database_id`. Do not

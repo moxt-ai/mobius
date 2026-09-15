@@ -749,6 +749,7 @@ export class MobiusPlatformAppClient {
         );
 
     readonly issueConversationAccessCredential = async (
+        projectId: string,
         conversationId: string,
         request: MobiusIssueConversationAccessCredentialRequest,
         signal: AbortSignal,
@@ -756,7 +757,7 @@ export class MobiusPlatformAppClient {
         new MobiusConversationAccessCredential(
             record(
                 await this.#executor.post(
-                    `v1/conversations/${encodeURIComponent(requestedIdentifier(conversationId, "Conversation identifier"))}/access-credentials`,
+                    `v1/conversations/${encodeURIComponent(requestedIdentifier(conversationId, "Conversation identifier"))}/access-credentials?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
                     {
                         actorRef: request.actorRef,
                         expiresInSeconds: requestedLifetime(
@@ -773,6 +774,7 @@ export class MobiusPlatformAppClient {
         );
 
     readonly rotateConversationAccessCredential = async (
+        projectId: string,
         credentialId: string,
         expiresInSeconds: number,
         signal: AbortSignal,
@@ -780,7 +782,7 @@ export class MobiusPlatformAppClient {
         new MobiusRotatedConversationAccessCredential(
             record(
                 await this.#executor.post(
-                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/rotate`,
+                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/rotate?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
                     { expiresInSeconds: requestedLifetime(expiresInSeconds, 3_600, "ConversationAccessCredential") },
                     signal,
                 ),
@@ -789,13 +791,14 @@ export class MobiusPlatformAppClient {
         );
 
     readonly revokeConversationAccessCredential = async (
+        projectId: string,
         credentialId: string,
         signal: AbortSignal,
     ): Promise<MobiusCredentialRevocation> =>
         new MobiusCredentialRevocation(
             record(
                 await this.#executor.post(
-                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/revoke`,
+                    `v1/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/revoke?project_id=${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}`,
                     {},
                     signal,
                 ),

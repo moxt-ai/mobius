@@ -1,5 +1,7 @@
 import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core/contracts";
+import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
 import type { PlatformProjectPlacement, PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
+import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 
 export interface PlatformStorageBindings {
     readonly D1_SHARD_APAC_01?: D1Database;
@@ -13,6 +15,15 @@ export interface PlatformStorageBindings {
 export interface PlatformDatabaseBinding {
     readonly database: D1Database;
     readonly id: string;
+}
+
+export function projectDatabase(shards: readonly PlatformDatabaseBinding[], projectId: string): D1Database {
+    const placement = decodePlatformProjectPlacement(projectId);
+    const database = shards.find(({ id }) => id === placement?.d1ShardId)?.database;
+    if (database === undefined) {
+        throw new DatabaseError("database_unavailable", "Project storage is unavailable");
+    }
+    return database;
 }
 
 export function platformDatabaseBindings(bindings: PlatformStorageBindings): readonly PlatformDatabaseBinding[] {

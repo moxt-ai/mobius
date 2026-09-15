@@ -1,5 +1,7 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWorktreeEnvironment } from "./worktree/environment.ts";
@@ -212,6 +214,55 @@ async function applyD1Migrations(
         ? environmentOptions[0].slice("--env=".length)
         : environmentOptions[1];
     for (const binding of target.migrationBindings(environment)) {
+        if (target === platformTarget && binding === PLATFORM_DIRECTORY_DATABASE_BINDING) {
+            const directory = await mkdtemp(resolve(tmpdir(), "mobius-platform-migrations-"));
+            try {
+                const config = resolve(directory, "wrangler.json");
+                await runPnpm(
+                    [
+                        "--filter",
+                        target.packageName,
+                        "exec",
+                        "node",
+                        "scripts/sharding-migrations.ts",
+                        ...selectWranglerOptions(wranglerArguments, ["--config", "--env"]),
+                        "--output",
+                        config,
+                    ],
+                    signal,
+                );
+                const persist = selectWranglerOptions(wranglerArguments, ["--persist-to"]);
+                const localOptions =
+                    location === "--local" && persist.length === 0
+                        ? ["--persist-to", resolve(target.configDirectory, ".wrangler/state")]
+                        : persist;
+                for (const shard of target
+                    .migrationBindings(environment)
+                    .filter((name) => name !== PLATFORM_DIRECTORY_DATABASE_BINDING)) {
+                    await runPnpm(
+                        [
+                            "--filter",
+                            target.packageName,
+                            "exec",
+                            "wrangler",
+                            "d1",
+                            "migrations",
+                            "apply",
+                            shard,
+                            location,
+                            "--config",
+                            config,
+                            ...localOptions,
+                            ...selectWranglerOptions(wranglerArguments, ["--profile"]),
+                            ...temporaryOptions,
+                        ],
+                        signal,
+                    );
+                }
+            } finally {
+                await rm(directory, { recursive: true, force: true });
+            }
+        }
         await runPnpm(
             [
                 "--filter",

@@ -39,11 +39,13 @@ void application;
 void project;
 
 export async function issueBrowserConversationAccess(
+    projectId: string,
     conversationId: string,
     actorRef: string,
     requestSignal: AbortSignal,
 ) {
     return await application.issueConversationAccessCredential(
+        projectId,
         conversationId,
         {
             actorRef,

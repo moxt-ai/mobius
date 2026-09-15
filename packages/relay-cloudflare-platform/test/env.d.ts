@@ -7,6 +7,7 @@ interface PlatformTestBindings extends PlatformRelayBindings {
     readonly TEST_UNINITIALIZED_SHARD: D1Database;
     readonly TEST_PLATFORM_MIGRATIONS: D1Migration[];
     readonly TEST_PROJECT_MIGRATIONS: D1Migration[];
+    readonly TEST_SHARDING_MIGRATIONS: D1Migration[];
 }
 
 declare global {

@@ -9,7 +9,7 @@ export class OrganizationInviteStorage {
 
     private readonly audit = (organizationId: string, actor: string, id: string, action: string, now: number) =>
         this.database
-            .prepare(`INSERT INTO platform_audit_events
+            .prepare(`INSERT INTO platform_dashboard_audit_events
             (audit_id, tenant_id, app_id, project_id, actor_kind, actor_id, actor_ref, action, subject_id, outcome, details_json, recorded_at)
             VALUES (?, ?, '', '', 'developer', ?, '', ?, ?, 'succeeded', '{}', ?)`)
             .bind(crypto.randomUUID(), organizationId, actor, action, id, now);

@@ -184,6 +184,23 @@ it.each(["apac", "wnam"])(
         expect((await fixture.worker.fetch(request("x".repeat(48)), edge)).status).toBe(401);
         const wrong = region === "apac" ? "wnam" : "apac";
         expect((await regional(wrong).fetch(request(fixture.appCredential))).status).toBe(421);
+        const browserRequest = () =>
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`, {
+                headers: credentialHeaders(`mconv_${"a".repeat(22)}_${"b".repeat(43)}`),
+            });
+        expect((await fixture.worker.fetch(browserRequest(), edge)).status).toBe(401);
+        expect((await regional(wrong).fetch(browserRequest())).status).toBe(421);
+        expect(
+            (
+                await fixture.worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${fixture.tenantId}/audit-events?project_id=${fixture.projectId}`,
+                        { headers: developerHeaders() },
+                    ),
+                    edge,
+                )
+            ).status,
+        ).toBe(200);
     },
 );
 
@@ -276,6 +293,37 @@ it("Given an App credential cached before App deletion, When stale authenticatio
         );
         expect(response.status).toBe(403);
     }
+});
+
+it("Given unavailable Project audit storage during creation, When the backend retries after recovery, Then the Project is usable and its creation is audited once", async () => {
+    const fixture = await provisionPlatformProject("audit-retry");
+    const create = (environment: PlatformRelayBindings) =>
+        fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
+                method: "POST",
+                headers: developerHeaders(),
+                body: JSON.stringify({
+                    displayName: "Recovered Project",
+                    idempotencyKey: "recover-audit",
+                    locationHint: "apac",
+                }),
+            }),
+            environment,
+        );
+    expect((await create({ ...fixture.environment, D1_SHARD_APAC_01: env.TEST_UNINITIALIZED_SHARD })).status).toBe(500);
+    const projectId = text(await json(await create(fixture.environment), 201), "projectId");
+    expect(text(await json(await create(fixture.environment), 201), "projectId")).toBe(projectId);
+    const audit = await json(
+        await fixture.worker.fetch(
+            new Request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${fixture.tenantId}/audit-events?project_id=${projectId}`,
+                { headers: developerHeaders() },
+            ),
+            fixture.environment,
+        ),
+        200,
+    );
+    expect(list(audit, "events").filter((event) => record(event)["action"] === "project.created")).toHaveLength(1);
 });
 
 it("Given an interrupted Project shard write, When provisioning is retried, Then the same Project becomes usable without reactivating an existing suspended record", async () => {
@@ -372,7 +420,7 @@ function credentialHeaders(credential: string): HeadersInit {
     return { authorization: `Bearer ${credential}`, "content-type": "application/json" };
 }
 
-it("Given a cached scoped App credential, When it is rotated, Then its cached replacement respects Project permissions and the old secret stops at the overlap deadline", async () => {
+it("Given a cached scoped App credential, When it is rotated, Then its shard stores the replacement scope and access respects permissions and the overlap deadline", async () => {
     const fixture = await provisionPlatformProject("kv-rotation");
     const developer = new MobiusPlatformDeveloperClient({
         authenticationProviderId: "clerk",
@@ -394,6 +442,13 @@ it("Given a cached scoped App credential, When it is rotated, Then its cached re
         );
     expect((await read(issued.credential)).status).toBe(200);
     const rotated = await developer.rotateAppCredential(issued.credentialId, 60, AbortSignal.timeout(5_000));
+    expect(
+        await env.D1_SHARD_APAC_01.prepare(
+            "SELECT project_id FROM platform_app_credential_projects WHERE credential_id = ?",
+        )
+            .bind(rotated.credentialId)
+            .first(),
+    ).toEqual({ project_id: fixture.projectId });
     expect((await read(issued.credential)).status).toBe(200);
     expect((await read(rotated.credential)).status).toBe(200);
     expect((await read(rotated.credential, "bots")).status).toBe(403);
@@ -967,6 +1022,18 @@ it("Given an App-owned Session, When its backend issues browser access, Then the
             201,
         );
         const headers = credentialHeaders(text(issued, "credential"));
+        expect(
+            await env.D1_SHARD_APAC_01.prepare(
+                "SELECT project_id, session_id FROM session_access_credentials WHERE credential_id = ?",
+            )
+                .bind(text(issued, "credentialId"))
+                .first(),
+        ).toEqual({ project_id: fixture.projectId, session_id: fixture.sessionId });
+        expect(
+            await env.D1_SHARD_APAC_01.prepare("SELECT action FROM platform_audit_events WHERE audit_id = ?")
+                .bind(`saa_${text(issued, "credentialId")}`)
+                .first(),
+        ).toEqual({ action: "session_access.issued" });
         const base = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}`;
         const preflight = await fixture.worker.fetch(
             new Request(`${base}/sessions/${fixture.sessionId}/prepare`, {
@@ -2244,8 +2311,23 @@ describe.sequential("Platform hosting boundary", () => {
         expect(audit["events"]).toEqual(
             expect.arrayContaining([
                 expect.objectContaining({ action: "app.created", outcome: "succeeded" }),
-                expect.objectContaining({ action: "project.created", outcome: "succeeded" }),
                 expect.objectContaining({ action: "quota.denied", outcome: "denied" }),
+            ]),
+        );
+        expect(list(audit, "events").every((event) => record(event)["projectId"] === "")).toBe(true);
+        const projectAudit = await json(
+            await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants/${tenantId}/audit-events?project_id=${projectId}`,
+                    { headers: developerHeaders() },
+                ),
+                { ...environment, D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD },
+            ),
+            200,
+        );
+        expect(projectAudit["events"]).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({ action: "project.created", outcome: "succeeded", projectId }),
                 expect.objectContaining({
                     action: "quota.denied",
                     details: { limit: 1, resource: "session" },
@@ -2531,7 +2613,11 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given a ready Platform Conversation, When scoped actor credentials use fixed browser routes, Then targets, permissions, cursors, revocation, and accepted Turn lifetime stay isolated", async () => {
-        const fixture = await createReadyConversation("browser-access");
+        const ready = await createReadyConversation("browser-access");
+        const fixture = {
+            ...ready,
+            environment: { ...ready.environment, D1_SHARD_WNAM_01: env.TEST_UNINITIALIZED_SHARD },
+        };
         try {
             const issue = async (
                 actorRef: string,
@@ -2542,7 +2628,7 @@ describe.sequential("Platform hosting boundary", () => {
                 await json(
                     await fixture.worker.fetch(
                         new Request(
-                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversations/${conversationId}/access-credentials`,
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversations/${conversationId}/access-credentials?project_id=${fixture.projectId}`,
                             {
                                 body: JSON.stringify({
                                     actorRef,
@@ -2568,6 +2654,58 @@ describe.sequential("Platform hosting boundary", () => {
                 "conversation:turn:create",
             ];
             const alice = await issue("actor-alice", fixture.conversationId, fullPermissions);
+            for (const query of [
+                "",
+                "?project_id=invalid",
+                `?project_id=${fixture.projectId}&project_id=${fixture.projectId}`,
+            ]) {
+                expect(
+                    (
+                        await fixture.worker.fetch(
+                            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session${query}`, {
+                                headers: credentialHeaders(text(alice, "credential")),
+                            }),
+                            fixture.environment,
+                        )
+                    ).status,
+                ).toBe(400);
+            }
+            const wrongProjectId = "prj_a01_AAAAAAAAAAAAAAAAAAAAAAAA";
+            expect(
+                (
+                    await fixture.worker.fetch(
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${wrongProjectId}`,
+                            { headers: credentialHeaders(text(alice, "credential")) },
+                        ),
+                        fixture.environment,
+                    )
+                ).status,
+            ).toBe(401);
+            for (const operation of ["rotate", "revoke"]) {
+                expect(
+                    (
+                        await fixture.worker.fetch(
+                            new Request(
+                                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(alice, "credentialId")}/${operation}?project_id=${wrongProjectId}`,
+                                {
+                                    method: "POST",
+                                    headers: credentialHeaders(fixture.appCredential),
+                                    body: JSON.stringify(operation === "rotate" ? { expiresInSeconds: 120 } : {}),
+                                },
+                            ),
+                            fixture.environment,
+                        )
+                    ).status,
+                ).toBe(404);
+            }
+            expect(
+                await env.D1_SHARD_APAC_01.prepare(
+                    "SELECT project_id FROM conversation_access_credentials WHERE credential_id = ?",
+                )
+                    .bind(text(alice, "credentialId"))
+                    .first(),
+            ).toEqual({ project_id: fixture.projectId });
             // Given wildcard browser access, unrelated origins still need a scoped credential and permission.
             const publicBrowserWorker = createTestMobiusPlatformApp(
                 new PlatformAuthenticationConfiguration(
@@ -2579,7 +2717,7 @@ describe.sequential("Platform hosting boundary", () => {
             );
             const readOnly = await issue("public-browser", fixture.conversationId, ["conversation:read"]);
             for (const origin of ["https://independent-app.example", "https://another-app.example"]) {
-                const endpoint = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`;
+                const endpoint = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`;
                 const preflight = await publicBrowserWorker.fetch(
                     new Request(endpoint, {
                         method: "OPTIONS",
@@ -2607,9 +2745,12 @@ describe.sequential("Platform hosting boundary", () => {
                 );
                 expect(unauthenticated.status).toBe(401);
                 const deniedEvents = await publicBrowserWorker.fetch(
-                    new Request(`${endpoint}/events`, {
-                        headers: { origin, ...credentialHeaders(text(readOnly, "credential")) },
-                    }),
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/events?project_id=${fixture.projectId}`,
+                        {
+                            headers: { origin, ...credentialHeaders(text(readOnly, "credential")) },
+                        },
+                    ),
                     fixture.environment,
                 );
                 expect(deniedEvents.status).toBe(403);
@@ -2622,6 +2763,7 @@ describe.sequential("Platform hosting boundary", () => {
                 transport,
             });
             const sdkAccess = await platformApplication.issueConversationAccessCredential(
+                fixture.projectId,
                 fixture.conversationId,
                 {
                     actorRef: "actor-sdk",
@@ -2631,6 +2773,7 @@ describe.sequential("Platform hosting boundary", () => {
                 AbortSignal.timeout(5_000),
             );
             const sdkBrowser = createMobiusConversationSession({
+                projectId: fixture.projectId,
                 accessTokenProvider: {
                     accessToken: async () => new MobiusBrowserAccessToken(sdkAccess.credential, sdkAccess.expiresAt),
                 },
@@ -2645,7 +2788,7 @@ describe.sequential("Platform hosting boundary", () => {
             expect("appCredentials" in sdkBrowser).toBe(false);
 
             const preflight = await fixture.worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`, {
                     headers: {
                         "access-control-request-headers": "authorization",
                         "access-control-request-method": "GET",
@@ -2661,7 +2804,7 @@ describe.sequential("Platform hosting boundary", () => {
                 "x-mobius-event-format",
             );
             const aliceSessionResponse = await fixture.worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`, {
                     headers: { ...credentialHeaders(aliceCredential), origin: thirdPartyBrowserOrigin },
                 }),
                 fixture.environment,
@@ -2675,7 +2818,7 @@ describe.sequential("Platform hosting boundary", () => {
             expect(record(aliceSession["session"])).toMatchObject({ sessionId: fixture.sessionId });
 
             const deniedOrigin = await fixture.worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`, {
                     headers: { ...credentialHeaders(aliceCredential), origin: "https://untrusted.example.test" },
                 }),
                 fixture.environment,
@@ -2700,9 +2843,12 @@ describe.sequential("Platform hosting boundary", () => {
             const bob = await issue("actor-bob", text(secondConversation, "conversationId"), ["conversation:read"]);
             const bobSession = await json(
                 await fixture.worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
-                        headers: credentialHeaders(text(bob, "credential")),
-                    }),
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`,
+                        {
+                            headers: credentialHeaders(text(bob, "credential")),
+                        },
+                    ),
                     fixture.environment,
                 ),
                 200,
@@ -2715,7 +2861,7 @@ describe.sequential("Platform hosting boundary", () => {
 
             const forbiddenTarget = await fixture.worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?sessionId=${encodeURIComponent(text(secondConversation, "sessionId"))}`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}&sessionId=${encodeURIComponent(text(secondConversation, "sessionId"))}`,
                     { headers: credentialHeaders(aliceCredential) },
                 ),
                 fixture.environment,
@@ -2734,18 +2880,21 @@ describe.sequential("Platform hosting boundary", () => {
             expect(controlPlane.status).toBe(401);
 
             const readOnlyTurn = await fixture.worker.fetch(
-                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/turns`, {
-                    body: JSON.stringify({
-                        additionalDirectoryIds: [],
-                        artifactIds: [],
-                        content: "denied",
-                        idempotencyKey: "read-only-turn",
-                        images: [],
-                        resources: [],
-                    }),
-                    headers: credentialHeaders(text(bob, "credential")),
-                    method: "POST",
-                }),
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/turns?project_id=${fixture.projectId}`,
+                    {
+                        body: JSON.stringify({
+                            additionalDirectoryIds: [],
+                            artifactIds: [],
+                            content: "denied",
+                            idempotencyKey: "read-only-turn",
+                            images: [],
+                            resources: [],
+                        }),
+                        headers: credentialHeaders(text(bob, "credential")),
+                        method: "POST",
+                    },
+                ),
                 fixture.environment,
             );
             expect(readOnlyTurn.status).toBe(403);
@@ -2755,18 +2904,21 @@ describe.sequential("Platform hosting boundary", () => {
 
             const accepted = await json(
                 await fixture.worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/turns`, {
-                        body: JSON.stringify({
-                            additionalDirectoryIds: [],
-                            artifactIds: [],
-                            content: "hello from Alice",
-                            idempotencyKey: "alice-turn",
-                            images: [],
-                            resources: [],
-                        }),
-                        headers: credentialHeaders(aliceCredential),
-                        method: "POST",
-                    }),
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/turns?project_id=${fixture.projectId}`,
+                        {
+                            body: JSON.stringify({
+                                additionalDirectoryIds: [],
+                                artifactIds: [],
+                                content: "hello from Alice",
+                                idempotencyKey: "alice-turn",
+                                images: [],
+                                resources: [],
+                            }),
+                            headers: credentialHeaders(aliceCredential),
+                            method: "POST",
+                        },
+                    ),
                     fixture.environment,
                 ),
                 202,
@@ -2805,9 +2957,12 @@ describe.sequential("Platform hosting boundary", () => {
 
             const firstEvents = await json(
                 await fixture.worker.fetch(
-                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/events?limit=1`, {
-                        headers: credentialHeaders(aliceCredential),
-                    }),
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/events?project_id=${fixture.projectId}&limit=1`,
+                        {
+                            headers: credentialHeaders(aliceCredential),
+                        },
+                    ),
                     fixture.environment,
                 ),
                 200,
@@ -2817,7 +2972,7 @@ describe.sequential("Platform hosting boundary", () => {
             const resumedEvents = await json(
                 await fixture.worker.fetch(
                     new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/events?limit=10&cursor=${encodeURIComponent(text(firstEvents, "cursor"))}`,
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session/events?project_id=${fixture.projectId}&limit=10&cursor=${encodeURIComponent(text(firstEvents, "cursor"))}`,
                         { headers: credentialHeaders(aliceCredential) },
                     ),
                     fixture.environment,
@@ -2839,7 +2994,7 @@ describe.sequential("Platform hosting boundary", () => {
             const rotated = await json(
                 await fixture.worker.fetch(
                     new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(alice, "credentialId")}/rotate`,
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(alice, "credentialId")}/rotate?project_id=${fixture.projectId}`,
                         {
                             body: JSON.stringify({ expiresInSeconds: 60 }),
                             headers: credentialHeaders(fixture.appCredential),
@@ -2853,9 +3008,12 @@ describe.sequential("Platform hosting boundary", () => {
             expect(
                 (
                     await fixture.worker.fetch(
-                        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
-                            headers: credentialHeaders(aliceCredential),
-                        }),
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`,
+                            {
+                                headers: credentialHeaders(aliceCredential),
+                            },
+                        ),
                         fixture.environment,
                     )
                 ).status,
@@ -2863,9 +3021,12 @@ describe.sequential("Platform hosting boundary", () => {
             expect(
                 (
                     await fixture.worker.fetch(
-                        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
-                            headers: credentialHeaders(text(rotated, "credential")),
-                        }),
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`,
+                            {
+                                headers: credentialHeaders(text(rotated, "credential")),
+                            },
+                        ),
                         fixture.environment,
                     )
                 ).status,
@@ -2875,9 +3036,12 @@ describe.sequential("Platform hosting boundary", () => {
             expect(
                 (
                     await fixture.worker.fetch(
-                        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
-                            headers: credentialHeaders(text(rotated, "credential")),
-                        }),
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`,
+                            {
+                                headers: credentialHeaders(text(rotated, "credential")),
+                            },
+                        ),
                         fixture.environment,
                     )
                 ).status,
@@ -2893,7 +3057,7 @@ describe.sequential("Platform hosting boundary", () => {
 
             const revoked = await fixture.worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(bob, "credentialId")}/revoke`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/${text(bob, "credentialId")}/revoke?project_id=${fixture.projectId}`,
                     { body: "{}", headers: credentialHeaders(fixture.appCredential), method: "POST" },
                 ),
                 fixture.environment,
@@ -2902,9 +3066,12 @@ describe.sequential("Platform hosting boundary", () => {
             expect(
                 (
                     await fixture.worker.fetch(
-                        new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session`, {
-                            headers: credentialHeaders(text(bob, "credential")),
-                        }),
+                        new Request(
+                            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/client/session?project_id=${fixture.projectId}`,
+                            {
+                                headers: credentialHeaders(text(bob, "credential")),
+                            },
+                        ),
                         fixture.environment,
                     )
                 ).status,
@@ -2918,6 +3085,7 @@ describe.sequential("Platform hosting boundary", () => {
                 code: "conversation_credential_revoked",
             });
             const sdkRevocation = await platformApplication.revokeConversationAccessCredential(
+                fixture.projectId,
                 sdkAccess.credentialId,
                 AbortSignal.timeout(5_000),
             );
@@ -2943,6 +3111,7 @@ describe.sequential("Platform hosting boundary", () => {
                 transport,
             });
             const issued = await application.issueConversationAccessCredential(
+                fixture.projectId,
                 fixture.conversationId,
                 {
                     actorRef: "actor-browser-history",
@@ -2959,6 +3128,7 @@ describe.sequential("Platform hosting boundary", () => {
             );
             let tokenRequests = 0;
             const browser = createMobiusConversationSession({
+                projectId: fixture.projectId,
                 accessTokenProvider: {
                     accessToken: async (signal) => {
                         tokenRequests += 1;
@@ -2966,6 +3136,7 @@ describe.sequential("Platform hosting boundary", () => {
                             return new MobiusBrowserAccessToken(issued.credential, issued.expiresAt);
                         }
                         const refreshed = await application.issueConversationAccessCredential(
+                            fixture.projectId,
                             fixture.conversationId,
                             {
                                 actorRef: "actor-browser-history",

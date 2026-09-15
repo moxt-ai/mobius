@@ -12,6 +12,7 @@ import {
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
+import { requestedProjectId } from "./conversation-request.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -175,6 +176,7 @@ export function createPlatformControlApplication() {
             return context.json(
                 await context.env.control.listTenantAuditEvents(
                     access,
+                    context.req.query("project_id") === undefined ? null : requestedProjectId(context.req.raw),
                     queryLimit(context.req.query("limit")),
                     context.var.signal,
                 ),

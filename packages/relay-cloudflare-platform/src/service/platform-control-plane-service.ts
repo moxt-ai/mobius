@@ -805,7 +805,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                     409,
                 );
             }
-            await this.#projectAuthorization.create(existing, signal);
+            await this.recoverProjectProvisioning(existing, access, signal);
             return projectResource(existing);
         }
         const placement = this.#placements.resolveLocationHint(locationHint);
@@ -871,7 +871,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                 signal,
             );
             if (duplicate !== null && duplicate.request_digest === digest) {
-                await this.#projectAuthorization.create(duplicate, signal);
+                await this.recoverProjectProvisioning(duplicate, access, signal);
                 return projectResource(duplicate);
             }
             await this.recordQuotaDenial(access, "project", app.app_id, quota.activeProjects, signal);
@@ -891,6 +891,33 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     readonly listApps = async (access: PlatformDeveloperAccess, signal: AbortSignal): Promise<object> => {
         const rows = await this.#storage.listApps(access.tenantId, signal);
         return { apps: rows.map(appResource) };
+    };
+
+    private readonly recoverProjectProvisioning = async (
+        project: ProjectRow,
+        access: ProjectProvisioningActor,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const recorded = await this.#storage.recordAudit(
+            this.auditRecord(
+                project.tenant_id,
+                project.app_id,
+                project.project_id,
+                access.kind,
+                access.subject,
+                access.credentialId,
+                "project.created",
+                project.project_id,
+                "succeeded",
+                {},
+                project.created_at,
+            ),
+            signal,
+        );
+        if (!recorded) {
+            throw new PlatformControlPlaneError("platform_write_failed", "The Project could not be created", 503);
+        }
+        await this.#projectAuthorization.create(project, signal);
     };
 
     readonly listProjects = async (
@@ -947,6 +974,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
 
     readonly listTenantAuditEvents = async (
         access: PlatformDeveloperAccess,
+        projectId: string | null,
         limit: number,
         signal: AbortSignal,
     ): Promise<object> => {
@@ -954,7 +982,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) {
             throw new PlatformControlPlaneError("invalid_request", "The audit page size is invalid", 400);
         }
-        const rows = await this.#storage.listTenantAuditEvents(access.tenantId, limit, signal);
+        const rows = await this.#storage.listTenantAuditEvents(access.tenantId, projectId, limit, signal);
         return { events: rows.map(auditResource) };
     };
 

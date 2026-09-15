@@ -122,11 +122,12 @@ function strings(value: Readonly<Record<string, unknown>>, field: string): reado
     return Object.freeze(candidate.filter((entry) => typeof entry === "string"));
 }
 
-function pagePath(path: string, page: MobiusPageRequest): string {
+function pagePath(path: string, page: MobiusPageRequest, projectId: string): string {
     const query = new URLSearchParams({ limit: page.limit.toString() });
     if (page.cursor.length > 0) {
         query.set("cursor", page.cursor);
     }
+    query.set("project_id", projectId);
     return `${path}?${query.toString()}`;
 }
 
@@ -318,9 +319,11 @@ export class MobiusBrowserHistory {
 }
 
 export class MobiusBrowserMessageResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
@@ -331,7 +334,7 @@ export class MobiusBrowserMessageResources {
         new MobiusAcceptedBrowserMessage(
             record(
                 await this.#executor.post(
-                    "v1/client/session/messages",
+                    `v1/client/session/messages?project_id=${encodeURIComponent(this.#projectId)}`,
                     {
                         artifactIds: request.artifactIds.map((artifactId) =>
                             requestedIdentifier(artifactId, "artifact identifier"),
@@ -350,7 +353,7 @@ export class MobiusBrowserMessageResources {
     readonly run = async (messageId: string, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeBrowserTurn(
             await this.#executor.post(
-                "v1/client/session/turns",
+                `v1/client/session/turns?project_id=${encodeURIComponent(this.#projectId)}`,
                 { messageId: requestedIdentifier(messageId, "message identifier") },
                 signal,
             ),
@@ -358,15 +361,20 @@ export class MobiusBrowserMessageResources {
 }
 
 export class MobiusBrowserHistoryResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
     readonly read = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusBrowserHistory> =>
         new MobiusBrowserHistory(
-            record(await this.#executor.get(pagePath("v1/client/session/history", page), signal), "Session history"),
+            record(
+                await this.#executor.get(pagePath("v1/client/session/history", page, this.#projectId), signal),
+                "Session history",
+            ),
         );
 }
 
@@ -419,15 +427,23 @@ export interface MobiusUpdateBrowserConfigurationRequest {
 }
 
 export class MobiusBrowserConfigurationResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
     readonly read = async (signal: AbortSignal): Promise<MobiusBrowserConfiguration> =>
         new MobiusBrowserConfiguration(
-            record(await this.#executor.get("v1/client/session/configuration", signal), "Session configuration"),
+            record(
+                await this.#executor.get(
+                    `v1/client/session/configuration?project_id=${encodeURIComponent(this.#projectId)}`,
+                    signal,
+                ),
+                "Session configuration",
+            ),
         );
 
     readonly update = async (
@@ -437,7 +453,7 @@ export class MobiusBrowserConfigurationResources {
         new MobiusBrowserConfigurationAcceptance(
             record(
                 await this.#executor.post(
-                    "v1/client/session/configuration",
+                    `v1/client/session/configuration?project_id=${encodeURIComponent(this.#projectId)}`,
                     {
                         additionalDirectoryIds: request.additionalDirectoryIds.map((directoryId) =>
                             requestedIdentifier(directoryId, "additional directory identifier"),
@@ -456,32 +472,41 @@ export class MobiusBrowserConfigurationResources {
 }
 
 export class MobiusBrowserSessionResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
     readonly read = async (signal: AbortSignal): Promise<MobiusBrowserSessionSnapshot> =>
         new MobiusBrowserSessionSnapshot(
-            record(await this.#executor.get("v1/client/session", signal), "Session snapshot"),
+            record(
+                await this.#executor.get(`v1/client/session?project_id=${encodeURIComponent(this.#projectId)}`, signal),
+                "Session snapshot",
+            ),
         );
 
     readonly readMessages = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusMessagePage> =>
-        decodeMobiusMessagePage(await this.#executor.get(pagePath("v1/client/session/messages", page), signal));
+        decodeMobiusMessagePage(
+            await this.#executor.get(pagePath("v1/client/session/messages", page, this.#projectId), signal),
+        );
 }
 
 export class MobiusBrowserTurnResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
     readonly submit = async (request: MobiusSubmitBrowserTurnRequest, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeBrowserTurn(
             await this.#executor.post(
-                "v1/client/session/turns",
+                `v1/client/session/turns?project_id=${encodeURIComponent(this.#projectId)}`,
                 {
                     additionalDirectoryIds: request.additionalDirectoryIds,
                     artifactIds: request.artifactIds,
@@ -497,7 +522,7 @@ export class MobiusBrowserTurnResources {
     readonly read = async (turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeMobiusTurn(
             await this.#executor.get(
-                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}`,
+                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}?project_id=${encodeURIComponent(this.#projectId)}`,
                 signal,
             ),
         );
@@ -505,7 +530,7 @@ export class MobiusBrowserTurnResources {
     readonly cancel = async (turnId: string, idempotencyKey: string, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeMobiusTurn(
             await this.#executor.post(
-                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}/cancel`,
+                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}/cancel?project_id=${encodeURIComponent(this.#projectId)}`,
                 { idempotencyKey: requestedIdentifier(idempotencyKey, "turn cancellation idempotency key") },
                 signal,
             ),
@@ -514,7 +539,7 @@ export class MobiusBrowserTurnResources {
     readonly promote = async (turnId: string, signal: AbortSignal): Promise<MobiusTurn> =>
         decodeMobiusTurn(
             await this.#executor.post(
-                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}/promote`,
+                `v1/client/session/turns/${encodeURIComponent(requestedIdentifier(turnId, "Turn identifier"))}/promote?project_id=${encodeURIComponent(this.#projectId)}`,
                 {},
                 signal,
             ),
@@ -522,19 +547,26 @@ export class MobiusBrowserTurnResources {
 }
 
 export class MobiusBrowserInteractionResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
     readonly listPending = async (signal: AbortSignal): Promise<readonly Interaction[]> =>
-        decodeMobiusInteractionList(await this.#executor.get("v1/client/session/interactions", signal));
+        decodeMobiusInteractionList(
+            await this.#executor.get(
+                `v1/client/session/interactions?project_id=${encodeURIComponent(this.#projectId)}`,
+                signal,
+            ),
+        );
 
     readonly read = async (interactionId: string, signal: AbortSignal): Promise<Interaction> =>
         decodeMobiusInteraction(
             await this.#executor.get(
-                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}`,
+                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}?project_id=${encodeURIComponent(this.#projectId)}`,
                 signal,
             ),
         );
@@ -547,7 +579,7 @@ export class MobiusBrowserInteractionResources {
     ): Promise<Interaction> =>
         decodeMobiusInteraction(
             await this.#executor.post(
-                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}/response`,
+                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}/response?project_id=${encodeURIComponent(this.#projectId)}`,
                 { kind: "permission", optionId, outcome },
                 signal,
             ),
@@ -561,7 +593,7 @@ export class MobiusBrowserInteractionResources {
     ): Promise<Interaction> =>
         decodeMobiusInteraction(
             await this.#executor.post(
-                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}/response`,
+                `v1/client/session/interactions/${encodeURIComponent(requestedIdentifier(interactionId, "Interaction identifier"))}/response?project_id=${encodeURIComponent(this.#projectId)}`,
                 { action, content, kind: "elicitation" },
                 signal,
             ),
@@ -569,9 +601,11 @@ export class MobiusBrowserInteractionResources {
 }
 
 export class MobiusBrowserArtifactResources {
+    readonly #projectId: string;
     readonly #executor: MobiusRequestExecutor;
 
-    constructor(executor: MobiusRequestExecutor) {
+    constructor(executor: MobiusRequestExecutor, projectId: string) {
+        this.#projectId = requestedIdentifier(projectId, "Project identifier");
         this.#executor = executor;
     }
 
@@ -579,7 +613,13 @@ export class MobiusBrowserArtifactResources {
         request: MobiusArtifactUploadRequest,
         signal: AbortSignal,
     ): Promise<MobiusArtifactUpload> =>
-        decodeMobiusArtifactUpload(await this.#executor.post("v1/client/session/artifacts", request, signal));
+        decodeMobiusArtifactUpload(
+            await this.#executor.post(
+                `v1/client/session/artifacts?project_id=${encodeURIComponent(this.#projectId)}`,
+                request,
+                signal,
+            ),
+        );
 
     readonly uploadContent = async (
         upload: MobiusArtifactUpload,
@@ -591,7 +631,7 @@ export class MobiusBrowserArtifactResources {
         }
         return decodeMobiusAvailableArtifact(
             await this.#executor.putBytes(
-                `v1/client/session/artifacts/${encodeURIComponent(upload.artifactId)}/content`,
+                `v1/client/session/artifacts/${encodeURIComponent(upload.artifactId)}/content?project_id=${encodeURIComponent(this.#projectId)}`,
                 bytes,
                 upload.mediaType,
                 upload.uploadToken,
@@ -603,7 +643,7 @@ export class MobiusBrowserArtifactResources {
     readonly read = async (artifactId: string, signal: AbortSignal): Promise<MobiusArtifact> =>
         decodeMobiusArtifact(
             await this.#executor.get(
-                `v1/client/session/artifacts/${encodeURIComponent(requestedIdentifier(artifactId, "Artifact identifier"))}`,
+                `v1/client/session/artifacts/${encodeURIComponent(requestedIdentifier(artifactId, "Artifact identifier"))}?project_id=${encodeURIComponent(this.#projectId)}`,
                 signal,
             ),
         );
@@ -614,7 +654,7 @@ export class MobiusBrowserArtifactResources {
             throw new MobiusApiError("artifact_not_ready", "The artifact content is not available", 409);
         }
         const bytes = await this.#executor.getBytes(
-            `v1/client/session/artifacts/${encodeURIComponent(requestedIdentifier(artifactId, "Artifact identifier"))}/content`,
+            `v1/client/session/artifacts/${encodeURIComponent(requestedIdentifier(artifactId, "Artifact identifier"))}/content?project_id=${encodeURIComponent(this.#projectId)}`,
             artifact,
             signal,
         );
@@ -622,9 +662,12 @@ export class MobiusBrowserArtifactResources {
     };
 }
 
-export interface MobiusBrowserClientOptions extends MobiusEndpointOptions {}
+export interface MobiusBrowserClientOptions extends MobiusEndpointOptions {
+    readonly projectId: string;
+}
 
 export interface MobiusConversationSessionOptions {
+    readonly projectId: string;
     readonly accessTokenProvider: MobiusBrowserAccessTokenProvider;
     readonly endpoint: string;
     readonly maxStreamReconnectAttempts?: number;
@@ -637,6 +680,7 @@ export interface MobiusConversationSessionOptions {
 
 export function createMobiusConversationSession(options: MobiusConversationSessionOptions): MobiusBrowserClient {
     return new MobiusBrowserClient({
+        projectId: options.projectId,
         credentialProvider: new RefreshingMobiusBrowserCredentialProvider(
             options.accessTokenProvider,
             options.refreshWindowMilliseconds,
@@ -673,14 +717,18 @@ export class MobiusBrowserClient {
             throw new MobiusValidationError("Browser requests cannot select a developer authentication provider");
         }
         const executor = new MobiusRequestExecutor(options);
-        this.artifacts = new MobiusBrowserArtifactResources(executor);
-        this.configuration = new MobiusBrowserConfigurationResources(executor);
-        this.events = new MobiusFixedSessionEventResources(executor, options.maxStreamReconnectAttempts);
-        this.history = new MobiusBrowserHistoryResources(executor);
-        this.interactions = new MobiusBrowserInteractionResources(executor);
-        this.messages = new MobiusBrowserMessageResources(executor);
-        this.session = new MobiusBrowserSessionResources(executor);
-        this.turns = new MobiusBrowserTurnResources(executor);
+        this.artifacts = new MobiusBrowserArtifactResources(executor, options.projectId);
+        this.configuration = new MobiusBrowserConfigurationResources(executor, options.projectId);
+        this.events = new MobiusFixedSessionEventResources(
+            executor,
+            options.projectId,
+            options.maxStreamReconnectAttempts,
+        );
+        this.history = new MobiusBrowserHistoryResources(executor, options.projectId);
+        this.interactions = new MobiusBrowserInteractionResources(executor, options.projectId);
+        this.messages = new MobiusBrowserMessageResources(executor, options.projectId);
+        this.session = new MobiusBrowserSessionResources(executor, options.projectId);
+        this.turns = new MobiusBrowserTurnResources(executor, options.projectId);
     }
 
     readonly readEvents = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusEventPage> =>

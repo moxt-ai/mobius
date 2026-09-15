@@ -10,7 +10,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { bodyParser } from "../middleware/body-parser.ts";
 import type { ConversationHttpEnvironment } from "./conversation-http-environment.ts";
-import { bearer } from "./conversation-request.ts";
+import { bearer, requestedProjectId } from "./conversation-request.ts";
 
 const artifactUploadSchema = v.strictObject({
     byteLength: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
@@ -24,6 +24,7 @@ export function createBrowserArtifactRoutes() {
         .post("/artifacts", bodyParser(artifactUploadSchema), async (context) => {
             const value = context.req.valid("json");
             const access = await context.env.access.authorize(
+                requestedProjectId(context.req.raw),
                 bearer(context.req.raw),
                 Permission.ArtifactWrite,
                 context.var.signal,
@@ -40,6 +41,7 @@ export function createBrowserArtifactRoutes() {
         })
         .put("/artifacts/:artifactId/content", async (context) => {
             const access = await context.env.access.authorize(
+                requestedProjectId(context.req.raw),
                 bearer(context.req.raw),
                 Permission.ArtifactWrite,
                 context.var.signal,
@@ -82,6 +84,7 @@ export function createBrowserArtifactRoutes() {
         })
         .get("/artifacts/:artifactId", async (context) => {
             const access = await context.env.access.authorize(
+                requestedProjectId(context.req.raw),
                 bearer(context.req.raw),
                 Permission.ArtifactRead,
                 context.var.signal,
@@ -97,6 +100,7 @@ export function createBrowserArtifactRoutes() {
         })
         .get("/artifacts/:artifactId/content", async (context) => {
             const access = await context.env.access.authorize(
+                requestedProjectId(context.req.raw),
                 bearer(context.req.raw),
                 Permission.ArtifactRead,
                 context.var.signal,

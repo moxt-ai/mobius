@@ -3,6 +3,8 @@ import { env } from "cloudflare:workers";
 
 await applyD1Migrations(env.D1_SHARD_APAC_01, env.TEST_PROJECT_MIGRATIONS);
 await applyD1Migrations(env.D1_SHARD_WNAM_01, env.TEST_PROJECT_MIGRATIONS);
+await applyD1Migrations(env.D1_SHARD_APAC_01, env.TEST_SHARDING_MIGRATIONS, "platform_sharding_migrations");
+await applyD1Migrations(env.D1_SHARD_WNAM_01, env.TEST_SHARDING_MIGRATIONS, "platform_sharding_migrations");
 if (env.TEST_PLATFORM_MIGRATIONS.length > 0) {
     await applyD1Migrations(env.PLATFORM_DIRECTORY_DATABASE, env.TEST_PLATFORM_MIGRATIONS);
 }

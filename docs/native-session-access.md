@@ -45,6 +45,6 @@ permissions are checked on each request. Event streams are bounded by credential
 expiry; reconnecting reauthorizes access. Runtime-local execution authorization
 continues to govern agent actions.
 
-Apply Platform directory migration `0004_session_access_credentials.sql` before
+Apply Platform `migrations/sharding/0001_platform_project_credentials.sql` before
 deployment. Existing Bot conversations continue to use their conversation-scoped
 credentials and browser SDK.

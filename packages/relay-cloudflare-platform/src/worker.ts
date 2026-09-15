@@ -109,14 +109,17 @@ export function createPlatformApplication(
             ),
         });
     const conversationHandler: Handler<DispatchEnvironment> = (context) => {
-        const { relay, sessionAccess, control, projectDatabases } = context.var;
+        const { relay, sessionAccess, control } = context.var;
         if (relay.services.bots === null) {
             throw new Error("Platform Bot services are unavailable");
         }
         return conversationApplication.fetch(context.req.raw, {
             sessionAccess,
             access: new ConversationAccessService(
-                new ConversationAccessStorage(context.env.PLATFORM_DIRECTORY_DATABASE, projectDatabases),
+                new ConversationAccessStorage(
+                    context.env.PLATFORM_DIRECTORY_DATABASE,
+                    platformDatabaseBindings(context.env),
+                ),
                 control,
             ),
             allowedOrigins: authentication.allowedOrigins,
@@ -192,7 +195,7 @@ export function createPlatformApplication(
             const projectDatabases = databaseBindings.map(({ database }) => database);
             const controlStorage = new PlatformControlPlaneStorage(
                 environment.PLATFORM_DIRECTORY_DATABASE,
-                projectDatabases,
+                databaseBindings,
             );
             const storageRegistry = new PlatformStorageRegistry(environment);
             const appAuthentication = new AppCredentialAuthenticationService(
@@ -219,7 +222,10 @@ export function createPlatformApplication(
             const databases = new PlatformDatabaseResolver(environment);
             const projects = new PlatformProjectStorageDirectory(storageRegistry);
             const sessionAccess = new SessionAccessService(
-                new SessionAccessStorage(environment.PLATFORM_DIRECTORY_DATABASE),
+                new SessionAccessStorage(
+                    environment.PLATFORM_DIRECTORY_DATABASE,
+                    platformDatabaseBindings(environment),
+                ),
                 control,
             );
             const cx = createWorkerContext({

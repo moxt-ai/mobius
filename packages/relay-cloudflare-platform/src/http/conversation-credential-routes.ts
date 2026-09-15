@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { bodyParser } from "../middleware/body-parser.ts";
 import type { ConversationHttpEnvironment } from "./conversation-http-environment.ts";
-import { bearer } from "./conversation-request.ts";
+import { bearer, requestedProjectId } from "./conversation-request.ts";
 
 const nonnegativeIntegerSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 const issueConversationCredentialSchema = v.strictObject({
@@ -23,6 +23,7 @@ export function createConversationCredentialRoutes() {
                 const value = context.req.valid("json");
                 return context.json(
                     await context.env.access.issueForConversation(
+                        requestedProjectId(context.req.raw),
                         validateIdentifier(context.req.param("conversationId"), "conversation_id"),
                         bearer(context.req.raw),
                         value.actorRef,
@@ -41,6 +42,7 @@ export function createConversationCredentialRoutes() {
                 const value = context.req.valid("json");
                 const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
                 const replacement = await context.env.access.rotate(
+                    requestedProjectId(context.req.raw),
                     credentialId,
                     bearer(context.req.raw),
                     value.expiresInSeconds,
@@ -56,6 +58,7 @@ export function createConversationCredentialRoutes() {
             async (context) => {
                 const credentialId = validateIdentifier(context.req.param("credentialId"), "credential_id");
                 const revocation = await context.env.access.revoke(
+                    requestedProjectId(context.req.raw),
                     credentialId,
                     bearer(context.req.raw),
                     context.var.signal,

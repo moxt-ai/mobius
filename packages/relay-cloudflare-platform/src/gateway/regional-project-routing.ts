@@ -23,13 +23,26 @@ export async function routeRegionalProject(
         return failure("regional_configuration_invalid", 503);
     }
     const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
-    const path = new URL(request.url).pathname;
-    if (!path.startsWith(prefix)) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const queryScoped =
+        path.startsWith(`${MOBIUS_API_PREFIX}/v1/client/session`) ||
+        path.startsWith(`${MOBIUS_API_PREFIX}/v1/conversations/`) ||
+        path.startsWith(`${MOBIUS_API_PREFIX}/v1/conversation-access-credentials/`) ||
+        (path.startsWith(`${MOBIUS_API_PREFIX}/v1/platform/tenants/`) &&
+            path.endsWith("/audit-events") &&
+            url.searchParams.has("project_id"));
+    if (!path.startsWith(prefix) && !queryScoped) {
         return null;
     }
     let projectId: string;
     try {
-        projectId = decodeURIComponent(path.slice(prefix.length).split("/")[0] ?? "");
+        if (queryScoped && url.searchParams.getAll("project_id").length !== 1) {
+            return failure("invalid_request", 400);
+        }
+        projectId = queryScoped
+            ? (url.searchParams.get("project_id") ?? "")
+            : decodeURIComponent(path.slice(prefix.length).split("/")[0] ?? "");
     } catch {
         return failure("project_id_invalid", 400);
     }
