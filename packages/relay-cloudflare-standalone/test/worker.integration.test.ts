@@ -3560,10 +3560,9 @@ describe.sequential("Cloudflare session deployment", () => {
                     const headers = {
                         "x-mobius-channel-id": pairing.created.channelId,
                         "x-mobius-runtime-id": pairing.created.runtimeId,
-                        "x-mobius-project-id": pairing.created.projectId,
                     };
                     const connect = () =>
-                        new Request("https://runtime.internal/daemon", {
+                        new Request(`https://runtime.internal/projects/${pairing.created.projectId}/daemon`, {
                             headers: { ...headers, Upgrade: "websocket" },
                         });
                     let closing: Promise<void> = Promise.resolve();
@@ -3579,7 +3578,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     await transport.suspended;
                     const queued = runtime.fetch(connect());
                     const revoked = runtime.fetch(
-                        new Request("https://runtime.internal/runtime/revoke", {
+                        new Request(`https://runtime.internal/projects/${pairing.created.projectId}/runtime/revoke`, {
                             method: "DELETE",
                             headers,
                         }),
@@ -3602,14 +3601,16 @@ describe.sequential("Cloudflare session deployment", () => {
                     const restored = new RuntimeRelay(state, env);
                     await restored.alarm();
                     const status = await restored.fetch(
-                        new Request("https://runtime.internal/runtime-status", { headers }),
+                        new Request(`https://runtime.internal/projects/${pairing.created.projectId}/runtime-status`, {
+                            headers,
+                        }),
                     );
                     await expect(status.json()).resolves.toEqual({ online: false });
                     const future = await restored.fetch(connect());
                     expect(future.status).toBe(401);
                     await expect(future.json()).resolves.toMatchObject({ error: { code: "runtime_revoked" } });
                     const host = await restored.fetch(
-                        new Request("https://runtime.internal/host", {
+                        new Request(`https://runtime.internal/projects/${pairing.created.projectId}/host`, {
                             headers: {
                                 ...headers,
                                 Upgrade: "websocket",

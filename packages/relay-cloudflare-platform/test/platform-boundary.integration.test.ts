@@ -1149,120 +1149,123 @@ it("Given an App-owned Session, When its backend issues browser access, Then the
     }
 });
 
-it("Given a paired native Agent, When the App backend discovers sessions, Then Mobius returns the Runtime inventory without issuing a host credential", async () => {
-    const fixture = await createReadyConversation("native-discovery-backend");
-    const client = new MobiusClient({
-        endpoint: relayOrigin,
-        projectId: fixture.projectId,
-        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
-        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
-    });
-    try {
-        const pending = client.runtimes.nativeSessions(
-            fixture.runtimeId,
-            {
-                action: "list",
-                agentId: "codex",
-                directoryId: "default",
-                additionalDirectoryIds: [],
-                cursor: null,
-                discoveryId: null,
-            },
-            new AbortController().signal,
-        );
-        const request = decodeNativeSessionCommand(await fixture.socketMessages.next());
-        const agent = readyAgents[0];
-        if (agent === undefined) {
-            throw new Error("The Runtime agent is unavailable");
-        }
-        fixture.socket.send(
-            encodeNativeSessionResult({
-                kind: "native.session.result",
-                action: "list",
-                requestId: request.requestId,
-                sessionId: request.sessionId,
-                capabilities: agent.capabilities,
-                entries: [
-                    {
-                        entryId: "native-history",
-                        title: "Native history",
-                        directoryId: "default",
-                        directoryLabel: "Workspace",
-                        additionalDirectories: [],
-                        updatedAt: null,
-                    },
-                ],
-                nextCursor: null,
-            }),
-        );
-        const result = await pending;
-        expect(result.action).toBe("list");
-        expect(result).not.toHaveProperty("hostToken");
-        const importing = client.runtimes.nativeSessions(
-            fixture.runtimeId,
-            {
-                action: "import",
-                agentId: "codex",
-                directoryId: "default",
-                additionalDirectoryIds: [],
-                entryId: "native-history",
-                discoveryId: result.sessionId,
-            },
-            new AbortController().signal,
-        );
-        const selected = decodeNativeSessionCommand(await fixture.socketMessages.next());
-        if (selected.action !== "import") {
-            throw new Error("Choose a native session to import");
-        }
-        if (selected.sessionId !== request.sessionId || selected.entryId !== "native-history") {
-            fixture.socket.send(
-                encodeSessionOperationFailedEvent({
-                    kind: "session.operation.failed",
-                    requestId: selected.requestId,
-                    sessionId: selected.sessionId,
-                    code: "native_session_not_found",
-                    message: "The discovered entry is unavailable",
-                }),
+it.each(["import", "fork"] as const)(
+    "Given a paired native Agent, When the App backend discovers sessions and requests %s, Then Mobius returns the selected session without issuing a host credential",
+    async (action) => {
+        const fixture = await createReadyConversation("native-discovery-backend");
+        const client = new MobiusClient({
+            endpoint: relayOrigin,
+            projectId: fixture.projectId,
+            credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+            transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+        });
+        try {
+            const pending = client.runtimes.nativeSessions(
+                fixture.runtimeId,
+                {
+                    action: "list",
+                    agentId: "codex",
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    cursor: null,
+                    discoveryId: null,
+                },
+                new AbortController().signal,
             );
-        } else {
+            const request = decodeNativeSessionCommand(await fixture.socketMessages.next());
+            const agent = readyAgents[0];
+            if (agent === undefined) {
+                throw new Error("The Runtime agent is unavailable");
+            }
             fixture.socket.send(
                 encodeNativeSessionResult({
                     kind: "native.session.result",
-                    action: "import",
-                    requestId: selected.requestId,
-                    sessionId: selected.sessionId,
-                    targetSessionId: selected.targetSessionId,
-                    title: "Native history",
-                    history: { status: "unavailable" },
-                    ready: {
-                        kind: "session.ready",
-                        requestId: selected.requestId,
-                        sessionId: fixture.sessionId,
-                        agentId: "codex",
-                        agentName: "Codex",
-                        agentVersion: "1",
-                        directoryId: "default",
-                        directoryLabel: "Workspace",
-                        additionalDirectories: [],
-                        capabilities: agent.capabilities,
-                        commands: [],
-                        configOptions: [],
-                        restored: true,
-                    },
+                    action: "list",
+                    requestId: request.requestId,
+                    sessionId: request.sessionId,
+                    capabilities: agent.capabilities,
+                    entries: [
+                        {
+                            entryId: "native-history",
+                            title: "Native history",
+                            directoryId: "default",
+                            directoryLabel: "Workspace",
+                            additionalDirectories: [],
+                            updatedAt: null,
+                        },
+                    ],
+                    nextCursor: null,
                 }),
             );
+            const result = await pending;
+            expect(result.action).toBe("list");
+            expect(result).not.toHaveProperty("hostToken");
+            const importing = client.runtimes.nativeSessions(
+                fixture.runtimeId,
+                {
+                    action,
+                    agentId: "codex",
+                    directoryId: "default",
+                    additionalDirectoryIds: [],
+                    entryId: "native-history",
+                    discoveryId: result.sessionId,
+                },
+                new AbortController().signal,
+            );
+            const selected = decodeNativeSessionCommand(await fixture.socketMessages.next());
+            if (selected.action !== action) {
+                throw new Error("Choose a native session to import");
+            }
+            if (selected.sessionId !== request.sessionId || selected.entryId !== "native-history") {
+                fixture.socket.send(
+                    encodeSessionOperationFailedEvent({
+                        kind: "session.operation.failed",
+                        requestId: selected.requestId,
+                        sessionId: selected.sessionId,
+                        code: "native_session_not_found",
+                        message: "The discovered entry is unavailable",
+                    }),
+                );
+            } else {
+                fixture.socket.send(
+                    encodeNativeSessionResult({
+                        kind: "native.session.result",
+                        action,
+                        requestId: selected.requestId,
+                        sessionId: selected.sessionId,
+                        targetSessionId: selected.targetSessionId,
+                        title: "Native history",
+                        history: { status: "unavailable" },
+                        ready: {
+                            kind: "session.ready",
+                            requestId: selected.requestId,
+                            sessionId: fixture.sessionId,
+                            agentId: "codex",
+                            agentName: "Codex",
+                            agentVersion: "1",
+                            directoryId: "default",
+                            directoryLabel: "Workspace",
+                            additionalDirectories: [],
+                            capabilities: agent.capabilities,
+                            commands: [],
+                            configOptions: [],
+                            restored: true,
+                        },
+                    }),
+                );
+            }
+            const imported = await importing;
+            expect(imported.action).toBe(action);
+            if (imported.action !== action) {
+                throw new Error("The session is not resumable");
+            }
+            expect(imported.ready.sessionId).toBe(fixture.sessionId);
+        } finally {
+            client.close();
+            fixture.socket.close();
         }
-        const imported = await importing;
-        expect(imported.action).toBe("import");
-        if (imported.action !== "import") {
-            throw new Error("The session is not resumable");
-        }
-        expect(imported.ready.sessionId).toBe(fixture.sessionId);
-    } finally {
-        client.close();
-        fixture.socket.close();
-    }
-});
+    },
+);
 
 it("Given a paired local Runtime, When the App backend browses its workspace, Then Mobius returns the locally authorized directories", async () => {
     const fixture = await createReadyConversation("workspace-browser-backend");

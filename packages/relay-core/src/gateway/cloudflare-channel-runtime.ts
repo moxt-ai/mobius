@@ -5,7 +5,6 @@ import type { ChannelGateway } from "./channel-gateway.ts";
 
 const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
-const INTERNAL_PROJECT_ID_HEADER = "x-mobius-project-id";
 const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
 
 export class CloudflareChannelRuntime implements ChannelGateway {
@@ -44,15 +43,17 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
-        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
-            new Request("https://runtime.internal/host-credentials/revoke", {
-                headers,
-                method: "DELETE",
-                signal,
-            }),
+            new Request(
+                `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/host-credentials/revoke`,
+                {
+                    headers,
+                    method: "DELETE",
+                    signal,
+                },
+            ),
         );
         signal.throwIfAborted();
         if (response.status !== 204) {
@@ -64,11 +65,10 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         signal.throwIfAborted();
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
-            new Request("https://runtime.internal/runtime/revoke", {
+            new Request(`https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/runtime/revoke`, {
                 headers,
                 method: "DELETE",
                 signal,
@@ -84,15 +84,17 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         signal.throwIfAborted();
         const headers = new Headers();
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(
-            new Request("https://runtime.internal/pending-daemon-deliveries", {
-                headers,
-                method: "POST",
-                signal,
-            }),
+            new Request(
+                `https://runtime.internal/projects/${encodeURIComponent(access.projectId)}/pending-daemon-deliveries`,
+                {
+                    headers,
+                    method: "POST",
+                    signal,
+                },
+            ),
         );
         signal.throwIfAborted();
         if (response.status !== 204) {
@@ -132,9 +134,10 @@ export class CloudflareChannelRuntime implements ChannelGateway {
         signal.throwIfAborted();
         const headers = new Headers(request.headers);
         headers.set(INTERNAL_CHANNEL_ID_HEADER, access.channelId);
-        headers.set(INTERNAL_PROJECT_ID_HEADER, access.projectId);
         headers.set(INTERNAL_RUNTIME_ID_HEADER, access.runtimeId);
-        const forwarded = new Request(request, { headers, signal });
+        const endpoint = new URL(request.url);
+        endpoint.pathname = `/projects/${encodeURIComponent(access.projectId)}${endpoint.pathname}`;
+        const forwarded = new Request(endpoint, { method: request.method, headers, signal });
         const objectId = this.#namespace.idFromName(access.channelId);
         const response = await this.#namespace.get(objectId).fetch(forwarded.url, forwarded);
         signal.throwIfAborted();

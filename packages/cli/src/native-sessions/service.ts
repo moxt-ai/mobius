@@ -167,6 +167,23 @@ export class NativeSessionService {
             );
         }
         const target = await this.resolveTarget(command, options, selected);
+        if (command.action === "preview") {
+            const history = await this.#sessions.previewNativeSession(
+                { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
+                target.info.sessionId,
+            );
+            signal.throwIfAborted();
+            this.record(command, "native_session_previewed");
+            return {
+                ...envelope,
+                action: "preview",
+                entryId: command.entryId,
+                targetSessionId: command.sessionId,
+                reason: "requested",
+                title: target.info.title ?? "Untitled session",
+                history,
+            };
+        }
         if (command.action === "delete") {
             if (!prepared.capabilities.deleteSession) {
                 throw new AcpExecutionError(

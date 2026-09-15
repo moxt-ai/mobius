@@ -7,11 +7,11 @@ function unauthorized(message: string): Response {
 }
 
 export function createRuntimeRoutes(runtime: RuntimeService) {
-    return new Hono().all("*", async (c) => {
+    return new Hono().all("/projects/:projectId/*", async (c) => {
         const request = c.req.raw;
         const channelId = request.headers.get("x-mobius-channel-id");
         const runtimeId = request.headers.get("x-mobius-runtime-id");
-        const projectId = request.headers.get("x-mobius-project-id");
+        const projectId = c.req.param("projectId");
         if (channelId === null || runtimeId === null || projectId === null) {
             return unauthorized("Verified channel access is required");
         }

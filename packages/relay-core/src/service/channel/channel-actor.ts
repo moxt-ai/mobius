@@ -180,11 +180,17 @@ export interface ChannelPeers {
 export class ChannelActor {
     readonly #pendingNativeImports = new Map<
         string,
-        {
-            readonly action: "import" | "fork";
-            readonly request: CreateSessionRequest;
-            readonly expiresAt: number;
-        }
+        | {
+              readonly action: "import" | "fork";
+              readonly request: CreateSessionRequest;
+              readonly expiresAt: number;
+          }
+        | {
+              readonly action: "preview";
+              readonly sessionId: string;
+              readonly entryId: string;
+              readonly expiresAt: number;
+          }
     >();
     readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
@@ -398,6 +404,7 @@ export class ChannelActor {
                     if (
                         pending === undefined ||
                         pending.expiresAt <= this.#clock.now() ||
+                        pending.action === "preview" ||
                         pending.action !== result.action ||
                         pending.request.sessionId !== result.targetSessionId ||
                         pending.request.agentId !== result.ready.agentId
@@ -452,7 +459,13 @@ export class ChannelActor {
                     if (
                         pending === undefined ||
                         pending.expiresAt <= this.#clock.now() ||
-                        pending.request.sessionId !== result.targetSessionId
+                        (pending.action === "preview"
+                            ? result.reason !== "requested" ||
+                              pending.sessionId !== result.sessionId ||
+                              pending.sessionId !== result.targetSessionId ||
+                              pending.entryId !== result.entryId
+                            : result.reason !== "continuation_unavailable" ||
+                              pending.request.sessionId !== result.targetSessionId)
                     ) {
                         throw new ProtocolMessageError("The native preview does not match a pending import");
                     }
@@ -609,6 +622,24 @@ export class ChannelActor {
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const command = decodeNativeSessionCommand(message);
+                if (command.action === "preview") {
+                    const now = this.#clock.now();
+                    this.expireNativeImports(now);
+                    if (
+                        this.#pendingNativeImports.has(command.requestId) ||
+                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
+                    ) {
+                        throw new ProtocolMessageError("Another native session operation is pending");
+                    }
+                    if (this.hasOnlineDaemon()) {
+                        this.#pendingNativeImports.set(command.requestId, {
+                            action: "preview",
+                            sessionId: command.sessionId,
+                            entryId: command.entryId,
+                            expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                        });
+                    }
+                }
                 if (command.action === "import" || command.action === "fork") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);

@@ -54,23 +54,23 @@ export function createTestGateways(options: {
         channel: {
             acceptDaemon: async (access, request, signal) => {
                 const url = new URL(request.url);
-                url.pathname = "/daemon";
+                url.pathname = `/projects/${encodeURIComponent(access.projectId)}/daemon`;
                 const headers = new Headers(request.headers);
                 headers.set("x-mobius-channel-id", access.channelId);
                 headers.set("x-mobius-runtime-id", access.runtimeId);
-                headers.set("x-mobius-project-id", access.projectId);
                 return await actor(`runtime:${access.channelId}`).applications.runtime.request(
                     new Request(url, { headers, signal }),
                 );
             },
             acceptHost: async (access, request, signal) => {
+                const url = new URL(request.url);
+                url.pathname = `/projects/${encodeURIComponent(access.projectId)}${url.pathname}`;
                 const headers = new Headers(request.headers);
                 headers.set("x-mobius-channel-id", access.channelId);
                 headers.set("x-mobius-runtime-id", access.runtimeId);
-                headers.set("x-mobius-project-id", access.projectId);
                 headers.set("x-mobius-host-credential-id", access.credentialId);
                 return await actor(`runtime:${access.channelId}`).applications.runtime.request(
-                    new Request(request, { headers, signal }),
+                    new Request(url, { headers, signal }),
                 );
             },
             disconnectHost: async (access, signal) => {

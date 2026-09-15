@@ -795,7 +795,7 @@ export class MobiusRuntimeResources {
             | (Omit<
                   Extract<NativeSessionCommand, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
-              > & { readonly action: "import"; readonly discoveryId: string }),
+              > & { readonly action: "import" | "fork" | "preview"; readonly discoveryId: string }),
         signal: AbortSignal,
     ) =>
         decodeNativeSessionResult(

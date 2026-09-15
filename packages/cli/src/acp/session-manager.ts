@@ -2509,6 +2509,40 @@ export class AcpSessionManager {
     ): Promise<NativeSessionPage> =>
         await (await this.#ensureNativeSessionBrowser(options)).listNativeSessions(cursor, options.signal);
 
+    readonly previewNativeSession = async (
+        options: AcpPrepareOptions,
+        nativeSessionId: string,
+    ): Promise<NativeSessionHistory> => {
+        const key = `${options.agent.id}:${nativeSessionId}`;
+        const linked = this.#store.findNative(options.agent.id, nativeSessionId);
+        if (
+            this.#nativeOperations.has(key) ||
+            linked.some((entry) => this.#activeSessionIds.has(entry.sessionId) || this.#preparing.has(entry.sessionId))
+        ) {
+            throw new AcpExecutionError(
+                "Wait for the native session's running operation to finish",
+                {},
+                "session_busy",
+            );
+        }
+        this.#nativeOperations.add(key);
+        try {
+            const runtime = await AcpProcessSession.startNativeSessionBrowser(
+                options,
+                () => this.#nativeBrowserObserver,
+                new MemoryAcpSessionStore(),
+            );
+            try {
+                runtime.selectNativeSession(nativeSessionId);
+                return await runtime.loadHistory(options.signal);
+            } finally {
+                await runtime.closeProcess();
+            }
+        } finally {
+            this.#nativeOperations.delete(key);
+        }
+    };
+
     readonly openNativeSession = async (
         options: AcpPrepareOptions,
         origin: NativeSessionOrigin,

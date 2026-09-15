@@ -56,6 +56,7 @@ const nativeSessionTurnForkCommandSchema = z
 export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkCommandSchema>;
 
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z
         .strictObject({
             ...identity,
@@ -126,7 +127,7 @@ const nativeSessionResultSchema = z.discriminatedUnion("action", [
             action: z.literal("preview"),
             entryId: identifier,
             targetSessionId: identifier,
-            reason: z.literal("continuation_unavailable"),
+            reason: z.enum(["continuation_unavailable", "requested"]),
             history: sessionHistorySchema,
             title: z.string().max(500),
         })

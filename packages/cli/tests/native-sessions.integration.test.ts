@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -131,6 +131,55 @@ async function fixture(
 }
 
 describe("native Agent session boundary", () => {
+    it("Given a saved local conversation, When its history is previewed and then forked, Then preview leaves the source untouched and only the fork creates a new conversation", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-15T12:00:00Z"));
+        const f = await fixture("Codex", "exclusive-writer");
+        try {
+            await f.seed("Original context");
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            const files = await readdir(f.native);
+            const source = files.find((file) => file.endsWith(".json"));
+            if (source === undefined) {
+                throw new Error("Missing saved native conversation");
+            }
+            const original = await readFile(join(f.native, source), "utf8");
+            const preview = await f.service.execute(
+                { ...f.identity, action: "preview", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            expect(preview).toMatchObject({
+                action: "preview",
+                reason: "requested",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Original context" }]),
+                },
+            });
+            expect(await readdir(f.native)).toEqual(files);
+            expect(await readFile(join(f.native, source), "utf8")).toBe(original);
+            const fork = await f.service.execute(
+                { ...f.identity, action: "fork", entryId: entry.entryId, targetSessionId: "forked-copy" },
+                new AbortController().signal,
+            );
+            expect(fork).toMatchObject({
+                action: "fork",
+                ready: { sessionId: "forked-copy" },
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Original context" }]),
+                },
+            });
+            expect((await f.list()).entries).toHaveLength(2);
+            expect(await readFile(join(f.native, source), "utf8")).toBe(original);
+        } finally {
+            await f.close();
+            vi.useRealTimers();
+        }
+    });
     it("Given a saved Codex conversation is open elsewhere, When a user imports it and retries after it closes, Then the original opening error is reported and the retry opens the conversation", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-14T00:00:00Z"));

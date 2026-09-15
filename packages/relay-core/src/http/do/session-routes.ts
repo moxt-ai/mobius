@@ -105,8 +105,13 @@ export function createSessionRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = context.req.valid("json");
-                if (body["action"] !== "list" && body["action"] !== "import") {
-                    throw new PairingDirectoryError("invalid_request", "Choose native session listing or import");
+                if (
+                    body["action"] !== "list" &&
+                    body["action"] !== "import" &&
+                    body["action"] !== "fork" &&
+                    body["action"] !== "preview"
+                ) {
+                    throw new PairingDirectoryError("invalid_request", "Choose a supported native session operation");
                 }
                 assertExactKeys(
                     body,
@@ -126,7 +131,9 @@ export function createSessionRoutes() {
                         requestId: crypto.randomUUID(),
                         sessionId: sourceSessionId,
                         bindingId: "workspace",
-                        ...(body["action"] === "import" ? { targetSessionId: crypto.randomUUID() } : {}),
+                        ...(body["action"] === "import" || body["action"] === "fork"
+                            ? { targetSessionId: crypto.randomUUID() }
+                            : {}),
                     }),
                 );
                 const result = await context.env.services.runtimePairings.requestControl(
