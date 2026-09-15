@@ -4,7 +4,7 @@ import {
     type ProjectAccessContext,
     type ProjectPermission,
     type VerifiedExternalIdentity,
-} from "@moxt-ai/mobius-relay-core";
+} from "@moxt-ai/mobius-relay-core/contracts";
 
 export class PlatformAuditActorKind extends AuditActorKind {
     static readonly Application = new PlatformAuditActorKind("application");

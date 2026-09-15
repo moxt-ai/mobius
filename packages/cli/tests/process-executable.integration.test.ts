@@ -39,19 +39,21 @@ describe("bounded local executable processes", () => {
             const executable = join(directory, "probe");
             const markerName = "started";
             const marker = join(directory, markerName);
+            const terminationMarker = join(directory, "termination-requested");
             try {
                 await writeFile(
                     executable,
                     executableSource(`
 import { writeFileSync } from "node:fs";
+process.on("SIGTERM", () => writeFileSync(${JSON.stringify(terminationMarker)}, "received"));
 writeFileSync(${JSON.stringify(marker)}, process.pid.toString());
-process.on("SIGTERM", () => undefined);
 setInterval(() => undefined, 60_000);
 `),
                     { mode: 0o700 },
                 );
                 await chmod(executable, 0o700);
                 const started = waitForMarker(directory, markerName);
+                const terminationRequested = waitForMarker(directory, "termination-requested");
                 const execution = runBoundedProcess({
                     arguments: ["--version"],
                     command: executable,
@@ -66,8 +68,8 @@ setInterval(() => undefined, 60_000);
                 );
                 await started;
 
-                await vi.advanceTimersByTimeAsync(4_100);
-                await new Promise<void>((resolveTurn) => setImmediate(resolveTurn));
+                await vi.advanceTimersByTimeAsync(3_000);
+                await terminationRequested;
                 await vi.advanceTimersByTimeAsync(1_000);
 
                 await expect(outcome).resolves.toMatchObject({

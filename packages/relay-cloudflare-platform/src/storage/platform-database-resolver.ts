@@ -1,4 +1,4 @@
-import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core";
+import { PairingDirectoryError, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core/contracts";
 import type { PlatformProjectPlacement, PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 
 export interface PlatformStorageBindings {

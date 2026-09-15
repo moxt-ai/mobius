@@ -1,5 +1,5 @@
-import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-core";
-import { PairingDirectoryError } from "@moxt-ai/mobius-relay-core";
+import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-core/contracts";
+import { PairingDirectoryError } from "@moxt-ai/mobius-relay-core/contracts";
 import type { PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 

@@ -1,5 +1,70 @@
 # Testing Guide
 
+## Verification and advisory coverage
+
+The pairing/chat e2e scenarios cover these repaired behavior slices:
+
+- After this, a user can retry a failed or cancelled native-session import and
+  see only successfully imported conversations in the Project directory.
+- After this, a user can cancel an Agent prompt and immediately continue the same
+  conversation, and see the next response after the old process is released.
+
+Native imports correlate bounded pending requests with validated Runtime results
+before publishing the destination Session. Failed local preparation removes its
+provisional native-session link. The fake Agent exposes a paused-load checkpoint
+so cancellation scenarios synchronize without sleeps or polling.
+
+`pnpm check` runs static checks, builds assets, and executes `pnpm test:coverage`.
+Coverage runs all root CLI/SDK/protocol/integration/e2e tests, web integration,
+Standalone Worker, and Platform Worker suites, sequentially after assets are built.
+No integration/e2e exclusion is applied to the root suite. Each suite writes its
+own Istanbul map; the maps are merged into `coverage/lcov.info`,
+`coverage/coverage-summary.json`, and an HTML report in `coverage/`.
+
+Coverage reports exact covered/total counts for lines, statements, functions, and
+branches. The 100% target is advisory: lower coverage does not fail the command.
+Test failures and missing or empty reports still fail verification.
+Source includes all production `packages/*/src/**/*.{ts,tsx}`,
+including UI and hosting adapters and files never imported by tests. Declarations,
+tests, and stateful testing fakes are excluded. Code executed only in an external
+process or separately bundled browser/Worker is not credited by the parent runner;
+its source remains in the denominator until its execution is instrumented.
+
+Worker-pool reports currently cover each hosting package only. Enabling external
+coverage for Relay core and protocol causes the Worker runner to fail during
+reporting. Those packages remain in the root denominator; their Worker execution
+is not yet credited. Cross-runtime collection is therefore not complete.
+
+Istanbul is used consistently because the Cloudflare runtime does not support the
+V8 provider's inspector. Do not combine reports from different source revisions.
+The command clears its output directory before running and requires each suite's
+report before emitting the canonical report.
+
+CI saves the combined report as a `coverage-report` artifact on PR, merge queue,
+and main runs, retained for 14 days. Upload failures are non-blocking. This uses
+the permitted GitHub-owned artifact action and does not require a Codecov account
+or changes to the repository's Actions allowlist. If Codecov uploads are enabled
+later, `codecov.yml` marks both project and patch coverage as informational.
+
+## Architecture enforcement
+
+`pnpm check:architecture` enforces the dependency rules in
+`dependency-cruiser.config.cjs`, including type-only imports:
+
+- `protocol` does not depend on implementation packages.
+- Shared Relay core does not depend on either hosting implementation.
+- Platform and Standalone implementations do not depend on each other.
+- Storage, entity, and infrastructure do not depend on services, HTTP, composition,
+  gateways, or Durable Object hosts.
+
+These are concrete information-hiding boundaries from
+[Business logic decomposition patterns](https://github.com/taowen/modularization-examples).
+Composition owns concrete adapters. Lower-level records and execution contracts
+remain with `entity` and `infra`. The parser uses a private TypeScript 6 compiler
+API dependency; application compilation remains on TypeScript 7.
+Qualitative review considers interface churn, persistent-state exposure, and the
+applicability of shared mechanisms rather than adding abstractions based on size.
+
 ## Executable Product Specifications
 
 Deliver each behavior change as the smallest end-to-end path a user can run and observe. Before implementation, state the slice in one sentence:
@@ -98,9 +163,9 @@ Worker integration scenarios belong in
 `packages/relay-cloudflare-standalone/test/**/*.integration.test.ts`. Keep the
 `--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
 integration currently requires shared, serialized storage for Durable Object
-WebSocket tests. Run `pnpm test:integration` in addition to `pnpm check` before
-delivery; it runs the Web, Standalone Worker, and Platform Worker integration
-suites.
+WebSocket tests. `pnpm check` includes these suites with coverage;
+`pnpm test:integration` remains available for focused verification without the
+aggregate coverage report.
 
 The root `pnpm test:integration` command first builds and tests Web, then runs
 at most two independent Cloudflare package suites concurrently. Web must finish

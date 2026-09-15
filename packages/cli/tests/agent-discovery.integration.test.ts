@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AcpSessionManager } from "../src/acp/session-manager.ts";
 import { formatAgentDiagnostics } from "../src/agent-catalog/agent-diagnostics.ts";
@@ -23,6 +23,13 @@ function executableSource(source: string): string {
 }
 
 describe("local Agent discovery", () => {
+    beforeEach(() => {
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
+    });
+    afterEach(() => {
+        vi.useRealTimers();
+    });
     it("Given a verified Pi executable exists without pi-acp, When discovery runs, Then Pi is detected with its details but its integration is not ready", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-missing-adapter-"));
         const piPath = join(temporaryDirectory, "pi");

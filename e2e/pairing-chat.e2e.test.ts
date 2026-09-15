@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, watch, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocket } from "undici";
 import { describe, expect, it, vi } from "vitest";
 import { AcpSessionManager } from "../packages/cli/src/acp/session-manager.ts";
 import { AuditStore } from "../packages/cli/src/audit/audit-store.ts";
@@ -64,6 +65,7 @@ import {
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     SESSION_USAGE_UPDATED_KIND,
+    type SessionCapabilities,
     type SessionUsageUpdatedEvent,
 } from "../packages/protocol/src/index.ts";
 
@@ -80,9 +82,11 @@ const verifiedAgentCapabilities = {
     imagePrompt: true,
     listSessions: true,
     loadSession: true,
+    promptQueueing: false,
     resumeSession: true,
+    steering: false,
     unstableForkSession: false,
-};
+} satisfies SessionCapabilities;
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -172,22 +176,13 @@ class BrowserPairingCredentials {
     readonly pairingCode: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
 
-    constructor(
-        channelId: string,
-        pairingCode: string,
-        hostToken: string,
-        tenantId: string,
-        projectId: string,
-        runtimeId: string,
-    ) {
+    constructor(channelId: string, pairingCode: string, hostToken: string, projectId: string, runtimeId: string) {
         this.channelId = channelId;
         this.hostToken = hostToken;
         this.pairingCode = pairingCode;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
-        this.tenantId = tenantId;
     }
 }
 
@@ -226,22 +221,30 @@ function decodeBrowserPairing(value: unknown): BrowserPairingCredentials {
     const pairingCode = value["pairingCode"];
     const projectId = value["projectId"];
     const runtimeId = value["runtimeId"];
-    const tenantId = value["tenantId"];
     if (
         typeof channelId !== "string" ||
         typeof hostToken !== "string" ||
         typeof pairingCode !== "string" ||
         typeof projectId !== "string" ||
-        typeof runtimeId !== "string" ||
-        typeof tenantId !== "string"
+        typeof runtimeId !== "string"
     ) {
         throw new Error("Invalid pairing response");
     }
-    return new BrowserPairingCredentials(channelId, pairingCode, hostToken, tenantId, projectId, runtimeId);
+    return new BrowserPairingCredentials(channelId, pairingCode, hostToken, projectId, runtimeId);
 }
 
 function authenticatedHeaders(pairing: BrowserPairingCredentials): Readonly<Record<string, string>> {
     return { authorization: `Bearer ${pairing.hostToken}` };
+}
+
+function runtimeSocket(url: URL): WebSocket {
+    const endpoint = new URL(url);
+    const token = endpoint.searchParams.get("token");
+    if (token === null) {
+        throw new Error("Expected the paired Runtime credential");
+    }
+    endpoint.searchParams.delete("token");
+    return new WebSocket(endpoint, { headers: { authorization: `Bearer ${token}` } });
 }
 
 function hostSocketUrl(pairing: BrowserPairingCredentials, origin: string): URL {
@@ -620,7 +623,7 @@ async function verifyActiveTurnHistory(
     origin: string,
     pairing: BrowserPairingCredentials,
 ): Promise<void> {
-    const controlledDaemon = new WebSocket(daemonUrl);
+    const controlledDaemon = runtimeSocket(daemonUrl);
     await waitForSocketOpen(controlledDaemon);
     const controlledHostUrl = hostSocketUrl(pairing, origin);
     const controlledHost = new WebSocket(controlledHostUrl);
@@ -1056,7 +1059,18 @@ describe("pairing and channel chat", () => {
                 expect(JSON.stringify(await sessionDirectory.json())).not.toContain("failed-import");
                 await external.close();
                 await writeFile(join(environment.MOBIUS_FAKE_ACP_STATE_DIRECTORY, "pause-load"), "");
-                const loading = waitForProtocolKind(socket, "session.info.updated");
+                // The destination is not published until import succeeds; the Agent's
+                // stateful checkpoint tells us when a user can cancel the paused load.
+                const loadingEvents = watch(environment.MOBIUS_FAKE_ACP_STATE_DIRECTORY, {
+                    signal: AbortSignal.timeout(15_000),
+                });
+                const loading = (async () => {
+                    for await (const event of loadingEvents) {
+                        if (event.filename === "load-paused") {
+                            return;
+                        }
+                    }
+                })();
                 const cancellationId = crypto.randomUUID();
                 const cancelledLoad = request(
                     {
@@ -1091,6 +1105,10 @@ describe("pairing and channel chat", () => {
                 expect(await cancelledLoad).toMatchObject({
                     code: "native_session_cancelled",
                 });
+                const afterCancellation = await fetch(projectSessionUrl(pairing, origin), {
+                    headers: authenticatedHeaders(pairing),
+                });
+                expect(JSON.stringify(await afterCancellation.json())).not.toContain("cancelled-load");
 
                 expect(claudeListing).toMatchObject({
                     action: "list",
@@ -1282,7 +1300,7 @@ describe("pairing and channel chat", () => {
             ]);
             const daemonUrl = new URL(paired.config.relayUrl);
             daemonUrl.searchParams.set("liveness", "1");
-            daemon = new WebSocket(daemonUrl);
+            daemon = runtimeSocket(daemonUrl);
             const ready = waitForProtocolKind(daemon, RUNTIME_LIVENESS_READY_KIND);
             await waitForSocketOpen(daemon);
             expect(decodeRuntimeLivenessReadyEvent(await ready)).toEqual({
@@ -1359,7 +1377,7 @@ describe("pairing and channel chat", () => {
                 "--workspace",
                 repositoryRoot,
             ]);
-            const staleDaemon = new WebSocket(paired.config.relayUrl);
+            const staleDaemon = runtimeSocket(paired.config.relayUrl);
             sockets.push(staleDaemon);
             await waitForSocketOpen(staleDaemon);
             const host = new WebSocket(hostSocketUrl(pairing, origin));
@@ -1401,7 +1419,7 @@ describe("pairing and channel chat", () => {
             staleDaemon.close(1000, "Simulate a lost daemon connection");
             expect(decodeRuntimeStatusEvent(await offline).online).toBe(false);
             const replacementOnline = waitForRuntimeOnline(host);
-            const replacementDaemon = new WebSocket(paired.config.relayUrl);
+            const replacementDaemon = runtimeSocket(paired.config.relayUrl);
             sockets.push(replacementDaemon);
             await waitForSocketOpen(replacementDaemon);
             await replacementOnline;
@@ -1567,7 +1585,7 @@ describe("pairing and channel chat", () => {
                 "--workspace",
                 repositoryRoot,
             ]);
-            staleDaemon = new WebSocket(paired.config.relayUrl);
+            staleDaemon = runtimeSocket(paired.config.relayUrl);
             await waitForSocketOpen(staleDaemon);
             host = new WebSocket(hostSocketUrl(pairing, origin));
             await waitForRuntimeOnline(host);
@@ -1603,7 +1621,7 @@ describe("pairing and channel chat", () => {
             );
             await observedStalledStart;
 
-            replacementDaemon = new WebSocket(paired.config.relayUrl);
+            replacementDaemon = runtimeSocket(paired.config.relayUrl);
             await waitForSocketOpen(replacementDaemon);
 
             const recoveredHistoryResponse = await fetch(projectSessionUrl(pairing, origin, sessionId, "/messages"), {
@@ -1785,6 +1803,8 @@ describe("pairing and channel chat", () => {
         process.env["MOBIUS_STATE_DIRECTORY"] = temporaryDirectory;
         process.env["MOBIUS_WORKBUDDY_PATH"] = workbuddyPath;
         process.env["MOBIUS_GEMINI_PATH"] = missingAgentPath;
+        vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+        vi.setSystemTime(new Date("2026-09-05T00:00:00Z"));
         process.env["PATH"] = `${executableDirectory}${delimiter}${previousPath ?? ""}`;
         process.env["NO_PROXY"] = "127.0.0.1,localhost";
         process.env["no_proxy"] = "127.0.0.1,localhost";
@@ -1827,12 +1847,13 @@ describe("pairing and channel chat", () => {
                 const sockets = [host];
                 try {
                     await waitForRuntimeOnline(host);
+                    vi.useRealTimers();
                     const sessionId = crypto.randomUUID();
                     const permissionArrived = waitForProtocolKind(host, SESSION_PERMISSION_REQUESTED_KIND);
                     const prompt = startBrowserPrompt(host, "workbuddy", sessionId, "exercise ACP controls");
                     const permission = decodeSessionPermissionRequestedEvent(await permissionArrived);
 
-                    const replacementDaemon = new WebSocket(paired.config.relayUrl);
+                    const replacementDaemon = runtimeSocket(paired.config.relayUrl);
                     sockets.push(replacementDaemon);
                     await waitForSocketOpen(replacementDaemon);
                     const reconnected = waitForRuntimeReconnect(host);
@@ -1894,6 +1915,7 @@ describe("pairing and channel chat", () => {
             restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
             restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
             restoreEnvironmentVariable("MOBIUS_CURSOR_PATH", previousCursorPath);
+            vi.useRealTimers();
             restoreEnvironmentVariable("MOBIUS_DEEPSEEK_HARNESS_PATH", previousDeepSeekPath);
             restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
             restoreEnvironmentVariable("MOBIUS_GROK_BUILD_PATH", previousGrokPath);
@@ -2069,7 +2091,6 @@ child.once("exit", (code) => process.exit(code ?? 93));
                 expect.objectContaining({
                     hostToken: expect.any(String),
                     projectId: expect.any(String),
-                    tenantId: expect.any(String),
                 }),
             );
             const pairing = decodeBrowserPairing(pairingBody);
@@ -2082,7 +2103,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
                 repositoryRoot,
             ]);
             expect(new URL(paired.channelUrl).pathname).toBe(`/channels/${pairing.channelId}`);
-            expect(paired.config.relayUrl.pathname).toBe(`${MOBIUS_API_PREFIX}/channels/${pairing.channelId}/daemon`);
+            expect(paired.config.relayUrl.pathname).toBe(`${MOBIUS_API_PREFIX}/v1/runtimes/connect`);
             const initiallyResumed = await resumeLocalMachine(["--channel", pairing.channelId]);
             expect(initiallyResumed.channelUrl).toBe(paired.channelUrl);
             expect(initiallyResumed.config.defaultWorkspace).toBe(paired.config.defaultWorkspace);
@@ -2201,7 +2222,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
             expect(JSON.stringify(publicChannel)).not.toContain(codexAdapterPath);
             const catalogEndpoint = new URL(paired.config.relayUrl);
             catalogEndpoint.protocol = "http:";
-            catalogEndpoint.pathname = catalogEndpoint.pathname.replace(/\/daemon$/, "/catalog");
+            catalogEndpoint.pathname = `${MOBIUS_API_PREFIX}/channels/${encodeURIComponent(pairing.channelId)}/catalog`;
             catalogEndpoint.searchParams.set("token", "invalid");
             const unauthorizedCatalogUpdate = await fetch(catalogEndpoint, {
                 body: JSON.stringify({
@@ -2219,7 +2240,7 @@ child.once("exit", (code) => process.exit(code ?? 93));
                 headers: { "content-type": "application/json" },
                 method: "PUT",
             });
-            expect(unauthorizedCatalogUpdate.status).toBe(401);
+            expect(unauthorizedCatalogUpdate.status, await unauthorizedCatalogUpdate.text()).toBe(401);
             catalogEndpoint.search = paired.config.relayUrl.search;
             const injectedCatalogUpdate = await fetch(catalogEndpoint, {
                 body: JSON.stringify({

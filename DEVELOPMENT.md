@@ -9,11 +9,10 @@ For local build-only verification, use the same fixture as CI:
 VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm check
 ```
 
-Lint, typechecking, builds, contract tests, and Knip run concurrently through
-pnpm's script runner, which reports failures with a nonzero exit status.
-The explicit `mobius-workspace` filter selects the five root scripts; without
-it, `--parallel` selects package scripts and omits root-only checks.
-These checks read source independently; only builds write release artifacts.
+Lint (including architecture), typechecking, and Knip run concurrently through
+pnpm's script runner. Builds then finish before the complete coverage suites run,
+so browser assets cannot be removed while integration harnesses read them.
+The explicit `mobius-workspace` filter selects the root static checks.
 Staged pre-commit lint runs before typechecking for quick feedback.
 Warnings also fail lint and staged pre-commit checks.
 `noUselessConstructor` is an error; Biome recognizes constructors needed to expose
@@ -25,9 +24,9 @@ The Standalone and Platform build scripts each own their frontend build, so the
 root build excludes those frontend packages to avoid duplicate builds and races
 with Vite clearing their output directories.
 
-PRs and merge groups run `pnpm check` and `pnpm test:integration`. Main pushes
-deploy and publish using the merge queue's verification instead of repeating it.
-Manual CI runs still verify before deploying.
+PRs, merge groups, main pushes, and manual CI runs execute `pnpm check`, including
+all integration/e2e suites and the combined coverage report. Coverage percentages
+are advisory. CI saves the report as an artifact without blocking on upload failures.
 
 ## Hosting profiles
 

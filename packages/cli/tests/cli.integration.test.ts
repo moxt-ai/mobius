@@ -65,7 +65,7 @@ describe("Mobius CLI", () => {
         const connectionsDirectory = join(stateDirectory, "connections");
         const defaultWorkspace = join(temporaryDirectory, "workspace");
         const channelId = "highlighted-channel";
-        const daemonToken = "a".repeat(32);
+        const daemonToken = "a".repeat(43);
         const codexPath = join(temporaryDirectory, "codex");
         const adapterPath = join(temporaryDirectory, "codex-acp");
         const relay = createServer((request, response) => {
@@ -183,11 +183,15 @@ if (process.argv.includes("--version")) {
             });
             try {
                 let stdout = "";
+                let stderr = "";
+                daemon.stderr?.on("data", (chunk: Buffer) => {
+                    stderr += chunk.toString("utf8");
+                });
                 const expectedCommand = `npx --yes @moxt-ai/mobius start --channel ${channelId}`;
                 await new Promise<void>((resolve, reject) => {
                     daemon.once("error", reject);
                     daemon.once("exit", (code) => {
-                        reject(new Error(`Mobius daemon exited before connecting: ${code}`));
+                        reject(new Error(`Mobius daemon exited before connecting: ${code}\n${stderr}`));
                     });
                     daemon.stdout?.on("data", (chunk: Buffer) => {
                         stdout += chunk.toString("utf8");

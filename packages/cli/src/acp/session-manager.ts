@@ -2007,7 +2007,7 @@ export class AcpSessionManager {
     readonly #nativeBrowserSessions = new Map<string, AcpProcessSession>();
     readonly #nativeBrowserStore = new MemoryAcpSessionStore();
     readonly #activeSessionIds = new Set<string>();
-    readonly #cancellationRequests = new Set<string>();
+    readonly #cancellationRequests = new Map<string, Promise<void>>();
     readonly #preparing = new Map<string, Promise<AcpProcessSession>>();
     readonly #sessions = new Map<string, AcpProcessSession>();
     readonly #store: AcpSessionStore;
@@ -2287,17 +2287,25 @@ export class AcpSessionManager {
     };
 
     readonly cancelPrompt = async (sessionId: string): Promise<void> => {
-        this.#cancellationRequests.add(sessionId);
-        const runtime = this.#sessions.get(sessionId);
-        if (runtime !== undefined) {
-            try {
-                await runtime.cancel();
-            } finally {
-                if (this.#sessions.get(sessionId) === runtime) {
-                    this.#sessions.delete(sessionId);
+        const existing = this.#cancellationRequests.get(sessionId);
+        if (existing !== undefined) {
+            await existing;
+            return;
+        }
+        const cancellation = (async () => {
+            const runtime = this.#sessions.get(sessionId);
+            if (runtime !== undefined) {
+                try {
+                    await runtime.cancel();
+                } finally {
+                    if (this.#sessions.get(sessionId) === runtime) {
+                        this.#sessions.delete(sessionId);
+                    }
                 }
             }
-        }
+        })();
+        this.#cancellationRequests.set(sessionId, cancellation);
+        await cancellation;
     };
 
     readonly steerPrompt = async (options: AcpSteerOptions): Promise<string> => {
@@ -2401,6 +2409,9 @@ export class AcpSessionManager {
                 this.#sessions.delete(options.sessionId);
                 await failedRuntime.close();
             }
+            if (this.#cancellationRequests.has(options.sessionId)) {
+                return { stopReason: "cancelled" };
+            }
             if (error instanceof AcpExecutionError) {
                 throw error;
             }
@@ -2409,11 +2420,15 @@ export class AcpSessionManager {
             });
         } finally {
             clearTimeout(deadline);
-            this.#activeSessionIds.delete(options.sessionId);
-            if (this.#activeCommandIds.get(options.sessionId) === options.commandId) {
-                this.#activeCommandIds.delete(options.sessionId);
+            try {
+                await this.#cancellationRequests.get(options.sessionId);
+            } finally {
+                this.#activeSessionIds.delete(options.sessionId);
+                if (this.#activeCommandIds.get(options.sessionId) === options.commandId) {
+                    this.#activeCommandIds.delete(options.sessionId);
+                }
+                this.#cancellationRequests.delete(options.sessionId);
             }
-            this.#cancellationRequests.delete(options.sessionId);
         }
     };
 
@@ -2573,6 +2588,14 @@ export class AcpSessionManager {
             } finally {
                 this.#nativeOperations.delete(openedKey);
             }
+        } catch (error) {
+            this.#store.remove(options.sessionId);
+            const runtime = this.#sessions.get(options.sessionId);
+            this.#sessions.delete(options.sessionId);
+            if (runtime !== undefined) {
+                await runtime.closeProcess();
+            }
+            throw error;
         } finally {
             this.#nativeOperations.delete(key);
         }

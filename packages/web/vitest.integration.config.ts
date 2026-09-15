@@ -24,5 +24,14 @@ export default defineConfig({
         hookTimeout: 40_000,
         include: ["test/**/*.integration.test.tsx", "test/**/*.e2e.test.tsx"],
         testTimeout: 15_000,
+        coverage: {
+            provider: "istanbul",
+            allowExternal: true,
+            reporter: ["text-summary", "json"],
+            reportsDirectory: "../../coverage/web",
+            reportOnFailure: true,
+            include: ["src/**/*.{ts,tsx}", "../web-core/src/**/*.{ts,tsx}"],
+            exclude: ["**/*.d.ts", "**/testing/**"],
+        },
     },
 });

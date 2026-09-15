@@ -12,6 +12,10 @@ import {
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import { type Handler, Hono } from "hono";
+import {
+    type PlatformAuthenticationEnvironment,
+    platformAuthenticationFromEnvironment,
+} from "./composition/platform-authentication-environment.ts";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { type RegionalProjectBindings, routeRegionalProject } from "./gateway/regional-project-routing.ts";
@@ -20,10 +24,6 @@ import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
-import {
-    type PlatformAuthenticationEnvironment,
-    platformAuthenticationFromEnvironment,
-} from "./infra/platform-authentication-environment.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
@@ -273,7 +273,7 @@ const worker = {
     },
 };
 
+export { platformAuthenticationFromEnvironment } from "./composition/platform-authentication-environment.ts";
 export { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
-export { platformAuthenticationFromEnvironment } from "./infra/platform-authentication-environment.ts";
 export { BotConnectionActor, PlatformSessionRelay, RuntimeRelay };
 export default worker;

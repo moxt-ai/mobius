@@ -85,6 +85,8 @@ const MINIMUM_TRUNCATED_HISTORY_MATCH_CHARACTERS = 32;
 const RUNTIME_DELIVERY_WINDOW = 16;
 const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
 const SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
+const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
+const MAX_PENDING_NATIVE_IMPORTS = 4;
 
 function reconcileNativeHistoryCoverage(
     history: NativeSessionHistory,
@@ -176,6 +178,14 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
+    readonly #pendingNativeImports = new Map<
+        string,
+        {
+            readonly action: "import" | "fork";
+            readonly request: CreateSessionRequest;
+            readonly expiresAt: number;
+        }
+    >();
     readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
     readonly #commands: SessionCommandGateway;
@@ -210,6 +220,7 @@ export class ChannelActor {
     readonly attachDaemon = async (replacedExistingConnection: boolean, signal: AbortSignal): Promise<void> => {
         this.#clearInFlightDeliveries();
         if (replacedExistingConnection) {
+            this.#pendingNativeImports.clear();
             await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         }
         this.broadcastRuntimeStatus(true);
@@ -243,6 +254,7 @@ export class ChannelActor {
             return;
         }
         this.#backpressuredEventBySource.clear();
+        this.#pendingNativeImports.clear();
         await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         this.broadcastRuntimeStatus(false);
     };
@@ -382,6 +394,18 @@ export class ChannelActor {
                 const result = decodeNativeSessionResult(message);
                 let forwardedMessage = message;
                 if (result.action === "import" || result.action === "fork") {
+                    const pending = this.#pendingNativeImports.get(result.requestId);
+                    if (
+                        pending === undefined ||
+                        pending.expiresAt <= this.#clock.now() ||
+                        pending.action !== result.action ||
+                        pending.request.sessionId !== result.targetSessionId ||
+                        pending.request.agentId !== result.ready.agentId
+                    ) {
+                        throw new ProtocolMessageError("The native session result does not match a pending import");
+                    }
+                    this.#pendingNativeImports.delete(result.requestId);
+                    await this.#commands.createSession(this.#scope, pending.request, this.#clock.now(), signal);
                     const target = await this.#queries.readSession(this.#scope, result.targetSessionId, signal);
                     if (
                         target.runtimeId !== this.#runtimeId ||
@@ -424,10 +448,21 @@ export class ChannelActor {
                         history,
                     });
                 } else if (result.action === "preview") {
-                    await this.#commands.deleteSession(this.#scope, result.targetSessionId, this.#clock.now(), signal);
+                    const pending = this.#pendingNativeImports.get(result.requestId);
+                    if (
+                        pending === undefined ||
+                        pending.expiresAt <= this.#clock.now() ||
+                        pending.request.sessionId !== result.targetSessionId
+                    ) {
+                        throw new ProtocolMessageError("The native preview does not match a pending import");
+                    }
                 }
                 this.broadcast(this.#peers.hosts(), forwardedMessage);
+                this.#pendingNativeImports.delete(result.requestId);
                 return;
+            }
+            if (kind === SESSION_OPERATION_FAILED_KIND) {
+                this.#pendingNativeImports.delete(decodeSessionOperationFailedEvent(message).requestId);
             }
             this.validateDaemonControl(kind, message);
             this.broadcast(this.#peers.hosts(), message);
@@ -575,19 +610,28 @@ export class ChannelActor {
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const command = decodeNativeSessionCommand(message);
                 if (command.action === "import" || command.action === "fork") {
-                    await this.#commands.createSession(
-                        this.#scope,
-                        new CreateSessionRequest(
-                            command.targetSessionId,
-                            this.#runtimeId,
-                            command.agentId,
-                            command.bindingId,
-                            command.directoryId,
-                            new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
-                        ),
-                        this.#clock.now(),
-                        signal,
-                    );
+                    const now = this.#clock.now();
+                    this.expireNativeImports(now);
+                    if (
+                        this.#pendingNativeImports.has(command.requestId) ||
+                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
+                    ) {
+                        throw new ProtocolMessageError("Another native session import is pending");
+                    }
+                    if (this.hasOnlineDaemon()) {
+                        this.#pendingNativeImports.set(command.requestId, {
+                            action: command.action,
+                            request: new CreateSessionRequest(
+                                command.targetSessionId,
+                                this.#runtimeId,
+                                command.agentId,
+                                command.bindingId,
+                                command.directoryId,
+                                new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
+                            ),
+                            expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                        });
+                    }
                 }
                 this.forwardControl(socket, message, command.requestId, command.sessionId);
                 return;
@@ -611,9 +655,16 @@ export class ChannelActor {
                         );
                     }
                     const authorized = await this.resolveTurnForkCommand(command, signal);
-                    await this.#commands.createSession(
-                        this.#scope,
-                        new CreateSessionRequest(
+                    this.expireNativeImports(this.#clock.now());
+                    if (
+                        this.#pendingNativeImports.has(command.requestId) ||
+                        this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
+                    ) {
+                        throw new ProtocolMessageError("Another native session import is pending");
+                    }
+                    this.#pendingNativeImports.set(command.requestId, {
+                        action: "fork",
+                        request: new CreateSessionRequest(
                             command.targetSessionId,
                             this.#runtimeId,
                             command.agentId,
@@ -628,16 +679,10 @@ export class ChannelActor {
                             ),
                             source.title,
                         ),
-                        this.#clock.now(),
-                        signal,
-                    );
+                        expiresAt: this.#clock.now() + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                    });
                     if (!this.sendToDaemon(encodeNativeSessionTurnForkCommand(authorized))) {
-                        await this.#commands.deleteSession(
-                            this.#scope,
-                            command.targetSessionId,
-                            this.#clock.now(),
-                            signal,
-                        );
+                        this.#pendingNativeImports.delete(command.requestId);
                         throw new SessionRuntimeError("runtime_offline", "The local runtime went offline");
                     }
                 } catch (error) {
@@ -847,6 +892,14 @@ export class ChannelActor {
             }
             default:
                 throw new ProtocolMessageError("Unsupported host message");
+        }
+    };
+
+    private readonly expireNativeImports = (now: number): void => {
+        for (const [requestId, pending] of this.#pendingNativeImports) {
+            if (pending.expiresAt <= now) {
+                this.#pendingNativeImports.delete(requestId);
+            }
         }
     };
 

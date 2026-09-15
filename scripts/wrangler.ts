@@ -188,6 +188,9 @@ function normalizeConfigPath(arguments_: readonly string[], target: WranglerTarg
         }
         normalized.push(argument);
     }
+    if (!hasArgument(normalized, "--config")) {
+        normalized.push("--config", resolve(target.configDirectory, "wrangler.jsonc"));
+    }
     return normalized;
 }
 

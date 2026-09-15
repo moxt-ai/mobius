@@ -1,12 +1,12 @@
 import { fileURLToPath } from "node:url";
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-plugin";
-import { defineConfig } from "vitest/config";
+import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 const packageDirectory = fileURLToPath(new URL(".", import.meta.url));
 const wranglerConfigPath = fileURLToPath(new URL("./wrangler.jsonc", import.meta.url));
 const migrationsPath = fileURLToPath(new URL("../relay-core/migrations/d1", import.meta.url));
 
-export default defineConfig(async () => {
+export default defineConfig(async (): Promise<ViteUserConfig> => {
     const migrations = await readD1Migrations(migrationsPath);
 
     return {
@@ -38,6 +38,14 @@ export default defineConfig(async () => {
             include: ["test/**/*.integration.test.ts"],
             setupFiles: ["./test/apply-migrations.ts"],
             testTimeout: 15_000,
+            coverage: {
+                provider: "istanbul",
+                reporter: ["text-summary", "json"],
+                reportsDirectory: "../../coverage/standalone",
+                reportOnFailure: true,
+                include: ["src/**/*.{ts,tsx}"],
+                exclude: ["**/*.d.ts", "**/testing/**"],
+            },
         },
     };
 });

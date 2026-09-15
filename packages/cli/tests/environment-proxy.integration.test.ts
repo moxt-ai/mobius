@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,9 +93,26 @@ describe("CLI environment proxy", () => {
         });
         trackConnections(relayServer, relaySockets);
 
-        const proxyServer = createServer((_request, response) => {
-            response.writeHead(405);
-            response.end();
+        const proxyServer = createServer((request, response) => {
+            const destination = new URL(request.url ?? "/", "http://127.0.0.1");
+            tunnelTargets.push(destination.host);
+            const headers = { ...request.headers };
+            delete headers["proxy-authorization"];
+            const upstream = httpRequest(
+                destination,
+                {
+                    method: request.method,
+                    headers,
+                    signal: AbortSignal.timeout(2_000),
+                },
+                (incoming) => {
+                    response.writeHead(incoming.statusCode ?? 502, incoming.headers);
+                    incoming.pipe(response);
+                },
+            );
+            upstream.once("error", () => response.destroy());
+            response.once("close", () => upstream.destroy());
+            request.pipe(upstream);
         });
         proxyServer.on("connect", (request, downstream, head) => {
             const encodedTarget = request.url;
@@ -115,6 +132,22 @@ describe("CLI environment proxy", () => {
                 upstream.pipe(downstream);
             });
             upstream.once("error", () => downstream.destroy());
+        });
+        proxyServer.on("upgrade", (request, downstream, head) => {
+            const destination = new URL(request.url ?? "/", "http://127.0.0.1");
+            tunnelTargets.push(destination.host);
+            const upstream = connect(Number(destination.port), destination.hostname, () => {
+                const headers = Object.entries(request.headers)
+                    .filter(([name]) => name !== "proxy-authorization")
+                    .map(([name, value]) => `${name}: ${value}`)
+                    .join("\r\n");
+                upstream.write(`GET ${destination.pathname}${destination.search} HTTP/1.1\r\n${headers}\r\n\r\n`);
+                upstream.write(head);
+                downstream.pipe(upstream);
+                upstream.pipe(downstream);
+            });
+            upstream.once("error", () => downstream.destroy());
+            downstream.once("close", () => upstream.destroy());
         });
         trackConnections(proxyServer, proxySockets);
 

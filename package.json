@@ -33,20 +33,21 @@
         "build": "pnpm --recursive --workspace-concurrency=3 --filter '!@moxt-ai/mobius-web' --filter '!@moxt-ai/mobius-platform-app' --if-present build",
         "typecheck": "tsc --project tsconfig.json && pnpm --recursive --if-present typecheck",
         "check:no-chinese": "node scripts/check-no-chinese.ts",
-        "lint": "biome ci --error-on-warnings && pnpm check:no-chinese",
+        "lint": "biome ci --error-on-warnings && pnpm check:no-chinese && pnpm check:architecture",
+        "check:architecture": "depcruise --config dependency-cruiser.config.cjs packages/*/src",
         "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
         "format": "biome format --write",
         "test": "vitest run && pnpm test:integration",
-        "test:ci": "vitest run --exclude '**/*.integration.test.ts' --exclude '**/*.integration.test.tsx' --exclude '**/*.e2e.test.ts' --exclude '**/*.e2e.test.tsx'",
+        "test:ci": "vitest run",
         "test:changed": "vitest run --changed=origin/main",
         "test:integration": "pnpm test:integration:web && pnpm --recursive --workspace-concurrency=2 --filter @moxt-ai/mobius-relay-cloudflare-standalone --filter @moxt-ai/mobius-relay-cloudflare-platform run test:integration",
         "test:integration:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform test:integration",
         "test:integration:web": "pnpm --filter @moxt-ai/mobius-web test:integration",
         "test:integration:worker": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone test:integration",
         "test:watch": "vitest",
-        "test:coverage": "vitest run --coverage",
+        "test:coverage": "pnpm build && node scripts/coverage.mjs",
         "knip": "knip",
-        "check": "pnpm --filter mobius-workspace run --parallel '/^(lint|typecheck|build|test:ci|knip)$/'",
+        "check": "pnpm --filter mobius-workspace run --parallel '/^(lint|typecheck|knip)$/' && pnpm test:coverage",
         "postinstall": "simple-git-hooks"
     },
     "simple-git-hooks": {
@@ -55,11 +56,16 @@
     "devDependencies": {
         "@biomejs/biome": "2.5.13",
         "@types/node": "^24.13.4",
-        "@vitest/coverage-v8": "^4.1.10",
+        "@vitest/coverage-istanbul": "4.1.11",
+        "dependency-cruiser": "18.2.0",
         "happy-dom": "20.14.3",
+        "istanbul-lib-coverage": "3.2.2",
+        "istanbul-lib-report": "3.0.1",
+        "istanbul-reports": "3.2.0",
         "knip": "^6.35.1",
         "simple-git-hooks": "^2.13.1",
         "typescript": "^7.0.2",
-        "vitest": "^4.1.10"
+        "undici": "7.29.0",
+        "vitest": "^4.1.11"
     }
 }

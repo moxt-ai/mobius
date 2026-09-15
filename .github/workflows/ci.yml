@@ -47,8 +47,8 @@ jobs:
 
   check:
     name: check
-    # Main pushes have already passed the merge queue; keep manual verification available.
-    if: github.event_name != 'push'
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
@@ -85,7 +85,14 @@ jobs:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
-      - run: pnpm test:integration
+      - name: Save coverage report
+        if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
   deploy-cloudflare:
     name: deploy Cloudflare

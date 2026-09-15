@@ -67,6 +67,15 @@ export async function createTestRuntime(options: {
         );
         const directory = await mkdtemp(join(tmpdir(), "mobius-test-runtime-"));
         resources.defer(() => rm(directory, { recursive: true, force: true }));
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        process.env["MOBIUS_STATE_DIRECTORY"] = directory;
+        resources.defer(() => {
+            if (previousStateDirectory === undefined) {
+                delete process.env["MOBIUS_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_STATE_DIRECTORY"] = previousStateDirectory;
+            }
+        });
         const project = options.project;
         const pairing =
             project === undefined

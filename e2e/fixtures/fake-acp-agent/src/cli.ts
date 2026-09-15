@@ -699,6 +699,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         acquireWriter(context.params.sessionId);
         const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
         if (directory !== undefined && existsSync(join(directory, "pause-load"))) {
+            writeFileSync(join(directory, "load-paused"), context.params.sessionId);
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
