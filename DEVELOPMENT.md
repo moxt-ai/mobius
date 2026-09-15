@@ -16,8 +16,8 @@ it, `--parallel` selects package scripts and omits root-only checks.
 These checks read source independently; only builds write release artifacts.
 Staged pre-commit lint runs before typechecking for quick feedback.
 Warnings also fail lint and staged pre-commit checks.
-`noUselessConstructor` is an error; constructors needed to expose a protected
-base constructor have local, documented suppressions. `useLiteralKeys` is
+`noUselessConstructor` is an error; Biome recognizes constructors needed to expose
+a protected base constructor publicly. `useLiteralKeys` is
 disabled because it conflicts with TypeScript's `noPropertyAccessFromIndexSignature`.
 
 Builds run in dependency order with at most three workspace tasks at once.

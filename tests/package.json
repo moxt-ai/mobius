@@ -15,8 +15,8 @@
         "./runtime": "./infra/runtime.ts"
     },
     "dependencies": {
-        "@cloudflare/vitest-plugin": "^1.1.4",
-        "@cloudflare/workers-types": "^5.20260905.1",
+        "@cloudflare/vitest-plugin": "^1.1.7",
+        "@cloudflare/workers-types": "^5.20260911.1",
         "@moxt-ai/mobius-sdk": "workspace:*",
         "@moxt-ai/mobius-fake-acp-agent": "workspace:*",
         "@types/ws": "^8.18.1",
@@ -24,9 +24,9 @@
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-standalone": "workspace:*",
         "esbuild": "0.28.2",
-        "hono": "^4.13.5",
+        "hono": "^4.13.7",
         "miniflare": "5.20260903.0-alpha",
-        "valibot": "1.4.2",
-        "ws": "^8.18.3"
+        "valibot": "1.5.0",
+        "ws": "^8.21.3"
     }
 }

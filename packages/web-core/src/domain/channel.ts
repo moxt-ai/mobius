@@ -43,7 +43,6 @@ export abstract class InstallableAgentOption {
 export class MissingAgentOption extends InstallableAgentOption {
     readonly status = "agent_not_installed";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(id: string, label: string) {
         super(id, label);
     }
@@ -77,7 +76,6 @@ export class IdleAgentInstallationState extends AgentInstallationViewState {
     readonly message = "Integration is not installed.";
     readonly status = "idle";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(agentId: string) {
         super(agentId);
     }
@@ -97,7 +95,6 @@ export class RequestingAgentInstallationState extends RequestedAgentInstallation
     readonly message = "Checking the local Agent.";
     readonly status = "requesting";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(agentId: string, requestId: string) {
         super(agentId, requestId);
     }
@@ -108,7 +105,6 @@ export class StartingAgentInstallationState extends RequestedAgentInstallationSt
     readonly message = "Starting integration installation.";
     readonly status = "starting";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(agentId: string, requestId: string) {
         super(agentId, requestId);
     }
@@ -179,7 +175,6 @@ export class CancelledAgentInstallationState extends RequestedAgentInstallationS
     readonly message = "Integration installation was cancelled.";
     readonly status = "cancelled";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(agentId: string, requestId: string) {
         super(agentId, requestId);
     }

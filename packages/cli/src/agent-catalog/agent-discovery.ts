@@ -44,7 +44,6 @@ export class MissingAdapter extends UnavailableInstalledAgent {
     readonly message = "ACP adapter not found";
     readonly status = "missing_adapter";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
         super(specification, agent);
     }
@@ -55,7 +54,6 @@ export class MissingAgent extends UnavailableAgent {
     readonly message = "Agent executable not found";
     readonly status = "missing_agent";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(specification: LocalAgentSpecification) {
         super(specification);
     }
@@ -95,7 +93,6 @@ export class IncompatibleAdapter extends UnavailableInstalledAgent {
     readonly message = "ACP adapter is incompatible";
     readonly status = "incompatible_adapter";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
         super(specification, agent);
     }
@@ -106,7 +103,6 @@ export class AuthenticationRequiredAgent extends UnavailableInstalledAgent {
     readonly message = "Agent authentication is required";
     readonly status = "authentication_required";
 
-    // biome-ignore lint/complexity/noUselessConstructor: Exposes the protected base constructor publicly.
     constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
         super(specification, agent);
     }
