@@ -145,6 +145,14 @@ Cloud-based integration targets:
 ## Development
 
 Repository development requires Node.js 24.20.0 and pnpm. The published CLI supports Node.js 22.13.0 or newer.
+The CLI supports Linux on x64 and arm64, including glibc and musl distributions;
+individual Agent executables must also support the selected distribution.
+DeepSeek Harness `0.1.2-rc.1` ships glibc-linked `node-pty` Linux binaries, so
+install `bash`, `ca-certificates`, and `gcompat` before using it on Alpine:
+
+```bash
+apk add --no-cache bash ca-certificates gcompat
+```
 
 ```bash
 pnpm install

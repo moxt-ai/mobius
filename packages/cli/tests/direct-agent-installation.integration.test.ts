@@ -156,7 +156,7 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
                 } else {
                     await runBoundedProcess({
                         arguments: ["-czf", archivePath, "-C", sourceDirectory, "opencode"],
-                        command: "/usr/bin/tar",
+                        command: "/bin/tar",
                         cwd: temporaryDirectory,
                         environment: { PATH: "/usr/bin:/bin" },
                         signal: new AbortController().signal,

@@ -85,6 +85,10 @@ jobs:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
+      - run: pnpm test:integration:cli
+
+      - run: pnpm test:integration
+
       - name: Save coverage report
         if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
         continue-on-error: true

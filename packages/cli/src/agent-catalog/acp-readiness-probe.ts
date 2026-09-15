@@ -17,7 +17,7 @@ import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import { type AcpClientHandler, createAcpClient } from "../acp/create-client.ts";
 import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
-import { stopProcessTree } from "../process/executable.ts";
+import { captureProcessTree, stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import type { LocalAgentDefinition } from "./local-agent.ts";
@@ -204,9 +204,10 @@ export async function probeAcpReadiness(
     } finally {
         clearTimeout(timeout);
         signal.removeEventListener("abort", abort);
+        const capturedProcesses = await captureProcessTree(child);
         connection.close();
         stdin.end();
         stderr.removeListener("data", consumeStderr);
-        await stopProcessTree(child);
+        await stopProcessTree(child, capturedProcesses);
     }
 }

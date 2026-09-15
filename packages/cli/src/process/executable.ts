@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
-import { constants } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { constants, readdirSync, readFileSync } from "node:fs";
+import { access, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 const DEFAULT_OUTPUT_LIMIT_BYTES = 16 * 1024;
@@ -8,7 +8,7 @@ const PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS = 1_000;
 const PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS = 5_000;
 const PROCESS_TABLE_TIMEOUT_MILLISECONDS = 1_000;
 const PROCESS_TABLE_OUTPUT_LIMIT_BYTES = 1024 * 1024;
-const PROCESS_EXIT_CHECK_ATTEMPTS = 8;
+const PROCESS_EXIT_CHECK_ATTEMPTS = 16;
 const GRACEFUL_STOP_SIGNAL = 15;
 const FORCED_STOP_SIGNAL = 9;
 
@@ -208,11 +208,85 @@ function parseProcessTable(output: string): readonly ProcessTableEntry[] {
     return entries;
 }
 
-function readProcessTable(): Promise<readonly ProcessTableEntry[]> {
-    if (process.platform === "win32") {
-        return Promise.resolve([]);
+function appendLinuxProcessTableEntry(entries: ProcessTableEntry[], processId: number, encoded: string): void {
+    const closingParenthesis = encoded.lastIndexOf(")");
+    if (!encoded.startsWith(`${processId.toString()} (`) || closingParenthesis < 0) {
+        return;
     }
-    const executable = process.platform === "darwin" ? "/bin/ps" : "/usr/bin/ps";
+    const fields = encoded
+        .slice(closingParenthesis + 1)
+        .trim()
+        .split(/\s+/);
+    const parentProcessId = Number(fields[1]);
+    const processGroupId = Number(fields[2]);
+    if (
+        !Number.isSafeInteger(parentProcessId) ||
+        parentProcessId < 0 ||
+        !Number.isSafeInteger(processGroupId) ||
+        processGroupId <= 0
+    ) {
+        return;
+    }
+    entries.push({ parentProcessId, processGroupId, processId });
+}
+
+async function readLinuxProcessTable(): Promise<readonly ProcessTableEntry[]> {
+    const entries: ProcessTableEntry[] = [];
+    try {
+        const directories = await readdir("/proc", { withFileTypes: true });
+        for (const directory of directories) {
+            if (!directory.isDirectory() || !/^\d+$/.test(directory.name)) {
+                continue;
+            }
+            const processId = Number(directory.name);
+            if (!Number.isSafeInteger(processId) || processId <= 0) {
+                continue;
+            }
+            try {
+                appendLinuxProcessTableEntry(
+                    entries,
+                    processId,
+                    await readFile(join("/proc", directory.name, "stat"), "utf8"),
+                );
+            } catch {
+                // Processes can exit while procfs is being enumerated.
+            }
+        }
+    } catch {
+        // A restricted Linux runtime may not mount procfs; the fixed ps fallback runs below.
+    }
+    return entries;
+}
+
+function readLinuxProcessTableSynchronously(): readonly ProcessTableEntry[] {
+    const entries: ProcessTableEntry[] = [];
+    try {
+        const directories = readdirSync("/proc", { withFileTypes: true });
+        for (const directory of directories) {
+            if (!directory.isDirectory() || !/^\d+$/.test(directory.name)) {
+                continue;
+            }
+            const processId = Number(directory.name);
+            if (!Number.isSafeInteger(processId) || processId <= 0) {
+                continue;
+            }
+            try {
+                appendLinuxProcessTableEntry(
+                    entries,
+                    processId,
+                    readFileSync(join("/proc", directory.name, "stat"), "utf8"),
+                );
+            } catch {
+                // Processes can exit while procfs is being enumerated.
+            }
+        }
+    } catch {
+        // A restricted Linux runtime may not mount procfs; the asynchronous fallback runs below.
+    }
+    return entries;
+}
+
+function readProcessTableWithPs(executable: string): Promise<readonly ProcessTableEntry[]> {
     return new Promise((resolveTable) => {
         execFile(
             executable,
@@ -230,11 +304,44 @@ function readProcessTable(): Promise<readonly ProcessTableEntry[]> {
     });
 }
 
+async function readLinuxProcessTableWithFallback(): Promise<readonly ProcessTableEntry[]> {
+    const procfsEntries = await readLinuxProcessTable();
+    if (procfsEntries.length > 0) {
+        return procfsEntries;
+    }
+    for (const candidate of ["/usr/bin/ps", "/bin/ps", "/run/current-system/sw/bin/ps"]) {
+        const executable = await resolveExecutablePath(candidate);
+        if (executable === null) {
+            continue;
+        }
+        const entries = await readProcessTableWithPs(executable.identity.requestedPath);
+        if (entries.length > 0) {
+            return entries;
+        }
+    }
+    return [];
+}
+
+function readProcessTable(): Promise<readonly ProcessTableEntry[]> {
+    if (process.platform === "win32") {
+        return Promise.resolve([]);
+    }
+    if (process.platform === "linux") {
+        return readLinuxProcessTableWithFallback();
+    }
+    return readProcessTableWithPs(process.platform === "darwin" ? "/bin/ps" : "/usr/bin/ps");
+}
+
 function selectProcessTree(
     entries: readonly ProcessTableEntry[],
     rootProcessId: number,
 ): readonly ProcessTreeIdentity[] {
     const processIds = new Set([rootProcessId]);
+    for (const entry of entries) {
+        if (entry.processGroupId === rootProcessId) {
+            processIds.add(entry.processId);
+        }
+    }
     let previousSize = 0;
     while (previousSize !== processIds.size) {
         previousSize = processIds.size;
@@ -270,10 +377,16 @@ export async function captureProcessTree(child: ReturnType<typeof spawn>): Promi
     if (process.platform === "win32" || child.pid === undefined) {
         return [];
     }
+    if (process.platform === "linux") {
+        const procfsEntries = readLinuxProcessTableSynchronously();
+        if (procfsEntries.length > 0) {
+            return selectProcessTree(procfsEntries, child.pid);
+        }
+    }
     return selectProcessTree(await readProcessTable(), child.pid);
 }
 
-function signalDetachedProcessGroups(
+function signalCapturedProcessGroups(
     processes: readonly ProcessTreeIdentity[],
     rootProcessId: number,
     signal: number,
@@ -281,9 +394,9 @@ function signalDetachedProcessGroups(
     const processIds = new Set(processes.map((identity) => identity.processId));
     const signalledGroups = new Set<number>();
     for (const identity of processes) {
+        const isRootProcessGroup = identity.processGroupId === rootProcessId;
         if (
-            identity.processGroupId === rootProcessId ||
-            !processIds.has(identity.processGroupId) ||
+            (!isRootProcessGroup && !processIds.has(identity.processGroupId)) ||
             signalledGroups.has(identity.processGroupId)
         ) {
             continue;
@@ -312,6 +425,23 @@ function signalDetachedProcessGroups(
 }
 
 function processExists(processId: number): boolean {
+    if (process.platform === "linux") {
+        try {
+            const encoded = readFileSync(join("/proc", processId.toString(), "stat"), "utf8");
+            const closingParenthesis = encoded.lastIndexOf(")");
+            if (closingParenthesis >= 0) {
+                const processState = encoded
+                    .slice(closingParenthesis + 1)
+                    .trimStart()
+                    .charAt(0);
+                if (processState === "Z" || processState === "X") {
+                    return false;
+                }
+            }
+        } catch {
+            // Fall through so restricted procfs mounts still use the portable signal probe.
+        }
+    }
     try {
         process.kill(processId, 0);
         return true;
@@ -375,11 +505,11 @@ export async function stopProcessTree(
         return;
     }
     const childExited = child.exitCode !== null || child.signalCode !== null;
-    if (childExited && capturedProcesses.length === 0) {
+    const processes = mergeProcessTrees(capturedProcesses, await captureProcessTree(child));
+    if (childExited && processes.length === 0) {
         return;
     }
-    const processes = mergeProcessTrees(capturedProcesses, childExited ? [] : await captureProcessTree(child));
-    signalDetachedProcessGroups(processes, childProcessId, GRACEFUL_STOP_SIGNAL);
+    signalCapturedProcessGroups(processes, childProcessId, GRACEFUL_STOP_SIGNAL);
     terminateProcess(child);
     const [exitedAfterTermination, descendantsExitedAfterTermination] = await Promise.all([
         waitForProcessExit(child, PROCESS_GRACEFUL_STOP_TIMEOUT_MILLISECONDS),
@@ -388,7 +518,7 @@ export async function stopProcessTree(
     if (exitedAfterTermination && descendantsExitedAfterTermination) {
         return;
     }
-    signalDetachedProcessGroups(processes, childProcessId, FORCED_STOP_SIGNAL);
+    signalCapturedProcessGroups(processes, childProcessId, FORCED_STOP_SIGNAL);
     forceTerminateProcess(child);
     const [exitedAfterForce, descendantsExitedAfterForce] = await Promise.all([
         waitForProcessExit(child, PROCESS_FORCED_STOP_TIMEOUT_MILLISECONDS),

@@ -103,6 +103,21 @@ discovers `*.contract.test.ts`, `*.integration.test.ts`, and
 boundary test: move the assertion to the owning protocol, runtime, or product
 entrypoint, or remove it when a stronger scenario already owns the behavior.
 
+## CLI Integration Tests
+
+Run the CLI boundary suite from the repository root:
+
+```bash
+pnpm test:integration:cli
+```
+
+The suite exercises the production CLI, local filesystem, SQLite, Unix socket,
+subprocess, process-tree, Agent, and Relay boundaries. CI runs it on Linux so a
+CLI change cannot pass the release gate solely on macOS behavior. Linux process
+cleanup reads procfs directly and falls back to a compatible fixed system `ps`;
+managed archives accept the standard `/usr/bin` and `/bin` tool locations used
+by glibc and musl distributions.
+
 ## Web Integration Tests
 
 ### Platform page colors (manual browser scenario)

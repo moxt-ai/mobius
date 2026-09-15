@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, mkdtemp, open, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 
-import { type ResolvedExecutable, resolveExecutablePath, runBoundedProcess } from "../process/executable.ts";
+import {
+    type ResolvedExecutable,
+    resolveExecutablePath,
+    revalidateExecutable,
+    runBoundedProcess,
+} from "../process/executable.ts";
 import { downloadVerifiedFile, type VerifiedDownload, type VerifiedDownloadOptions } from "./verified-download.ts";
 
 const ARCHIVE_DOWNLOAD_LIMIT_BYTES = 128 * 1024 * 1024;
@@ -19,7 +24,7 @@ export abstract class ManagedAgentArchiveDefinition {
     readonly executableName: string;
     readonly version: string;
     abstract readonly extractArguments: (archivePath: string, destination: string) => readonly string[];
-    abstract readonly extractor: string;
+    abstract readonly extractorPaths: readonly string[];
     abstract readonly listArguments: (archivePath: string) => readonly string[];
 
     constructor(version: string, archiveName: string, archiveUrl: URL, archiveSha256: string, executableName: string) {
@@ -32,7 +37,7 @@ export abstract class ManagedAgentArchiveDefinition {
 }
 
 export class ZipManagedAgentArchiveDefinition extends ManagedAgentArchiveDefinition {
-    readonly extractor = "/usr/bin/unzip";
+    readonly extractorPaths = Object.freeze(["/usr/bin/unzip", "/bin/unzip", "/run/current-system/sw/bin/unzip"]);
     readonly extractArguments = (archivePath: string, destination: string): readonly string[] => [
         "-q",
         archivePath,
@@ -43,7 +48,7 @@ export class ZipManagedAgentArchiveDefinition extends ManagedAgentArchiveDefinit
 }
 
 export class TarGzipManagedAgentArchiveDefinition extends ManagedAgentArchiveDefinition {
-    readonly extractor = "/usr/bin/tar";
+    readonly extractorPaths = Object.freeze(["/usr/bin/tar", "/bin/tar", "/run/current-system/sw/bin/tar"]);
     readonly extractArguments = (archivePath: string, destination: string): readonly string[] => [
         "-xzf",
         archivePath,
@@ -226,6 +231,32 @@ function validateArchiveEntries(output: string, definition: ManagedAgentArchiveD
     }
 }
 
+async function resolveArchiveExtractor(
+    definition: ManagedAgentArchiveDefinition,
+    signal: AbortSignal,
+): Promise<ResolvedExecutable> {
+    for (const requestedPath of definition.extractorPaths) {
+        signal.throwIfAborted();
+        const executable = await resolveExecutablePath(requestedPath);
+        if (executable !== null) {
+            return executable;
+        }
+    }
+    throw new ManagedAgentArchiveError(
+        "managed_archive_extractor_not_found",
+        "A supported local archive extractor is required to install this Agent",
+    );
+}
+
+async function assertArchiveExtractorUnchanged(extractor: ResolvedExecutable): Promise<void> {
+    if (!(await revalidateExecutable(extractor.identity))) {
+        throw new ManagedAgentArchiveError(
+            "managed_archive_extractor_changed",
+            "The local archive extractor changed during installation",
+        );
+    }
+}
+
 export class ManagedAgentArchiveInstaller implements ManagedAgentArchiveInstallationPort {
     readonly #downloader: ManagedAgentArchiveDownloadPort;
 
@@ -260,6 +291,10 @@ export class ManagedAgentArchiveInstaller implements ManagedAgentArchiveInstalla
         const working = await mkdtemp(join(parent, `.${definition.version}.archive-`));
         const staging = await mkdtemp(join(parent, `.${definition.version}.staging-`));
         try {
+            const extractor = await resolveArchiveExtractor(definition, signal);
+            const extractorEnvironment = {
+                PATH: `${dirname(extractor.identity.requestedPath)}${delimiter}${MINIMAL_PATH}`,
+            };
             const archivePath = join(working, definition.archiveName);
             const extractionRoot = join(working, "extracted");
             await mkdir(extractionRoot, { mode: 0o700 });
@@ -282,21 +317,23 @@ export class ManagedAgentArchiveInstaller implements ManagedAgentArchiveInstalla
                     "The managed Agent archive checksum is invalid",
                 );
             }
+            await assertArchiveExtractorUnchanged(extractor);
             const list = await runBoundedProcess({
                 arguments: definition.listArguments(archivePath),
-                command: definition.extractor,
+                command: extractor.identity.requestedPath,
                 cwd: working,
-                environment: { PATH: MINIMAL_PATH },
+                environment: extractorEnvironment,
                 outputLimitBytes: 64 * 1024,
                 signal,
                 timeoutMilliseconds: ARCHIVE_EXTRACTION_TIMEOUT_MILLISECONDS,
             });
             validateArchiveEntries(list.stdout, definition);
+            await assertArchiveExtractorUnchanged(extractor);
             await runBoundedProcess({
                 arguments: definition.extractArguments(archivePath, extractionRoot),
-                command: definition.extractor,
+                command: extractor.identity.requestedPath,
                 cwd: working,
-                environment: { PATH: MINIMAL_PATH },
+                environment: extractorEnvironment,
                 outputLimitBytes: 64 * 1024,
                 signal,
                 timeoutMilliseconds: ARCHIVE_EXTRACTION_TIMEOUT_MILLISECONDS,
