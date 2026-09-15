@@ -13,7 +13,6 @@ import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-cl
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const MAXIMUM_RESPONSE_LENGTH = 8 * 1024 * 1024;
 const PROJECT_PERMISSIONS = Object.freeze([
-    "application:manage",
     "artifact:read",
     "artifact:write",
     "bot:behavior:write",
@@ -74,14 +73,6 @@ function identifierField(value: Readonly<Record<string, unknown>>, key: string, 
 function optionalIdentifierField(value: Readonly<Record<string, unknown>>, key: string, name: string): string {
     const field = text(value, key, name, true);
     if (field.length > 0 && !/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(field)) {
-        throw new MobiusProtocolError(`The service returned an invalid ${name}`);
-    }
-    return field;
-}
-
-function publicCredentialIdField(value: Readonly<Record<string, unknown>>, key: string, name: string): string {
-    const field = text(value, key, name);
-    if (!/^[a-zA-Z0-9_-]{1,128}$/.test(field)) {
         throw new MobiusProtocolError(`The service returned an invalid ${name}`);
     }
     return field;
@@ -402,19 +393,6 @@ export interface MobiusProjectAuthenticationClientOptions {
     readonly transport?: MobiusHttpTransport;
 }
 
-export interface CreateMobiusProjectApplicationRequest {
-    readonly name: string;
-    readonly permissions: readonly string[];
-}
-
-export interface IssueMobiusApplicationCredentialRequest {
-    readonly expiresInSeconds: number;
-}
-
-export interface RotateMobiusApplicationCredentialRequest extends IssueMobiusApplicationCredentialRequest {
-    readonly overlapSeconds: number;
-}
-
 export interface AttachMobiusExternalIdentityRequest {
     readonly externalCredential: string;
     readonly permissions: readonly string[];
@@ -513,138 +491,6 @@ function credentialState(value: Readonly<Record<string, unknown>>, name: string)
         return new MobiusReplacedCredentialState(replacement);
     }
     return new MobiusCurrentCredentialState();
-}
-
-export class MobiusProjectApplicationLifecycle {
-    static readonly Active = new MobiusProjectApplicationLifecycle("active");
-    static readonly Revoked = new MobiusProjectApplicationLifecycle("revoked");
-
-    readonly value: string;
-
-    private constructor(value: string) {
-        this.value = value;
-    }
-
-    readonly toJSON = (): string => this.value;
-}
-
-export abstract class MobiusProjectApplicationState {
-    abstract readonly lifecycle: MobiusProjectApplicationLifecycle;
-}
-
-export class MobiusActiveProjectApplicationState extends MobiusProjectApplicationState {
-    readonly lifecycle = MobiusProjectApplicationLifecycle.Active;
-}
-
-export class MobiusRevokedProjectApplicationState extends MobiusProjectApplicationState {
-    readonly lifecycle = MobiusProjectApplicationLifecycle.Revoked;
-    readonly revokedAt: string;
-
-    constructor(revokedAt: string) {
-        super();
-        this.revokedAt = revokedAt;
-    }
-}
-
-function applicationState(value: Readonly<Record<string, unknown>>): MobiusProjectApplicationState {
-    const lifecycle = value["lifecycle"];
-    const revokedAt = timestamp(value, "revokedAt", "Project application", true);
-    if (lifecycle === "active" && revokedAt.length === 0) {
-        return new MobiusActiveProjectApplicationState();
-    }
-    if (lifecycle === "revoked" && revokedAt.length > 0) {
-        return new MobiusRevokedProjectApplicationState(revokedAt);
-    }
-    throw new MobiusProtocolError("The service returned an invalid Project application");
-}
-
-export class MobiusProjectApplicationCredential {
-    readonly credentialId: string;
-    readonly expiresAt: string;
-    readonly issuedAt: string;
-    readonly lastUsedAt: string;
-    readonly publicCredentialId: string;
-    readonly state: MobiusCredentialState;
-
-    constructor(value: unknown) {
-        const resource = record(value, "Project application credential");
-        this.credentialId = identifierField(resource, "credentialId", "Project application credential");
-        this.publicCredentialId = publicCredentialIdField(
-            resource,
-            "publicCredentialId",
-            "Project application credential",
-        );
-        this.issuedAt = timestamp(resource, "issuedAt", "Project application credential");
-        this.expiresAt = timestamp(resource, "expiresAt", "Project application credential");
-        this.lastUsedAt = timestamp(resource, "lastUsedAt", "Project application credential");
-        this.state = credentialState(resource, "Project application credential");
-    }
-}
-
-export class MobiusProjectApplication {
-    readonly applicationId: string;
-    readonly createdAt: string;
-    readonly credentials: readonly MobiusProjectApplicationCredential[];
-    readonly name: string;
-    readonly permissions: readonly string[];
-    readonly projectId: string;
-    readonly state: MobiusProjectApplicationState;
-    readonly updatedAt: string;
-
-    constructor(value: unknown) {
-        const resource = record(value, "Project application");
-        this.applicationId = identifierField(resource, "applicationId", "Project application");
-        this.projectId = identifierField(resource, "projectId", "Project application");
-        this.name = text(resource, "name", "Project application");
-        this.permissions = permissionList(resource["permissions"], "Project application permissions");
-        this.state = applicationState(resource);
-        this.createdAt = timestamp(resource, "createdAt", "Project application");
-        this.updatedAt = timestamp(resource, "updatedAt", "Project application");
-        this.credentials = Object.freeze(
-            records(resource, "credentials", "Project application credentials").map(
-                (credentialResource) => new MobiusProjectApplicationCredential(credentialResource),
-            ),
-        );
-    }
-}
-
-export class MobiusIssuedApplicationCredential {
-    readonly applicationId: string;
-    readonly credential: string;
-    readonly credentialId: string;
-    readonly expiresAt: string;
-    readonly issuedAt: string;
-    readonly publicCredentialId: string;
-
-    constructor(value: unknown) {
-        const resource = record(value, "issued Project application credential");
-        this.applicationId = identifierField(resource, "applicationId", "issued Project application credential");
-        this.credential = credential(text(resource, "credential", "issued Project application credential"));
-        this.credentialId = identifierField(resource, "credentialId", "issued Project application credential");
-        this.publicCredentialId = publicCredentialIdField(
-            resource,
-            "publicCredentialId",
-            "issued Project application credential",
-        );
-        this.issuedAt = timestamp(resource, "issuedAt", "issued Project application credential");
-        this.expiresAt = timestamp(resource, "expiresAt", "issued Project application credential");
-    }
-}
-
-export class MobiusRotatedApplicationCredential extends MobiusIssuedApplicationCredential {
-    readonly overlapEndsAt: string;
-    readonly replacedCredentialId: string;
-
-    constructor(value: unknown) {
-        super(value);
-        const resource = record(value, "rotated Project application credential");
-        this.overlapEndsAt = timestamp(resource, "overlapEndsAt", "rotated Project application credential");
-        this.replacedCredentialId = identifierField(
-            resource,
-            "replacedCredentialId",
-            "rotated Project application credential",
-        );
-    }
 }
 
 export class MobiusExternalIdentityBinding {
@@ -859,94 +705,6 @@ export class ExchangingMobiusCredentialProvider implements MobiusCredentialProvi
     };
 }
 
-export class MobiusProjectApplicationResource {
-    readonly #client: MobiusProjectAuthenticationClient;
-
-    constructor(client: MobiusProjectAuthenticationClient) {
-        this.#client = client;
-    }
-
-    readonly create = async (
-        request: CreateMobiusProjectApplicationRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusProjectApplication> =>
-        new MobiusProjectApplication(
-            await this.#client.projectPost(
-                `v1/projects/${encodeURIComponent(this.#client.projectId)}/applications`,
-                { name: request.name, permissions: requestPermissionList(request.permissions) },
-                signal,
-            ),
-        );
-
-    readonly list = async (signal: AbortSignal): Promise<readonly MobiusProjectApplication[]> => {
-        const value = record(
-            await this.#client.projectGet(
-                `v1/projects/${encodeURIComponent(this.#client.projectId)}/applications`,
-                signal,
-            ),
-            "Project application directory",
-        );
-        return Object.freeze(
-            records(value, "applications", "Project application directory").map(
-                (application) => new MobiusProjectApplication(application),
-            ),
-        );
-    };
-
-    readonly revoke = async (applicationId: string, signal: AbortSignal): Promise<void> => {
-        await this.#client.projectPost(
-            `v1/project-applications/${encodeURIComponent(identifier(applicationId, "Project application"))}/revoke`,
-            {},
-            signal,
-        );
-    };
-}
-
-export class MobiusApplicationCredentialResource {
-    readonly #client: MobiusProjectAuthenticationClient;
-
-    constructor(client: MobiusProjectAuthenticationClient) {
-        this.#client = client;
-    }
-
-    readonly issue = async (
-        applicationId: string,
-        request: IssueMobiusApplicationCredentialRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusIssuedApplicationCredential> =>
-        new MobiusIssuedApplicationCredential(
-            await this.#client.projectPost(
-                `v1/project-applications/${encodeURIComponent(identifier(applicationId, "Project application"))}/credentials`,
-                { expiresInSeconds: positiveInteger(request.expiresInSeconds, "credential lifetime") },
-                signal,
-            ),
-        );
-
-    readonly rotate = async (
-        credentialId: string,
-        request: RotateMobiusApplicationCredentialRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusRotatedApplicationCredential> =>
-        new MobiusRotatedApplicationCredential(
-            await this.#client.projectPost(
-                `v1/project-application-credentials/${encodeURIComponent(identifier(credentialId, "application credential"))}/rotate`,
-                {
-                    expiresInSeconds: positiveInteger(request.expiresInSeconds, "credential lifetime"),
-                    overlapSeconds: nonnegativeInteger(request.overlapSeconds, "credential overlap"),
-                },
-                signal,
-            ),
-        );
-
-    readonly revoke = async (credentialId: string, signal: AbortSignal): Promise<void> => {
-        await this.#client.projectPost(
-            `v1/project-application-credentials/${encodeURIComponent(identifier(credentialId, "application credential"))}/revoke`,
-            {},
-            signal,
-        );
-    };
-}
-
 export class MobiusExternalIdentityBindingResource {
     readonly #client: MobiusProjectAuthenticationClient;
 
@@ -1055,8 +813,6 @@ export class MobiusAuthenticationAuditResource {
 }
 
 export class MobiusProjectAuthenticationClient {
-    readonly applicationCredentials: MobiusApplicationCredentialResource;
-    readonly applications: MobiusProjectApplicationResource;
     readonly auditEvents: MobiusAuthenticationAuditResource;
     readonly externalIdentityBindings: MobiusExternalIdentityBindingResource;
     readonly ownerCredentials: MobiusOwnerCredentialResource;
@@ -1066,8 +822,6 @@ export class MobiusProjectAuthenticationClient {
     constructor(options: MobiusProjectAuthenticationClientOptions) {
         this.projectId = identifier(options.projectId, "Project");
         this.#requests = new ProjectAuthenticationRequestExecutor(options);
-        this.applications = new MobiusProjectApplicationResource(this);
-        this.applicationCredentials = new MobiusApplicationCredentialResource(this);
         this.externalIdentityBindings = new MobiusExternalIdentityBindingResource(this);
         this.ownerCredentials = new MobiusOwnerCredentialResource(this);
         this.auditEvents = new MobiusAuthenticationAuditResource(this);

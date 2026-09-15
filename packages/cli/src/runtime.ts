@@ -7,10 +7,8 @@ import { createDaemonConfig, type DaemonConfig, loadDefaultWorkspace } from "./c
 import { runDaemon } from "./run-daemon.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
-const APP_CREDENTIAL_PATTERN = /^mapp_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;
-const CONVERSATION_CREDENTIAL_PATTERN = /^mconv_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
-const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
+const RUNTIME_CREDENTIAL_PATTERN = /^[a-zA-Z0-9_-]{43}$/;
 
 export interface MobiusRuntimeConnection {
     readonly auditDatabasePath: string;
@@ -44,12 +42,6 @@ function validateRuntimeRelay(relayUrl: URL): void {
     const credential = relayUrl.searchParams.get("token") ?? "";
     if (credential.length === 0) {
         throw new MobiusRuntimeConfigurationError("The Runtime relay credential is required");
-    }
-    if (APP_CREDENTIAL_PATTERN.test(credential)) {
-        throw new MobiusRuntimeConfigurationError("An AppCredential cannot be held by a local Runtime");
-    }
-    if (CONVERSATION_CREDENTIAL_PATTERN.test(credential)) {
-        throw new MobiusRuntimeConfigurationError("A ConversationAccessToken cannot be held by a local Runtime");
     }
     if (!RUNTIME_CREDENTIAL_PATTERN.test(credential)) {
         throw new MobiusRuntimeConfigurationError("The Runtime relay credential is invalid");

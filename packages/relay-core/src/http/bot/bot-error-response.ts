@@ -82,19 +82,14 @@ function projectAuthenticationErrorStatus(code: string): number {
         case "project_access_denied":
         case "project_permission_denied":
             return 403;
-        case "application_credential_not_found":
         case "external_identity_binding_not_found":
         case "external_provider_unknown":
         case "owner_credential_not_found":
-        case "project_application_not_found":
             return 404;
-        case "application_credential_rotation_conflict":
         case "external_identity_binding_conflict":
         case "owner_credential_rotation_conflict":
-        case "project_application_conflict":
             return 409;
         case "access_credential_lifetime_invalid":
-        case "application_credential_lifetime_invalid":
         case "audit_page_invalid":
         case "credential_overlap_invalid":
         case "external_identity_not_fresh":

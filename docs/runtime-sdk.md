@@ -62,8 +62,9 @@ and returns a single-use engine. `run(signal)` owns and closes the audit store a
 propagates cancellation through Relay, ACP adapters, and Agent processes.
 
 Only a Runtime Credential is accepted for the long-lived Relay connection.
-Values shaped as Platform AppCredentials or Conversation credentials are rejected
-before Agent discovery or network I/O. The local execution boundary still
+The Runtime validates its issued 43-character base64url credential format
+before Agent discovery or network I/O, without interpreting hosting credentials.
+The local execution boundary still
 normalizes the executable and workspace and enforces local grants immediately
 before a side effect. The connector removes the credential from the WebSocket URL
 and presents it only as the `Authorization: Bearer` upgrade header. Finite Runtime

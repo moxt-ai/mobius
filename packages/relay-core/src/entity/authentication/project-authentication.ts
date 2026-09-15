@@ -104,14 +104,13 @@ export function decodeProjectPermissions(value: unknown): ReadonlySet<ProjectPer
 
 export class AuditActorKind {
     static readonly AccountlessOwner = new AuditActorKind("accountless_owner");
-    static readonly Application = new AuditActorKind("application");
     static readonly BotConnection = new AuditActorKind("bot_connection");
     static readonly BrowserAccess = new AuditActorKind("browser_access");
     static readonly ExternalIdentity = new AuditActorKind("external_identity");
 
     readonly value: string;
 
-    private constructor(value: string) {
+    protected constructor(value: string) {
         this.value = value;
     }
 

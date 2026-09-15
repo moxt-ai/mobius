@@ -1216,7 +1216,7 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(ownerCredential?.token_hash).not.toBe(created.hostToken);
     });
 
-    it("Given an owner app credential, When a browser uses a short-lived project credential through the SDK, Then Runtime discovery and every Session request enforce expiry, refresh, and revocation", async () => {
+    it("Given an owner credential, When a browser uses a short-lived project credential through the SDK, Then Runtime discovery and every Session request enforce expiry, refresh, and revocation", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();

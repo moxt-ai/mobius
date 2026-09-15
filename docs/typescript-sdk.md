@@ -136,7 +136,7 @@ is in [Project Runtime pairing](runtime-pairing.md).
 
 ## Credentials
 
-Server applications normally provide an application credential through
+Servers provide a hosting-authorized Project credential through
 `StaticMobiusCredentialProvider` or their own rotating provider. The provider's
 `credential(signal)` operation runs before every finite request and every event
 reconnection.
@@ -159,20 +159,20 @@ await ownerClient.credentials.revoke(
 ```
 
 Return only the short-lived browser credential from an authenticated
-application endpoint. Never put the owner or server application credential in
+application endpoint. Never put the owner or server-held Project credential in
 a browser bundle or browser example. A browser provider should cache the
 short-lived credential, refresh it before `expiresAt`, and honor its supplied
 abort signal.
 
-`MobiusProjectAuthenticationClient` exposes application registration and
-credential lifecycle, external identity binding and exchange, accountless owner
+`MobiusProjectAuthenticationClient` exposes external identity binding and exchange, accountless owner
 rotation/revocation, and authentication audit events. Use
-`RotatingMobiusCredentialProvider` to swap an application or owner secret after
+`RotatingMobiusCredentialProvider` to swap an owner secret after
 rotation and `ExchangingMobiusCredentialProvider` to cache and refresh
 short-lived Mobius access credentials from a host-supplied OIDC token provider.
 See [Project authentication and credential operations](project-authentication.md)
-for the full permission matrix, Clerk-compatible construction example, Moxt
-server example, and recovery/rotation runbook.
+for the permission matrix, Platform backend example, and recovery/rotation
+runbook. App registration and AppCredential lifecycle belong exclusively to
+`@moxt-ai/mobius-sdk/platform`.
 
 The SDK does not loop on authentication failures. `credential_expired` and
 `credential_revoked` are returned immediately. After obtaining a replacement,

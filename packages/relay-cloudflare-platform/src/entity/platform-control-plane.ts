@@ -1,9 +1,14 @@
-import type {
-    ExternalIdentityAuthenticator,
-    ProjectAccessContext,
-    ProjectPermission,
-    VerifiedExternalIdentity,
+import {
+    AuditActorKind,
+    type ExternalIdentityAuthenticator,
+    type ProjectAccessContext,
+    type ProjectPermission,
+    type VerifiedExternalIdentity,
 } from "@moxt-ai/mobius-relay-core";
+
+export class PlatformAuditActorKind extends AuditActorKind {
+    static readonly Application = new PlatformAuditActorKind("application");
+}
 
 export class PlatformControlPlaneError extends Error {
     readonly code: string;

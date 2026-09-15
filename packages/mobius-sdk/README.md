@@ -21,11 +21,18 @@ guide](https://github.com/moxt-ai/mobius/blob/main/docs/bots.md) documents grant
 redemption, scoped credentials, connected conversations, cursor recovery,
 outbound acknowledgement, and connection revocation.
 
-Project application registration, OIDC exchange, accountless recovery, and
-credential rotation are documented in the [Project authentication
+Project authorization, accountless recovery, and owner credential rotation
+are documented in the [Project authentication
 guide](https://github.com/moxt-ai/mobius/blob/main/docs/project-authentication.md).
 The server-only
 [`moxt-server`](https://github.com/moxt-ai/mobius/blob/main/packages/mobius-sdk/examples/moxt-server.ts)
-example provisions separate least-privilege application credentials for Runtime
-and Bot management, conversation work, and event projection without creating a
-Bot Connection.
+example provisions a Platform App and Project using `@moxt-ai/mobius-sdk/platform`,
+then uses Project-scoped clients for Runtime and Bot management, conversation
+work, and event projection. App lifecycle and AppCredentials belong to the
+Platform SDK entry point only.
+
+Existing users of `MobiusProjectAuthenticationClient.applications` and
+`.applicationCredentials` should migrate to `MobiusPlatformDeveloperClient`.
+The [migration table](https://github.com/moxt-ai/mobius/blob/main/docs/project-authentication.md#migrating-app-management-to-platform)
+maps each operation to its Platform SDK method and HTTP endpoint, including
+Tenant ownership, Project scope, and credential lifecycle differences.

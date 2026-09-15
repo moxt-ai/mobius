@@ -1,6 +1,5 @@
 import {
     AuditActor,
-    AuditActorKind,
     createRandomToken,
     type decodeProjectCredential,
     decodeProjectPermissions,
@@ -20,6 +19,7 @@ import {
 import {
     hasControlCharacters,
     PlatformAppCredentialAccess,
+    PlatformAuditActorKind,
     type PlatformAuthenticationConfiguration,
     PlatformControlPlaneError,
     PlatformDeveloperAccess,
@@ -1206,7 +1206,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         return new ProjectAccessContext(
             new ProjectScope(project.project_id),
             granted,
-            new AuditActor(AuditActorKind.Application, row.app_id),
+            new AuditActor(PlatformAuditActorKind.Application, row.app_id),
             row.credential_id,
             now,
             new PerpetualProjectAccessLifetime(),
