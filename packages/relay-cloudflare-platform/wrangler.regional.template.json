@@ -5,5 +5,5 @@
     "vars": { "MOBIUS_WORKER_REGION": "<%% projectRegion %%>" },
     "workers_dev": false,
     "preview_urls": false,
-    "keep_vars": true
+    "keep_vars": false
 }

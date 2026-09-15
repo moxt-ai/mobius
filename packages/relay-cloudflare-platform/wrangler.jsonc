@@ -99,14 +99,7 @@
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-staging-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
             ],
-            "vars": {
-                "MOBIUS_WORKER_REGION": "edge",
-                "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
-                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://smashing-spider-8574.clerk.accounts.dev\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://smashing-spider-8574.clerk.accounts.dev/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
-                "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
-                "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
-                "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
-            }
+            "vars": { "MOBIUS_WORKER_REGION": "edge" }
         },
         "production": {
             "name": "mobius-platform-production",
@@ -166,14 +159,7 @@
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-production-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
             ],
-            "vars": {
-                "MOBIUS_WORKER_REGION": "edge",
-                "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
-                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://clerk.mobius.moxt.ai\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://clerk.mobius.moxt.ai/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
-                "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
-                "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
-                "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"
-            }
+            "vars": { "MOBIUS_WORKER_REGION": "edge" }
         }
     }
 }

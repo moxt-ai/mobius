@@ -96,7 +96,7 @@ for (const region of ["apac", "wnam"] satisfies readonly ("apac" | "wnam")[]) {
             vars: v.object({ MOBIUS_WORKER_REGION: v.picklist(["apac", "wnam"]) }),
             workers_dev: v.literal(false),
             preview_urls: v.literal(false),
-            keep_vars: v.literal(true),
+            keep_vars: v.boolean(),
         }),
         JSON.parse(rendered),
     );

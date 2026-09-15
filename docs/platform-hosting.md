@@ -124,13 +124,32 @@ The command applies both remote D1 migration streams before publishing the
 Worker. A migration failure stops deployment. It never migrates or deploys the
 Standalone Worker.
 
-CI deploys staging and production using the `mobius-relay-production` GitHub
-environment. Its `CLOUDFLARE_API_TOKEN` must retain account access for Worker
+CI deploys staging and production using separate `staging` and `production` GitHub
+environments. Their `CLOUDFLARE_API_TOKEN` must retain account access for Worker
 uploads, D1 migrations, R2 bindings, Workers KV Storage, and custom domains,
 plus Zone Read and Workers Routes Edit access to both `moxt.ws` and `moxt.ai`. A token
 that can upload a Worker can still fail when Wrangler reads or updates routes.
 
-The checked-in Platform configuration is authoritative for CI deployments.
+GitHub Environment variables and secrets are authoritative for runtime settings.
+Create individual GitHub variables for the three authentication variables above
+plus `SESSION_ACTIVE_SESSIONS_PER_PROJECT` and `SESSION_ARCHIVE_BYTES_PER_SESSION`.
+All values must be nonempty strings; authentication values contain JSON arrays.
+Set the individual GitHub secret `CLERK_SECRET_KEY` to enable organization invites.
+It is optional for deployments without invites. The workflow explicitly maps
+each setting and calls `scripts/validate-worker-config.ts` before migrations,
+then supplies variables and provided secrets to both regional Workers and the edge
+Worker with their deployed versions. Worker region is topology owned by Wrangler
+configuration. Wrangler preserves
+existing secrets; explicitly delete retired bindings in Cloudflare.
+
+Also set GitHub variables `CLERK_PUBLISHABLE_KEY` for the frontend build and
+`CLOUDFLARE_ACCOUNT_ID`. Copy deployment credentials from the former shared
+`mobius-relay-production` environment into both environments before the first CD
+run. That original environment remains in use by the standalone Relay deployment.
+Populate GitHub with existing runtime values before deployment; Cloudflare cannot
+return secret plaintext, so recover those from the original store or rotate them.
+
+The checked-in Platform configuration owns resource bindings and routes.
 Platform CI omits Wrangler's `--strict` option so Workers bootstrapped through
 the script API can be updated from the repository. Such deployments replace
 remote code and configuration with the checked-in version.

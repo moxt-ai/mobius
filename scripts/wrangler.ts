@@ -314,7 +314,7 @@ async function run(signal: AbortSignal): Promise<void> {
                     "--config",
                     resolve(regionalDirectory, `${region}.json`),
                     ...(dryRun ? ["--dry-run"] : []),
-                    ...selectWranglerOptions(wranglerArguments, ["--message"]),
+                    ...selectWranglerOptions(wranglerArguments, ["--message", "--var", "--secrets-file"]),
                 ],
                 signal,
             );

@@ -13,6 +13,38 @@ permissions:
   contents: read
 
 jobs:
+  validate-worker-config:
+    name: Validate Worker config (${{ matrix.environment }})
+    if: >-
+      github.repository == 'moxt-ai/mobius' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        environment: [staging, production]
+    environment: ${{ matrix.environment }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Validate GitHub runtime configuration
+        run: node scripts/validate-worker-config.ts
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          MOBIUS_PLATFORM_ALLOWED_ORIGINS: ${{ vars.MOBIUS_PLATFORM_ALLOWED_ORIGINS }}
+          MOBIUS_PLATFORM_OIDC_PROVIDERS: ${{ vars.MOBIUS_PLATFORM_OIDC_PROVIDERS }}
+          MOBIUS_PLATFORM_OPERATOR_SUBJECTS: ${{ vars.MOBIUS_PLATFORM_OPERATOR_SUBJECTS }}
+          SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
+          SESSION_ARCHIVE_BYTES_PER_SESSION: ${{ vars.SESSION_ARCHIVE_BYTES_PER_SESSION }}
+
   check:
     name: check
     # Main pushes have already passed the merge queue; keep manual verification available.
@@ -136,11 +168,12 @@ jobs:
     name: deploy Platform (${{ matrix.environment }})
     if: >-
       !cancelled() &&
+      needs.validate-worker-config.result == 'success' &&
       (needs.check.result == 'success' || needs.check.result == 'skipped') &&
       github.repository == 'moxt-ai/mobius' &&
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
-    needs: check
+    needs: [check, validate-worker-config]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -149,12 +182,10 @@ jobs:
         include:
           - environment: staging
             domain: mobius.moxt.ws
-            clerk_publishable_key: pk_test_c21hc2hpbmctc3BpZGVyLTg1NzQuY2xlcmsuYWNjb3VudHMuZGV2JA==
           - environment: production
             domain: mobius.moxt.ai
-            clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLm1veHQuYWkk
     environment:
-      name: mobius-relay-production
+      name: ${{ matrix.environment }}
       url: https://${{ matrix.domain }}
     concurrency:
       group: deploy-mobius-platform-${{ matrix.environment }}
@@ -187,13 +218,33 @@ jobs:
 
       - name: Deploy mobius-platform
         env:
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ matrix.clerk_publishable_key }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.CLERK_PUBLISHABLE_KEY }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          MOBIUS_PLATFORM_ALLOWED_ORIGINS: ${{ vars.MOBIUS_PLATFORM_ALLOWED_ORIGINS }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          MOBIUS_PLATFORM_OIDC_PROVIDERS: ${{ vars.MOBIUS_PLATFORM_OIDC_PROVIDERS }}
+          MOBIUS_PLATFORM_OPERATOR_SUBJECTS: ${{ vars.MOBIUS_PLATFORM_OPERATOR_SUBJECTS }}
+          SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
+          SESSION_ARCHIVE_BYTES_PER_SESSION: ${{ vars.SESSION_ARCHIVE_BYTES_PER_SESSION }}
+          DEPLOY_ENVIRONMENT: ${{ matrix.environment }}
+        shell: bash
         run: |
+          node scripts/validate-worker-config.ts
+          umask 077
+          secrets_file="$(mktemp "$RUNNER_TEMP/worker-secrets.XXXXXX.json")"
+          trap 'rm -f "$secrets_file"' EXIT
+          node scripts/validate-worker-config.ts secrets > "$secrets_file"
+          worker_vars="$(node scripts/validate-worker-config.ts vars)"
+          args=()
+          while IFS= read -r -d '' binding; do
+            args+=(--var "$binding")
+          done < <(printf '%s' "$worker_vars" | jq -j 'to_entries[] | .key + ":" + .value + "\u0000"')
           pnpm wrangler deploy \
             --config packages/relay-cloudflare-platform/wrangler.jsonc \
-            --env "${{ matrix.environment }}" \
+            --env "$DEPLOY_ENVIRONMENT" \
+            --secrets-file "$secrets_file" \
+            "${args[@]}" \
             --message "GitHub ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
       - name: Verify Platform health
