@@ -1,4 +1,5 @@
 import type { ProjectScope } from "../do/session.ts";
+import type { HttpError } from "../http-error.ts";
 import { VerifiedChannelAccess } from "../pairing/pairing.ts";
 
 export class ProjectPermission {
@@ -197,13 +198,61 @@ export function decodeProjectCredential(value: unknown): ProjectCredential {
     return ProjectCredential.decode(value);
 }
 
-export class ProjectAuthenticationError extends Error {
+export class ProjectAuthenticationError extends Error implements HttpError {
     readonly code: string;
 
     constructor(code: string, message: string, options: ErrorOptions = {}) {
         super(message, options);
         this.code = code;
         this.name = "ProjectAuthenticationError";
+    }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: projectAuthenticationErrorStatus(this.code),
+    });
+}
+
+function projectAuthenticationErrorStatus(code: string): number {
+    switch (code) {
+        case "credential_expired":
+        case "credential_revoked":
+        case "external_algorithm_invalid":
+        case "external_audience_invalid":
+        case "external_claims_invalid":
+        case "external_credential_invalid":
+        case "external_identity_expired":
+        case "external_identity_invalid":
+        case "external_identity_not_active":
+        case "external_issuer_invalid":
+        case "external_provider_invalid":
+        case "external_signature_invalid":
+        case "external_signing_key_unknown":
+        case "external_subject_invalid":
+        case "project_credential_invalid":
+            return 401;
+        case "external_identity_not_granted":
+        case "owner_access_required":
+        case "project_access_denied":
+        case "project_permission_denied":
+            return 403;
+        case "external_identity_binding_not_found":
+        case "external_provider_unknown":
+        case "owner_credential_not_found":
+            return 404;
+        case "external_identity_binding_conflict":
+        case "owner_credential_rotation_conflict":
+            return 409;
+        case "access_credential_lifetime_invalid":
+        case "audit_page_invalid":
+        case "credential_overlap_invalid":
+        case "external_identity_not_fresh":
+        case "project_permission_invalid":
+            return 400;
+        case "external_provider_timeout":
+            return 504;
+        default:
+            return 503;
     }
 }
 

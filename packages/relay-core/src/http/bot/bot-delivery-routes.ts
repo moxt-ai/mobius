@@ -2,8 +2,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import type { BotDeliveryService } from "../../service/bot/bot-delivery-service.ts";
 import { botDeliveryBodyParser } from "../middleware/bot-delivery-body-parser.ts";
-import { botDeliveryErrorMiddleware } from "../middleware/bot-error-middleware.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 
 const text = v.pipe(v.string(), v.minLength(1), v.maxLength(10_000));
 const integer = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
@@ -49,7 +48,7 @@ export function createBotDeliveryRoutes(service: BotDeliveryService) {
     return new Hono()
         .basePath("/internal/bot-connections")
         .onError(rethrowHonoError)
-        .use("*", botDeliveryErrorMiddleware())
+        .use("*", errorMiddleware)
         .use("*", async (c, next) => {
             if (c.req.method !== "POST") {
                 return new Response(null, { status: 405 });

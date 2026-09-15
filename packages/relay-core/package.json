@@ -19,6 +19,7 @@
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "hono": "^4.13.7",
+        "pino": "^10.3.1",
         "valibot": "1.5.0"
     }
 }

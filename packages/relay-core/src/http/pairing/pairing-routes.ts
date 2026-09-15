@@ -8,14 +8,14 @@ import {
     validatePairingCode,
 } from "../../entity/pairing/pairing.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
-import { directoryErrorMiddleware, pairingTimeoutMiddleware } from "../middleware/relay-error-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
+import { pairingTimeoutMiddleware } from "../middleware/pairing-timeout-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createPairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
-        .use("*", directoryErrorMiddleware)
+        .use("*", errorMiddleware)
         .use("/", pairingTimeoutMiddleware("Pairing creation timed out"))
         .post("/", async (context) => {
             const request = context.req.raw;
@@ -37,7 +37,7 @@ export function createPairingRoutes() {
 export function createPairingClaimRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
-        .use("*", directoryErrorMiddleware)
+        .use("*", errorMiddleware)
         .post(
             "/claim",
             bodyParser<RelayHttpEnvironment>([

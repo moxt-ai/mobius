@@ -9,14 +9,14 @@ import {
 } from "../../entity/pairing/pairing.ts";
 import { bearerToken, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
-import { directoryErrorMiddleware, pairingTimeoutMiddleware } from "../middleware/relay-error-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
+import { pairingTimeoutMiddleware } from "../middleware/pairing-timeout-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createProjectRuntimePairingRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
-        .use("*", directoryErrorMiddleware)
+        .use("*", errorMiddleware)
         .use("/runtime-pairings/:pairingId/redeem", pairingTimeoutMiddleware("Runtime pairing redemption timed out"))
         .use("/projects/:projectId/runtime-pairings", pairingTimeoutMiddleware("Runtime pairing creation timed out"))
         .use(

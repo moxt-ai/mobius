@@ -38,6 +38,11 @@ class InternalRequestError extends Error implements HttpError {
         this.httpStatus = httpStatus;
         this.name = "InternalRequestError";
     }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: this.httpStatus,
+    });
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -331,7 +336,8 @@ function operationFromPath(pathname: string): string {
 }
 
 function errorResponse(error: Error & HttpError): Response {
-    return Response.json({ error: { code: error.code, message: error.message } }, { status: error.httpStatus });
+    const response = error.toHttpJson();
+    return Response.json(response.body, { status: response.status, headers: response.headers ?? {} });
 }
 
 class DoRoutes {

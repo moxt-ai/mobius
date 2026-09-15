@@ -40,8 +40,7 @@ import {
 } from "../../infra/relay-http.ts";
 import { isRecord } from "../../service/do/session-codec.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
-import { sessionErrorMiddleware } from "../middleware/relay-error-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 function readIdentifierArray(
@@ -100,7 +99,7 @@ function readTargetCommandId(body: Readonly<Record<string, unknown>>, dispositio
 export function createSessionRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
-        .use("*", sessionErrorMiddleware)
+        .use("*", errorMiddleware)
         .post(
             "/projects/:projectId/runtimes/:runtimeId/native-sessions",
             bodyParser<RelayHttpEnvironment>(),

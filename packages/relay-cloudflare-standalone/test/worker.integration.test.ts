@@ -749,7 +749,9 @@ describe.sequential("Cloudflare session deployment", () => {
             },
         );
         expect(runtimeCannotPair.status).toBe(401);
-        await expect(runtimeCannotPair.json()).resolves.toMatchObject({ error: { code: "unauthorized" } });
+        await expect(runtimeCannotPair.json()).resolves.toMatchObject({
+            error: { code: "project_credential_invalid" },
+        });
         const ownerCredentials = await env.DIRECTORY_DATABASE.prepare(
             `SELECT COUNT(*) AS credential_count FROM project_owner_credentials WHERE project_id = ?`,
         )
@@ -1120,7 +1122,7 @@ describe.sequential("Cloudflare session deployment", () => {
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${first.created.projectId}/sessions/existing-tenant-session`,
             { headers: authorization(second.created) },
         );
-        expect(denied.status).toBe(401);
+        expect(denied.status).toBe(403);
     });
 
     it("Given a browser pairing, When clients use channel and project resources, Then verified credentials derive one tenant and project scope", async () => {
@@ -2926,7 +2928,7 @@ describe.sequential("Cloudflare session deployment", () => {
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${source.created.projectId}/sessions`,
             { headers: authorization(destination.created) },
         );
-        expect(unauthorized.status).toBe(401);
+        expect(unauthorized.status).toBe(403);
         const invisible = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${destination.created.projectId}/sessions/${sessionId}`,
             { headers: authorization(destination.created) },

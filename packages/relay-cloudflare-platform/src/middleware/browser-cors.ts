@@ -41,6 +41,11 @@ export function createBrowserCors(methods: readonly string[], headers: readonly 
             }
             return new Response(null, { headers: browserCorsHeaders(origin, methods, headers), status: 204 });
         }
+        if (origin.length > 0) {
+            for (const [name, value] of browserCorsHeaders(origin, methods, headers)) {
+                context.header(name, value);
+            }
+        }
         await next();
         if (origin.length > 0) {
             context.res = new Response(context.res.body, context.res);

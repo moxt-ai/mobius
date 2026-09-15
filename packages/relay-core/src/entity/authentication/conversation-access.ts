@@ -1,4 +1,5 @@
 import type { ProjectScope } from "../do/session.ts";
+import type { HttpError } from "../http-error.ts";
 import type { ProjectAccessLifetime } from "./project-authentication.ts";
 
 export class ConversationPermission {
@@ -97,7 +98,7 @@ export class ConversationAccessContext {
     };
 }
 
-export class ConversationAccessError extends Error {
+export class ConversationAccessError extends Error implements HttpError {
     readonly code: string;
 
     constructor(code: string, message: string, options: ErrorOptions = {}) {
@@ -105,6 +106,11 @@ export class ConversationAccessError extends Error {
         this.code = code;
         this.name = "ConversationAccessError";
     }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: this.code === "conversation_permission_denied" ? 403 : 401,
+    });
 }
 
 export interface ConversationAccessAuthorizer {

@@ -1,3 +1,5 @@
+import type { HttpError } from "../http-error.ts";
+
 export type BotErrorCode =
     | "behavior_not_approved"
     | "binding_incompatible"
@@ -32,7 +34,7 @@ export type BotFailureKind =
     | "capacity-exceeded"
     | "unavailable";
 
-export class BotApiError extends Error {
+export class BotApiError extends Error implements HttpError {
     readonly code: BotErrorCode;
     readonly kind: BotFailureKind;
 
@@ -42,4 +44,18 @@ export class BotApiError extends Error {
         this.name = "BotApiError";
         this.kind = kind;
     }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: {
+            "invalid-input": 400,
+            "input-too-large": 413,
+            unauthenticated: 401,
+            "access-denied": 403,
+            "not-found": 404,
+            conflict: 409,
+            "capacity-exceeded": 429,
+            unavailable: 503,
+        }[this.kind],
+    });
 }

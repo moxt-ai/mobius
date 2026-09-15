@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { createChannelRoutes } from "./http/channel/channel-routes.ts";
 import { createSessionRoutes } from "./http/do/session-routes.ts";
 import { createHealthRoutes } from "./http/health/health-routes.ts";
-import { rethrowHonoError } from "./http/middleware/error-response-middleware.ts";
+import { rethrowHonoError } from "./http/middleware/error-middleware.ts";
 import { createPairingClaimRoutes, createPairingRoutes } from "./http/pairing/pairing-routes.ts";
 import { createProjectRuntimePairingRoutes } from "./http/pairing/project-runtime-pairing-routes.ts";
 import type { RelayHttpEnvironment } from "./http/relay-http-environment.ts";

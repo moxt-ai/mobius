@@ -1,20 +1,13 @@
-export interface HttpError {
-    readonly code: string;
-    readonly httpStatus: number;
+export interface HttpErrorJson {
+    readonly body: { readonly error: { readonly code: string; readonly message: string } };
+    readonly status: number;
+    readonly headers?: Readonly<Record<string, string>>;
+}
+
+export interface HttpError extends Error {
+    readonly toHttpJson: () => HttpErrorJson;
 }
 
 export function isHttpError(error: unknown): error is Error & HttpError {
-    if (!(error instanceof Error)) {
-        return false;
-    }
-    const code = Reflect.get(error, "code");
-    const httpStatus = Reflect.get(error, "httpStatus");
-    return (
-        typeof code === "string" &&
-        code.length > 0 &&
-        typeof httpStatus === "number" &&
-        Number.isSafeInteger(httpStatus) &&
-        httpStatus >= 400 &&
-        httpStatus <= 599
-    );
+    return error instanceof Error && "toHttpJson" in error && typeof error.toHttpJson === "function";
 }

@@ -1,5 +1,5 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
-import { PairingDirectoryError, ProjectAuthenticationError } from "@moxt-ai/mobius-relay-core";
+import { errorMiddleware, requestTimeoutMiddleware, rethrowHonoError } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
@@ -37,19 +37,6 @@ type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
     readonly Bindings: { readonly allowedOrigins: ReadonlySet<string>; readonly invites: OrganizationInviteService };
 };
 
-function errorResponse(error: unknown): Response {
-    if (error instanceof PlatformControlPlaneError) {
-        return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status });
-    }
-    if (error instanceof ProjectAuthenticationError || error instanceof PairingDirectoryError) {
-        return Response.json({ error: { code: error.code, message: error.message } }, { status: 400 });
-    }
-    return Response.json(
-        { error: { code: "platform_internal_error", message: "The Platform request could not be completed" } },
-        { status: 500 },
-    );
-}
-
 function path(value: string): string {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value)) {
         throw new PlatformControlPlaneError("invalid_request", "A Platform resource identifier is invalid", 400);
@@ -74,13 +61,21 @@ function queryLimit(value: unknown): number {
 export function createPlatformControlApplication() {
     return new Hono<PlatformHttpEnvironment>({ strict: false })
         .basePath(MOBIUS_API_PREFIX)
-        .use("*", async (context, next) => {
-            context.set(
-                "signal",
-                AbortSignal.any([context.req.raw.signal, AbortSignal.timeout(OPERATION_TIMEOUT_MILLISECONDS)]),
-            );
-            await next();
-        })
+        .onError(rethrowHonoError)
+        .use("*", errorMiddleware)
+        .use(
+            "*",
+            requestTimeoutMiddleware<PlatformHttpEnvironment>(
+                OPERATION_TIMEOUT_MILLISECONDS,
+                (cause) =>
+                    new PlatformControlPlaneError(
+                        "platform_timeout",
+                        "The Platform request timed out. Please retry",
+                        504,
+                        { cause },
+                    ),
+            ),
+        )
         .use(
             "*",
             createBrowserCors(
@@ -88,16 +83,6 @@ export function createPlatformControlApplication() {
                 ["authorization", "content-type", "x-mobius-oidc-provider"],
             ),
         )
-        .onError((error, context) => {
-            context.req.raw.signal.throwIfAborted();
-            if (context.var.signal.aborted) {
-                return context.json(
-                    { error: { code: "platform_timeout", message: "The Platform request timed out. Please retry" } },
-                    504,
-                );
-            }
-            return errorResponse(error);
-        })
         .get("/health", (context) => context.json({ service: "mobius-relay-platform", status: "ok" }))
         .get("/capabilities", (context) =>
             context.json({

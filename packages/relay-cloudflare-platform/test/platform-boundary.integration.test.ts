@@ -211,18 +211,18 @@ it.each(["apac", "wnam"])(
                     unavailable,
                 )
             ).status,
-        ).toBe(401);
+        ).toBe(403);
         const database = location === "apac" ? env.D1_SHARD_APAC_01 : env.D1_SHARD_WNAM_01;
         await database
             .prepare("UPDATE platform_project_authorizations SET lifecycle = 'suspended' WHERE project_id = ?")
             .bind(fixture.projectId)
             .run();
-        expect((await read(unavailable)).status).toBe(401);
+        expect((await read(unavailable)).status).toBe(403);
         await database
             .prepare("DELETE FROM platform_project_authorizations WHERE project_id = ?")
             .bind(fixture.projectId)
             .run();
-        expect((await read(fixture.environment)).status).toBe(401);
+        expect((await read(fixture.environment)).status).toBe(403);
     },
 );
 
@@ -274,7 +274,7 @@ it("Given an App credential cached before App deletion, When stale authenticatio
             }),
             unavailable,
         );
-        expect(response.status).toBe(401);
+        expect(response.status).toBe(403);
     }
 });
 
@@ -304,7 +304,7 @@ it("Given an interrupted Project shard write, When provisioning is retried, Then
     await env.D1_SHARD_APAC_01.prepare("DELETE FROM platform_project_authorizations WHERE project_id = ?")
         .bind(fixture.projectId)
         .run();
-    expect((await read()).status).toBe(401);
+    expect((await read()).status).toBe(403);
     expect(text(await json(await retry(), 201), "projectId")).toBe(fixture.projectId);
     expect((await read()).status).toBe(200);
     await env.D1_SHARD_APAC_01.prepare(
@@ -313,7 +313,7 @@ it("Given an interrupted Project shard write, When provisioning is retried, Then
         .bind(fixture.projectId)
         .run();
     expect((await retry()).status).toBe(201);
-    expect((await read()).status).toBe(401);
+    expect((await read()).status).toBe(403);
 });
 
 it("Given cached active and revoked App credentials, When credential storage is unavailable, Then Project reads accept only the active secret until its cache expires", async () => {
@@ -398,7 +398,7 @@ it("Given a cached scoped App credential, When it is rotated, Then its cached re
     expect((await read(rotated.credential)).status).toBe(200);
     expect((await read(rotated.credential, "bots")).status).toBe(403);
     const other = await provisionPlatformProject("kv-other-project");
-    expect((await read(rotated.credential, "runtimes", other.projectId)).status).toBe(401);
+    expect((await read(rotated.credential, "runtimes", other.projectId)).status).toBe(403);
     vi.setSystemTime(new Date("2026-09-10T00:01:00.000Z"));
     expect((await read(issued.credential)).status).toBe(401);
     expect((await read(rotated.credential)).status).toBe(200);
@@ -1248,6 +1248,29 @@ afterEach(() => {
 });
 
 describe.sequential("Platform hosting boundary", () => {
+    it("Given unavailable Platform storage, When a signed-in developer lists organizations, Then the API returns a sanitized internal error with browser access headers", async () => {
+        const identity = new DeveloperAuthenticator();
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(identity, new Set(), new Set([thirdPartyBrowserOrigin])),
+            createPlatformGateways,
+        );
+        const response = await worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/platform/tenants`, {
+                headers: {
+                    authorization: `Bearer ${identity.session("user_owner", "org_team", "org:admin")}`,
+                    "x-mobius-oidc-provider": "clerk",
+                    origin: thirdPartyBrowserOrigin,
+                },
+            }),
+            { ...bindings(), PLATFORM_DIRECTORY_DATABASE: env.TEST_UNINITIALIZED_SHARD },
+        );
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({
+            error: { code: "internal_error", message: "The request could not be completed" },
+        });
+        expect(response.headers.get("access-control-allow-origin")).toBe(thirdPartyBrowserOrigin);
+    });
+
     it("Given developers in Clerk organizations, When they create and list apps, Then teammates share the organization tenant and other organizations are denied", async () => {
         const identity = new DeveloperAuthenticator();
         const worker = createTestMobiusPlatformApp(

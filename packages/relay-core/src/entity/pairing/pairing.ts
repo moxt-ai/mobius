@@ -3,6 +3,7 @@ import {
     type SessionCapabilities,
     sessionCapabilitiesSchema,
 } from "@moxt-ai/mobius-protocol";
+import type { HttpError } from "../http-error.ts";
 
 export const PAIRING_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
 export const ACCESS_GRANT_LIFETIME_MILLISECONDS = 10 * 60 * 1_000;
@@ -265,13 +266,56 @@ export class RevokedPairingStatus extends PairingStatus {
     }
 }
 
-export class PairingDirectoryError extends Error {
+export class PairingDirectoryError extends Error implements HttpError {
     readonly code: string;
 
     constructor(code: string, message: string, options: ErrorOptions = {}) {
         super(message, options);
         this.code = code;
         this.name = "PairingDirectoryError";
+    }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: pairingDirectoryErrorStatus(this.code),
+    });
+}
+
+function pairingDirectoryErrorStatus(code: string): number {
+    switch (code) {
+        case "pairing_not_found":
+        case "runtime_not_found":
+        case "channel_not_found":
+        case "access_grant_invalid":
+        case "linked_device_not_found":
+        case "browser_credential_not_found":
+            return 404;
+        case "unauthorized":
+        case "credential_expired":
+        case "credential_revoked":
+            return 401;
+        case "owner_access_required":
+        case "public_project_bootstrap_disabled":
+        case "runtime_access_denied":
+        case "workspace_required":
+            return 403;
+        case "access_grant_expired":
+            return 410;
+        case "access_grant_redeemed":
+        case "runtime_unavailable":
+        case "idempotency_conflict":
+            return 409;
+        case "pairing_timeout":
+        case "directory_timeout":
+            return 504;
+        case "runtime_quota_exceeded":
+        case "public_project_bootstrap_rate_limited":
+            return 429;
+        case "directory_unavailable":
+        case "runtime_disconnect_failed":
+            return 503;
+        default:
+            return 400;
     }
 }
 

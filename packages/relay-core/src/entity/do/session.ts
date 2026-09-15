@@ -533,6 +533,22 @@ export interface SessionExport {
 }
 
 function sessionRuntimeErrorStatus(code: string): number {
+    if (code === "execution_capability_invalid") {
+        return 401;
+    }
+    if (
+        code === "conversation_access_denied" ||
+        code === "delivery_target_not_allowed" ||
+        code === "execution_context_mismatch"
+    ) {
+        return 403;
+    }
+    if (code === "execution_capability_expired") {
+        return 410;
+    }
+    if (code === "queue_full") {
+        return 429;
+    }
     if (
         code === "session_not_found" ||
         code === "artifact_not_found" ||
@@ -586,4 +602,9 @@ export class SessionRuntimeError extends Error implements HttpError {
         this.httpStatus = sessionRuntimeErrorStatus(code);
         this.name = "SessionRuntimeError";
     }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: this.httpStatus,
+    });
 }

@@ -9,20 +9,13 @@ import {
 import { RequestBodyError, readBoundedBytesBody } from "../../infra/bounded-request-body.ts";
 import { bearerToken, readInteger, readString } from "../../infra/relay-http.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
-import { directoryErrorMiddleware, sessionErrorMiddleware } from "../middleware/relay-error-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 export function createChannelRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
-        .use("*", directoryErrorMiddleware)
-        .use("/:channelId/sessions/:sessionId/artifacts/uploads", sessionErrorMiddleware)
-        .use("/:channelId/sessions/:sessionId/artifacts/:artifactId/content", sessionErrorMiddleware)
-        .use(
-            "/:channelId/sessions/:sessionId/commands/:commandId/artifacts/:artifactId/content",
-            sessionErrorMiddleware,
-        )
+        .use("*", errorMiddleware)
         .put(
             "/:channelId/catalog",
             bodyParser<RelayHttpEnvironment>(["agents", "installableAgents"]),

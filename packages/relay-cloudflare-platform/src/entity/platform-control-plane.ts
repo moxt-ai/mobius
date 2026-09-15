@@ -1,6 +1,7 @@
 import {
     AuditActorKind,
     type ExternalIdentityAuthenticator,
+    type HttpError,
     type ProjectAccessContext,
     type ProjectPermission,
     type VerifiedExternalIdentity,
@@ -10,7 +11,7 @@ export class PlatformAuditActorKind extends AuditActorKind {
     static readonly Application = new PlatformAuditActorKind("application");
 }
 
-export class PlatformControlPlaneError extends Error {
+export class PlatformControlPlaneError extends Error implements HttpError {
     readonly code: string;
     readonly status: number;
 
@@ -20,6 +21,11 @@ export class PlatformControlPlaneError extends Error {
         this.name = "PlatformControlPlaneError";
         this.status = status;
     }
+
+    readonly toHttpJson: HttpError["toHttpJson"] = () => ({
+        body: { error: { code: this.code, message: this.message } },
+        status: this.status,
+    });
 }
 
 export class PlatformAuthenticationConfiguration {

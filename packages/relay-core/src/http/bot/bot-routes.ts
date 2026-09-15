@@ -2,8 +2,7 @@ import { decodePromptImagesValue, decodePromptResourcesValue, MOBIUS_API_PREFIX 
 import { Hono } from "hono";
 import type { BotService } from "../../service/bot/bot-service.ts";
 import { botBodyParser } from "../middleware/bot-body-parser.ts";
-import { botErrorMiddleware } from "../middleware/bot-error-middleware.ts";
-import { rethrowHonoError } from "../middleware/error-response-middleware.ts";
+import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
 import { requestTimeoutMiddleware } from "../middleware/request-timeout-middleware.ts";
 import {
     actorReference,
@@ -47,7 +46,7 @@ export function createBotApplication() {
     return new Hono<BotHttpEnvironment>({ strict: false })
         .basePath(`${MOBIUS_API_PREFIX}/v1`)
         .onError(rethrowHonoError)
-        .use("*", botErrorMiddleware<BotHttpEnvironment>())
+        .use("*", errorMiddleware)
         .use("*", requestTimeoutMiddleware<BotHttpEnvironment>(15_000))
         .use("*", async (c, next) => {
             c.set("bots", c.env.services.bots);

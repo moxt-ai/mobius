@@ -66,7 +66,7 @@ export {
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
 } from "./entity/do/session.ts";
-export { type HttpError, isHttpError } from "./entity/http-error.ts";
+export { type HttpError, type HttpErrorJson, isHttpError } from "./entity/http-error.ts";
 export {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
     type AgentDescriptor,
@@ -124,6 +124,8 @@ export type {
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
 export { createBotApplication } from "./http/bot/bot-routes.ts";
+export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
+export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
 export {
     RequestBodyError,
     type RequestBodyErrorCode,
