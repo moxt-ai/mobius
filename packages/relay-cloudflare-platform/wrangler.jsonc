@@ -90,8 +90,9 @@
                 },
                 {
                     "binding": "PLATFORM_DIRECTORY_DATABASE",
-                    "database_name": "mobius-platform-staging-control-plane-apac",
-                    "database_id": "58d2769f-fd2b-432f-9f53-61b238de7b82",
+                    "database_name": "mobius-platform-staging-control-plane-wnam",
+                    // Created with --location=wnam; primary verified in SJC.
+                    "database_id": "2068a52c-5681-4e0f-b00d-4f2cc980b89a",
                     "migrations_dir": "migrations/d1"
                 }
             ],
@@ -150,8 +151,9 @@
                 },
                 {
                     "binding": "PLATFORM_DIRECTORY_DATABASE",
-                    "database_name": "mobius-platform-production-control-plane",
-                    "database_id": "c0e2546c-ad98-4c7b-b6fd-091d860965d9",
+                    "database_name": "mobius-platform-production-control-plane-wnam",
+                    // Created with --location=wnam; primary verified in DEN.
+                    "database_id": "f7035824-ba09-4042-8599-9c32ca16c13d",
                     "migrations_dir": "migrations/d1"
                 }
             ],
