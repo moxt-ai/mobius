@@ -20,6 +20,7 @@ import {
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
+import { hashSecret } from "@moxt-ai/mobius-relay-core";
 import {
     createMobiusConversationSession,
     MobiusApiError,
@@ -140,8 +141,10 @@ function bindings(): PlatformRelayBindings {
         APP_CREDENTIAL_CACHE: env.APP_CREDENTIAL_CACHE,
         BOT_CONNECTIONS: env.BOT_CONNECTIONS,
         D1_SHARD_APAC_01: env.D1_SHARD_APAC_01,
+        D1_SHARD_WNAM_01: env.D1_SHARD_WNAM_01,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
         R2_BUCKET_APAC: env.R2_BUCKET_APAC,
+        R2_BUCKET_WNAM: env.R2_BUCKET_WNAM,
         RUNTIME_RELAY: env.RUNTIME_RELAY,
         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
         SESSION_RELAY: env.SESSION_RELAY,
@@ -155,6 +158,135 @@ function developerHeaders(): HeadersInit {
         "x-mobius-oidc-provider": "clerk",
     };
 }
+
+it.each(["apac", "wnam"])(
+    "Given shard-local Project ownership in %s and an authenticated App, When the control plane is unavailable, Then Project reads succeed from the selected shard",
+    async (location) => {
+        const fixture = await provisionPlatformProject(`shard-project-scope-${location}`, location);
+        const read = (environment: PlatformRelayBindings) =>
+            fixture.worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
+                    headers: credentialHeaders(fixture.appCredential),
+                }),
+                environment,
+            );
+        expect((await read(fixture.environment)).status).toBe(200);
+        const unavailable = { ...fixture.environment, PLATFORM_DIRECTORY_DATABASE: env.TEST_UNINITIALIZED_SHARD };
+        expect((await read(unavailable)).status).toBe(200);
+        const other = await provisionPlatformProject(`other-shard-owner-${location}`, location);
+        expect(
+            (
+                await fixture.worker.fetch(
+                    new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
+                        headers: credentialHeaders(other.appCredential),
+                    }),
+                    unavailable,
+                )
+            ).status,
+        ).toBe(401);
+        const database = location === "apac" ? env.D1_SHARD_APAC_01 : env.D1_SHARD_WNAM_01;
+        await database
+            .prepare("UPDATE platform_project_authorizations SET lifecycle = 'suspended' WHERE project_id = ?")
+            .bind(fixture.projectId)
+            .run();
+        expect((await read(unavailable)).status).toBe(401);
+        await database
+            .prepare("DELETE FROM platform_project_authorizations WHERE project_id = ?")
+            .bind(fixture.projectId)
+            .run();
+        expect((await read(fixture.environment)).status).toBe(401);
+    },
+);
+
+it("Given an App credential cached before App deletion, When stale authentication reaches either shard, Then existing and late-written Projects are denied", async () => {
+    const fixture = await provisionPlatformProject("shard-delete-app");
+    const developer = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    const western = await developer.createProject(
+        fixture.appId,
+        {
+            displayName: "Western project",
+            clientReference: "western-app",
+            idempotencyKey: "western-app",
+            locationHint: "wnam",
+        },
+        AbortSignal.timeout(5_000),
+    );
+    const cacheKey = `app-secret:v1:${await hashSecret(fixture.appCredential)}`;
+    const cached = await env.APP_CREDENTIAL_CACHE.get(cacheKey);
+    if (cached === null) {
+        throw new Error("Expected warmed App authentication");
+    }
+    await developer.deleteApp(fixture.appId, AbortSignal.timeout(5_000));
+    // Model a stale edge snapshot using the real KV boundary.
+    await env.APP_CREDENTIAL_CACHE.put(cacheKey, cached);
+    const unavailable = { ...fixture.environment, PLATFORM_DIRECTORY_DATABASE: env.TEST_UNINITIALIZED_SHARD };
+    const projects = [fixture.projectId, western.projectId];
+    for (const [code, database] of [
+        ["a01", env.D1_SHARD_APAC_01],
+        ["w01", env.D1_SHARD_WNAM_01],
+    ] satisfies readonly (readonly [string, D1Database])[]) {
+        const lateProjectId = `prj_${code}_${"a".repeat(24)}`;
+        await database
+            .prepare(
+                "INSERT INTO platform_project_authorizations (project_id, app_id, tenant_id, lifecycle) VALUES (?, ?, ?, 'active')",
+            )
+            .bind(lateProjectId, fixture.appId, fixture.tenantId)
+            .run();
+        projects.push(lateProjectId);
+    }
+    for (const projectId of projects) {
+        const response = await fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/runtimes`, {
+                headers: credentialHeaders(fixture.appCredential),
+            }),
+            unavailable,
+        );
+        expect(response.status).toBe(401);
+    }
+});
+
+it("Given an interrupted Project shard write, When provisioning is retried, Then the same Project becomes usable without reactivating an existing suspended record", async () => {
+    const label = "shard-provision-retry";
+    const fixture = await provisionPlatformProject(label);
+    const retry = () =>
+        fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
+                method: "POST",
+                headers: developerHeaders(),
+                body: JSON.stringify({
+                    displayName: `Project ${label}`,
+                    idempotencyKey: `project-${label}`,
+                    locationHint: "apac",
+                }),
+            }),
+            fixture.environment,
+        );
+    const read = () =>
+        fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
+                headers: credentialHeaders(fixture.appCredential),
+            }),
+            fixture.environment,
+        );
+    await env.D1_SHARD_APAC_01.prepare("DELETE FROM platform_project_authorizations WHERE project_id = ?")
+        .bind(fixture.projectId)
+        .run();
+    expect((await read()).status).toBe(401);
+    expect(text(await json(await retry(), 201), "projectId")).toBe(fixture.projectId);
+    expect((await read()).status).toBe(200);
+    await env.D1_SHARD_APAC_01.prepare(
+        "UPDATE platform_project_authorizations SET lifecycle = 'suspended' WHERE project_id = ?",
+    )
+        .bind(fixture.projectId)
+        .run();
+    expect((await retry()).status).toBe(201);
+    expect((await read()).status).toBe(401);
+});
 
 it("Given cached active and revoked App credentials, When credential storage is unavailable, Then Project reads accept only the active secret until its cache expires", async () => {
     const fixture = await provisionPlatformProject("kv-app-secrets");
@@ -306,7 +438,7 @@ async function json(response: Response, expectedStatus: number): Promise<Readonl
     return record(await response.json());
 }
 
-async function provisionPlatformProject(label: string): Promise<PlatformProjectFixture> {
+async function provisionPlatformProject(label: string, locationHint = "apac"): Promise<PlatformProjectFixture> {
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(
             new DeveloperAuthenticator(),
@@ -345,7 +477,7 @@ async function provisionPlatformProject(label: string): Promise<PlatformProjectF
                 body: JSON.stringify({
                     displayName: `Project ${label}`,
                     idempotencyKey: `project-${label}`,
-                    locationHint: "apac",
+                    locationHint,
                 }),
                 headers: developerHeaders(),
                 method: "POST",

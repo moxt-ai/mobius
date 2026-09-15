@@ -528,28 +528,6 @@ export class PlatformControlPlaneStorage {
         };
     };
 
-    readonly readProjectScope = async (
-        projectId: string,
-        appId: string,
-        tenantId: string,
-        signal: AbortSignal,
-    ): Promise<PlatformProjectScopeRow | null> =>
-        decodeOptionalStorageRecord(
-            PlatformProjectScopeRowSchema,
-            await waitForD1(
-                () =>
-                    this.#database
-                        .prepare(
-                            `SELECT project_id, tenant_id, app_id, lifecycle
-                               FROM platform_projects
-                              WHERE project_id = ? AND app_id = ? AND tenant_id = ?`,
-                        )
-                        .bind(projectId, appId, tenantId)
-                        .first(),
-                signal,
-            ),
-        );
-
     readonly credentialHasProject = async (
         credentialId: string,
         projectId: string,

@@ -17,7 +17,8 @@ export default defineConfig(async () => {
             cloudflareTest({
                 wrangler: { configPath: wranglerConfigPath },
                 miniflare: {
-                    d1Databases: ["TEST_UNINITIALIZED_SHARD"],
+                    d1Databases: ["TEST_UNINITIALIZED_SHARD", "D1_SHARD_WNAM_01"],
+                    r2Buckets: ["R2_BUCKET_WNAM"],
                     bindings: {
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "8",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",

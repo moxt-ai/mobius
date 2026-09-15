@@ -143,8 +143,9 @@ expiry. Raw secrets are never stored in KV. Both active and revoked credentials
 can be cached; unknown or incorrect secrets are not cached. Cache hits do not
 extend expiry, and a known rotation overlap deadline is enforced on every hit.
 `lastUsedAt` is sampled when an active credential is loaded from D1, rather than
-written on each request. Project ownership, lifecycle, and selected-Project
-scope are still authorized against D1 on every Project request.
+written on each request. Project ownership and lifecycle are authorized against
+the Project's D1 shard on every Project request. Selected-Project credential
+grants still use the control-plane credential-scope table.
 
 Revocation commits to D1, then deletes the hash-keyed cache record. Rotation
 deletes the old credential's record; App deletion invalidates all
@@ -164,6 +165,34 @@ target. Query and body fields attempting to choose those resources are rejected;
 the server reads the exact IDs from the credential record. Turn and artifact IDs
 are subordinate resources of that already-fixed Session and are reauthorized by
 the Session service.
+
+### Shard-local Project authorization
+
+After this, an App-wide backend can read a provisioned Project while the control
+plane is unavailable, provided its App authentication is already cached. The
+Worker decodes the Project ID to select a configured shard and reads
+`platform_project_authorizations` there. It checks the App ID, Tenant ID, and
+active lifecycle locally; it never falls back to the central Project directory.
+There is no Project-authorization KV cache or lifecycle TTL.
+
+Provisioning records the administrative Project directory and audit in the
+control plane, then creates the shard-local authorization record before returning
+success. An idempotent provisioning retry completes a missing shard write but
+does not overwrite an existing record's ownership or lifecycle.
+
+App deletion writes revocation tombstones to every configured
+shard before committing the control-plane deletion and invalidating App
+authentication. Shards reject both existing Projects and authorization records
+written later by concurrent provisioning. If deletion stops partway through the
+shards, completed tombstones continue denying access; retry deletion to finish.
+New shards must be initialized consistently before accepting Project traffic.
+
+**Clean-cutover deployment:** migration `0011_platform_project_authorizations.sql`
+creates the shard tables. Existing Projects are not backfilled and cannot be
+authorized using central directory rows alone. This change assumes the planned
+data reset and fresh Project provisioning. Apply shard migrations before deploying
+the Worker. The control plane retains its directory for listing, quotas, and
+administrative operations.
 
 ## Backend flow
 

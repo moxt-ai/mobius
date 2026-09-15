@@ -36,6 +36,7 @@ import {
     PlatformStorageRegistry,
     platformDatabaseBindings,
 } from "./storage/platform-database-resolver.ts";
+import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-authorization-storage.ts";
 import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
 export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
@@ -181,6 +182,7 @@ export function createPlatformApplication(
                 authentication,
                 storageRegistry,
                 appAuthentication,
+                new PlatformProjectAuthorizationStorage(databaseBindings),
             );
             context.set("control", control);
             context.set("appAuthentication", appAuthentication);

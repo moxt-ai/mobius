@@ -87,7 +87,14 @@ Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;
 mapped placements missing configured bindings return HTTP 400 with
 `storage_location_unavailable`.
 
-The control plane stores Project metadata directly in `platform_projects`.
+The control plane stores administrative Project metadata directly in `platform_projects`.
+Request authorization reads ownership and lifecycle from
+`platform_project_authorizations` in the shard encoded by the Project ID.
+Provisioning creates that record before returning success; there is no central
+authorization fallback or Project KV cache. App deletion installs
+shard-local App tombstones, including protection against late provisioning.
+Migration `0011_platform_project_authorizations.sql` assumes a clean data reset;
+existing central Project rows are not backfilled.
 Placement is derived only from the encoded ID; migration
 `0006_drop_project_storage_placements.sql` removes the redundant placement table.
 
