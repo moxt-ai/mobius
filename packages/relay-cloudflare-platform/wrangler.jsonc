@@ -157,7 +157,7 @@
             ],
             "vars": {
                 "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
-                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://clerk.mobius.paraflow.biz\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://clerk.mobius.paraflow.biz/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
+                "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[{\"providerId\":\"clerk\",\"issuer\":\"https://clerk.mobius.moxt.ai\",\"audience\":\"mobius-platform\",\"jwksUrl\":\"https://clerk.mobius.moxt.ai/.well-known/jwks.json\",\"allowedAlgorithms\":[\"RS256\"],\"safeMetadataClaims\":[\"email\",\"name\"]}]",
                 "MOBIUS_PLATFORM_OPERATOR_SUBJECTS": "[]",
                 "SESSION_ACTIVE_SESSIONS_PER_PROJECT": "1000",
                 "SESSION_ARCHIVE_BYTES_PER_SESSION": "268435456"

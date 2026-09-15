@@ -152,7 +152,7 @@ jobs:
             clerk_publishable_key: pk_test_c21hc2hpbmctc3BpZGVyLTg1NzQuY2xlcmsuYWNjb3VudHMuZGV2JA==
           - environment: production
             domain: mobius.moxt.ai
-            clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLnBhcmFmbG93LmJpeiQ=
+            clerk_publishable_key: pk_live_Y2xlcmsubW9iaXVzLm1veHQuYWkk
     environment:
       name: mobius-relay-production
       url: https://${{ matrix.domain }}
