@@ -34,7 +34,10 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
         test: {
             include: ["test/**/*.integration.test.ts"],
             setupFiles: ["./test/apply-migrations.ts"],
-            testTimeout: 15_000,
+            // CI runs this suite alongside nine other matrix jobs (see .github/workflows/ci.yml),
+            // so shared-runner contention can slow the ~200-round-trip WebSocket replay test well
+            // beyond the default budget even though it normally finishes in a couple of seconds.
+            testTimeout: 30_000,
             coverage: {
                 provider: "istanbul",
                 reporter: ["text-summary", "json"],
