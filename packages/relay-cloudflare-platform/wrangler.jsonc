@@ -1,8 +1,10 @@
 {
     "$schema": "../../node_modules/wrangler/config-schema.json",
     "name": "mobius-relay-platform",
+    "placement": { "mode": "smart" },
     "main": "src/worker.ts",
     "compatibility_date": "2026-09-03",
+    "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE" }],
     "durable_objects": {
         "bindings": [
             {
@@ -54,6 +56,7 @@
     "env": {
         "staging": {
             "name": "mobius-platform-staging",
+            "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "04588dbeba594690b790fcb087ddeb23" }],
             "workers_dev": false,
             "preview_urls": false,
             "routes": [{ "pattern": "mobius.moxt.ws", "custom_domain": true }],
@@ -101,6 +104,7 @@
         },
         "production": {
             "name": "mobius-platform-production",
+            "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "b15cc4481591452392682c2ff0793196" }],
             "workers_dev": false,
             "preview_urls": false,
             "routes": [{ "pattern": "mobius.moxt.ai", "custom_domain": true }],

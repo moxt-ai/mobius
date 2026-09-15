@@ -577,6 +577,28 @@ export class PlatformControlPlaneStorage {
         return decodeStorageRecords(CredentialRowSchema, rows.results);
     };
 
+    readonly listTenantCredentials = async (
+        tenantId: string,
+        signal: AbortSignal,
+    ): Promise<readonly CredentialRow[]> => {
+        const rows = await waitForD1(
+            () =>
+                this.#database
+                    .prepare(
+                        `SELECT credentials.*, apps.tenant_id,
+                        apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
+                   FROM platform_app_credentials AS credentials
+                   JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
+                   JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
+                  WHERE apps.tenant_id = ?`,
+                    )
+                    .bind(tenantId)
+                    .all(),
+            signal,
+        );
+        return decodeStorageRecords(CredentialRowSchema, rows.results);
+    };
+
     readonly listCredentialProjectIds = async (
         credentialId: string,
         signal: AbortSignal,

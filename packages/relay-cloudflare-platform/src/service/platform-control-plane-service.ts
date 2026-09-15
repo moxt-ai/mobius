@@ -524,6 +524,9 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         if (!deleted) {
             throw new PlatformControlPlaneError("tenant_not_found", "The Tenant was not found", 404);
         }
+        for (const credential of await this.#storage.listTenantCredentials(access.tenantId, signal)) {
+            await this.#appAuthentication.invalidate(credential, signal);
+        }
         return { ...tenantResource(tenant), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
     };
 
@@ -750,6 +753,9 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         );
         if (!deleted) {
             throw new PlatformControlPlaneError("app_not_found", "The App was not found", 404);
+        }
+        for (const credential of await this.#storage.listAppCredentials(app.app_id, signal)) {
+            await this.#appAuthentication.invalidate(credential, signal);
         }
         return { ...appResource(app), deletedAt: iso(now), lifecycle: "deleted", updatedAt: iso(now) };
     };
@@ -1125,6 +1131,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                 409,
             );
         }
+        await this.#appAuthentication.invalidate(source, signal);
         return {
             ...created.resource(),
             overlapEndsAt: iso(overlapEndsAt),
@@ -1164,6 +1171,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         if (!revoked.credentialRevoked || !revoked.auditRecorded) {
             throw new PlatformControlPlaneError("app_credential_not_found", "The AppCredential was not found", 404);
         }
+        await this.#appAuthentication.invalidate(source, signal);
         return { credentialId: normalizedCredentialId, revokedAt: iso(now) };
     };
 
@@ -1262,10 +1270,6 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             );
         }
         const now = Date.now();
-        const updated = await this.#storage.touchCredential(row.credential_id, now, signal);
-        if (!updated) {
-            throw new ProjectAuthenticationError("credential_revoked", "The AppCredential is no longer active");
-        }
         return new ProjectAccessContext(
             new ProjectScope(project.project_id),
             granted,

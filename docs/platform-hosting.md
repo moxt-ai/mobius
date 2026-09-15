@@ -28,6 +28,11 @@ point both bindings at one database: they have separate ownership and migration
 histories. The Worker also creates independent Runtime Relay, Session Relay, and
 Bot Connection Durable Object namespaces.
 
+Bind a separate Workers KV namespace as `APP_CREDENTIAL_CACHE` for each
+environment. The checked-in staging and production configurations include their
+namespace IDs; local development uses a local namespace. KV bindings are not
+inherited from the top-level Wrangler configuration.
+
 Configure these JSON-encoded Worker variables:
 
 ```json
@@ -70,8 +75,8 @@ Standalone Worker.
 
 CI deploys staging and production using the `mobius-relay-production` GitHub
 environment. Its `CLOUDFLARE_API_TOKEN` must retain account access for Worker
-uploads, D1 migrations, R2 bindings, and custom domains, plus Zone Read and
-Workers Routes Edit access to both `moxt.ws` and `moxt.ai`. A token
+uploads, D1 migrations, R2 bindings, Workers KV Storage, and custom domains,
+plus Zone Read and Workers Routes Edit access to both `moxt.ws` and `moxt.ai`. A token
 that can upload a Worker can still fail when Wrangler reads or updates routes.
 
 The checked-in Platform configuration is authoritative for CI deployments.
@@ -108,6 +113,35 @@ Conversation credential expiry, parent AppCredential revision, App lifecycle, Pr
 Conversation lifecycle are rechecked for every browser request. Active browser
 event streams close on explicit revocation and periodically reauthorize so a
 cross-isolate or parent lifecycle change also terminates the stream.
+
+### App credential authentication cache
+
+After this, a backend can reuse its existing App secret and see repeated
+authentication served from Workers KV, with D1 credential reads and last-used
+writes performed only on cache misses. There is no token exchange or SDK change.
+
+Platform stores one versioned record per SHA-256 App secret digest in
+`APP_CREDENTIAL_CACHE`. It contains the credential identity, permissions,
+App/Tenant lifecycle, revocation and rotation metadata, and an absolute two-hour
+expiry. Raw secrets are never stored in KV. Both active and revoked credentials
+can be cached; unknown or incorrect secrets are not cached. Cache hits do not
+extend expiry, and a known rotation overlap deadline is enforced on every hit.
+`lastUsedAt` is sampled when an active credential is loaded from D1, rather than
+written on each request. Project ownership, lifecycle, and selected-Project
+scope are still authorized against D1 on every Project request.
+
+Revocation commits to D1, then deletes the hash-keyed cache record. Rotation
+deletes the old credential's record; App or Tenant deletion invalidates all
+affected credentials. The next miss reloads current D1 state, including revoked
+status. Invalid or expired cache records and failed KV reads fall back to D1.
+Failed cache fills do not reject an otherwise valid D1 authentication; failed
+invalidation returns a typed error after the D1 change has committed.
+
+KV is eventually consistent. Reads use a 60-second edge cache lifetime, but
+invalidation is not an immediate global revocation guarantee. If invalidation
+fails or a concurrent stale fill completes after deletion, an active snapshot
+can survive until its original two-hour expiry. That expiry is measured from
+the start of the D1 read and is checked in the Worker as well as by KV.
 
 The browser route never accepts a Project, Conversation, Session, Bot, or Runtime
 target. Query and body fields attempting to choose those resources are rejected;

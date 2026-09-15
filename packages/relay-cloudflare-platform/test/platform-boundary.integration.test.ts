@@ -137,6 +137,7 @@ class PlatformWorkerTransport {
 
 function bindings(): PlatformRelayBindings {
     return {
+        APP_CREDENTIAL_CACHE: env.APP_CREDENTIAL_CACHE,
         BOT_CONNECTIONS: env.BOT_CONNECTIONS,
         D1_SHARD_APAC_01: env.D1_SHARD_APAC_01,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
@@ -155,9 +156,125 @@ function developerHeaders(): HeadersInit {
     };
 }
 
+it("Given cached active and revoked App credentials, When credential storage is unavailable, Then Project reads accept only the active secret until its cache expires", async () => {
+    const fixture = await provisionPlatformProject("kv-app-secrets");
+    const developer = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    const issued = await developer.issueAppCredential(
+        fixture.appId,
+        { permissions: ["runtime:read"], projectIds: [fixture.projectId] },
+        AbortSignal.timeout(5_000),
+    );
+    const read = (credential: string) =>
+        fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
+                headers: credentialHeaders(credential),
+            }),
+            fixture.environment,
+        );
+    expect((await read(fixture.appCredential)).status).toBe(200);
+    expect((await read(issued.credential)).status).toBe(200);
+    const wrongSecret = `${fixture.appCredential.slice(0, -1)}${fixture.appCredential.endsWith("a") ? "b" : "a"}`;
+    expect((await read(wrongSecret)).status).toBe(401);
+    await developer.revokeAppCredential(issued.credentialId, AbortSignal.timeout(5_000));
+    expect((await read(issued.credential)).status).toBe(401);
+    await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+        "ALTER TABLE platform_app_credentials RENAME TO unavailable_app_credentials",
+    ).run();
+    try {
+        expect((await read(fixture.appCredential)).status).toBe(200);
+        expect((await read(issued.credential)).status).toBe(401);
+        vi.setSystemTime(new Date("2026-09-10T01:59:59.000Z"));
+        expect((await read(fixture.appCredential)).status).toBe(200);
+        vi.setSystemTime(new Date("2026-09-10T02:00:00.000Z"));
+        expect((await read(fixture.appCredential)).ok).toBe(false);
+    } finally {
+        await env.PLATFORM_DIRECTORY_DATABASE.prepare(
+            "ALTER TABLE unavailable_app_credentials RENAME TO platform_app_credentials",
+        ).run();
+    }
+    const beforeRefresh = await developer.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
+    expect(beforeRefresh.find((credential) => credential.credentialId !== issued.credentialId)?.lastUsedAt).toBe(
+        "2026-09-10T00:00:00.000Z",
+    );
+    expect((await read(fixture.appCredential)).status).toBe(200);
+    const afterRefresh = await developer.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
+    expect(afterRefresh.find((credential) => credential.credentialId !== issued.credentialId)?.lastUsedAt).toBe(
+        "2026-09-10T02:00:00.000Z",
+    );
+});
+
 function credentialHeaders(credential: string): HeadersInit {
     return { authorization: `Bearer ${credential}`, "content-type": "application/json" };
 }
+
+it("Given a cached scoped App credential, When it is rotated, Then its cached replacement respects Project permissions and the old secret stops at the overlap deadline", async () => {
+    const fixture = await provisionPlatformProject("kv-rotation");
+    const developer = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    const issued = await developer.issueAppCredential(
+        fixture.appId,
+        { permissions: ["runtime:read"], projectIds: [fixture.projectId] },
+        AbortSignal.timeout(5_000),
+    );
+    const read = (credential: string, resource = "runtimes", projectId = fixture.projectId) =>
+        fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/${resource}`, {
+                headers: credentialHeaders(credential),
+            }),
+            fixture.environment,
+        );
+    expect((await read(issued.credential)).status).toBe(200);
+    const rotated = await developer.rotateAppCredential(issued.credentialId, 60, AbortSignal.timeout(5_000));
+    expect((await read(issued.credential)).status).toBe(200);
+    expect((await read(rotated.credential)).status).toBe(200);
+    expect((await read(rotated.credential, "bots")).status).toBe(403);
+    const other = await provisionPlatformProject("kv-other-project");
+    expect((await read(rotated.credential, "runtimes", other.projectId)).status).toBe(401);
+    vi.setSystemTime(new Date("2026-09-10T00:01:00.000Z"));
+    expect((await read(issued.credential)).status).toBe(401);
+    expect((await read(rotated.credential)).status).toBe(200);
+});
+
+it.each(["App", "Tenant"])(
+    "Given a cached App credential, When its %s is deleted, Then the old secret fails authentication",
+    async (resource) => {
+        const fixture = await provisionPlatformProject(`kv-delete-${resource}`);
+        const developer = new MobiusPlatformDeveloperClient({
+            authenticationProviderId: "clerk",
+            credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+            endpoint: relayOrigin,
+            transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+        });
+        if (resource === "App") {
+            await developer.deleteApp(fixture.appId, AbortSignal.timeout(5_000));
+        } else {
+            await developer.deleteTenant(fixture.tenantId, AbortSignal.timeout(5_000));
+        }
+        const response = await fixture.worker.fetch(
+            new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/apps/${fixture.appId}/projects`, {
+                method: "POST",
+                headers: credentialHeaders(fixture.appCredential),
+                body: JSON.stringify({
+                    displayName: "After delete",
+                    idempotencyKey: "after-delete",
+                    locationHint: "apac",
+                }),
+            }),
+            fixture.environment,
+        );
+        expect(response.status).toBe(401);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "credential_revoked" } });
+    },
+);
 
 function record(value: unknown): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {

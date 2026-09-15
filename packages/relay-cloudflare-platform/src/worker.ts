@@ -27,6 +27,7 @@ import { ConversationAccessService } from "./service/conversation-access-service
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { SessionAccessService } from "./service/session-access-service.ts";
+import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
@@ -38,6 +39,7 @@ import {
 import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
 export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
+    readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly D1_SHARD_APAC_01: D1Database;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
@@ -170,7 +172,10 @@ export function createPlatformApplication(
                 projectDatabases,
             );
             const storageRegistry = new PlatformStorageRegistry(environment);
-            const appAuthentication = new AppCredentialAuthenticationService(controlStorage);
+            const appAuthentication = new AppCredentialAuthenticationService(
+                controlStorage,
+                new AppCredentialCacheStorage(environment.APP_CREDENTIAL_CACHE),
+            );
             const control = new PlatformControlPlaneService(
                 controlStorage,
                 authentication,
