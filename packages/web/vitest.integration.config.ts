@@ -22,7 +22,7 @@ export default defineConfig({
         fileParallelism: true,
         maxWorkers: 4,
         hookTimeout: 40_000,
-        include: ["test/**/*.integration.test.tsx"],
+        include: ["test/**/*.integration.test.tsx", "test/**/*.e2e.test.tsx"],
         testTimeout: 15_000,
     },
 });

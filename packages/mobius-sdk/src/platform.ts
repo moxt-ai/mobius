@@ -1,6 +1,13 @@
+import {
+    createdOrganizationInviteSchema,
+    organizationInviteListSchema,
+    organizationInvitePreviewSchema,
+    organizationInviteRequestSchema,
+} from "@moxt-ai/mobius-protocol";
 import { MobiusProtocolError, MobiusValidationError } from "./errors.ts";
 import { type MobiusEndpointOptions, MobiusRequestExecutor, StaticMobiusCredentialProvider } from "./service-client.ts";
 
+export type { OrganizationInvite, OrganizationInvitePreview } from "@moxt-ai/mobius-protocol";
 export { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 
 export {
@@ -403,6 +410,61 @@ export interface MobiusPlatformDeveloperClientOptions extends MobiusEndpointOpti
 }
 
 export class MobiusPlatformDeveloperClient {
+    readonly createOrganizationInvite = async (organizationId: string, signal: AbortSignal) => {
+        const value = await this.#executor.post(
+            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
+            {},
+            signal,
+        );
+        const result = createdOrganizationInviteSchema.safeParse(value);
+        if (!result.success) {
+            throw new MobiusProtocolError("The Platform returned an invalid invitation");
+        }
+        return result.data;
+    };
+
+    readonly listOrganizationInvites = async (organizationId: string, signal: AbortSignal) => {
+        const value = await this.#executor.get(
+            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
+            signal,
+        );
+        const result = organizationInviteListSchema.safeParse(value);
+        if (!result.success) {
+            throw new MobiusProtocolError("The Platform returned an invalid invitation list");
+        }
+        return result.data;
+    };
+
+    readonly revokeOrganizationInvite = async (
+        organizationId: string,
+        id: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        await this.#executor.delete(
+            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links/${requestedIdentifier(id, "invitation")}`,
+            signal,
+        );
+    };
+
+    readonly previewOrganizationInvite = async (token: string, signal: AbortSignal) =>
+        this.organizationInvite("preview", token, signal);
+    readonly acceptOrganizationInvite = async (token: string, signal: AbortSignal) =>
+        this.organizationInvite("accept", token, signal);
+
+    private readonly organizationInvite = async (action: "preview" | "accept", token: string, signal: AbortSignal) => {
+        const body = organizationInviteRequestSchema.safeParse({ token });
+        if (!body.success) {
+            throw new MobiusValidationError("The invitation link is invalid");
+        }
+        const result = organizationInvitePreviewSchema.safeParse(
+            await this.#executor.post(`v1/platform/invite-links/${action}`, body.data, signal),
+        );
+        if (!result.success) {
+            throw new MobiusProtocolError("The Platform returned an invalid invitation");
+        }
+        return result.data;
+    };
+
     readonly #executor: MobiusRequestExecutor;
 
     constructor(options: MobiusPlatformDeveloperClientOptions) {

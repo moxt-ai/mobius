@@ -1,4 +1,5 @@
-import { fileURLToPath } from "node:url";
+/// <reference types="@cloudflare/workers-types" />
+import { fileURLToPath, URL as NodeURL } from "node:url";
 import { readD1Migrations } from "@cloudflare/vitest-plugin";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
@@ -6,9 +7,9 @@ import type { PlatformRelayBindings, RelayBindings } from "./app.ts";
 
 /** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
 async function createCloudflareRuntime(profile: "standalone" | "platform") {
-    const packageDirectory = new URL(`../../packages/relay-cloudflare-${profile}/`, import.meta.url);
+    const packageDirectory = new NodeURL(`../../packages/relay-cloudflare-${profile}/`, import.meta.url);
     const bundle = await build({
-        entryPoints: [fileURLToPath(new URL("src/worker.ts", packageDirectory))],
+        entryPoints: [fileURLToPath(new NodeURL("src/worker.ts", packageDirectory))],
         bundle: true,
         format: "esm",
         platform: "browser",
@@ -45,7 +46,7 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
     return runtime;
 }
 
-async function migrate(database: D1Database, directory: URL) {
+async function migrate(database: D1Database, directory: NodeURL) {
     for (const migration of await readD1Migrations(fileURLToPath(directory))) {
         await database.batch(migration.queries.map((query) => database.prepare(query)));
     }
@@ -55,7 +56,7 @@ export async function createTestMobiusBindings() {
     const runtime = await createCloudflareRuntime("standalone");
     try {
         const env = await runtime.getBindings<RelayBindings>();
-        await migrate(env.DIRECTORY_DATABASE, new URL("../../packages/relay-core/migrations/d1", import.meta.url));
+        await migrate(env.DIRECTORY_DATABASE, new NodeURL("../../packages/relay-core/migrations/d1", import.meta.url));
         return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
     } catch (cause) {
         await runtime.dispose();
@@ -69,12 +70,12 @@ export async function createTestMobiusPlatformBindings() {
         const env = await runtime.getBindings<PlatformRelayBindings>();
         for (const database of [env.D1_SHARD_APAC_01, env.D1_SHARD_WNAM_01]) {
             if (database !== undefined) {
-                await migrate(database, new URL("../../packages/relay-core/migrations/d1", import.meta.url));
+                await migrate(database, new NodeURL("../../packages/relay-core/migrations/d1", import.meta.url));
             }
         }
         await migrate(
             env.PLATFORM_DIRECTORY_DATABASE,
-            new URL("../../packages/relay-cloudflare-platform/migrations/d1", import.meta.url),
+            new NodeURL("../../packages/relay-cloudflare-platform/migrations/d1", import.meta.url),
         );
         return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
     } catch (cause) {

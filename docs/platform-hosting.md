@@ -66,6 +66,41 @@ Migration `0007_clerk_organizations.sql` drops the old membership table. Existin
 `ten_...` resource records are not automatically assigned to an organization:
 moving existing data requires an explicit old-ID-to-Clerk-organization mapping.
 
+### Shareable organization invite links
+
+After this, an admin can share an organization invite link, and a recipient can
+sign in, join, and see that organization's Platform dashboard.
+
+Set the Worker secret `CLERK_SECRET_KEY` to the backend secret for the **same Clerk
+instance** as the Platform publishable key and configured OIDC issuer. For local
+development, put it in the Platform Worker's `.dev.vars`; for a deployed Worker,
+use Wrangler's `secret put CLERK_SECRET_KEY` with the target environment. Never
+use a `VITE_` variable for this secret. Apply the Platform migration stream,
+including `0008_organization_invite_links.sql`, before running the new Worker.
+
+Admins select **Invite members** beside the organization switcher, then **Create
+invite link** and **Copy link**. Links are reusable for seven days and grant only
+`org:member`. The full secret is returned once; D1 stores its SHA-256 digest.
+The dialog lists up to 100 active links, with creation/expiry dates and a revoke
+action. Creation, revocation, and successful acceptance produce Platform audit
+events without recording invite tokens.
+
+The `/join#<token>` page saves the token in tab-scoped session storage and removes
+it from the URL before authentication. Clerk sign-in and sign-up return to `/join`.
+Recipients need an active Clerk account but do not need an active organization.
+After an explicit **Join organization**, Platform adds membership through Clerk,
+selects that organization, refreshes the session token, clears the pending invite,
+and opens the dashboard. Existing membership is preserved, including its role.
+
+Management routes require both a matching active organization and current Clerk
+admin membership. The authenticated preview/accept routes resolve the organization
+from the invite; request bodies cannot select a role or target organization.
+An acceptance already in progress when an admin revokes a link can finish;
+revocation prevents subsequent redemptions and does not remove existing members.
+
+Without `CLERK_SECRET_KEY`, invitation operations return `invite_links_unavailable`;
+other Platform operations continue to use OIDC authentication.
+
 Allowed browser origins are exact `http` or `https` origins. Wildcards, URL
 paths, credentials, query strings, and fragments are rejected. The allowlist is
 applied only to `/mobius/api/v1/client/session/*`; CORS is a browser hardening

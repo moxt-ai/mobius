@@ -76,7 +76,7 @@ it("Given an organization's application keys are visible, When a user switches a
         throw new Error("Missing server address");
     }
     const container = document.createElement("div");
-    document.body.append(container);
+    document.body.appendChild(container);
     const root = createRoot(container);
     const rendered = (text: string) =>
         new Promise<void>((resolve) => {

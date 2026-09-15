@@ -17,6 +17,8 @@ import type { PlatformAuthenticationConfiguration } from "./entity/platform-cont
 import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
+import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
+import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
@@ -25,10 +27,12 @@ import { PlatformProjectStorageDirectory } from "./infra/platform-project-storag
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
+import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { SessionAccessService } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
+import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
     PlatformDatabaseResolver,
@@ -40,6 +44,7 @@ import { PlatformProjectAuthorizationStorage } from "./storage/platform-project-
 import { SessionAccessStorage } from "./storage/session-access-storage.ts";
 
 export interface PlatformRelayBindings extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
+    readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly D1_SHARD_APAC_01: D1Database;
@@ -85,6 +90,8 @@ type DispatchEnvironment = {
 export function createPlatformApplication(
     authentication: PlatformAuthenticationConfiguration,
     gateways: (environment: PlatformRelayBindings) => WorkerRuntimeGateways,
+    organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (environment) =>
+        new ClerkOrganizationGateway(environment.CLERK_SECRET_KEY),
 ): Hono<{ Bindings: PlatformRelayBindings }> {
     const conversationStreams = new ConversationStreamRegistry();
     const controlHandler: Handler<DispatchEnvironment> = (context) =>
@@ -92,6 +99,10 @@ export function createPlatformApplication(
             control: context.var.control,
             appAuthentication: context.var.appAuthentication,
             allowedOrigins: authentication.allowedOrigins,
+            invites: new OrganizationInviteService(
+                new OrganizationInviteStorage(context.env.PLATFORM_DIRECTORY_DATABASE),
+                organizations(context.env),
+            ),
         });
     const conversationHandler: Handler<DispatchEnvironment> = (context) => {
         const { relay, sessionAccess, control, projectDatabases } = context.var;

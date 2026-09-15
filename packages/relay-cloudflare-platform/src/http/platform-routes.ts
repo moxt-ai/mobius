@@ -11,6 +11,7 @@ import {
 } from "../middleware/authentication.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
+import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -30,9 +31,10 @@ const issueCredentialBody = v.strictObject({
 });
 const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
+const inviteBody = v.strictObject({ token: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)) });
 
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
-    readonly Bindings: { readonly allowedOrigins: ReadonlySet<string> };
+    readonly Bindings: { readonly allowedOrigins: ReadonlySet<string>; readonly invites: OrganizationInviteService };
 };
 
 function errorResponse(error: unknown): Response {
@@ -72,13 +74,6 @@ function queryLimit(value: unknown): number {
 export function createPlatformControlApplication() {
     return new Hono<PlatformHttpEnvironment>({ strict: false })
         .basePath(MOBIUS_API_PREFIX)
-        .use(
-            "*",
-            createBrowserCors(
-                ["GET", "POST", "PUT", "DELETE"],
-                ["authorization", "content-type", "x-mobius-oidc-provider"],
-            ),
-        )
         .use("*", async (context, next) => {
             context.set(
                 "signal",
@@ -86,8 +81,21 @@ export function createPlatformControlApplication() {
             );
             await next();
         })
+        .use(
+            "*",
+            createBrowserCors(
+                ["GET", "POST", "PUT", "DELETE"],
+                ["authorization", "content-type", "x-mobius-oidc-provider"],
+            ),
+        )
         .onError((error, context) => {
             context.req.raw.signal.throwIfAborted();
+            if (context.var.signal.aborted) {
+                return context.json(
+                    { error: { code: "platform_timeout", message: "The Platform request timed out. Please retry" } },
+                    504,
+                );
+            }
             return errorResponse(error);
         })
         .get("/health", (context) => context.json({ service: "mobius-relay-platform", status: "ok" }))
@@ -112,6 +120,42 @@ export function createPlatformControlApplication() {
         .get("/v1/platform/configuration", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
             return context.json(await context.env.control.readPlatformConfiguration(identity, context.var.signal));
+        })
+        .post("/v1/platform/tenants/:tenantId/invite-links", bodyParser(emptyBody), async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.invites.create(identity, path(context.req.param("tenantId")), context.var.signal),
+                201,
+            );
+        })
+        .get("/v1/platform/tenants/:tenantId/invite-links", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.invites.list(identity, path(context.req.param("tenantId")), context.var.signal),
+            );
+        })
+        .delete("/v1/platform/tenants/:tenantId/invite-links/:inviteId", async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.invites.revoke(
+                    identity,
+                    path(context.req.param("tenantId")),
+                    path(context.req.param("inviteId")),
+                    context.var.signal,
+                ),
+            );
+        })
+        .post("/v1/platform/invite-links/preview", bodyParser(inviteBody), async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.invites.preview(identity, context.req.valid("json").token, context.var.signal),
+            );
+        })
+        .post("/v1/platform/invite-links/accept", bodyParser(inviteBody), async (context) => {
+            const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
+            return context.json(
+                await context.env.invites.accept(identity, context.req.valid("json").token, context.var.signal),
+            );
         })
         .get("/v1/platform/tenants", async (context) => {
             const identity = await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal);
