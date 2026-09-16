@@ -120,10 +120,38 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  agent-daemon-plan:
+    name: Plan Agent and daemon tests
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      count: ${{ steps.plan.outputs.count }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Test planner
+        run: node --test scripts/plan-agent-daemon-tests.test.mjs
+
+      - name: Select affected Agents
+        id: plan
+        run: node scripts/plan-agent-daemon-tests.mjs --base "$BASE_SHA" --head "$GITHUB_SHA" --github-output "$GITHUB_OUTPUT"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+
   agent-daemon:
     name: test:agent-daemon:${{ matrix.agent }}
     # Post-merge pushes to main skip tests; the merge queue already verified them.
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && needs.agent-daemon-plan.outputs.count != '0'
+    needs: agent-daemon-plan
     permissions:
       contents: read
     runs-on: ubuntu-latest
@@ -133,20 +161,7 @@ jobs:
       cancel-in-progress: true
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - agent: opencode
-            packages: opencode-ai@1.18.29
-          - agent: codex
-            packages: "@openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0"
-          - agent: pi
-            packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33"
-          - agent: gemini
-            packages: "@google/gemini-cli@0.59.0"
-          - agent: claude
-            packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0"
-          - agent: deepseek
-            packages: "@deepseek-ai/dsh@0.1.2-rc.1"
+      matrix: ${{ fromJSON(needs.agent-daemon-plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -178,10 +193,22 @@ jobs:
         env:
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
-      - name: Install ${{ matrix.agent }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: matrix.agent == 'hermes'
+        with:
+          python-version: "3.12"
+
+      - name: Install npm Agent
+        if: matrix.packages != ''
         run: npm install --global $AGENT_PACKAGES
         env:
           AGENT_PACKAGES: ${{ matrix.packages }}
+
+      - name: Install Hermes
+        if: matrix.agent == 'hermes'
+        run: |
+          git clone --depth 1 --branch v2026.9.7 https://github.com/NousResearch/hermes-agent.git /tmp/hermes-agent
+          python -m pip install --editable '/tmp/hermes-agent[acp]'
 
       - name: Run ${{ matrix.agent }} Agent and daemon integration test
         run: pnpm exec vitest run --config vitest.agent-daemon.config.ts "$TEST_FILE"
@@ -190,7 +217,7 @@ jobs:
 
   check:
     name: check
-    needs: [checks, agent-daemon]
+    needs: [checks, agent-daemon-plan, agent-daemon]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -247,9 +274,11 @@ jobs:
         if: always()
         run: |
           test "$CHECKS_RESULT" = success || test "$CHECKS_RESULT" = skipped
+          test "$AGENT_DAEMON_PLAN_RESULT" = success || test "$AGENT_DAEMON_PLAN_RESULT" = skipped
           test "$AGENT_DAEMON_RESULT" = success || test "$AGENT_DAEMON_RESULT" = skipped
         env:
           AGENT_DAEMON_RESULT: ${{ needs.agent-daemon.result }}
+          AGENT_DAEMON_PLAN_RESULT: ${{ needs.agent-daemon-plan.result }}
           CHECKS_RESULT: ${{ needs.checks.result }}
 
   deploy-cloudflare:

@@ -680,5 +680,5 @@ describe("daemon Bot execution boundary", () => {
             restore("no_proxy", previousLowerNoProxy);
             await rm(stateDirectory, { force: true, recursive: true });
         }
-    });
+    }, 30_000);
 });

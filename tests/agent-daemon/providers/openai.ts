@@ -88,7 +88,7 @@ function stringProperty(parameters: JsonObject | undefined, candidates: readonly
 }
 
 function selectTool(tools: readonly AvailableTool[]): SelectedTool | undefined {
-    const shell = tools.find((tool) => /(?:^|\.)(?:exec|bash|shell|command)$/iu.test(tool.name));
+    const shell = tools.find((tool) => /(?:^|\.)(?:terminal|exec|bash|shell|command)$/iu.test(tool.name));
     if (shell !== undefined) {
         if (shell.kind === "custom") {
             return {
@@ -298,6 +298,44 @@ function sendChatToolCall(response: ServerResponse, model: string, tool: Selecte
     response.end("data: [DONE]\n\n");
 }
 
+function sendChatCompletion(
+    response: ServerResponse,
+    model: string,
+    answer: string,
+    tool: SelectedTool | undefined,
+): void {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(
+        JSON.stringify({
+            id: "chatcmpl-mobius",
+            object: "chat.completion",
+            created: 0,
+            model,
+            choices: [
+                {
+                    index: 0,
+                    message:
+                        tool === undefined
+                            ? { role: "assistant", content: answer }
+                            : {
+                                  role: "assistant",
+                                  content: null,
+                                  tool_calls: [
+                                      {
+                                          id: toolCallId,
+                                          type: "function",
+                                          function: { name: tool.name, arguments: tool.input },
+                                      },
+                                  ],
+                              },
+                    finish_reason: tool === undefined ? "stop" : "tool_calls",
+                },
+            ],
+            usage: { prompt_tokens: 10, completion_tokens: 6, total_tokens: 16 },
+        }),
+    );
+}
+
 export class FakeOpenAiProvider implements AsyncDisposable {
     static readonly apiKey = "mobius-agent-daemon-fixture";
 
@@ -328,12 +366,30 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     static async start(model: string, answer: string): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         const server = createServer(async (request, response) => {
+            if (request.method === "GET" && request.url?.endsWith("/models") === true) {
+                response.writeHead(200, { "content-type": "application/json" });
+                response.end(
+                    JSON.stringify({
+                        object: "list",
+                        data: [{ id: model, object: "model", created: 0, owned_by: "mobius" }],
+                    }),
+                );
+                return;
+            }
             let body = "";
             for await (const chunk of request) {
                 body += chunk.toString();
             }
+            if (body.length === 0) {
+                response.writeHead(404).end();
+                return;
+            }
             const decoded: unknown = JSON.parse(body);
             const payload = isObject(decoded) ? decoded : {};
+            if (request.url?.endsWith("/chat/completions") !== true && request.url?.endsWith("/responses") !== true) {
+                response.writeHead(404).end();
+                return;
+            }
             const tools = availableTools(payload);
             const hasToolResult = includesToolResult(payload);
             const tool = hasToolResult ? undefined : selectTool(tools);
@@ -344,8 +400,8 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 url: request.url ?? "",
             });
 
-            response.writeHead(200, responseHeaders());
             if (request.url?.endsWith("/responses") === true) {
+                response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
                     sendResponsesText(response, model, answer);
                 } else {
@@ -353,6 +409,11 @@ export class FakeOpenAiProvider implements AsyncDisposable {
                 }
                 return;
             }
+            if (payload["stream"] === false) {
+                sendChatCompletion(response, model, answer, tool);
+                return;
+            }
+            response.writeHead(200, responseHeaders());
             if (tool === undefined) {
                 sendChatText(response, model, answer);
             } else {

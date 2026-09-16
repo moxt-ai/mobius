@@ -60,6 +60,7 @@ tests/agent-daemon/
     codex.integration.test.ts
     deepseek.integration.test.ts
     gemini.integration.test.ts
+    hermes.integration.test.ts
     opencode.integration.test.ts
     pi.integration.test.ts
   infra/
@@ -68,6 +69,7 @@ tests/agent-daemon/
     deepseek.ts
     executable.ts
     gemini.ts
+    hermes.ts
     opencode.ts
     pi.ts
   providers/
@@ -94,12 +96,20 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Claude, Codex, DeepSeek Harness, Gemini, and Pi cases likewise accept
+The Claude, Codex, DeepSeek Harness, Gemini, Hermes, and Pi cases likewise accept
 `MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
 `MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
+`MOBIUS_TEST_HERMES_PATH`,
 `MOBIUS_TEST_PI_PATH`, and `MOBIUS_TEST_PI_ACP_PATH`, with Gemini using
 `MOBIUS_TEST_GEMINI_PATH`. Without overrides, cases resolve their executables
 from `PATH`. CI installs the repository-tested versions and runs each Agent as
 an independent matrix job. Missing Agent software is a setup failure, not a
 skipped test.
+
+CI creates matrix jobs only for Agents affected by the Git diff. Agent-owned
+cases, fixtures, and specifications select one Agent; shared provider fixtures
+select their protocol group; shared daemon, ACP, SDK, protocol, and server code
+select every Agent. Documentation and unrelated application code select none.
+Unknown files under this test suite and failures to read the diff select every
+Agent so the optimization cannot silently omit coverage.

@@ -13,7 +13,6 @@ export { CopilotCliAgentSpecification } from "./agents/copilot-cli-agent.ts";
 export { CursorCliAgentSpecification } from "./agents/cursor-cli-agent.ts";
 export { DeepSeekHarnessAgentSpecification } from "./agents/deepseek-harness-agent.ts";
 export { GrokBuildAgentSpecification } from "./agents/grok-build-agent.ts";
-export { HermesAgentSpecification } from "./agents/hermes-agent.ts";
 export { OpenCodeAgentSpecification } from "./agents/opencode-agent.ts";
 export { PiAgentSpecification } from "./agents/pi-agent.ts";
 export { supportedLocalAgentSpecifications } from "./agents/supported-agent-specifications.ts";
