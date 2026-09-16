@@ -201,6 +201,8 @@ describe.sequential("Project Runtime management", () => {
 
             await screen.findByRole("heading", { level: 1, name: "Local Agents" });
             expect(screen.getByText("Not installed")).toBeTruthy();
+            expect(screen.queryByRole("button", { name: "Install integration" })).toBeNull();
+            expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
             expect(window.location.pathname).toBe(
                 `/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}`,
             );

@@ -160,7 +160,7 @@ function createManager(
 }
 
 describe("local Agent integration installation", () => {
-    it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and retries its integration, Then Mobius installs only the adapter and publishes the detected Agent details", async () => {
+    it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and checks again, Then Mobius installs only the adapter and publishes the detected Agent details", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-after-agent-install-"));
         const executableDirectory = join(stateDirectory, "external");
         const agentPath = join(executableDirectory, "codex");
@@ -175,7 +175,7 @@ describe("local Agent integration installation", () => {
             expect(missing).toBeInstanceOf(FailedInstallation);
             expect(missing).toMatchObject({
                 code: "agent_not_installed",
-                message: "Install Codex on this machine, then try installing the integration again.",
+                message: "Install Codex on this machine, then check local Agents again.",
             });
             expect(adapterInstaller.installedAgentIds).toEqual([]);
             expect(catalog.read().installableAgents[0]).toBeInstanceOf(MissingAgentDefinition);

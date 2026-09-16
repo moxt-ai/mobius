@@ -300,8 +300,8 @@ processes only its locally detected `integration_not_installed` entries. Each
 automatic operation re-runs the same local Agent and ACP verification before it
 stages a pinned private adapter. It never installs or changes an Agent CLI.
 After startup, the catalog changes after that local automatic setup or an
-explicit, verified retry. Ordinary discovery or verification failure leaves the
-daemon and channel online.
+explicit `Check again` scan. Ordinary discovery or verification failure leaves
+the daemon and channel online.
 
 The ready and installable catalogs are separate contracts. The daemon publishes
 IDs and labels for every supported Agent plus the discovered path and reported version for
@@ -314,16 +314,18 @@ credentials are not published.
 
 Web presents the same contracts on the channel Agent settings route. Ready
 entries show Agent version and path and link back to chat. Setup entries show
-either `Not installed` or the detected Agent details. Detected entries are
-installed automatically and retain retry or cancel controls while setup is in
-progress. This is integration management, not remote Agent package management:
-Agent installation, removal, upgrades, sign-in, and provider credentials stay
-outside the Web action surface.
+either `Not installed` or the detected Agent details. The conversation sidebar
+does not show setup entries. Web exposes one `Check again` action instead of
+per-Agent installation controls; it re-runs detection for all setup entries, and
+the daemon automatically installs integrations for Agents it finds. This is
+integration management, not remote Agent package management: Agent installation,
+removal, upgrades, sign-in, and provider credentials stay outside the Web action
+surface.
 
 Integration installation follows the local execution-boundary pipeline:
 
 ```text
-locally detected integration-needed Agent, or requestId + registered agentId from Web
+locally detected integration-needed Agent, or Check again + registered Agent IDs from Web
   -> locally created setup target, or strict integration-specific protocol validation
   -> local Agent ID authorization against the built-in catalog
   -> fresh local executable and version discovery
@@ -337,9 +339,9 @@ locally detected integration-needed Agent, or requestId + registered agentId fro
 The Relay authenticates and routes integration messages but never executes them.
 The automatic path is initiated by the local daemon from its own catalog, and
 the integration-specific message kinds are distinct from the former Agent
-installation protocol, so mixed old and new clients cannot silently turn a retry
-button into an Agent installer. A Web click confirms one retry; the local daemon
-remains the final authority and rejects any Agent ID outside its built-in
+installation protocol, so mixed old and new clients cannot silently turn a scan
+into an Agent installer. A Web click requests one complete recheck; the local
+daemon remains the final authority and rejects any Agent ID outside its built-in
 catalog. The host credential cannot provide or alter an executable, command,
 version, URL, argument, environment value, or target. Adapter installer
 processes receive a minimal allowlisted environment with no channel token, Agent

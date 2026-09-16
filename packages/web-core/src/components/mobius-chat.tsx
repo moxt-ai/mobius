@@ -1,7 +1,7 @@
 import { LoaderCircle } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { AgentInstallationSidebarPanel } from "@/components/agent-installation-panel";
+import { AgentInstallationPanel } from "@/components/agent-installation-panel";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatMessageList } from "@/components/chat-message-list";
 import { Button } from "@/components/ui/button";
@@ -77,15 +77,15 @@ function ConnectedMobiusChat({
                 <h1 className="text-xl font-semibold">Local Agents</h1>
                 <p className="mt-2 text-sm text-muted-foreground">
                     No Agent integration is ready on {connection.machineName} yet. Mobius automatically installs and
-                    verifies integrations for detected Agents. Install any missing Agent CLI yourself, then retry if
-                    setup needs attention.
+                    verifies integrations while detecting local Agents. Install any missing Agent CLI yourself, then
+                    choose Check again.
                 </p>
                 {!runtime.canSend && (
                     <p role="status" className="mt-3 text-sm text-muted-foreground">
                         Keep the Mobius daemon online to check Agents and install integrations.
                     </p>
                 )}
-                <AgentInstallationSidebarPanel />
+                <AgentInstallationPanel />
             </section>
         );
     }

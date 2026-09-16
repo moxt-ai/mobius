@@ -60,7 +60,6 @@ import {
     OwnerChannelCredentialAuthority,
     ProjectOwnerRuntimeCredentialAuthority,
     RecordedActivity,
-    RequestedAgentInstallationState,
 } from "@/domain/channel";
 import {
     type Conversation,
@@ -1342,7 +1341,7 @@ export async function stopActiveTurn(): Promise<void> {
     }
 }
 
-export async function installLocalAgent(agentId: string): Promise<void> {
+async function recheckLocalAgent(agentId: string): Promise<void> {
     const state = useChatStore.getState();
     if (!state.installableAgents.some((agent) => agent.id === agentId)) {
         return;
@@ -1373,19 +1372,9 @@ export async function installLocalAgent(agentId: string): Promise<void> {
     }
 }
 
-export async function cancelLocalAgentInstallation(agentId: string): Promise<void> {
-    const state = useChatStore.getState();
-    const installation = state.agentInstallations.find((candidate) => candidate.agentId === agentId);
-    if (!(installation instanceof RequestedAgentInstallationState) || !installation.canCancel) {
-        return;
-    }
-    try {
-        await transport.cancelAgentInstallation({
-            requestId: installation.requestId,
-        });
-    } catch (error) {
-        state.setErrorMessage(failureMessage(error));
-    }
+export async function recheckLocalAgents(): Promise<void> {
+    const agentIds = useChatStore.getState().installableAgents.map((agent) => agent.id);
+    await Promise.all(agentIds.map(recheckLocalAgent));
 }
 
 export async function closeMobiusTransport(): Promise<void> {

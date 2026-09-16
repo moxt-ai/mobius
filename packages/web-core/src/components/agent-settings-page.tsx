@@ -1,10 +1,21 @@
-import { ArrowLeft, Bot, CheckCircle2, Menu, PanelLeftClose, PanelLeftOpen, Settings, ShieldCheck } from "lucide-react";
+import {
+    ArrowLeft,
+    Bot,
+    CheckCircle2,
+    LoaderCircle,
+    Menu,
+    PanelLeftClose,
+    PanelLeftOpen,
+    RefreshCw,
+    Settings,
+    ShieldCheck,
+} from "lucide-react";
 import { Link } from "react-router";
 
 import { AgentInstallationCardsView } from "@/components/agent-installation-panel";
 import { Button } from "@/components/ui/button";
 import type { AgentInstallationViewState, AgentOption, InstallableAgentOption } from "@/domain/channel";
-import { cancelLocalAgentInstallation, installLocalAgent } from "@/services/mobius-transport";
+import { recheckLocalAgents } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
 
 function countLabel(count: number, singular: string): string {
@@ -17,9 +28,8 @@ interface AgentSettingsViewProps {
     readonly installableAgents: readonly InstallableAgentOption[];
     readonly installations: readonly AgentInstallationViewState[];
     readonly machineName: string;
-    readonly onCancelInstallation: (agentId: string) => void;
-    readonly onInstall: (agentId: string) => void;
     readonly onOpenSidebar: () => void;
+    readonly onRecheck: () => void;
     readonly onToggleDesktopSidebar: () => void;
     readonly runtimeCanSend: boolean;
     readonly runtimeLabel: string;
@@ -32,14 +42,14 @@ function AgentSettingsView({
     installableAgents,
     installations,
     machineName,
-    onCancelInstallation,
-    onInstall,
     onOpenSidebar,
+    onRecheck,
     onToggleDesktopSidebar,
     runtimeCanSend,
     runtimeLabel,
     sidebarOpen,
 }: AgentSettingsViewProps) {
+    const checking = installations.some((installation) => installation.canCancel);
     return (
         <>
             <header className="chat-header z-10 flex shrink-0 items-center border-b-[0.5px] border-black/6 bg-background/92 px-2.5 supports-[backdrop-filter]:backdrop-blur-xl md:px-[18px]">
@@ -97,8 +107,8 @@ function AgentSettingsView({
                         </h2>
                         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
                             See which Agent CLIs Mobius detected on {machineName}, including their reported version and
-                            executable path. Mobius installs only the integration; Agent installation and sign-in remain
-                            local actions.
+                            executable path. Detection also installs or repairs integrations automatically; Agent
+                            installation and sign-in remain local actions.
                         </p>
 
                         <div className="mt-6 grid gap-3 sm:grid-cols-3">
@@ -208,8 +218,8 @@ function AgentSettingsView({
                                     Needs setup
                                 </h2>
                                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                                    Missing Agents must be installed locally first. Mobius can install or repair only
-                                    their ACP integrations.
+                                    Install missing Agents locally. Check again re-runs detection and automatically
+                                    installs or repairs their ACP integrations.
                                 </p>
                             </div>
                             <span className="shrink-0 rounded-full bg-black/5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">
@@ -218,14 +228,7 @@ function AgentSettingsView({
                         </div>
 
                         {installableAgents.length > 0 ? (
-                            <AgentInstallationCardsView
-                                agents={installableAgents}
-                                compact={false}
-                                installations={installations}
-                                onCancel={onCancelInstallation}
-                                onInstall={onInstall}
-                                runtimeCanSend={runtimeCanSend}
-                            />
+                            <AgentInstallationCardsView agents={installableAgents} installations={installations} />
                         ) : (
                             <div className="mt-4 flex items-start gap-3 rounded-xl border-[0.5px] border-black/10 bg-white px-5 py-4 shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
                                 <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-[9px] bg-[#eefaf3] text-[#218854]">
@@ -241,11 +244,26 @@ function AgentSettingsView({
                                 </span>
                             </div>
                         )}
+                        <Button
+                            className="mt-5 min-h-11 px-4 text-xs"
+                            disabled={!runtimeCanSend || checking || installableAgents.length === 0}
+                            onClick={onRecheck}
+                        >
+                            {checking ? (
+                                <LoaderCircle
+                                    aria-hidden="true"
+                                    className="size-3.5 animate-spin motion-reduce:animate-none"
+                                />
+                            ) : (
+                                <RefreshCw aria-hidden="true" className="size-3.5" />
+                            )}
+                            {checking ? "Checking local Agents…" : "Check again"}
+                        </Button>
                     </section>
 
                     <aside className="mt-10 rounded-xl bg-[#f1f3f5] px-5 py-4 text-xs leading-5 text-muted-foreground">
-                        “Install integration” rechecks the Agent on this machine, then installs only the audited ACP
-                        integration. It never installs, removes, upgrades, or signs in to the Agent CLI itself.
+                        Check again scans this machine for local Agents, then installs only the audited ACP integrations
+                        for Agents it detects. It never installs, removes, upgrades, or signs in to an Agent CLI.
                     </aside>
                 </div>
             </div>
@@ -276,9 +294,8 @@ export function AgentSettingsPage({
             installableAgents={installableAgents}
             installations={installations}
             machineName={machineName}
-            onCancelInstallation={(agentId) => void cancelLocalAgentInstallation(agentId)}
-            onInstall={(agentId) => void installLocalAgent(agentId)}
             onOpenSidebar={() => setSidebarOpen(true)}
+            onRecheck={() => void recheckLocalAgents()}
             onToggleDesktopSidebar={onToggleDesktopSidebar}
             runtimeCanSend={runtime.canSend}
             runtimeLabel={runtime.label}

@@ -37,9 +37,10 @@ cannot accidentally mix identities from two executables.
 Managed ACP adapter metadata and installation stay under
 `packages/cli/src/agent-installation/`. After a paired daemon's first Relay
 connection, Mobius automatically provisions only the pinned adapter for locally
-detected Agents whose integration is incomplete; a Web action can retry that
-same operation. It remains separate from read-only Agent discovery, and Mobius
-does not install Agent CLIs.
+detected Agents whose integration is incomplete. The Web `Check again` action
+re-runs discovery for supported Agents and automatically provisions integrations
+for those it finds. It remains separate from read-only Agent discovery, and
+Mobius does not install Agent CLIs.
 
 ## Adding an Agent
 
@@ -61,11 +62,11 @@ does not install Agent CLIs.
    advertising it as ready.
 
 Discovery is part of the local execution boundary. Automatic setup reads only
-the daemon's locally produced detected-Agent catalog; remote clients can select
-a registered Agent ID only when they explicitly retry its integration. Neither
+the daemon's locally produced detected-Agent catalog; remote clients can request
+a recheck only for registered Agent IDs already published by the daemon. Neither
 path can provide an executable path, command, argument, environment variable,
 managed artifact, or capability claim. The daemon re-runs local discovery for
-every automatic setup and retry, and rejects the integration with
+every automatic setup and recheck, and rejects the integration with
 `agent_not_installed` until the Agent executable passes the local version probe.
 Detected Agent paths and versions are output metadata for authenticated channel
 clients; they are never accepted back as execution authority. Local and managed

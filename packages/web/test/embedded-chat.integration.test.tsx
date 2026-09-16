@@ -12,7 +12,7 @@ import {
 setupWebIntegrationEnvironment();
 
 describe.sequential("Embedded Mobius chat", () => {
-    it("Given a paired machine has no detected Agent, When a workspace opens Chat, Then a loading indicator gives way to the missing Agent and integration action", async ({
+    it("Given a paired machine has no detected Agent, When a workspace opens Chat, Then a loading indicator gives way to Agent status and a global recheck action", async ({
         signal,
     }) => {
         const paired = await pairDaemon({
@@ -36,10 +36,11 @@ describe.sequential("Embedded Mobius chat", () => {
             expect(screen.getByText("Not installed")).toBeTruthy();
             expect(
                 screen.getByText(
-                    /Mobius automatically installs and verifies integrations for detected Agents\. Install any missing Agent CLI yourself/,
+                    /Mobius automatically installs and verifies integrations while detecting local Agents\. Install any missing Agent CLI yourself/,
                 ),
             ).toBeTruthy();
-            expect(screen.getByRole("button", { name: "Install integration" })).toBeTruthy();
+            expect(screen.queryByRole("button", { name: "Install integration" })).toBeNull();
+            expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
             expect(screen.queryByText("Preparing Mobius chat…")).toBeNull();
             expect(screen.queryByRole("status", { name: "Loading Mobius chat" })).toBeNull();
         } finally {

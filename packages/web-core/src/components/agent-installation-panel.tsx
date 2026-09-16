@@ -1,4 +1,4 @@
-import { Bot, Cable, CheckCircle2, CircleAlert, LoaderCircle, Settings, X } from "lucide-react";
+import { Bot, Cable, CheckCircle2, CircleAlert, LoaderCircle, RefreshCw, Settings } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -12,44 +12,38 @@ import {
     MissingAgentOption,
     SucceededAgentInstallationState,
 } from "@/domain/channel";
-import { cancelLocalAgentInstallation, installLocalAgent } from "@/services/mobius-transport";
+import { recheckLocalAgents } from "@/services/mobius-transport";
 import { useChatStore } from "@/store/chat-store";
 
 interface AgentInstallationCardsViewProps {
     readonly agents: readonly InstallableAgentOption[];
-    readonly compact: boolean;
     readonly installations: readonly AgentInstallationViewState[];
-    readonly onCancel: (agentId: string) => void;
-    readonly onInstall: (agentId: string) => void;
-    readonly runtimeCanSend: boolean;
 }
 
-export function AgentInstallationCardsView({
-    agents,
-    compact,
-    installations,
-    onCancel,
-    onInstall,
-    runtimeCanSend,
-}: AgentInstallationCardsViewProps) {
+export function AgentInstallationCardsView({ agents, installations }: AgentInstallationCardsViewProps) {
     return (
-        <div className={compact ? "space-y-2" : "mt-7 grid gap-3 sm:grid-cols-2"}>
+        <div className="mt-7 grid gap-3 sm:grid-cols-2">
             {agents.map((agent) => {
                 const installation = installations.find((candidate) => candidate.agentId === agent.id);
                 const succeeded = installation instanceof SucceededAgentInstallationState;
                 const failed = installation instanceof FailedAgentInstallationState;
                 const active = installation?.canCancel === true;
                 const missing = agent instanceof MissingAgentOption;
+                const statusLabel = active
+                    ? "Checking"
+                    : succeeded
+                      ? "Ready"
+                      : failed
+                        ? "Needs attention"
+                        : missing
+                          ? "Not installed"
+                          : "Agent detected";
                 if (!missing && !(agent instanceof AgentIntegrationOption)) {
                     throw new Error("Unsupported local Agent integration option");
                 }
                 return (
                     <article
-                        className={
-                            compact
-                                ? "rounded-[10px] border-[0.5px] border-black/9 bg-white p-2.5"
-                                : "rounded-xl border-[0.5px] border-black/10 bg-white p-4 text-left shadow-[0_1px_3px_rgba(0,0,0,0.03)]"
-                        }
+                        className="rounded-xl border-[0.5px] border-black/10 bg-white p-4 text-left shadow-[0_1px_3px_rgba(0,0,0,0.03)]"
                         key={agent.id}
                     >
                         <div className="flex items-start gap-2.5">
@@ -77,12 +71,12 @@ export function AgentInstallationCardsView({
                                 <strong className="block text-[13px] leading-5 font-semibold">{agent.label}</strong>
                                 <span
                                     className={
-                                        missing
+                                        failed || (missing && !active)
                                             ? "mt-0.5 block text-[11px] leading-4 font-medium text-[#a85d00]"
                                             : "mt-0.5 block text-[11px] leading-4 font-medium text-[#218854]"
                                     }
                                 >
-                                    {missing ? "Not installed" : "Agent detected"}
+                                    {statusLabel}
                                 </span>
                             </span>
                         </div>
@@ -105,29 +99,9 @@ export function AgentInstallationCardsView({
                             {installation !== undefined && !(installation instanceof IdleAgentInstallationState)
                                 ? installation.message
                                 : missing
-                                  ? `Install ${agent.label} on this machine first. Then Mobius can install and verify its integration.`
-                                  : "Mobius automatically installs and verifies this integration while the daemon is online. You can install it now if it needs attention."}
+                                  ? `Install ${agent.label} on this machine, then choose Check again. Mobius will detect it and install its integration automatically.`
+                                  : "Mobius detected this Agent and automatically installs and verifies its integration while the daemon is online."}
                         </p>
-                        <div className="mt-3 flex items-center gap-2">
-                            {active ? (
-                                <Button
-                                    className="min-h-11 px-3 text-xs"
-                                    onClick={() => onCancel(agent.id)}
-                                    variant="outline"
-                                >
-                                    <X aria-hidden="true" className="size-3.5" /> Cancel
-                                </Button>
-                            ) : (
-                                <Button
-                                    className="min-h-11 px-3 text-xs"
-                                    disabled={!runtimeCanSend || succeeded}
-                                    onClick={() => onInstall(agent.id)}
-                                >
-                                    <Cable aria-hidden="true" className="size-3.5" />
-                                    {failed ? "Retry integration" : succeeded ? "Ready" : "Install integration"}
-                                </Button>
-                            )}
-                        </div>
                     </article>
                 );
             })}
@@ -135,34 +109,27 @@ export function AgentInstallationCardsView({
     );
 }
 
-function AgentInstallationCards({ compact }: { readonly compact: boolean }) {
+export function AgentInstallationPanel() {
     const agents = useChatStore((state) => state.installableAgents);
     const installations = useChatStore((state) => state.agentInstallations);
     const runtime = useChatStore((state) => state.runtime);
+    const checking = installations.some((installation) => installation.canCancel);
     return (
-        <AgentInstallationCardsView
-            agents={agents}
-            compact={compact}
-            installations={installations}
-            onCancel={(agentId) => void cancelLocalAgentInstallation(agentId)}
-            onInstall={(agentId) => void installLocalAgent(agentId)}
-            runtimeCanSend={runtime.canSend}
-        />
-    );
-}
-
-export function AgentInstallationSidebarPanel() {
-    const installableAgents = useChatStore((state) => state.installableAgents);
-    if (installableAgents.length === 0) {
-        return null;
-    }
-    return (
-        <section className="border-t-[0.5px] border-black/6 px-3 py-3">
-            <h2 className="mb-2 px-1 text-[11px] font-semibold tracking-[0.02em] text-muted-foreground">
-                Agent integrations
-            </h2>
-            <AgentInstallationCards compact />
-        </section>
+        <>
+            <AgentInstallationCardsView agents={agents} installations={installations} />
+            <Button
+                className="mx-auto mt-5 min-h-11 px-4 text-xs"
+                disabled={!runtime.canSend || checking || agents.length === 0}
+                onClick={() => void recheckLocalAgents()}
+            >
+                {checking ? (
+                    <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
+                ) : (
+                    <RefreshCw aria-hidden="true" className="size-3.5" />
+                )}
+                {checking ? "Checking local Agents…" : "Check again"}
+            </Button>
+        </>
     );
 }
 
@@ -179,18 +146,19 @@ export function AgentInstallationPage() {
                 <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Local Agents</h1>
                 <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
                     No Agent integration is ready on {machineName} yet. Mobius automatically installs and verifies
-                    integrations for detected Agents. Install any missing Agent CLI yourself, then retry if setup needs
-                    attention.
+                    integrations while detecting local Agents. Install any missing Agent CLI yourself, then choose Check
+                    again.
                 </p>
                 {!runtime.canSend && (
                     <p className="mt-3 text-xs font-medium text-[#a85d00]">
                         Keep the Mobius daemon online while it checks Agents and installs integrations.
                     </p>
                 )}
-                <AgentInstallationCards compact={false} />
+                <AgentInstallationPanel />
                 <p className="mt-6 text-xs leading-5 text-muted-foreground">
-                    Automatic setup and each retry recheck the local machine, so an Agent installed after the daemon
-                    started can be detected without pairing again. Provider sign-in may still be required afterward.
+                    Check again re-runs local detection and automatic integration setup, so an Agent installed after the
+                    daemon started can be detected without pairing again. Provider sign-in may still be required
+                    afterward.
                 </p>
                 <Link
                     className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"

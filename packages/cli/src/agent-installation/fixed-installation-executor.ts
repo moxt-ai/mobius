@@ -164,14 +164,14 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             if (initialDiscovery instanceof MissingAgent) {
                 throw new InstallationManagerError(
                     "agent_not_installed",
-                    `Install ${specification.label} on this machine, then try installing the integration again.`,
+                    `Install ${specification.label} on this machine, then check local Agents again.`,
                 );
             }
             const verifiedAgent = await findVerifiedAgentExecutable(specification, discoveryOptions);
             if (verifiedAgent === null) {
                 throw new InstallationManagerError(
                     "agent_not_installed",
-                    `Install ${specification.label} on this machine, then try installing the integration again.`,
+                    `Install ${specification.label} on this machine, then check local Agents again.`,
                 );
             }
             const agent = verifiedAgent.executable;

@@ -197,7 +197,9 @@ separately from supported Agents that still need setup. A locally detected Agent
 shows its reported version and executable path; an Agent that was not detected is
 explicitly labeled `Not installed`. After the paired daemon connects, Mobius
 automatically installs or repairs only the ACP integration for each locally
-detected Agent; `Install integration` remains available as a manual retry.
+detected Agent. Setup cards stay out of the conversation sidebar. The single
+`Check again` action re-runs local Agent detection and automatically installs the
+integration for each Agent it finds; missing Agents have no integration action.
 The public Runtime descriptor includes the reported path and version together
 with capability booleans observed during each ready Agent's bounded ACP probe.
 The page does not expose provider credentials or offer a remote Agent uninstall
@@ -308,21 +310,23 @@ applicable. The one-time pairing claim remains read-only.
 
 When no verified integration is ready, the paired daemon keeps the channel
 online and Web still lists every supported Agent. The user installs the Agent CLI
-themselves; detected Agents are set up automatically. Selecting `Install
-integration` is a manual retry and makes the local daemon rediscover the Agent
-at that moment, so a CLI installed after daemon startup is recognized without
-pairing again. If the Agent is still absent, the request fails with
+themselves; detected Agents are set up automatically. Selecting `Check again`
+makes the local daemon rediscover all setup Agents at that moment and
+automatically provisions integrations for those it finds, so a CLI installed
+after daemon startup is recognized without pairing again. If an Agent is still
+absent, its request fails with
 `agent_not_installed` and asks the user to install it locally. Mobius never
 downloads, installs, upgrades, removes, or signs in to an Agent CLI through this
-button or the automatic setup path.
+action or the automatic setup path.
 
-For a detected bridged Agent, automatic setup or an explicit retry may install
+For a detected bridged Agent, automatic setup or an explicit recheck may install
 the exact pinned ACP adapter into Mobius's private cache, then repeats normal
 discovery and the ACP initialize handshake before advertising the integration as
 ready. Direct ACP Agents only repeat verification because they need no separate
 adapter. An explicit adapter override remains authoritative and is never
 replaced. Failure does not take the channel offline; the Agent remains in the
-setup catalog with a sanitized diagnostic and a retry action. Progress events
+setup catalog with a sanitized diagnostic and can be included in the next
+recheck. Progress events
 contain stable integration stages and errors, never commands, URLs, adapter
 paths, raw output, environment values, or credentials.
 
