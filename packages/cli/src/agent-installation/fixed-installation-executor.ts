@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 
 import type { AgentInstallationStage } from "@moxt-ai/mobius-protocol";
 
-import { AvailableAgent } from "../agent-catalog/agent-discovery.ts";
+import { AvailableAgent, MissingAgent } from "../agent-catalog/agent-discovery.ts";
 import {
     BridgedAcpAgentDefinition,
     DirectAcpAgentDefinition,
@@ -12,11 +12,7 @@ import {
 import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/supported-agent-specifications.ts";
 import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import { findVerifiedAgentExecutable, resolveAdapterExecutable } from "../agent-catalog/executable-discovery.ts";
-import {
-    AgentIntegrationDefinition,
-    type LocalAgentCatalog,
-    MissingAgentDefinition,
-} from "../agent-catalog/local-agent.ts";
+import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
 import type { InstallationAudit, InstallationExecutor } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
 import {
@@ -162,20 +158,15 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             if (alreadyReady instanceof AvailableAgent) {
                 return;
             }
-            const candidate = initialInventory.installable.find((agent) => agent.id === agentId);
-            if (candidate instanceof MissingAgentDefinition) {
+            const initialDiscovery = initialInventory.unavailable.find(
+                (candidate) => candidate.specification.id === agentId,
+            );
+            if (initialDiscovery instanceof MissingAgent) {
                 throw new InstallationManagerError(
                     "agent_not_installed",
                     `Install ${specification.label} on this machine, then try installing the integration again.`,
                 );
             }
-            if (!(candidate instanceof AgentIntegrationDefinition)) {
-                throw new InstallationManagerError(
-                    "agent_verification_failed",
-                    "The local Agent discovery result is unavailable",
-                );
-            }
-
             const verifiedAgent = await findVerifiedAgentExecutable(specification, discoveryOptions);
             if (verifiedAgent === null) {
                 throw new InstallationManagerError(

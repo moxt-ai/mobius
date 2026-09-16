@@ -17,8 +17,12 @@ import {
     TurnRecordSchema,
 } from "../../entity/do/session-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
+import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
 import type { SessionArchiveStorage } from "./session-archive-storage.ts";
+import { decodeStreamBlock } from "./session-stream-codec.ts";
+import { splitUtf8Text, utf8ByteLength } from "./session-text-chunks.ts";
+import { rowNumber, rowString } from "./sqlite-row.ts";
 
 export class SessionTransferStorage {
     readonly #database: DoSqlDatabase;
@@ -48,6 +52,28 @@ export class SessionTransferStorage {
                     commandId: command.command.commandId,
                     commandJson: JSON.stringify(command.command),
                 });
+                this.insertCanonicalMessage({
+                    ...scope,
+                    commandId: command.command.commandId,
+                    createdAt: command.createdAt,
+                    completedAt: command.createdAt,
+                    content: command.command.prompt,
+                    messageId: `user-${command.command.commandId}`,
+                    parentId: null,
+                    role: "user",
+                });
+                if (command.state === "cancelled" || command.state === "failed" || command.state === "succeeded") {
+                    this.insertCanonicalMessage({
+                        ...scope,
+                        commandId: command.command.commandId,
+                        createdAt: command.createdAt,
+                        completedAt: command.completedAt,
+                        content: command.response,
+                        messageId: `assistant-${command.command.commandId}`,
+                        parentId: `user-${command.command.commandId}`,
+                        role: "assistant",
+                    });
+                }
                 this.insertCommandReceipt({
                     ...scope,
                     commandKind: command.command.kind,
@@ -106,31 +132,48 @@ export class SessionTransferStorage {
                     summaryJson: encodeAgentActivityEvent(activity.event),
                     detailKind: detail.kind,
                     detailArtifactId: detail.kind === "available" ? detail.artifactId : null,
-                    hotDetail: artifact?.payload ?? null,
+                    hotDetail: null,
                     capturedBytes: detail.kind === "truncated" ? detail.capturedBytes : 0,
                     originalBytes: detail.kind === "truncated" ? detail.originalBytes : 0,
                     eventSequence: activity.eventSequence,
                 });
                 if (artifact !== null) {
-                    this.#archive.stageArtifact({
+                    this.#archive.retainHotArtifact({
                         ...scope,
                         artifactId: artifact.artifactId,
                         ownerId: activity.event.activityId,
                         mediaType: "application/json",
                         hotPayload: artifact.payload,
                     });
+                    if (activity.event.status === "completed" || activity.event.status === "failed") {
+                        this.#archive.stageArtifact({
+                            ...scope,
+                            artifactId: artifact.artifactId,
+                            ownerId: activity.event.activityId,
+                            mediaType: "application/json",
+                        });
+                    }
                 }
             }
-            for (const { event, payloadHash, sourceId, archiveSegmentId } of plan.events) {
-                this.#archive.stageEvent({
-                    ...scope,
-                    segmentId: archiveSegmentId,
-                    eventId: event.eventId,
-                    sequence: Number(event.sequence),
-                    mediaType: "application/json",
-                    hotPayload: event.payload,
-                });
-                this.insertEvent({
+            for (const command of plan.commands) {
+                switch (command.state) {
+                    case "cancelled":
+                    case "failed":
+                    case "succeeded":
+                        this.#archive.stageTurnActivityDetails({ ...scope, commandId: command.command.commandId });
+                        break;
+                    case "indeterminate":
+                    case "queued":
+                    case "running":
+                        break;
+                    default: {
+                        const unreachable: never = command.state;
+                        return unreachable;
+                    }
+                }
+            }
+            for (const { event, payloadHash, sourceId } of plan.events) {
+                this.insertHotEvent({
                     ...scope,
                     sequenceNumber: Number(event.sequence),
                     eventId: event.eventId,
@@ -139,11 +182,14 @@ export class SessionTransferStorage {
                     sourceId,
                     sourceSeq: event.source.sourceSeq,
                     payload: event.payload,
-                    archiveSegmentId,
                     recordedAt: Date.parse(event.recordedAt),
                 });
             }
             this.restoreSessionConfiguration(plan);
+            this.#archive.discardImportedEventHistory({
+                ...scope,
+                throughSequence: plan.nextSequence - 1,
+            });
             this.restoreBindingRevision({
                 ...scope,
                 configRevision: plan.configRevision,
@@ -160,13 +206,43 @@ export class SessionTransferStorage {
             CommittedEventRecordSchema,
             this.#database.query(
                 `SELECT sequence_number, event_id, payload_hash, source_kind, source_id,
-              source_seq, payload, archive_segment_id, recorded_at
+              source_seq, payload, recorded_at
        FROM session_events
        WHERE scope_key = ? AND session_id = ?
        ORDER BY sequence_number`,
                 [input.scopeKey, input.sessionId],
             ),
         );
+
+    readonly readActiveEventPayload = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly sequenceNumber: number;
+    }): string | undefined => {
+        const row = this.#database.query(
+            `SELECT block.payload, reference.event_index
+               FROM session_stream_event_refs reference
+               INNER JOIN session_stream_blocks block
+                 ON block.scope_key = reference.scope_key
+                AND block.session_id = reference.session_id
+                AND block.stream_id = reference.stream_id
+                AND block.block_index = reference.block_index
+              WHERE reference.scope_key = ? AND reference.session_id = ?
+                AND reference.sequence_number = ?`,
+            [input.scopeKey, input.sessionId, input.sequenceNumber],
+        )[0];
+        if (row === undefined) {
+            return undefined;
+        }
+        const event = decodeStreamBlock(rowString(row, "payload"))[rowNumber(row, "event_index")];
+        if (event === undefined || event.sequence !== input.sequenceNumber) {
+            throw new DatabaseError(
+                "database_statement_invalid",
+                "The imported Session stream event reference is invalid",
+            );
+        }
+        return event.payload;
+    };
 
     readonly listTurns = (input: { readonly scopeKey: string; readonly sessionId: string }): readonly TurnRecord[] =>
         decodeStorageRows(
@@ -338,6 +414,70 @@ export class SessionTransferStorage {
             ],
         );
 
+    private readonly insertCanonicalMessage = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+        readonly messageId: string;
+        readonly role: string;
+        readonly parentId: string | null;
+        readonly content: string;
+        readonly createdAt: number;
+        readonly completedAt: number | null;
+    }): void => {
+        const chunks = splitUtf8Text(input.content);
+        const initial = chunks[0];
+        if (initial === undefined) {
+            throw new DatabaseError("database_statement_invalid", "The imported canonical Session message is empty");
+        }
+        this.#database.run(
+            `DELETE FROM session_message_chunks
+              WHERE scope_key = ? AND session_id = ? AND message_id = ?`,
+            [input.scopeKey, input.sessionId, input.messageId],
+        );
+        this.#database.run(
+            `INSERT INTO session_messages (
+               scope_key, session_id, message_id, command_id, role, parent_id,
+               content, content_chunks, token_estimate, created_at, completed_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(scope_key, session_id, command_id, role) DO UPDATE SET
+               message_id = excluded.message_id,
+               parent_id = excluded.parent_id,
+               content = excluded.content,
+               content_chunks = excluded.content_chunks,
+               token_estimate = excluded.token_estimate,
+               completed_at = excluded.completed_at`,
+            [
+                input.scopeKey,
+                input.sessionId,
+                input.messageId,
+                input.commandId,
+                input.role,
+                input.parentId,
+                initial,
+                chunks.length - 1,
+                Math.ceil(utf8ByteLength(input.content) / 4),
+                input.createdAt,
+                input.completedAt,
+            ],
+        );
+        for (let index = 1; index < chunks.length; index += 1) {
+            const content = chunks[index];
+            if (content === undefined) {
+                throw new DatabaseError(
+                    "database_statement_invalid",
+                    "An imported canonical Session message chunk is missing",
+                );
+            }
+            this.#database.run(
+                `INSERT INTO session_message_chunks (
+                   scope_key, session_id, message_id, chunk_index, content, byte_length
+                 ) VALUES (?, ?, ?, ?, ?, ?)`,
+                [input.scopeKey, input.sessionId, input.messageId, index, content, utf8ByteLength(content)],
+            );
+        }
+    };
+
     private readonly insertCommandReceipt = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
@@ -469,7 +609,7 @@ export class SessionTransferStorage {
             ],
         );
 
-    private readonly insertEvent = (input: {
+    private readonly insertHotEvent = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
         readonly sequenceNumber: number;
@@ -479,7 +619,6 @@ export class SessionTransferStorage {
         readonly sourceId: string;
         readonly sourceSeq: string;
         readonly payload: string | null;
-        readonly archiveSegmentId: string;
         readonly recordedAt: number;
     }): { readonly changes: number } =>
         this.#database.run(
@@ -498,7 +637,7 @@ export class SessionTransferStorage {
                 input.sourceId,
                 input.sourceSeq,
                 input.payload,
-                input.archiveSegmentId,
+                "",
                 input.recordedAt,
             ],
         );

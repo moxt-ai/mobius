@@ -611,7 +611,7 @@ async function commitAttemptEvent(daemon: OpenSocket, envelope: SessionEventEnve
     });
 }
 
-async function expectConversationEvents(
+async function expectConversationHistory(
     pairing: CreatedPairing,
     bot: CreatedBot,
     conversation: CreatedConversation,
@@ -619,27 +619,22 @@ async function expectConversationEvents(
     behavior: CreatedBehavior,
 ): Promise<void> {
     const app = pairing.app;
-    const page = await json(
-        await app.request(
-            `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}/events`,
-            { headers: ownerHeaders(pairing) },
-        ),
-        200,
-    );
-    expect(recordArrayField(page, "events")).toMatchObject([
+    const endpoint = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/conversations/${conversation.conversationId}`;
+    const messages = await json(await app.request(`${endpoint}/messages`, { headers: ownerHeaders(pairing) }), 200);
+    expect(recordArrayField(messages, "messages")).toMatchObject([
         {
             behaviorRevisionId: behavior.behaviorRevisionId,
-            conversationId: conversation.conversationId,
-            kind: SESSION_STARTED_KIND,
-            turnId: accepted.turnId,
-        },
-        {
-            behaviorRevisionId: behavior.behaviorRevisionId,
-            conversationId: conversation.conversationId,
-            kind: SESSION_COMPLETED_KIND,
+            executionId: accepted.executionId,
             turnId: accepted.turnId,
         },
     ]);
+    const events = await json(
+        await app.request(`${endpoint}/events?after=${encodeURIComponent(stringField(messages, "tailEventCursor"))}`, {
+            headers: ownerHeaders(pairing),
+        }),
+        200,
+    );
+    expect(recordArrayField(events, "events")).toEqual([]);
 }
 
 beforeEach(() => {
@@ -1544,8 +1539,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                 );
                 expect(execution.accepted.turnId).toBe(execution.command.turnId);
             }
-            await expectConversationEvents(runtimeA, botA, conversationA, acceptedA, behaviorA);
-            await expectConversationEvents(runtimeA, botB, conversationB, acceptedB, behaviorB);
+            await expectConversationHistory(runtimeA, botA, conversationA, acceptedA, behaviorA);
+            await expectConversationHistory(runtimeA, botB, conversationB, acceptedB, behaviorB);
 
             daemonA.socket.send(
                 encodeSessionEventEnvelope(
@@ -1822,8 +1817,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                 );
             }
 
-            await expectConversationEvents(pairing, botAlpha, conversationAlpha, acceptedAlpha, behaviorAlpha);
-            await expectConversationEvents(pairing, botBeta, conversationBeta, acceptedBeta, behaviorBeta);
+            await expectConversationHistory(pairing, botAlpha, conversationAlpha, acceptedAlpha, behaviorAlpha);
+            await expectConversationHistory(pairing, botBeta, conversationBeta, acceptedBeta, behaviorBeta);
 
             const outboundAlpha = await json(
                 await app.request(

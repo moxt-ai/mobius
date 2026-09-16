@@ -274,7 +274,7 @@ export class ProductionMobiusCli implements AsyncDisposable {
     async restartFromSavedChannel(): Promise<void> {
         await this.#process.stop();
         this.#process = spawnCli(["start", "--channel", this.channelId], this.#environment);
-        await this.#process.waitFor("Mobius daemon connected to the relay.", 20_000);
+        await this.#process.waitFor("Mobius daemon is ready for Agent requests.", 20_000);
     }
 
     async [Symbol.asyncDispose](): Promise<void> {
@@ -315,7 +315,7 @@ export async function startProductionMobiusCli(
         environment,
     );
     try {
-        await process_.waitFor("Mobius daemon connected to the relay.", 20_000);
+        await process_.waitFor("Mobius daemon is ready for Agent requests.", 20_000);
         return new ProductionMobiusCli(pairing.channelId, environment, process_, temporaryDirectory);
     } catch (cause) {
         await process_.stop();

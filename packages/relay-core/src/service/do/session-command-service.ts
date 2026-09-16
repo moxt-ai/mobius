@@ -141,6 +141,7 @@ export class SessionCommandService {
         const workId = `dispatch_${turnId}`;
         const result = this.#storage.insertTurnWithDispatch({
             disposition: validatedCommand.disposition,
+            prompt: validatedCommand.prompt,
             targetCommandId: validatedCommand.targetCommandId,
             turn: {
                 scopeKey: key,
@@ -569,9 +570,55 @@ export class SessionCommandService {
                     "A persisted event identity was reused with different content",
                 );
             }
-            const payload = await this.#archive.readEventPayload(scope, validatedEnvelope.sessionId, duplicate, signal);
+            const payload =
+                rowNullableString(duplicate, "payload") ??
+                this.#storage.readActiveEventPayload({
+                    scopeKey: key,
+                    sessionId: validatedEnvelope.sessionId,
+                    sequenceNumber: rowNumber(duplicate, "sequence_number"),
+                });
+            if (payload === null || payload === undefined) {
+                throw new SessionRuntimeError("session_storage_unavailable", "The active event payload is unavailable");
+            }
             return {
                 committed: committedFromRow(duplicate, scope, validatedEnvelope.sessionId, payload),
+                duplicate: true,
+            };
+        }
+        const receipt = this.#storage.findEventReceipt({
+            scopeKey: key,
+            sessionId: validatedEnvelope.sessionId,
+            eventId: validatedEnvelope.eventId,
+            sourceKind: sourceKind,
+            sourceId: sourceId,
+            sourceSeq: sourceSeq,
+        });
+        if (receipt !== undefined) {
+            if (
+                receipt.event_id !== validatedEnvelope.eventId ||
+                receipt.payload_hash !== payloadHash ||
+                receipt.source_kind !== sourceKind ||
+                receipt.source_id !== sourceId ||
+                receipt.source_seq !== sourceSeq
+            ) {
+                throw new SessionRuntimeError(
+                    "event_source_conflict",
+                    "A persisted event identity was reused with different content",
+                );
+            }
+            return {
+                committed: decodeCommittedSessionEvent(
+                    encodeCommittedSessionEvent({
+                        cursor: eventCursor(scope, validatedEnvelope.sessionId, receipt.sequence_number),
+                        eventId: validatedEnvelope.eventId,
+                        kind: SESSION_EVENT_COMMITTED_KIND,
+                        payload: validatedEnvelope.payload,
+                        recordedAt: new Date(receipt.recorded_at).toISOString(),
+                        sequence: receipt.sequence_number.toString(),
+                        sessionId: validatedEnvelope.sessionId,
+                        source: validatedEnvelope.source,
+                    }),
+                ),
                 duplicate: true,
             };
         }
@@ -598,7 +645,6 @@ export class SessionCommandService {
             prepared,
             sourceKind === "attempt" ? sourceId : null,
         );
-        const archiveSegmentId = `segment-${validatedEnvelope.eventId}`;
         const committed = this.#storage.commitEvent({
             scopeKey: key,
             sessionId: validatedEnvelope.sessionId,
@@ -610,7 +656,6 @@ export class SessionCommandService {
             sourceSeq: sourceSeq,
             messageId: prepared.event.kind === AGENT_MESSAGE_DELTA_KIND ? prepared.event.messageId : "",
             payload: prepared.payload,
-            archiveSegmentId: archiveSegmentId,
             recordedAt: now,
             expectedPreviousSourceSequence:
                 previousSource === undefined ? null : rowString(previousSource, "source_seq"),

@@ -72,7 +72,11 @@ import { createTestMobiusApp } from "../../../tests/infra/app.ts";
 import { RuntimeRelay } from "../src/durable-objects.ts";
 import { createStandaloneGateways } from "../src/worker.ts";
 import { testBindings } from "./infra/bindings.ts";
-import { runtimeWithTransport, SuspendedDisconnectTransport } from "./runtime-recovery-transport.ts";
+import {
+    runtimeWithTransport,
+    SuspendedDisconnectTransport,
+    SuspendedEventCommitTransport,
+} from "./runtime-recovery-transport.ts";
 
 const relayOrigin = "https://relay.test";
 const verifiedAgentCapabilities = {
@@ -1935,7 +1939,7 @@ describe.sequential("Cloudflare session deployment", () => {
                         `INSERT INTO archive_work (
                             scope_key, session_id, target_id, archive_kind, owner_id,
                             media_type, hot_payload
-                         ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                         ) VALUES (?, ?, ?, 'activity', ?, 'application/json', ?)`,
                         pairing.created.projectId,
                         sessionId,
                         `long-session-pending-${index.toString()}`,
@@ -1966,6 +1970,115 @@ describe.sequential("Cloudflare session deployment", () => {
         } finally {
             host.socket.close(1000, "Long Session count backlog test complete");
             daemon.socket.close(1000, "Long Session count backlog test complete");
+        }
+    });
+
+    it("Given an active Turn exceeds its former hot-event window, When it has not completed, Then every delta remains in a Durable Object stream block without an R2 archive", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession, openChannelSocket, authorization } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "active-turn-hot-tail";
+        expect((await createSession(pairing.created, sessionId, { hotEventLimit: 10 })).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const command = prompt(sessionId, "active-turn-hot-tail-command", "stream past the former hot window");
+            await submitPrompt(host, daemon, command);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "active-turn-hot-tail-started", {
+                    attemptId: "active-turn-hot-tail-attempt",
+                    commandId: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+            const deltaIds: string[] = [];
+            for (let index = 0; index < 11; index += 1) {
+                const eventId = `active-turn-hot-tail-delta-${index.toString()}`;
+                deltaIds.push(eventId);
+                await commit(
+                    host,
+                    daemon,
+                    envelope(sessionId, eventId, {
+                        commandId: command.commandId,
+                        kind: AGENT_MESSAGE_DELTA_KIND,
+                        messageId: "active-turn-hot-tail-message",
+                        sessionId,
+                        text: index.toString(),
+                    }),
+                );
+            }
+
+            const sessionStub = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+            );
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                const rows = state.storage.sql
+                    .exec(
+                        `SELECT sequence_number, event_id, payload
+                         FROM session_events
+                         WHERE session_id = ?
+                         ORDER BY sequence_number`,
+                        sessionId,
+                    )
+                    .toArray();
+                expect(rows).toEqual([
+                    expect.objectContaining({ payload: expect.any(String), sequence_number: 1 }),
+                    ...Array.from({ length: 11 }, (_, index) =>
+                        expect.objectContaining({ payload: null, sequence_number: index + 2 }),
+                    ),
+                ]);
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_stream_blocks
+                              WHERE session_id = ?`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_stream_event_refs
+                              WHERE session_id = ?`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 11 });
+                expect(
+                    state.storage.sql
+                        .exec("SELECT COUNT(*) AS count FROM archive_work WHERE session_id = ?", sessionId)
+                        .one(),
+                ).toEqual({ count: 0 });
+            });
+
+            const resumed = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/events?limit=100`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(resumed.status).toBe(200);
+            const body: unknown = await resumed.json();
+            if (!isRecord(body) || !Array.isArray(body["events"])) {
+                throw new Error("Expected the active Turn event page");
+            }
+            expect(body["events"]).toMatchObject([
+                { eventId: "active-turn-hot-tail-started" },
+                ...deltaIds.map((eventId) => ({ eventId })),
+            ]);
+        } finally {
+            host.socket.close(1000, "Active Turn hot tail test complete");
+            daemon.socket.close(1000, "Active Turn hot tail test complete");
         }
     });
 
@@ -2001,7 +2114,7 @@ describe.sequential("Cloudflare session deployment", () => {
                         `INSERT INTO archive_work (
                             scope_key, session_id, target_id, archive_kind, owner_id,
                             media_type, hot_payload
-                         ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                         ) VALUES (?, ?, ?, 'activity', ?, 'application/json', ?)`,
                         pairing.created.projectId,
                         sessionId,
                         `long-session-byte-pending-${index.toString()}`,
@@ -2092,7 +2205,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     `INSERT INTO archive_work (
                         scope_key, session_id, target_id, archive_kind, owner_id,
                         media_type, hot_payload
-                     ) VALUES (?, ?, ?, 'event', ?, 'application/json', ?)`,
+                     ) VALUES (?, ?, ?, 'activity', ?, 'application/json', ?)`,
                     pairing.created.projectId,
                     sessionId,
                     `archive-drain-${index.toString()}`,
@@ -2214,8 +2327,14 @@ describe.sequential("Cloudflare session deployment", () => {
         const pairing = await pairChannel();
         const firstSessionId = "parallel-event-session-a";
         const secondSessionId = "parallel-event-session-b";
-        expect((await createSession(pairing.created, firstSessionId)).status).toBe(201);
-        expect((await createSession(pairing.created, secondSessionId)).status).toBe(201);
+        const firstSession = await createSession(pairing.created, firstSessionId);
+        const secondSession = await createSession(pairing.created, secondSessionId);
+        expect(firstSession.status).toBe(201);
+        expect(secondSession.status).toBe(201);
+        const summaries = new Map<string, string>([
+            [firstSessionId, JSON.stringify(await firstSession.json())],
+            [secondSessionId, JSON.stringify(await secondSession.json())],
+        ]);
         const daemon = await openChannelSocket(
             `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
         );
@@ -2235,20 +2354,28 @@ describe.sequential("Cloudflare session deployment", () => {
                 title: "Second",
                 updatedAt: "2026-09-11T00:00:00.000Z",
             });
-            for (const event of firstSessionEvents) {
-                daemon.socket.send(encodeSessionEventEnvelope(event));
-            }
-            daemon.socket.send(encodeSessionEventEnvelope(secondSessionEvent));
-
-            let firstSessionAcknowledgements = 0;
-            for (;;) {
-                const acknowledgement = decodeSessionEventAcknowledgement(await daemon.messages.next());
-                if (acknowledgement.eventId === secondSessionEvent.eventId) {
-                    break;
+            const runtimeStub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            await runInDurableObject(runtimeStub, async (_instance, state) => {
+                const server = state.getWebSockets("daemon")[0];
+                const firstEvent = firstSessionEvents[0];
+                if (server === undefined || firstEvent === undefined) {
+                    throw new Error("Expected a connected daemon and an event burst");
                 }
-                firstSessionAcknowledgements += 1;
-            }
-            expect(firstSessionAcknowledgements).toBeLessThan(firstSessionEvents.length);
+                const transport = new SuspendedEventCommitTransport(firstSessionId, secondSessionId, summaries);
+                const runtime = runtimeWithTransport(state, transport);
+                const pending = [runtime.webSocketMessage(server, encodeSessionEventEnvelope(firstEvent))];
+                try {
+                    await transport.suspended;
+                    for (const event of firstSessionEvents.slice(1)) {
+                        pending.push(runtime.webSocketMessage(server, encodeSessionEventEnvelope(event)));
+                    }
+                    pending.push(runtime.webSocketMessage(server, encodeSessionEventEnvelope(secondSessionEvent)));
+                    expect(await transport.committed).toBe(secondSessionId);
+                } finally {
+                    transport.resume();
+                    await Promise.all(pending);
+                }
+            });
         } finally {
             daemon.socket.close(1000, "Parallel Session event test complete");
         }
@@ -2866,7 +2993,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     sessionId,
                 }),
             );
-            const fullOutput = `begin-${"large output line\n".repeat(35_000)}-end`;
+            const fullOutput = `begin-${"large output line\n".repeat(100_000)}-end`;
             const activityEnvelope = envelope(sessionId, "large-activity", {
                 activityId: "activity-large",
                 activityType: "tool",
@@ -2897,43 +3024,65 @@ describe.sequential("Cloudflare session deployment", () => {
             });
 
             const artifactId = "activity-large-activity";
-            const detailPayload = JSON.stringify({
-                content: [],
-                input: "{}",
-                output: fullOutput,
-            });
             const stub = env.SESSION_RELAY.get(
                 env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
             );
             await runInDurableObject(stub, async (_instance, state) => {
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT hot_detail
+                               FROM tool_call_views
+                              WHERE session_id = ? AND activity_id = ?`,
+                            sessionId,
+                            "activity-large",
+                        )
+                        .one(),
+                ).toEqual({ hot_detail: null });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_content_chunks
+                              WHERE session_id = ? AND content_id = ?`,
+                            sessionId,
+                            artifactId,
+                        )
+                        .one(),
+                ).toEqual({ count: 2 });
+                const contentChunks = state.storage.sql
+                    .exec<{ byte_length: number }>(
+                        `SELECT byte_length
+                           FROM session_content_chunks
+                          WHERE session_id = ? AND content_id = ?
+                          ORDER BY chunk_index`,
+                        sessionId,
+                        artifactId,
+                    )
+                    .toArray();
+                expect(contentChunks).toHaveLength(2);
+                expect(contentChunks.every((chunk) => chunk.byte_length <= 1_536 * 1024)).toBe(true);
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT state FROM artifacts
+                              WHERE session_id = ? AND artifact_id = ?`,
+                            sessionId,
+                            artifactId,
+                        )
+                        .one(),
+                ).toEqual({ state: "uploading" });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT hot_payload FROM archive_work
+                              WHERE session_id = ? AND target_id = ?`,
+                            sessionId,
+                            artifactId,
+                        )
+                        .one(),
+                ).toEqual({ hot_payload: "" });
                 await state.storage.deleteAlarm();
-                state.storage.transactionSync(() => {
-                    state.storage.sql.exec(
-                        `UPDATE artifacts
-             SET state = 'uploading', sha256 = '', chunks_json = NULL
-             WHERE session_id = ? AND artifact_id = ?`,
-                        sessionId,
-                        artifactId,
-                    );
-                    state.storage.sql.exec(
-                        `UPDATE tool_call_views SET hot_detail = ?
-             WHERE session_id = ? AND activity_id = ?`,
-                        detailPayload,
-                        sessionId,
-                        "activity-large",
-                    );
-                    state.storage.sql.exec(
-                        `INSERT OR REPLACE INTO archive_work (
-               scope_key, session_id, target_id, archive_kind, owner_id,
-               media_type, hot_payload, attempts, last_error
-             ) VALUES (?, ?, ?, 'activity', ?, 'application/json', ?, 0, '')`,
-                        pairing.created.projectId,
-                        sessionId,
-                        artifactId,
-                        "activity-large",
-                        detailPayload,
-                    );
-                });
             });
             const detailPath = `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/large-attempt/tool-calls/activity-large`;
             const availableBeforeRecovery = await app.request(detailPath, {
@@ -2974,7 +3123,7 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
-    it("Given the free deployment archive quota, When a compressed tool record exceeds it, Then the archive reports a typed quota error and preserves the hot detail", async () => {
+    it("Given an active Turn has a running compressed tool record, When the ToolCall completes and exceeds the archive quota, Then updates coalesce before archiving and a typed quota error preserves the final detail", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
@@ -3016,7 +3165,7 @@ describe.sequential("Cloudflare session deployment", () => {
             await commit(
                 host,
                 daemon,
-                envelope(sessionId, "quota-activity", {
+                envelope(sessionId, "quota-activity-running", {
                     activityId: "activity-quota",
                     activityType: "tool",
                     commandId: command.commandId,
@@ -3034,7 +3183,7 @@ describe.sequential("Cloudflare session deployment", () => {
                     output: fullOutput.slice(0, 24_000),
                     sequence: 0,
                     sessionId,
-                    status: "completed",
+                    status: "running",
                     title: "Run terminal command",
                     toolKind: "execute",
                 }),
@@ -3043,6 +3192,65 @@ describe.sequential("Cloudflare session deployment", () => {
             const stub = env.SESSION_RELAY.get(
                 env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
             );
+            await runInDurableObject(stub, async (_instance, state) => {
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                             FROM archive_work
+                             WHERE session_id = ? AND archive_kind = 'activity'`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 0 });
+            });
+            const activeDetail = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/attempts/quota-attempt/tool-calls/activity-quota`,
+                { headers: authorization(pairing.created) },
+            );
+            await expect(activeDetail.json()).resolves.toMatchObject({
+                kind: "available",
+                output: fullOutput,
+                storage: "hot",
+            });
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "quota-activity", {
+                    activityId: "activity-quota",
+                    activityType: "tool",
+                    commandId: command.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "{}",
+                        kind: "recorded",
+                        output: fullOutput,
+                    },
+                    input: "{}",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "terminal",
+                    output: fullOutput.slice(0, 24_000),
+                    sequence: 1,
+                    sessionId,
+                    status: "completed",
+                    title: "Run terminal command",
+                    toolKind: "execute",
+                }),
+            );
+            await runInDurableObject(stub, async (_instance, state) => {
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                             FROM archive_work
+                             WHERE session_id = ? AND archive_kind = 'activity'`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+            });
             const archiveResponse = await runInDurableObject(stub, async (instance) => {
                 if (instance.fetch === undefined) {
                     throw new Error("Expected the Session Durable Object fetch handler");
@@ -3793,18 +4001,12 @@ describe.sequential("Cloudflare session deployment", () => {
         },
     );
 
-    it("Given an archived event window, When a client resumes from an old durable cursor and retransmits an archived event, Then catch-up and deduplication remain complete", async () => {
+    it("Given a completed Turn, When a client resumes from its old cursor and retransmits the terminal event, Then the cursor expires while message recovery and terminal deduplication remain complete", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();
         const sessionId = "cursor-session";
-        expect(
-            (
-                await createSession(pairing.created, sessionId, {
-                    hotEventLimit: 10,
-                })
-            ).status,
-        ).toBe(201);
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
         const daemon = await openChannelSocket(
             `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
         );
@@ -3822,56 +4024,125 @@ describe.sequential("Cloudflare session deployment", () => {
                 sessionId,
             });
             const first = await commit(host, daemon, startedEnvelope);
-            const events = [
-                ...Array.from({ length: 40 }, (_, index) =>
-                    envelope(sessionId, `cursor-delta-${index.toString()}`, {
-                        commandId: command.commandId,
-                        kind: AGENT_MESSAGE_DELTA_KIND,
-                        messageId: `agent-message-${index.toString()}`,
-                        sessionId,
-                        text: index.toString(),
-                    }),
-                ),
-                envelope(sessionId, "cursor-completed", {
+            const deltas = Array.from({ length: 40 }, (_, index) =>
+                envelope(sessionId, `cursor-delta-${index.toString()}`, {
                     commandId: command.commandId,
-                    kind: SESSION_COMPLETED_KIND,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: `agent-message-${index.toString()}`,
                     sessionId,
-                    stopReason: "end_turn",
+                    text: index.toString(),
                 }),
-            ];
-            for (let offset = 0; offset < events.length; offset += 10) {
-                await commitBatch(host, daemon, events.slice(offset, offset + 10));
+            );
+            const completedEnvelope = envelope(sessionId, "cursor-completed", {
+                commandId: command.commandId,
+                kind: SESSION_COMPLETED_KIND,
+                sessionId,
+                stopReason: "end_turn",
+            });
+            for (let offset = 0; offset < deltas.length; offset += 10) {
+                await commitBatch(host, daemon, deltas.slice(offset, offset + 10));
             }
             const sessionStub = env.SESSION_RELAY.get(
                 env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
             );
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_streams
+                              WHERE session_id = ?`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_stream_blocks
+                              WHERE session_id = ?`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_events
+                              WHERE session_id = ? AND payload IS NULL`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: deltas.length });
+            });
+            await commit(host, daemon, completedEnvelope);
             await runInDurableObject(sessionStub, async (instance, state) => {
                 if (instance.alarm === undefined) {
                     throw new Error("Expected the Session Durable Object alarm handler");
                 }
                 await state.storage.deleteAlarm();
                 await instance.alarm();
+                expect(
+                    state.storage.sql
+                        .exec("SELECT COUNT(*) AS count FROM session_events WHERE session_id = ?", sessionId)
+                        .one(),
+                ).toEqual({ count: 0 });
+                expect(
+                    state.storage.sql
+                        .exec("SELECT event_id, source_seq FROM session_event_receipts WHERE session_id = ?", sessionId)
+                        .one(),
+                ).toMatchObject({ event_id: "cursor-completed", source_seq: "42" });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT role, content, content_chunks
+                               FROM session_messages
+                              WHERE session_id = ? AND role = 'assistant'`,
+                            sessionId,
+                        )
+                        .one(),
+                ).toEqual({
+                    content: deltas.map((_event, index) => index.toString()).join(""),
+                    content_chunks: 0,
+                    role: "assistant",
+                });
+                expect(
+                    state.storage.sql
+                        .exec("SELECT COUNT(*) AS count FROM session_streams WHERE session_id = ?", sessionId)
+                        .one(),
+                ).toEqual({ count: 0 });
+                expect(
+                    state.storage.sql
+                        .exec("SELECT COUNT(*) AS count FROM session_stream_blocks WHERE session_id = ?", sessionId)
+                        .one(),
+                ).toEqual({ count: 0 });
             });
             const resumed = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/events?cursor=${encodeURIComponent(first.cursor)}`,
                 { headers: authorization(pairing.created) },
             );
-            expect(resumed.status).toBe(200);
-            const resumedBody: unknown = await resumed.json();
-            if (!isRecord(resumedBody) || !Array.isArray(resumedBody["events"])) {
-                throw new Error("Expected a durable event catch-up page");
-            }
-            expect(resumedBody["hasMore"]).toBe(false);
-            expect(resumedBody["events"]).toHaveLength(41);
-            expect(resumedBody["events"].slice(0, 2)).toMatchObject([
-                { eventId: "cursor-delta-0", sequence: "2" },
-                { eventId: "cursor-delta-1", sequence: "3" },
-            ]);
-            daemon.socket.send(encodeSessionEventEnvelope(startedEnvelope));
+            expect(resumed.status).toBe(410);
+            await expect(resumed.json()).resolves.toMatchObject({ error: { code: "cursor_expired" } });
+            const recoveredMessages = await app.request(
+                relayOrigin +
+                    MOBIUS_API_PREFIX +
+                    "/projects/" +
+                    pairing.created.projectId +
+                    "/sessions/" +
+                    sessionId +
+                    "/messages",
+                { headers: authorization(pairing.created) },
+            );
+            expect(recoveredMessages.status).toBe(200);
+            await expect(recoveredMessages.json()).resolves.toMatchObject({
+                messages: [{ response: deltas.map((_event, index) => index.toString()).join("") }],
+            });
+            daemon.socket.send(encodeSessionEventEnvelope(completedEnvelope));
             expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
                 duplicate: true,
-                eventId: "cursor-started",
-                sequence: "1",
+                eventId: "cursor-completed",
             });
 
             const progress = encodeAgentInstallProgressEvent({

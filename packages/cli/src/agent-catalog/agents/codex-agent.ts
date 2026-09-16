@@ -2,6 +2,7 @@ import { ManagedNpmPackageDefinition } from "../../agent-installation/managed-np
 import { BridgedAcpAgentDefinition } from "../agent-specification.ts";
 
 export class CodexAgentSpecification extends BridgedAcpAgentDefinition {
+    override readonly versionProbeTimeoutMilliseconds = 10_000;
     readonly adapterEnvironmentVariable = "CODEX_PATH";
     readonly adapterOverrideVariable = "MOBIUS_CODEX_ACP_PATH";
     readonly adapterPackageDefinition = new ManagedNpmPackageDefinition(

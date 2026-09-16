@@ -229,6 +229,7 @@ function decodePendingOutbound(value: unknown): PendingBotOutbound {
 function runtimeErrorCode(value: string): string {
     const allowed = new Set([
         "conversation_access_denied",
+        "cursor_expired",
         "delivery_target_not_allowed",
         "execution_capability_expired",
         "execution_capability_invalid",

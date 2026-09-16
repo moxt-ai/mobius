@@ -15,14 +15,21 @@ export class SessionDeletionStorage {
         this.deleteUploadedArtifacts(input);
         this.deleteArchiveWork(input);
         this.deleteArchiveSegments(input);
+        this.deleteContentChunks(input);
         this.deleteArtifacts(input);
         this.deleteToolCallViews(input);
         this.deletePendingWork(input);
         this.deleteInteractions(input);
         this.deleteBotClientCursors(input);
+        this.deleteStreamEventRefs(input);
+        this.deleteStreamBlocks(input);
+        this.deleteStreams(input);
         this.deleteSessionEvents(input);
+        this.deleteSessionEventReceipts(input);
         this.deleteAttempts(input);
         this.deleteCommandReceipts(input);
+        this.deleteMessageChunks(input);
+        this.deleteMessages(input);
         this.deleteTurns(input);
         this.deleteSessionBindings(input);
     };
@@ -58,6 +65,16 @@ export class SessionDeletionStorage {
             input.scopeKey,
             input.sessionId,
         ]);
+    private readonly deleteMessages = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_messages WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteMessageChunks = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_message_chunks WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
     private readonly deleteCommandReceipts = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM command_receipts WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
@@ -88,6 +105,26 @@ export class SessionDeletionStorage {
             input.scopeKey,
             input.sessionId,
         ]);
+    private readonly deleteStreams = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_streams WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteStreamBlocks = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_stream_blocks WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteStreamEventRefs = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_stream_event_refs WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteSessionEventReceipts = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_event_receipts WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
     private readonly deleteToolCallViews = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM tool_call_views WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
@@ -95,6 +132,11 @@ export class SessionDeletionStorage {
         ]);
     private readonly deleteArtifacts = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM artifacts WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteContentChunks = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM session_content_chunks WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
             input.sessionId,
         ]);

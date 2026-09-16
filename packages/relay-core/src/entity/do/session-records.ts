@@ -180,9 +180,19 @@ const SessionEventRecordSchema = v.object({
     source_id: v.string(),
     source_seq: v.string(),
     payload: v.nullable(v.string()),
-    archive_segment_id: v.string(),
     recorded_at: v.pipe(v.number(), v.safeInteger()),
 });
+
+export const EventReceiptRecordSchema = v.object({
+    event_id: v.string(),
+    payload_hash: v.string(),
+    source_kind: v.picklist(["attempt", "runtime"]),
+    source_id: v.string(),
+    source_seq: v.string(),
+    sequence_number: v.pipe(v.number(), v.safeInteger()),
+    recorded_at: v.pipe(v.number(), v.safeInteger()),
+});
+export type EventReceiptRecord = Readonly<v.InferOutput<typeof EventReceiptRecordSchema>>;
 
 const ActivityRecordSchema = v.object({
     scope_key: v.string(),
@@ -206,20 +216,6 @@ const ArtifactRecordSchema = v.object({
     owner_id: v.string(),
     media_type: v.string(),
     state: v.picklist(["uploading", "available", "deleting", "deleted", "failed", "expired"]),
-    byte_length: v.pipe(v.number(), v.safeInteger()),
-    sha256: v.string(),
-    chunks_json: v.nullable(v.string()),
-});
-
-const ArchiveSegmentRecordSchema = v.object({
-    scope_key: v.string(),
-    session_id: v.string(),
-    segment_id: v.string(),
-    first_sequence: v.pipe(v.number(), v.safeInteger()),
-    last_sequence: v.pipe(v.number(), v.safeInteger()),
-    event_count: v.pipe(v.number(), v.safeInteger()),
-    media_type: v.string(),
-    state: v.picklist(["pending", "uploaded", "published", "deleting", "deleted"]),
     byte_length: v.pipe(v.number(), v.safeInteger()),
     sha256: v.string(),
     chunks_json: v.nullable(v.string()),
@@ -263,21 +259,19 @@ export const ArtifactManifestRecordSchema = v.pick(ArtifactRecordSchema, [
 ]);
 export type ArtifactManifestRecord = Readonly<v.InferOutput<typeof ArtifactManifestRecordSchema>>;
 
-export const SegmentManifestRecordSchema = v.pick(ArchiveSegmentRecordSchema, [
-    "state",
-    "byte_length",
-    "sha256",
-    "chunks_json",
-]);
-export type SegmentManifestRecord = Readonly<v.InferOutput<typeof SegmentManifestRecordSchema>>;
-
 export const ArchivePayloadSchema = v.pick(ArchiveJobRecordSchema, ["hot_payload"]);
 export type ArchivePayload = Readonly<v.InferOutput<typeof ArchivePayloadSchema>>;
 
 export const ContentManifestRecordSchema = v.pick(ArtifactRecordSchema, ["chunks_json"]);
 export type ContentManifestRecord = Readonly<v.InferOutput<typeof ContentManifestRecordSchema>>;
 
-export const PendingArchivePayloadSchema = v.pick(ArchiveJobRecordSchema, ["target_id", "hot_payload"]);
+export const PendingArchivePayloadSchema = v.pick(ArchiveJobRecordSchema, [
+    "target_id",
+    "archive_kind",
+    "owner_id",
+    "media_type",
+    "hot_payload",
+]);
 export type PendingArchivePayload = Readonly<v.InferOutput<typeof PendingArchivePayloadSchema>>;
 
 export const BindingIdentitySchema = v.pick(SessionBindingRecordSchema, ["binding_id"]);
@@ -300,7 +294,6 @@ export const CommittedEventRecordSchema = v.pick(SessionEventRecordSchema, [
     "source_id",
     "source_seq",
     "payload",
-    "archive_segment_id",
     "recorded_at",
 ]);
 export type CommittedEventRecord = Readonly<v.InferOutput<typeof CommittedEventRecordSchema>>;
@@ -373,3 +366,9 @@ export const ActivityArtifactRecordSchema = v.pick(ActivityRecordSchema, [
     "hot_detail",
 ]);
 export type ActivityArtifactRecord = Readonly<v.InferOutput<typeof ActivityArtifactRecordSchema>>;
+
+export const HotActivityDetailRecordSchema = v.object({
+    activity_id: v.string(),
+    detail_artifact_id: v.string(),
+    hot_detail: v.string(),
+});

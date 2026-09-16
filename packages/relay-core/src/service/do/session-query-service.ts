@@ -305,7 +305,16 @@ export class SessionQueryService {
         const pageRows = rows.slice(0, limit);
         const events: CommittedSessionEvent[] = [];
         for (const row of pageRows) {
-            const payload = await this.#archive.readEventPayload(scope, sessionId, row, signal);
+            const payload =
+                rowNullableString(row, "payload") ??
+                this.#storage.readActiveEventPayload({
+                    scopeKey: scopeKey(scope),
+                    sessionId,
+                    sequenceNumber: rowNumber(row, "sequence_number"),
+                });
+            if (payload === null || payload === undefined) {
+                throw new SessionRuntimeError("session_storage_unavailable", "The active event payload is unavailable");
+            }
             events.push(committedFromRow(row, scope, sessionId, payload));
         }
         const last = pageRows.at(-1);
@@ -398,6 +407,7 @@ export class SessionQueryService {
             throw new SessionRuntimeError("session_storage_unavailable", "The activity archive reference is missing");
         }
         const hot = rowNullableString(row, "hot_detail");
+        const hotStored = hot !== null || this.#archive.hasHotArtifact(scope, sessionId, artifactId);
         const encoded = hot ?? (await this.#archive.readArtifact(scope, sessionId, artifactId, signal));
         const detail = decodeActivityDetailPayload(
             encoded,
@@ -410,7 +420,7 @@ export class SessionQueryService {
             input: detail.input,
             kind: "available",
             output: detail.output,
-            storage: hot === null ? "archive" : "hot",
+            storage: hotStored ? "hot" : "archive",
         };
     };
 
@@ -455,6 +465,20 @@ export class SessionQueryService {
                 toolKind: event.toolKind,
             };
         });
+        const canonical = this.#storage.readCanonicalAssistantMessage({
+            scopeKey: scopeKey(scope),
+            sessionId,
+            commandId: command.commandId,
+        });
+        const activeResponse =
+            canonical === undefined
+                ? this.#storage.readActiveTurnResponse({
+                      scopeKey: scopeKey(scope),
+                      sessionId,
+                      commandId: command.commandId,
+                  })
+                : "";
+        const anchoredMessageId = this.#storage.readTurnMessageId(scopeKey(scope), sessionId, command.commandId);
         return {
             activities,
             additionalDirectoryIds: command.additionalDirectoryIds,
@@ -464,10 +488,10 @@ export class SessionQueryService {
             createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
             disposition: command.disposition,
             images: command.images,
-            messageId: this.#storage.readTurnMessageId(scopeKey(scope), sessionId, command.commandId),
+            messageId: anchoredMessageId || canonical?.messageId || "",
             prompt: command.prompt,
             resources: command.resources,
-            response: rowString(row, "response"),
+            response: canonical?.content ?? `${rowString(row, "response")}${activeResponse}`,
             sessionId,
             targetCommandId: command.targetCommandId,
         };

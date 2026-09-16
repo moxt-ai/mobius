@@ -1,0 +1,1492 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Mobius Long Sessions: Send, Finalize, and Recover</title>
+    <style>
+        :root {
+            color-scheme: light;
+            --ink: #18212c;
+            --muted: #627080;
+            --paper: #f7f8f6;
+            --card: #ffffff;
+            --line: #dbe1df;
+            --warm: #fff4dd;
+            --warm-line: #efc36f;
+            --green: #13795b;
+            --green-soft: #e6f5ee;
+            --blue: #176fbe;
+            --blue-soft: #eaf4ff;
+            --violet: #6444a8;
+            --violet-soft: #f1edfb;
+            --red: #bc3e47;
+            --shadow: 0 14px 36px rgb(34 54 48 / 9%);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html {
+            background: var(--paper);
+        }
+
+        body {
+            margin: 0;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 93% 0%, rgb(66 148 119 / 10%), transparent 30rem),
+                linear-gradient(180deg, #fbfcfa 0%, var(--paper) 100%);
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            line-height: 1.56;
+        }
+
+        code,
+        pre {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        }
+
+        .page {
+            width: min(1180px, calc(100% - 48px));
+            margin: 0 auto;
+            padding: 30px 0 72px;
+        }
+
+        .masthead {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding-bottom: 28px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .brand,
+        .scope,
+        .eyebrow,
+        .section-number,
+        .kicker {
+            letter-spacing: .1em;
+            text-transform: uppercase;
+        }
+
+        .brand {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 13px;
+            font-weight: 750;
+        }
+
+        .brand-mark {
+            width: 13px;
+            height: 13px;
+            border: 3px solid var(--green);
+            border-radius: 50%;
+            box-shadow: 8px -7px 0 -5px var(--blue);
+        }
+
+        .scope {
+            margin: 0;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .hero {
+            display: grid;
+            grid-template-columns: minmax(0, 1.55fr) minmax(280px, .82fr);
+            gap: clamp(28px, 6vw, 80px);
+            align-items: end;
+            padding: clamp(56px, 9vw, 110px) 0 54px;
+        }
+
+        .eyebrow,
+        .section-number {
+            margin: 0 0 13px;
+            color: var(--green);
+            font-size: 12px;
+            font-weight: 800;
+        }
+
+        .eyebrow::before {
+            display: inline-block;
+            width: 28px;
+            height: 2px;
+            margin: 0 10px 4px 0;
+            background: currentColor;
+            content: "";
+        }
+
+        h1,
+        h2,
+        h3,
+        p {
+            margin-top: 0;
+        }
+
+        h1 {
+            max-width: 760px;
+            margin-bottom: 20px;
+            font-family: Iowan Old Style, "Palatino Linotype", Georgia, serif;
+            font-size: clamp(48px, 7.4vw, 90px);
+            font-weight: 500;
+            letter-spacing: -.055em;
+            line-height: .95;
+        }
+
+        h2 {
+            margin-bottom: 10px;
+            font-family: Iowan Old Style, "Palatino Linotype", Georgia, serif;
+            font-size: clamp(30px, 4vw, 47px);
+            font-weight: 500;
+            letter-spacing: -.035em;
+            line-height: 1.05;
+        }
+
+        h3 {
+            font-size: 17px;
+            line-height: 1.3;
+        }
+
+        .hero-lede {
+            max-width: 690px;
+            margin: 0;
+            color: #3d4a57;
+            font-size: 18px;
+        }
+
+        .promise {
+            padding: 26px 28px;
+            border: 1px solid #b6d8c8;
+            border-radius: 18px;
+            background: linear-gradient(145deg, #effaf4, #e3f2ea);
+            box-shadow: var(--shadow);
+        }
+
+        .promise-label,
+        .kicker {
+            color: var(--green);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+        }
+
+        :where(.promise) strong {
+            display: block;
+            margin: 10px 0 8px;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 26px;
+            font-weight: 500;
+            line-height: 1.15;
+        }
+
+        .promise p {
+            margin-bottom: 0;
+            color: #3a594d;
+            font-size: 14px;
+        }
+
+        .facts {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            border: 1px solid var(--line);
+            border-radius: 17px;
+            overflow: hidden;
+            background: var(--card);
+            box-shadow: var(--shadow);
+        }
+
+        .fact {
+            min-height: 145px;
+            padding: 25px;
+            border-right: 1px solid var(--line);
+        }
+
+        .fact:last-child {
+            border-right: 0;
+        }
+
+        .fact-number {
+            display: block;
+            color: var(--green);
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 45px;
+            line-height: 1;
+        }
+
+        .fact-label {
+            display: block;
+            margin-top: 13px;
+            color: var(--muted);
+            font-size: 13px;
+            line-height: 1.42;
+        }
+
+        section {
+            margin-top: 100px;
+        }
+
+        .section-heading {
+            display: grid;
+            grid-template-columns: 130px minmax(0, 1fr);
+            gap: 24px;
+            align-items: start;
+            margin-bottom: 32px;
+        }
+
+        :where(.section-heading > div > p) {
+            max-width: 770px;
+            margin-bottom: 0;
+            color: var(--muted);
+        }
+
+        .flow-shell,
+        .raw-event-lab,
+        .ownership,
+        .limits,
+        .proof,
+        .guardrails {
+            border: 1px solid var(--line);
+            border-radius: 20px;
+            background: var(--card);
+            box-shadow: var(--shadow);
+        }
+
+        .flow-shell {
+            overflow: hidden;
+        }
+
+        .flow-intro {
+            display: flex;
+            justify-content: space-between;
+            gap: 24px;
+            padding: 20px 26px;
+            border-bottom: 1px solid var(--line);
+            background: #fbfcfb;
+        }
+
+        .flow-intro p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 13px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .legend li {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .swatch {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .swatch.hot { background: var(--green); }
+        .swatch.commit { background: var(--violet); }
+        .swatch.cold { background: var(--blue); }
+
+        .flow-board {
+            padding: 28px;
+        }
+
+        .flow-strip {
+            display: block;
+            width: 100%;
+            height: auto;
+            border-bottom: 1px solid var(--line);
+            background: #fcfdfc;
+        }
+
+        .flow-strip .rail {
+            stroke: #a5b1ab;
+            stroke-width: 2;
+        }
+
+        .flow-strip .arrow {
+            fill: #a5b1ab;
+        }
+
+        .flow-strip .active-box {
+            fill: #e6f5ee;
+            stroke: #8ac8a9;
+            stroke-width: 1.5;
+        }
+
+        .flow-strip .commit-box {
+            fill: #f1edfb;
+            stroke: #bda8e3;
+            stroke-width: 1.5;
+        }
+
+        .flow-strip .recover-box {
+            fill: #eaf4ff;
+            stroke: #a8ceee;
+            stroke-width: 1.5;
+        }
+
+        .flow-strip .svg-kicker {
+            fill: #63716d;
+            font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1.1px;
+        }
+
+        .flow-strip .svg-title {
+            fill: #18212c;
+            font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+            font-size: 16px;
+            font-weight: 700;
+        }
+
+        .lane {
+            display: grid;
+            grid-template-columns: 145px minmax(0, 1fr);
+            gap: 22px;
+            padding: 24px 0;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .lane:last-child {
+            border-bottom: 0;
+            padding-bottom: 2px;
+        }
+
+        .lane-label {
+            padding: 4px 0;
+        }
+
+        :where(.lane-label) strong {
+            display: block;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 23px;
+            font-weight: 500;
+            line-height: 1.05;
+        }
+
+        .lane-label span {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(125px, 1fr));
+            gap: 12px;
+            align-items: stretch;
+        }
+
+        .step {
+            position: relative;
+            min-height: 150px;
+            padding: 18px;
+            border: 1px solid var(--line);
+            border-radius: 15px;
+            background: #fff;
+        }
+
+        .step:not(:last-child)::after {
+            position: absolute;
+            z-index: 2;
+            top: 50%;
+            right: -22px;
+            width: 30px;
+            height: 1px;
+            background: #98a6a1;
+            content: "";
+        }
+
+        .step:not(:last-child)::before {
+            position: absolute;
+            z-index: 2;
+            top: calc(50% - 4px);
+            right: -23px;
+            border-width: 4px 0 4px 6px;
+            border-style: solid;
+            border-color: transparent transparent transparent #98a6a1;
+            content: "";
+        }
+
+        .step.hot {
+            border-color: #9dd4bb;
+            background: var(--green-soft);
+        }
+
+        .step.commit {
+            border-color: #c9b8ed;
+            background: var(--violet-soft);
+        }
+
+        .step.cold {
+            border-color: #afd2ef;
+            background: var(--blue-soft);
+        }
+
+        .step.error {
+            border-color: #efb9b9;
+            background: #fff2f2;
+        }
+
+        .step .kicker {
+            display: block;
+            margin-bottom: 8px;
+            color: var(--muted);
+            font-size: 10px;
+        }
+
+        .step h3 {
+            margin-bottom: 7px;
+        }
+
+        .step p {
+            margin-bottom: 0;
+            color: #4d5a66;
+            font-size: 13px;
+            line-height: 1.42;
+        }
+
+        .step code {
+            font-size: .91em;
+        }
+
+        .flow-caption {
+            margin: 20px 0 0;
+            padding: 16px 18px;
+            border-left: 3px solid var(--green);
+            background: #f4f8f5;
+            color: #405349;
+            font-size: 14px;
+        }
+
+        .phase-notes {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 20px;
+        }
+
+        details {
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            background: var(--card);
+        }
+
+        summary {
+            cursor: pointer;
+            padding: 16px 18px;
+            font-weight: 750;
+            list-style: none;
+        }
+
+        summary::-webkit-details-marker {
+            display: none;
+        }
+
+        summary::after {
+            float: right;
+            color: var(--green);
+            content: "+";
+            font-size: 20px;
+            line-height: .8;
+        }
+
+        details[open] summary::after {
+            content: "−";
+        }
+
+        .note-copy {
+            padding: 0 18px 18px;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .note-copy p:last-child {
+            margin-bottom: 0;
+        }
+
+        .raw-event-lab {
+            overflow: hidden;
+        }
+
+        .raw-head {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 250px;
+            gap: 28px;
+            padding: 28px;
+            border-bottom: 1px solid var(--line);
+            background: #fbfcfb;
+        }
+
+        .raw-head h3 {
+            margin-bottom: 8px;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 26px;
+            font-weight: 500;
+        }
+
+        .raw-head p,
+        .raw-note {
+            margin-bottom: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .raw-note {
+            padding: 17px;
+            border-radius: 12px;
+            background: var(--warm);
+            color: #77541e;
+        }
+
+        .raw-note strong {
+            display: block;
+            margin-bottom: 6px;
+            color: #765115;
+        }
+
+        .raw-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 1px;
+            background: var(--line);
+        }
+
+        .event-card {
+            padding: 22px;
+            background: var(--card);
+        }
+
+        .event-card.terminal {
+            background: #fffdfa;
+        }
+
+        .event-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 12px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .event-meta b {
+            display: inline-grid;
+            width: 30px;
+            height: 30px;
+            place-items: center;
+            border-radius: 50%;
+            background: var(--green-soft);
+            color: var(--green);
+        }
+
+        .event-card.terminal .event-meta b {
+            background: var(--warm);
+            color: #81570d;
+        }
+
+        .event-card h3 {
+            margin-bottom: 10px;
+        }
+
+        .event-card dl {
+            display: grid;
+            grid-template-columns: 84px 1fr;
+            gap: 5px 10px;
+            margin: 0 0 14px;
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .event-card dt {
+            color: #85909c;
+        }
+
+        .event-card dd {
+            margin: 0;
+        }
+
+        pre {
+            overflow: auto;
+            margin: 0;
+            padding: 14px;
+            border-radius: 11px;
+            background: #1b2630;
+            color: #deedf6;
+            font-size: 11px;
+            line-height: 1.55;
+        }
+
+        .result-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1px;
+            border-top: 1px solid var(--line);
+            background: var(--line);
+        }
+
+        .result-card {
+            padding: 26px 28px;
+            background: var(--card);
+        }
+
+        .result-card h3 {
+            margin-bottom: 8px;
+        }
+
+        .result-card p {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .result-card pre {
+            margin-top: 14px;
+        }
+
+        .result-card.commit-result {
+            background: #fcfaff;
+        }
+
+        .use-cases {
+            padding: 27px 28px 30px;
+            border-top: 1px solid var(--line);
+        }
+
+        .use-cases h3 {
+            margin-bottom: 8px;
+        }
+
+        .use-cases > p {
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .use-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 14px;
+            margin-top: 17px;
+        }
+
+        .use-grid article {
+            padding: 16px;
+            border-left: 3px solid var(--green);
+            border-radius: 0 10px 10px 0;
+            background: #f4f8f5;
+        }
+
+        .use-grid h4 {
+            margin: 0 0 7px;
+            font-size: 14px;
+        }
+
+        .use-grid p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .ownership-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.28fr) minmax(300px, .72fr);
+            gap: 18px;
+        }
+
+        .ownership,
+        .limits,
+        .proof {
+            overflow: hidden;
+        }
+
+        .card-head {
+            padding: 24px 27px 18px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .card-head h3 {
+            margin-bottom: 5px;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 25px;
+            font-weight: 500;
+        }
+
+        .card-head p {
+            margin: 0;
+            color: var(--muted);
+            font-size: 12px;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th,
+        td {
+            padding: 19px 27px;
+            border-bottom: 1px solid var(--line);
+            text-align: left;
+            vertical-align: top;
+            font-size: 14px;
+        }
+
+        th {
+            width: 130px;
+            color: var(--green);
+            font-size: 13px;
+        }
+
+        td {
+            color: #4b5965;
+        }
+
+        td :where(strong) {
+            color: var(--ink);
+        }
+
+        tr:last-child th,
+        tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .limit-list {
+            margin: 0;
+            padding: 0;
+            list-style: none;
+        }
+
+        .limit-list li {
+            display: grid;
+            grid-template-columns: 90px minmax(0, 1fr);
+            gap: 14px;
+            padding: 21px 27px;
+            border-bottom: 1px solid var(--line);
+        }
+
+        .limit-list li:last-child {
+            border-bottom: 0;
+        }
+
+        .limit-list strong {
+            color: var(--blue);
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 29px;
+            font-weight: 500;
+        }
+
+        .limit-list span {
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .decision-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 16px;
+        }
+
+        .decision {
+            min-height: 220px;
+            padding: 24px;
+            border-top: 4px solid var(--green);
+            border-radius: 15px;
+            background: var(--card);
+            box-shadow: var(--shadow);
+        }
+
+        .decision:nth-child(2) {
+            border-color: var(--violet);
+        }
+
+        .decision:nth-child(3) {
+            border-color: var(--blue);
+        }
+
+        .decision h3 {
+            margin-bottom: 9px;
+        }
+
+        .decision p {
+            margin-bottom: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .test-readout {
+            display: grid;
+            grid-template-columns: .9fr 1.5fr;
+            border-radius: 19px;
+            overflow: hidden;
+            background: #1d2d29;
+            color: #eff8f3;
+            box-shadow: var(--shadow);
+        }
+
+        .test-title {
+            padding: 30px;
+            background: #153e33;
+        }
+
+        .test-title p {
+            margin-bottom: 8px;
+            color: #a3d4be;
+            font-size: 12px;
+            letter-spacing: .1em;
+            text-transform: uppercase;
+        }
+
+        .test-title h2 {
+            margin: 0;
+            font-size: 32px;
+        }
+
+        .test-result {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .test-result div {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 156px;
+            padding: 25px;
+            border-right: 1px solid rgb(255 255 255 / 16%);
+        }
+
+        .test-result div:last-child {
+            border-right: 0;
+        }
+
+        .test-result strong {
+            color: #a5e4bf;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 42px;
+            font-weight: 500;
+            line-height: 1;
+        }
+
+        .test-result span {
+            margin-top: 9px;
+            color: #c9dcd3;
+            font-size: 13px;
+            line-height: 1.38;
+        }
+
+        .proof {
+            margin-top: 18px;
+        }
+
+        .proof-grid {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+
+        .proof-grid article {
+            min-height: 170px;
+            padding: 24px 27px;
+            border-right: 1px solid var(--line);
+        }
+
+        .proof-grid article:last-child {
+            border-right: 0;
+        }
+
+        .proof-grid h3 {
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .proof-grid p {
+            margin-bottom: 0;
+            color: var(--muted);
+            font-size: 14px;
+        }
+
+        .guardrails {
+            display: grid;
+            grid-template-columns: 74px minmax(0, 1fr);
+            gap: 24px;
+            align-items: start;
+            padding: 29px;
+            border-color: #c9d8cf;
+            background: linear-gradient(135deg, #f6fbf8, #edf7f1);
+        }
+
+        .guardrail-mark {
+            display: grid;
+            width: 52px;
+            height: 52px;
+            place-items: center;
+            border-radius: 50%;
+            background: var(--green);
+            color: white;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 35px;
+        }
+
+        .guardrails h3 {
+            margin-bottom: 7px;
+            font-family: Iowan Old Style, Georgia, serif;
+            font-size: 25px;
+            font-weight: 500;
+        }
+
+        .guardrails p {
+            max-width: 860px;
+            margin-bottom: 0;
+            color: #4a6055;
+        }
+
+        .source-notes {
+            margin-top: 82px;
+            padding-top: 24px;
+            border-top: 1px solid var(--line);
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .source-notes h2 {
+            margin-bottom: 13px;
+            color: var(--ink);
+            font-size: 20px;
+        }
+
+        .source-notes ul {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 10px 26px;
+            margin: 0;
+            padding-left: 20px;
+        }
+
+        @media (max-width: 920px) {
+            .hero,
+            .ownership-grid,
+            .raw-head,
+            .test-readout {
+                grid-template-columns: 1fr;
+            }
+
+            .facts,
+            .decision-grid,
+            .phase-notes,
+            .use-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .fact:nth-child(2) {
+                border-right: 0;
+            }
+
+            .fact:nth-child(-n + 2) {
+                border-bottom: 1px solid var(--line);
+            }
+
+            .steps {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .step:nth-child(2)::after,
+            .step:nth-child(2)::before {
+                display: none;
+            }
+
+            .source-notes ul {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 660px) {
+            .page {
+                width: min(100% - 28px, 1180px);
+                padding-top: 18px;
+            }
+
+            .masthead,
+            .flow-intro,
+            .section-heading,
+            .lane,
+            .guardrails {
+                display: block;
+            }
+
+            .scope {
+                margin-top: 9px;
+            }
+
+            .hero {
+                padding-top: 54px;
+            }
+
+            h1 {
+                font-size: 52px;
+            }
+
+            section {
+                margin-top: 70px;
+            }
+
+            .section-number {
+                margin-bottom: 8px;
+            }
+
+            .flow-intro .legend {
+                margin-top: 12px;
+            }
+
+            .flow-strip {
+                min-height: 124px;
+            }
+
+            .flow-board {
+                padding: 18px;
+            }
+
+            .lane-label {
+                margin-bottom: 13px;
+            }
+
+            .facts,
+            .decision-grid,
+            .phase-notes,
+            .use-grid,
+            .raw-grid,
+            .result-grid,
+            .test-result,
+            .steps {
+                grid-template-columns: 1fr;
+            }
+
+            .fact,
+            .fact:nth-child(2) {
+                border-right: 0;
+                border-bottom: 1px solid var(--line);
+            }
+
+            .fact:last-child {
+                border-bottom: 0;
+            }
+
+            .step::after,
+            .step::before {
+                display: none;
+            }
+
+            .event-card,
+            .result-card {
+                border-bottom: 1px solid var(--line);
+            }
+
+            .result-card:last-child {
+                border-bottom: 0;
+            }
+
+            .test-result div,
+            .proof-grid article {
+                min-height: 0;
+                border-right: 0;
+                border-bottom: 1px solid rgb(255 255 255 / 16%);
+            }
+
+            .proof-grid article {
+                border-color: var(--line);
+            }
+
+            .proof-grid article:last-child {
+                border-bottom: 0;
+            }
+
+            th,
+            td {
+                padding: 16px;
+            }
+
+            th {
+                width: 98px;
+            }
+
+            .guardrail-mark {
+                margin-bottom: 14px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <main class="page">
+        <header class="masthead">
+            <div class="brand"><span class="brand-mark" aria-hidden="true"></span><span>Mobius / long-session contract</span></div>
+            <p class="scope">Current implementation · Session DO · local long-session acceptance</p>
+        </header>
+
+        <section class="hero" aria-labelledby="page-title">
+            <div>
+                <p class="eyebrow">Long session, no raw-history archive</p>
+                <h1 id="page-title">Flow while active.<br>Reclaim at completion.</h1>
+                <p class="hero-lede">
+                    Only the <strong>active turn</strong> keeps raw event payloads in the Session DO.
+                    Text deltas are packed in active stream blocks; its terminal transaction persists a canonical message, retains a payload-free idempotency receipt, then deletes that turn's raw payloads and blocks.
+                    A refresh restores stable history from <code>/messages</code>, never by replaying old deltas.
+                </p>
+            </div>
+            <aside class="promise" aria-label="Core contract">
+                <div class="promise-label">Core boundary</div>
+                <strong>Completed raw events are not archived to R2.</strong>
+                <p>
+                    Raw events serve the current stream, brief reconnection, and commit idempotency; once complete, their UI meaning is absorbed by the canonical message read model.
+                    When R2 is used, it stores only tool-detail artifacts that a read model cannot reconstruct.
+                </p>
+            </aside>
+        </section>
+
+        <section class="facts" aria-label="Four long-session data boundaries">
+            <article class="fact"><span class="fact-number">1</span><span class="fact-label">An active turn's raw-event hot stream exists only in the DO</span></article>
+            <article class="fact"><span class="fact-number">0</span><span class="fact-label">Completed-turn raw-payload retention or R2 raw archive</span></article>
+            <article class="fact"><span class="fact-number">410</span><span class="fact-label">Explicit result for an old event cursor: <code>cursor_expired</code></span></article>
+            <article class="fact"><span class="fact-number">R2</span><span class="fact-label">Large activity / tool-detail artifacts only; never raw deltas</span></article>
+        </section>
+
+        <section aria-labelledby="flow-heading">
+            <div class="section-heading">
+                <p class="section-number">01 / FLOW</p>
+                <div>
+                    <h2 id="flow-heading">How one long reply is sent, finalized, and recovered</h2>
+                    <p>The first lane is the active hot path; the next two show the terminal transaction and refresh recovery. Green is the raw hot stream, violet is the atomic commit, and blue is optional artifact storage.</p>
+                </div>
+            </div>
+
+            <div class="flow-shell">
+                <div class="flow-intro">
+                    <p><strong>How to read this:</strong> raw events move only along the active lane; after the terminal node, no raw-R2 readback path exists.</p>
+                    <ul class="legend" aria-label="Legend">
+                        <li><span class="swatch hot" aria-hidden="true"></span>active raw payload</li>
+                        <li><span class="swatch commit" aria-hidden="true"></span>terminal transaction</li>
+                        <li><span class="swatch cold" aria-hidden="true"></span>optional R2 artifact</li>
+                    </ul>
+                </div>
+                <svg class="flow-strip" viewBox="0 0 1100 142" role="img" aria-labelledby="flow-strip-title flow-strip-desc">
+                    <title id="flow-strip-title">Active raw events are reclaimed when a turn finalizes</title>
+                    <desc id="flow-strip-desc">The browser sends a prompt to the Session DO. While active, delta payloads are packed into stream blocks. On a terminal event, one atomic transaction materializes a canonical message and payload-free receipt and deletes raw events and blocks. A fresh page reads messages to recover history.</desc>
+                    <line class="rail" x1="78" y1="71" x2="1022" y2="71"></line>
+                    <path class="arrow" d="M 1014 65 L 1030 71 L 1014 77 Z"></path>
+                    <rect class="active-box" x="50" y="34" width="215" height="74" rx="12"></rect>
+                    <text class="svg-kicker" x="69" y="60">ACTIVE TURN</text>
+                    <text class="svg-title" x="69" y="87">event index + stream block</text>
+                    <rect class="commit-box" x="424" y="34" width="255" height="74" rx="12"></rect>
+                    <text class="svg-kicker" x="444" y="60">TERMINAL TRANSACTION</text>
+                    <text class="svg-title" x="444" y="87">message + receipt + reclaim</text>
+                    <rect class="recover-box" x="838" y="34" width="215" height="74" rx="12"></rect>
+                    <text class="svg-kicker" x="858" y="60">FRESH PAGE</text>
+                    <text class="svg-title" x="858" y="87">messages → UI</text>
+                    <text class="svg-kicker" x="79" y="128">payload exists</text>
+                    <text class="svg-kicker" x="469" y="128">payload gone; semantics persist</text>
+                    <text class="svg-kicker" x="855" y="128">no raw replay</text>
+                </svg>
+                <div class="flow-board">
+                    <div class="lane">
+                        <div class="lane-label"><strong>Active turn</strong><span>while it is generating</span></div>
+                        <div class="steps">
+                            <article class="step">
+                                <span class="kicker">01 / Browser</span>
+                                <h3>Send the prompt</h3>
+                                <p>The browser establishes this turn's realtime subscription.</p>
+                            </article>
+                            <article class="step hot">
+                                <span class="kicker">02 / Session DO</span>
+                                <h3>Index the raw event</h3>
+                                <p><code>session_events</code> keeps source order; delta JSON is packed in <code>session_stream_blocks</code>.</p>
+                            </article>
+                            <article class="step hot">
+                                <span class="kicker">03 / stream block</span>
+                                <h3>Append bounded delta material</h3>
+                                <p>Each active delta gets a stream reference; no growing completed-history row is written yet.</p>
+                            </article>
+                            <article class="step hot">
+                                <span class="kicker">04 / Browser</span>
+                                <h3>Render the stream immediately</h3>
+                                <p>Current subscribers receive exact event boundaries and payloads.</p>
+                            </article>
+                        </div>
+                    </div>
+
+                    <div class="lane">
+                        <div class="lane-label"><strong>Terminal transaction</strong><span><code>session.completed</code></span></div>
+                        <div class="steps">
+                            <article class="step commit">
+                                <span class="kicker">05 / terminal</span>
+                                <h3>Materialize final state</h3>
+                                <p>Fold stream blocks into an assistant <code>session_messages</code> record; the turn becomes completed.</p>
+                            </article>
+                            <article class="step commit">
+                                <span class="kicker">06 / receipt</span>
+                                <h3>Keep a tiny receipt</h3>
+                                <p>Keep <code>event_id</code>, hash, source sequence, and cursor; do not retain the payload.</p>
+                            </article>
+                            <article class="step commit">
+                                <span class="kicker">07 / reclaim</span>
+                                <h3>Delete raw material</h3>
+                                <p>Delete the completed turn's <code>session_events</code>, stream blocks, and advance the minimum cursor.</p>
+                            </article>
+                            <article class="step error">
+                                <span class="kicker">08 / old cursor</span>
+                                <h3>Make expiry explicit</h3>
+                                <p>An old <code>/events</code> cursor returns <code>cursor_expired</code>; the client goes back to <code>/messages</code>.</p>
+                            </article>
+                        </div>
+                    </div>
+
+                    <div class="lane">
+                        <div class="lane-label"><strong>Recovery and artifacts</strong><span>fresh page / tool details</span></div>
+                        <div class="steps">
+                            <article class="step">
+                                <span class="kicker">09 / Fresh page</span>
+                                <h3>Read <code>/messages</code></h3>
+                                <p>Query canonical messages, turn metadata, and message anchors directly.</p>
+                            </article>
+                            <article class="step">
+                                <span class="kicker">10 / stable UI</span>
+                                <h3>Render stable history</h3>
+                                <p>The complete reply comes from <code>session_messages</code>, never by delta replay.</p>
+                            </article>
+                            <article class="step cold">
+                                <span class="kicker">optional / R2</span>
+                                <h3>Archive large tool details</h3>
+                                <p>Only artifact material is segmented, verified, and uploaded; its active copy uses DO content chunks, not a giant <code>hot_detail</code> row.</p>
+                            </article>
+                            <article class="step cold">
+                                <span class="kicker">on demand</span>
+                                <h3>Read a detail artifact</h3>
+                                <p>Read an R2 artifact only when needed; it never participates in ordinary chat-history recovery.</p>
+                            </article>
+                        </div>
+                    </div>
+
+                    <p class="flow-caption">
+                        <strong>Key distinction:</strong> completion is still delivered to a currently connected realtime subscriber. Only a client reconnecting later with an expired cursor cannot demand raw replay;
+                        it obtains the same complete conversation state through <code>/messages</code>.
+                    </p>
+                </div>
+            </div>
+
+            <div class="phase-notes">
+                <details open>
+                    <summary>Why an active turn has no rolling hot tail</summary>
+                    <div class="note-copy"><p>A generating turn needs all of its still-unfinalized raw events for realtime delivery and reconnect compensation. Splitting it mid-turn would fork its recovery semantics, so it stays wholly in the DO until its terminal transaction reclaims it.</p></div>
+                </details>
+                <details>
+                    <summary>Why the receipt has no payload</summary>
+                    <div class="note-copy"><p>If an ACK is lost, the daemon can resend a terminal event. The receipt only needs to prove that the same event ID, hash, and source sequence committed, so it can return the original cursor idempotently; it need not retain displayable JSON.</p></div>
+                </details>
+                <details>
+                    <summary>Why history still recovers in full</summary>
+                    <div class="note-copy"><p>At the terminal boundary, all active stream blocks are folded into <code>session_messages</code> in the same transaction that reclaims raw data. Deleting raw events therefore leaves <code>/messages</code> able to return the complete, stable conversation.</p></div>
+                </details>
+            </div>
+        </section>
+
+        <section aria-labelledby="raw-event-heading">
+            <div class="section-heading">
+                <p class="section-number">02 / RAW EVENT</p>
+                <div>
+                    <h2 id="raw-event-heading">How “Hel” and “lo” become both a live stream and the final message</h2>
+                    <p>This is a readable representation of an active event index and its stream-block payload. The <code>session_events</code> row preserves delivery identity; the delta JSON lives in a bounded block until completion.</p>
+                </div>
+            </div>
+
+            <article class="raw-event-lab">
+                <header class="raw-head">
+                    <div>
+                        <h3>A raw event records “what just happened”; the turn read model records “what should render now”.</h3>
+                        <p>While active, both deltas exist in the DO as indexed stream material. Once the terminal event commits, they become one canonical assistant message and are no longer retained as historical raw data.</p>
+                    </div>
+                    <aside class="raw-note"><strong>Not wasteful double-writing</strong>Raw events serve the streaming protocol; projection serves the stable UI. Their lifetimes differ, so completion retains only the latter.</aside>
+                </header>
+
+                <div class="raw-grid">
+                    <article class="event-card">
+                        <div class="event-meta"><span>event index → stream block 0</span><b>42</b></div>
+                        <h3>First text fragment</h3>
+                        <dl><dt>event_id</dt><dd>evt-delta-01</dd><dt>source</dt><dd>attempt / att-demo-01 / seq 2</dd><dt>state</dt><dd>active · event payload NULL · block item 0</dd></dl>
+                        <pre><code>{
+  "kind": "agent.message.delta",
+  "messageId": "msg-demo-01",
+  "text": "Hel"
+}</code></pre>
+                    </article>
+                    <article class="event-card">
+                        <div class="event-meta"><span>event index → stream block 0</span><b>43</b></div>
+                        <h3>Second text fragment</h3>
+                        <dl><dt>event_id</dt><dd>evt-delta-02</dd><dt>source</dt><dd>attempt / att-demo-01 / seq 3</dd><dt>state</dt><dd>active · event payload NULL · block item 1</dd></dl>
+                        <pre><code>{
+  "kind": "agent.message.delta",
+  "messageId": "msg-demo-01",
+  "text": "lo"
+}</code></pre>
+                    </article>
+                    <article class="event-card terminal">
+                        <div class="event-meta"><span>terminal event</span><b>44</b></div>
+                        <h3>The turn's terminal boundary</h3>
+                        <dl><dt>event_id</dt><dd>evt-completed-01</dd><dt>source</dt><dd>attempt / att-demo-01 / seq 4</dd><dt>action</dt><dd>project + receipt + delete</dd></dl>
+                        <pre><code>{
+  "kind": "session.completed",
+  "sessionId": "ses-demo-01",
+  "stopReason": "end_turn"
+}</code></pre>
+                    </article>
+                </div>
+
+                <div class="result-grid">
+                    <article class="result-card">
+                        <h3>While active: deltas are bounded stream material</h3>
+                        <p>Each event index points into an active block. The browser can resolve exact delta boundaries without a growing completed-message row.</p>
+                        <pre><code>session_stream_blocks[0]
+item 0 / sequence 42  → "Hel"
+item 1 / sequence 43  → "lo"
+active render           → "Hello"</code></pre>
+                    </article>
+                    <article class="result-card commit-result">
+                        <h3>After completion: retain meaning, reclaim payload</h3>
+                        <p>The same commit boundary keeps recovery-page state consistent with raw deletion; a compact receipt handles terminal resends.</p>
+                        <pre><code>session_events[42..44]  → DELETE
+sessions.minimum_sequence → 45
+session_event_receipts   → metadata only
+session_messages.content → "Hello"
+R2 raw object            → none</code></pre>
+                    </article>
+                </div>
+
+                <div class="use-cases">
+                    <h3>When is a raw event actually needed?</h3>
+                    <p>It is short-lived protocol material, not a second permanent history for a completed session.</p>
+                    <div class="use-grid">
+                        <article><h4>Realtime output</h4><p>While the browser subscribes, delta boundaries and payloads are required for incremental rendering.</p></article>
+                        <article><h4>Active-turn continuation</h4><p>After a brief disconnect, an unfinalized turn can use the latest message cursor to fill in exact events.</p></article>
+                        <article><h4>Terminal-event idempotency</h4><p>After raw deletion, the payload-free receipt still identifies a resend of the same terminal event caused by a lost ACK.</p></article>
+                    </div>
+                </div>
+            </article>
+        </section>
+
+        <section aria-labelledby="ownership-heading">
+            <div class="section-heading">
+                <p class="section-number">03 / OWNERSHIP</p>
+                <div>
+                    <h2 id="ownership-heading">Each datum stays only where it is useful</h2>
+                    <p>“The DO stores hot events only for the currently active turn” means the event index plus its stream blocks; completed-message projections remain in the DO as stable conversation history.</p>
+                </div>
+            </div>
+
+            <div class="ownership-grid">
+                <article class="ownership">
+                    <div class="card-head"><h3>Data ownership</h3><p>current contract</p></div>
+                    <table>
+                        <thead><tr><th scope="col">Location</th><th scope="col">What remains</th></tr></thead>
+                        <tbody>
+                            <tr><th scope="row">Session DO</th><td><strong>Raw payloads in active stream blocks</strong>; canonical <code>session_messages</code>, turn state, and payload-free event receipts for stable history.</td></tr>
+                            <tr><th scope="row">R2</th><td><strong>Optional activity / tool-detail artifacts</strong>, after their active DO content chunks have been published. It keeps neither completed-turn raw deltas nor completed envelopes.</td></tr>
+                            <tr><th scope="row">Browser</th><td><strong>Realtime stream + <code>/messages</code> snapshot</strong>. A refresh trusts the read model; an expired event cursor retrieves a fresh message snapshot.</td></tr>
+                        </tbody>
+                    </table>
+                </article>
+                <aside class="limits" aria-labelledby="limits-heading">
+                    <div class="card-head"><h3 id="limits-heading">Capacity boundaries</h3><p>what the limits now mean</p></div>
+                    <ul class="limit-list">
+                        <li><strong>active</strong><span>Raw events are not cut into a historical hot tail; all raw events for an unfinalized turn stay in the DO until its terminal transaction completes.</span></li>
+                        <li><strong>256 KiB</strong><span>The target packing size for an active delta stream block; it bounds rewrite cost without splitting one event.</span></li>
+                        <li><strong>1.5 MiB</strong><span>The UTF-8-safe DO row budget for canonical-message continuation and active activity-detail content chunks.</span></li>
+                        <li><strong>128 KiB</strong><span>The uncompressed physical-segment limit before an R2 write still applies when archiving a large activity detail.</span></li>
+                        <li><strong>192 KiB</strong><span>The capacity guard for one compressed artifact segment. It does not constrain raw events because raw never travels through R2.</span></li>
+                    </ul>
+                </aside>
+            </div>
+        </section>
+
+        <section aria-labelledby="decisions-heading">
+            <div class="section-heading">
+                <p class="section-number">04 / DECISIONS</p>
+                <div>
+                    <h2 id="decisions-heading">Three intentional tradeoffs in this design</h2>
+                    <p>It separates a fast realtime protocol from stable historical reading instead of making R2 a permanent raw-event extension.</p>
+                </div>
+            </div>
+            <div class="decision-grid">
+                <article class="decision"><h3>Keep a generating turn fully hot</h3><p>A long turn can temporarily consume DO raw-event space in exchange for simple, continuous realtime and reconnect semantics. Completion reclaims it, so growth never accumulates as hot history for the whole session.</p></article>
+                <article class="decision"><h3>Delete raw at termination; do not move it</h3><p>Projection already persists final text, tool summary, and state. Creating an R2 range archive for an input copy no historical UI uses only adds writes, indexes, recovery work, and failure surface.</p></article>
+                <article class="decision"><h3>An expired cursor is an explicit contract</h3><p>Historical raw deletion is not silent loss: an event request before the minimum sequence gets <code>cursor_expired</code>, so the client knows to recover from a <code>/messages</code> snapshot.</p></article>
+            </div>
+        </section>
+
+        <section aria-labelledby="test-heading">
+            <div class="section-heading">
+                <p class="section-number">05 / PROOF</p>
+                <div>
+                    <h2 id="test-heading">Acceptance proves the read/write boundary, not merely that a page can refresh</h2>
+                    <p>A local Browser long-session run covers many deltas, stable post-completion refresh, and the new raw-reclamation and expired-cursor behavior.</p>
+                </div>
+            </div>
+            <div class="test-readout">
+                <div class="test-title"><p>Local browser acceptance</p><h2>The same session still has the same reply after a refresh.</h2></div>
+                <div class="test-result">
+                    <div><strong>1,200</strong><span>Target: the browser shows all numbered lines after completion and refresh</span></div>
+                    <div><strong>0</strong><span>Target: no raw-event R2 object exists after a turn completes</span></div>
+                    <div><strong>expired</strong><span>Target: a pre-terminal cursor does not replay old raw data; it returns <code>cursor_expired</code></span></div>
+                </div>
+            </div>
+            <article class="proof">
+                <div class="card-head"><h3>Acceptance mapping</h3><p>product boundary + storage evidence</p></div>
+                <div class="proof-grid">
+                    <article><h3>Active path</h3><p>For an active turn that exceeds the former hot window, every delta remains in a DO stream block and is continuously readable through <code>/events</code>.</p></article>
+                    <article><h3>Terminal path</h3><p>Canonical-message materialization, minimum-cursor advancement, event-and-block deletion, and a payload-free receipt occur in one DO transaction; a terminal resend remains idempotent.</p></article>
+                    <article><h3>Recovery path</h3><p>A page restores the full reply with <code>/messages</code> alone; it loses no text and does not rejoin deltas because raw data has been reclaimed.</p></article>
+                </div>
+            </article>
+        </section>
+
+        <section aria-labelledby="guardrail-heading">
+            <div class="section-heading">
+                <p class="section-number">06 / GUARDRAIL</p>
+                <div>
+                    <h2 id="guardrail-heading">“No raw history” does not mean “no conversation history”.</h2>
+                    <p>Raw payload and message history are different material. The former serves current transport; the latter serves a user's stable, visible conversation.</p>
+                </div>
+            </div>
+            <aside class="guardrails">
+                <div class="guardrail-mark" aria-hidden="true">!</div>
+                <div>
+                    <h3>The factual source for a completed turn is its turn read model, not an R2 raw replay.</h3>
+                    <p>If a future feature needs a full protocol audit, replayable trace, or model-debug data, make it an explicit, separate audit product with its own retention policy. Do not quietly depend on a raw-event archive for ordinary chat-history recovery.</p>
+                </div>
+            </aside>
+        </section>
+
+        <footer class="source-notes">
+            <h2>Implementation index</h2>
+            <ul>
+                <li><code>session-commands-storage.ts</code>: packs active delta blocks, materializes canonical messages, writes receipts, and reclaims raw data in one transaction.</li>
+                <li><code>session-archive-storage.ts</code>: stores <code>discardEventsThrough</code> behavior and chunked activity-detail artifacts.</li>
+                <li><code>session-stream-codec.ts</code>: validates bounded active stream-block payloads and exact delta text.</li>
+                <li><code>session-query-service.ts</code>: defines stable <code>/messages</code> recovery and the <code>cursor_expired</code> event-read boundary.</li>
+            </ul>
+        </footer>
+    </main>
+</body>
+</html>

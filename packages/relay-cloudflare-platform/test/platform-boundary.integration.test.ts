@@ -1,3 +1,4 @@
+import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_MESSAGE_DELTA_KIND,
@@ -2105,6 +2106,12 @@ describe.sequential("Platform hosting boundary", () => {
                     },
                 });
             }
+            const staleEventPage = await owner.readConversationEvents(
+                fixture.botId,
+                created.conversationId,
+                "",
+                AbortSignal.timeout(5_000),
+            );
             await commitRuntimeEvent(
                 fixture,
                 attemptEvent(
@@ -2119,7 +2126,7 @@ describe.sequential("Platform hosting boundary", () => {
             const archived = await fixture.environment.R2_BUCKET_APAC.list({
                 prefix: `${fixture.projectId}/${command.sessionId}/`,
             });
-            expect(archived.objects.length).toBeGreaterThan(0);
+            expect(archived.objects).toHaveLength(0);
 
             const messages = await owner.readConversationMessages(
                 fixture.botId,
@@ -2149,25 +2156,14 @@ describe.sequential("Platform hosting boundary", () => {
             expect(messages.tailEventCursor).not.toBe(messages.lastCommittedSequence);
             expect(JSON.stringify(messages)).not.toContain(command.sessionId);
 
-            let replayCursor = "";
-            let replayHasMore = true;
-            let replayedMessageDeltaCount = 0;
-            for (let pageNumber = 0; pageNumber < 20 && replayHasMore; pageNumber += 1) {
-                const replayPage = await owner.readConversationEvents(
+            await expect(
+                owner.readConversationEvents(
                     fixture.botId,
                     created.conversationId,
-                    replayCursor,
+                    staleEventPage.cursor,
                     AbortSignal.timeout(5_000),
-                );
-                expect(replayPage.events.length).toBeLessThanOrEqual(20);
-                replayedMessageDeltaCount += replayPage.events.filter(
-                    (event) => event.kind === AGENT_MESSAGE_DELTA_KIND,
-                ).length;
-                replayCursor = replayPage.cursor;
-                replayHasMore = replayPage.hasMore;
-            }
-            expect(replayHasMore).toBe(false);
-            expect(replayedMessageDeltaCount).toBe(responseChunks.length);
+                ),
+            ).rejects.toMatchObject({ code: "cursor_expired" });
 
             await expect(
                 owner.readConversationEvents(
@@ -2406,6 +2402,226 @@ describe.sequential("Platform hosting boundary", () => {
             });
         } finally {
             fixture.socket.close(1000, "Server SDK native default test complete");
+        }
+    });
+
+    it("Given a completed Turn followed by an active Turn, When the terminal event commits, Then raw events are discarded while messages and the next active stream remain available", async () => {
+        const fixture = await createReadyConversation("turn-scoped-hot-events");
+        try {
+            const owner = new MobiusBotOwnerClient({
+                actorReference: "turn-scoped-history-owner",
+                credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+                endpoint: relayOrigin,
+                projectId: fixture.projectId,
+                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+            });
+            const first = await owner.submitProjectConversationTurn(
+                fixture.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Complete this Turn and materialize its message.",
+                    idempotencyKey: "turn-scoped-first",
+                    images: [],
+                    resources: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            const firstCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            const firstAttemptId = "turn-scoped-first-attempt";
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    fixture.sessionId,
+                    firstCommand.commandId,
+                    "turn-scoped-first-started",
+                    SESSION_STARTED_KIND,
+                    firstAttemptId,
+                    1,
+                ),
+            );
+            const firstResponse: string[] = [];
+            for (let index = 0; index < 12; index += 1) {
+                const eventId = `turn-scoped-first-delta-${index.toString()}`;
+                const text = `materialized response ${index.toString()}\n`;
+                firstResponse.push(text);
+                await commitRuntimeEvent(fixture, {
+                    eventId,
+                    kind: SESSION_EVENT_KIND,
+                    payload: JSON.stringify({
+                        commandId: firstCommand.commandId,
+                        kind: AGENT_MESSAGE_DELTA_KIND,
+                        messageId: "turn-scoped-first-message",
+                        sessionId: fixture.sessionId,
+                        text,
+                    }),
+                    sessionId: fixture.sessionId,
+                    source: { attemptId: firstAttemptId, kind: "attempt", sourceSeq: (index + 2).toString() },
+                });
+            }
+            const staleEventPage = await owner.readConversationEvents(
+                fixture.botId,
+                fixture.conversationId,
+                "",
+                AbortSignal.timeout(5_000),
+            );
+            const firstCompleted = attemptEvent(
+                fixture.sessionId,
+                firstCommand.commandId,
+                "turn-scoped-first-completed",
+                SESSION_COMPLETED_KIND,
+                firstAttemptId,
+                14,
+            );
+            await commitRuntimeEvent(fixture, firstCompleted);
+            fixture.socket.send(encodeSessionEventEnvelope(firstCompleted));
+            expect(decodeSessionEventAcknowledgement(await fixture.socketMessages.next())).toMatchObject({
+                duplicate: true,
+                eventId: firstCompleted.eventId,
+                sessionId: fixture.sessionId,
+            });
+
+            const completedMessages = await owner.readConversationMessages(
+                fixture.botId,
+                fixture.conversationId,
+                new MobiusPageRequest(50, ""),
+                AbortSignal.timeout(5_000),
+            );
+            expect(completedMessages.messages).toMatchObject([
+                {
+                    clientMessageId: "turn-scoped-first",
+                    response: firstResponse.join(""),
+                },
+            ]);
+            await expect(
+                owner.readConversationEvents(
+                    fixture.botId,
+                    fixture.conversationId,
+                    staleEventPage.cursor,
+                    AbortSignal.timeout(5_000),
+                ),
+            ).rejects.toMatchObject({ code: "cursor_expired" });
+
+            await owner.submitProjectConversationTurn(
+                fixture.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Keep this Turn active and hot.",
+                    idempotencyKey: "turn-scoped-second",
+                    images: [],
+                    resources: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            const secondCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            const secondAttemptId = "turn-scoped-second-attempt";
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    fixture.sessionId,
+                    secondCommand.commandId,
+                    "turn-scoped-second-started",
+                    SESSION_STARTED_KIND,
+                    secondAttemptId,
+                    1,
+                ),
+            );
+            await commitRuntimeEvent(fixture, {
+                eventId: "turn-scoped-second-delta",
+                kind: SESSION_EVENT_KIND,
+                payload: JSON.stringify({
+                    commandId: secondCommand.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "turn-scoped-second-message",
+                    sessionId: fixture.sessionId,
+                    text: "active response",
+                }),
+                sessionId: fixture.sessionId,
+                source: { attemptId: secondAttemptId, kind: "attempt", sourceSeq: "2" },
+            });
+
+            const sessionStub = fixture.environment.SESSION_RELAY.get(
+                fixture.environment.SESSION_RELAY.idFromName(`platform:${fixture.projectId}:${fixture.sessionId}`),
+            );
+            await runInDurableObject(sessionStub, async (instance, state) => {
+                if (instance.alarm === undefined) {
+                    throw new Error("Expected the Session Durable Object alarm handler");
+                }
+                await state.storage.deleteAlarm();
+                await instance.alarm();
+                const rows = state.storage.sql
+                    .exec(
+                        `SELECT event_id, payload
+                         FROM session_events
+                         WHERE session_id = ?
+                         ORDER BY sequence_number`,
+                        fixture.sessionId,
+                    )
+                    .toArray();
+                expect(rows).toMatchObject([
+                    { event_id: "turn-scoped-second-started", payload: expect.any(String) },
+                    { event_id: "turn-scoped-second-delta", payload: null },
+                ]);
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_streams
+                              WHERE session_id = ?`,
+                            fixture.sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT COUNT(*) AS count
+                               FROM session_stream_blocks
+                              WHERE session_id = ?`,
+                            fixture.sessionId,
+                        )
+                        .one(),
+                ).toEqual({ count: 1 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT minimum_sequence, next_sequence FROM sessions
+                              WHERE session_id = ?`,
+                            fixture.sessionId,
+                        )
+                        .one(),
+                ).toEqual({ minimum_sequence: 15, next_sequence: 17 });
+                expect(
+                    state.storage.sql
+                        .exec(
+                            `SELECT event_id, source_seq
+                               FROM session_event_receipts
+                              WHERE session_id = ?`,
+                            fixture.sessionId,
+                        )
+                        .one(),
+                ).toEqual({ event_id: "turn-scoped-first-completed", source_seq: "14" });
+            });
+
+            const archived = await fixture.environment.R2_BUCKET_APAC.list({
+                prefix: `${fixture.projectId}/${fixture.sessionId}/`,
+            });
+            expect(archived.objects).toHaveLength(0);
+
+            const events = await owner.readConversationEvents(
+                fixture.botId,
+                fixture.conversationId,
+                completedMessages.tailEventCursor,
+                AbortSignal.timeout(5_000),
+            );
+            expect(events.events).toMatchObject([
+                { eventId: "turn-scoped-second-started" },
+                { eventId: "turn-scoped-second-delta" },
+            ]);
+            expect(first.executionId).not.toBe("");
+        } finally {
+            fixture.socket.close(1000, "Turn-scoped archive test complete");
         }
     });
 
@@ -3248,18 +3464,6 @@ describe.sequential("Platform hosting boundary", () => {
                     1,
                 ),
             );
-            await commitRuntimeEvent(
-                fixture,
-                attemptEvent(
-                    fixture.sessionId,
-                    command.commandId,
-                    "alice-completed",
-                    SESSION_COMPLETED_KIND,
-                    "attempt-alice",
-                    2,
-                ),
-            );
-
             const firstEvents = await json(
                 await fixture.worker.fetch(
                     new Request(
@@ -3273,28 +3477,50 @@ describe.sequential("Platform hosting boundary", () => {
                 200,
             );
             expect(firstEvents["events"]).toMatchObject([{ eventId: "alice-started" }]);
-            expect(firstEvents["hasMore"]).toBe(true);
-            const resumedEvents = await json(
-                await fixture.worker.fetch(
-                    new Request(
-                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/client/session/events?limit=10&cursor=${encodeURIComponent(text(firstEvents, "cursor"))}`,
-                        { headers: credentialHeaders(aliceCredential) },
-                    ),
-                    fixture.environment,
-                ),
-                200,
-            );
-            expect(resumedEvents["events"]).toMatchObject([{ eventId: "alice-completed" }]);
+            expect(firstEvents["hasMore"]).toBe(false);
             const sdkFirstEvents = await sdkBrowser.readEvents(
                 new MobiusPageRequest(1, ""),
                 AbortSignal.timeout(5_000),
             );
             expect(sdkFirstEvents.events.map((event) => event.eventId)).toEqual(["alice-started"]);
-            const sdkResumedEvents = await sdkBrowser.readEvents(
-                new MobiusPageRequest(10, sdkFirstEvents.cursor),
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    fixture.sessionId,
+                    command.commandId,
+                    "alice-completed",
+                    SESSION_COMPLETED_KIND,
+                    "attempt-alice",
+                    2,
+                ),
+            );
+            const expiredEvents = await fixture.worker.fetch(
+                new Request(
+                    relayOrigin +
+                        MOBIUS_API_PREFIX +
+                        "/v1/projects/" +
+                        fixture.projectId +
+                        "/client/session/events?limit=10&cursor=" +
+                        encodeURIComponent(text(firstEvents, "cursor")),
+                    { headers: credentialHeaders(aliceCredential) },
+                ),
+                fixture.environment,
+            );
+            expect(expiredEvents.status).toBe(410);
+            await expect(expiredEvents.json()).resolves.toMatchObject({ error: { code: "cursor_expired" } });
+            await expect(
+                sdkBrowser.readEvents(new MobiusPageRequest(10, sdkFirstEvents.cursor), AbortSignal.timeout(5_000)),
+            ).rejects.toMatchObject({ code: "cursor_expired" });
+            const restoredMessages = await sdkBrowser.session.readMessages(
+                new MobiusPageRequest(10, ""),
                 AbortSignal.timeout(5_000),
             );
-            expect(sdkResumedEvents.events.map((event) => event.eventId)).toEqual(["alice-completed"]);
+            expect(restoredMessages.messages).toMatchObject([{ prompt: "hello from Alice", response: "" }]);
+            const recoveredEvents = await sdkBrowser.readEvents(
+                new MobiusPageRequest(10, ""),
+                AbortSignal.timeout(5_000),
+            );
+            expect(recoveredEvents.events).toEqual([]);
 
             const rotated = await json(
                 await fixture.worker.fetch(
@@ -3382,7 +3608,7 @@ describe.sequential("Platform hosting boundary", () => {
                 ).status,
             ).toBe(401);
             const liveSubscription = await sdkBrowser.events.subscribe(
-                sdkResumedEvents.cursor,
+                recoveredEvents.cursor,
                 { receive: async () => true },
                 AbortSignal.timeout(5_000),
             );

@@ -83,6 +83,81 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         event_sequence INTEGER NOT NULL,
         PRIMARY KEY (scope_key, session_id, command_id)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_messages (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+        parent_id TEXT,
+        content TEXT NOT NULL,
+        content_chunks INTEGER NOT NULL DEFAULT 0 CHECK (content_chunks >= 0),
+        token_estimate INTEGER NOT NULL DEFAULT 0 CHECK (token_estimate >= 0),
+        created_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        PRIMARY KEY (scope_key, session_id, message_id),
+        UNIQUE (scope_key, session_id, command_id, role)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS session_messages_page
+        ON session_messages(scope_key, session_id, created_at DESC, command_id DESC);
+      CREATE TABLE IF NOT EXISTS session_message_chunks (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL CHECK (chunk_index > 0),
+        content TEXT NOT NULL,
+        byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+        PRIMARY KEY (scope_key, session_id, message_id, chunk_index)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_streams (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        stream_id TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('streaming')),
+        first_sequence INTEGER NOT NULL,
+        last_sequence INTEGER NOT NULL,
+        next_block_index INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, stream_id),
+        UNIQUE (scope_key, session_id, command_id)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_stream_blocks (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        stream_id TEXT NOT NULL,
+        block_index INTEGER NOT NULL CHECK (block_index >= 0),
+        sequence_from INTEGER NOT NULL,
+        sequence_to INTEGER NOT NULL,
+        payload TEXT NOT NULL,
+        byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, stream_id, block_index),
+        CHECK (sequence_from <= sequence_to)
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_stream_event_refs (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        sequence_number INTEGER NOT NULL,
+        stream_id TEXT NOT NULL,
+        block_index INTEGER NOT NULL CHECK (block_index >= 0),
+        event_index INTEGER NOT NULL CHECK (event_index >= 0),
+        PRIMARY KEY (scope_key, session_id, sequence_number)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS session_stream_event_refs_stream
+        ON session_stream_event_refs(scope_key, session_id, stream_id, block_index);
+      CREATE TABLE IF NOT EXISTS session_content_chunks (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        content_id TEXT NOT NULL,
+        chunk_index INTEGER NOT NULL CHECK (chunk_index >= 0),
+        payload TEXT NOT NULL,
+        byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
+        PRIMARY KEY (scope_key, session_id, content_id, chunk_index)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS command_receipts (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -161,6 +236,20 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         UNIQUE (scope_key, session_id, event_id),
         UNIQUE (scope_key, session_id, source_kind, source_id, source_seq)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS session_event_receipts (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        source_kind TEXT NOT NULL CHECK (source_kind IN ('attempt', 'runtime')),
+        source_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        payload_hash TEXT NOT NULL,
+        source_seq TEXT NOT NULL,
+        sequence_number INTEGER NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, source_kind, source_id)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS session_event_receipts_event
+        ON session_event_receipts(scope_key, session_id, event_id);
       CREATE TABLE IF NOT EXISTS tool_call_views (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,
@@ -176,6 +265,11 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         event_sequence INTEGER NOT NULL,
         PRIMARY KEY (scope_key, session_id, attempt_id, activity_id)
       ) STRICT;
+      CREATE INDEX IF NOT EXISTS tool_call_views_command_event
+        ON tool_call_views(scope_key, session_id, command_id, event_sequence);
+      CREATE INDEX IF NOT EXISTS tool_call_views_detail_artifact
+        ON tool_call_views(scope_key, session_id, detail_artifact_id)
+        WHERE detail_artifact_id IS NOT NULL;
       CREATE TABLE IF NOT EXISTS artifacts (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

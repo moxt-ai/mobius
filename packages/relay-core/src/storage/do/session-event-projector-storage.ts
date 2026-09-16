@@ -41,7 +41,6 @@ export class SessionEventProjectorStorage {
                 this.startTurn({ ...scope, ...plan, startedAt: input.now });
                 return;
             case "response":
-                this.appendTurnResponse({ ...scope, ...plan });
                 if (input.messageId.length > 0) {
                     this.upsertTurnMessageAnchor({
                         ...scope,
@@ -67,7 +66,7 @@ export class SessionEventProjectorStorage {
                               ? "truncated"
                               : "unrecorded",
                     detailArtifactId: detail.kind === "available" ? detail.artifactId : null,
-                    hotDetail: plan.hotDetail,
+                    hotDetail: null,
                     capturedBytes: detail.kind === "truncated" ? detail.capturedBytes : 0,
                     originalBytes: detail.kind === "truncated" ? detail.originalBytes : 0,
                     eventSequence: input.sequence,
@@ -212,20 +211,6 @@ export class SessionEventProjectorStorage {
          SET state = 'running', attempt_id = ?, started_at = ?, updated_at = ?
          WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
             [input.attemptId, input.startedAt, input.updatedAt, input.scopeKey, input.sessionId, input.commandId],
-        );
-
-    private readonly appendTurnResponse = (input: {
-        readonly text: string;
-        readonly updatedAt: number;
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-    }): { readonly changes: number } =>
-        this.#database.run(
-            `UPDATE turns
-         SET response = response || ?, updated_at = ?
-         WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
-            [input.text, input.updatedAt, input.scopeKey, input.sessionId, input.commandId],
         );
 
     private readonly upsertTurnMessageAnchor = (input: {

@@ -536,15 +536,21 @@ does not run the local daemon or ACP agent; the pairing command starts it locall
 The Web package uses Vite, TypeScript, React, Zustand, Tailwind CSS, and local
 shadcn/ui components. Zustand owns live page state, while independent Session
 Durable Objects record accepted commands, concrete attempts, ordered events, and
-archive references. In the default Lite profile, the referenced compressed
-chunks live in the same Session Durable Object's SQLite database; the R2 profile
-stores those chunks in R2. The Web opens one paginated message page and loads
-full tool details only when expanded. Prompts and agent responses are therefore
-persisted in Cloudflare; local agent credentials remain only on the paired
-machine. Each conversation keeps one Mobius session across turns. The
-daemon stores the corresponding native ACP session identifier in its local
-SQLite database and uses ACP resume or load after a daemon restart when the
-selected agent advertises that capability.
+archive references. Raw event payloads stay in the Durable Object only while a
+Turn is active: text deltas are packed into bounded stream blocks, while the
+event table keeps ordering and idempotency metadata. Its terminal transaction
+first materializes the canonical message read model, then removes that Turn's raw
+events and stream blocks and advances the event cursor floor; compact payload-free
+receipts keep a lost terminal acknowledgement idempotent. Historical chat is
+restored from the paginated message read model, not by replaying deltas.
+In the default Lite profile, full tool details are stored in the same Session
+Durable Object's SQLite database; the R2 profile stores those detail chunks in
+R2. The Web opens one paginated message page and loads full tool details only when
+expanded. Prompts and agent responses are therefore persisted in Cloudflare; local
+agent credentials remain only on the paired machine. Each conversation keeps one
+Mobius session across turns. The daemon stores the corresponding native ACP
+session identifier in its local SQLite database and uses ACP resume or load after
+a daemon restart when the selected agent advertises that capability.
 
 ## Workspace layout
 

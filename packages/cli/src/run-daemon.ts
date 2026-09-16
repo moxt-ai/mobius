@@ -2627,6 +2627,15 @@ export async function runDaemon(
     );
     let connectionEpoch = 0;
     let connectionAnnounced = false;
+    let catalogPublished = false;
+    let readinessAnnounced = false;
+    const announceReadiness = (): void => {
+        if (!connectionAnnounced || !catalogPublished || readinessAnnounced) {
+            return;
+        }
+        readinessAnnounced = true;
+        process.stdout.write("Mobius daemon is ready for Agent requests.\n");
+    };
     const announceConnection = (): void => {
         if (connectionAnnounced) {
             return;
@@ -2637,8 +2646,16 @@ export async function runDaemon(
         process.stdout.write(
             `${styleText(["bold", "yellow"], `Reconnect this channel later:\n  ${reconnectCommand}`)}\n\n`,
         );
+        announceReadiness();
     };
     const catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
+    void catalogPublication.then(() => {
+        if (signal.aborted) {
+            return;
+        }
+        catalogPublished = true;
+        announceReadiness();
+    });
 
     try {
         await ipc.listen(signal);

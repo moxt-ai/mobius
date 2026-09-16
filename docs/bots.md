@@ -213,10 +213,16 @@ Inbound connector data plane:
 
 ```text
 POST /v1/projects/{projectId}/bots/{botId}/conversations
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages
 POST /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages
 GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/events?after={cursor}
 POST /v1/projects/{projectId}/bots/{botId}/turns/{turnId}/cancel
 ```
+
+`events` is the live transport for the active Turn. Once that Turn completes,
+connectors restore durable conversation history from `messages`; an event cursor
+that predates the retained active range returns `cursor_expired` rather than
+replaying raw message deltas.
 
 The initial connector scopes are `inbound-conversation:create`,
 `inbound-message:create`, `conversation-events:read`, `turn:cancel`,

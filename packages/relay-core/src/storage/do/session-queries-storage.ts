@@ -19,8 +19,10 @@ import {
     TurnRecordSchema,
 } from "../../entity/do/session-records.ts";
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
+import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
-import { rowString } from "./sqlite-row.ts";
+import { decodeStreamBlock, sessionDeltaText } from "./session-stream-codec.ts";
+import { rowNumber, rowString } from "./sqlite-row.ts";
 
 export class SessionQueriesStorage {
     readonly #database: DoSqlDatabase;
@@ -60,6 +62,106 @@ export class SessionQueriesStorage {
             ),
         )[0];
         return anchor === undefined ? "" : rowString(anchor, "message_id");
+    };
+
+    readonly readCanonicalAssistantMessage = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+    }): { readonly messageId: string; readonly content: string } | undefined => {
+        const message = this.#database.query(
+            `SELECT message_id, content, content_chunks
+               FROM session_messages
+              WHERE scope_key = ? AND session_id = ? AND command_id = ? AND role = 'assistant'`,
+            [input.scopeKey, input.sessionId, input.commandId],
+        )[0];
+        if (message === undefined) {
+            return undefined;
+        }
+        const count = rowNumber(message, "content_chunks");
+        if (!Number.isSafeInteger(count) || count < 0) {
+            throw new DatabaseError(
+                "database_statement_invalid",
+                "The canonical Session message chunk count is invalid",
+            );
+        }
+        let content = rowString(message, "content");
+        const chunks = this.#database.query(
+            `SELECT chunk_index, content
+               FROM session_message_chunks
+              WHERE scope_key = ? AND session_id = ? AND message_id = ?
+              ORDER BY chunk_index`,
+            [input.scopeKey, input.sessionId, rowString(message, "message_id")],
+        );
+        if (chunks.length !== count) {
+            throw new DatabaseError(
+                "database_statement_invalid",
+                "The canonical Session message chunks are incomplete",
+            );
+        }
+        for (let index = 0; index < chunks.length; index += 1) {
+            const chunk = chunks[index];
+            if (chunk === undefined || rowNumber(chunk, "chunk_index") !== index + 1) {
+                throw new DatabaseError(
+                    "database_statement_invalid",
+                    "The canonical Session message chunks are invalid",
+                );
+            }
+            content += rowString(chunk, "content");
+        }
+        return { content, messageId: rowString(message, "message_id") };
+    };
+
+    readonly readActiveTurnResponse = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+    }): string => {
+        const rows = this.#database.query(
+            `SELECT block.payload
+               FROM session_streams stream
+               INNER JOIN session_stream_blocks block
+                 ON block.scope_key = stream.scope_key
+                AND block.session_id = stream.session_id
+                AND block.stream_id = stream.stream_id
+              WHERE stream.scope_key = ? AND stream.session_id = ? AND stream.command_id = ?
+              ORDER BY block.block_index`,
+            [input.scopeKey, input.sessionId, input.commandId],
+        );
+        let response = "";
+        for (const row of rows) {
+            for (const event of decodeStreamBlock(rowString(row, "payload"))) {
+                response += sessionDeltaText(event.payload);
+            }
+        }
+        return response;
+    };
+
+    readonly readActiveEventPayload = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly sequenceNumber: number;
+    }): string | undefined => {
+        const row = this.#database.query(
+            `SELECT block.payload, reference.event_index
+               FROM session_stream_event_refs reference
+               INNER JOIN session_stream_blocks block
+                 ON block.scope_key = reference.scope_key
+                AND block.session_id = reference.session_id
+                AND block.stream_id = reference.stream_id
+                AND block.block_index = reference.block_index
+              WHERE reference.scope_key = ? AND reference.session_id = ?
+                AND reference.sequence_number = ?`,
+            [input.scopeKey, input.sessionId, input.sequenceNumber],
+        )[0];
+        if (row === undefined) {
+            return undefined;
+        }
+        const event = decodeStreamBlock(rowString(row, "payload"))[rowNumber(row, "event_index")];
+        if (event === undefined || event.sequence !== input.sequenceNumber) {
+            throw new DatabaseError("database_statement_invalid", "The session stream event reference is invalid");
+        }
+        return event.payload;
     };
 
     readonly findAttempt = (scopeKey: string, sessionId: string, attemptId: string): AttemptRecord | undefined =>
@@ -144,7 +246,7 @@ export class SessionQueriesStorage {
             CommittedEventRecordSchema,
             this.#database.query(
                 `SELECT sequence_number, event_id, payload_hash, source_kind, source_id,
-              source_seq, payload, archive_segment_id, recorded_at
+              source_seq, payload, recorded_at
        FROM session_events
        WHERE scope_key = ? AND session_id = ? AND sequence_number > ?
        ORDER BY sequence_number

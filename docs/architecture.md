@@ -44,7 +44,7 @@ and artifact ownership, while storage serializes and restores the records and
 archive work in one transaction. Failed imports use a dedicated atomic rollback.
 Event projection services likewise prepare typed changes without writing SQL.
 Event storage rechecks the planned session/source sequence, then commits the
-projection, archive work, event, and sequence advance together. Core DO services
+projection, active raw event or terminal receipt/reclaim, and sequence advance together. Core DO services
 do not receive SQL executors; the core service tree has no transaction callbacks.
 Bot failures carry typed domain codes and failure categories. HTTP boundaries
 own the status mappings, including distinctions between missing and inaccessible
@@ -160,10 +160,18 @@ credentials and Runtime slots, and add indexed Project/Runtime lookup.
 Session identity and durable history are independent of connection channels.
 Turns and Attempts have explicit queued, running, waiting, terminal, or
 indeterminate lifecycle states. The daemon writes validated events through a durable SQLite
-outbox; Relay acknowledgements are emitted only after the authoritative event,
-projection, and archive job commit. Reconnection retransmits the same event IDs,
-so it repairs delivery without rerunning a command. Clients catch up with ordered
-cursors, then consume the same committed-event envelope live.
+outbox; Relay acknowledgements are emitted only after the authoritative event and
+projection commit. While a Turn is active, its raw event payloads remain in the
+Session Durable Object. Text-delta envelopes are packed into bounded
+`session_stream_blocks`; `session_events` keeps their ordered source/event index,
+while other active events remain inline. A terminal event atomically folds those
+blocks into the canonical `session_messages` read model (with continuation chunks
+when needed), records a payload-free retry receipt, and removes the completed raw
+range and stream blocks.
+Reconnection retransmits the same event IDs, so it repairs delivery without
+rerunning a command. Clients catch up with an active ordered cursor, then consume
+the same committed-event envelope live; after a terminal reclaim, they restore
+history from the message read model.
 
 Daemon-to-Relay replay is fair across event sources: the connection window is 16
 events and 32 MiB, with at most four unacknowledged events from one source. Each
@@ -202,24 +210,37 @@ work may wait for a disconnected connector. See [Bots and external
 connectors](bots.md) for the identity, authorization, API, and threat-model
 contract.
 
+The Session Durable Object keeps raw events only for the current active Turn and
+the latest detail for each in-progress activity. Text deltas use an event index
+plus bounded stream blocks rather than a growing `turns.response` field. A
+terminal event first materializes the final canonical assistant message, then
+atomically removes the completed raw-event range and its stream blocks and moves
+`minimum_sequence` past it. Session-scoped events committed
+without an active Turn follow the same rule. The small receipt retained for each
+source contains an event identity, hash, source sequence, cursor, and timestamp,
+but never the raw payload; it makes an acknowledgement-lost terminal retry
+idempotent. Event cursors before `minimum_sequence - 1` return `cursor_expired`.
+Clients restore completed chat through `/messages` and resume an active stream
+from that page's tail cursor, rather than replaying historical deltas.
+
 Activity summaries are bounded separately from recorded details. Full permitted
-details are captured before summarization, split into bounded compressed segments,
-and loaded only when a user expands an activity. Archive manifests are published
-only after all immutable segments pass integrity checks; hot content remains
-queryable until that commit. Archive admission is bounded by pending bytes rather
-than event count. Recovery takes up to 256 jobs per pass, writes up to four jobs
-concurrently, and schedules the next pass after one second while it is
+details are captured before summarization. Repeated updates for one running
+activity replace its hot content chunks; only the latest detail is staged when
+that activity completes or fails, and the Turn terminal event stages any details
+still running. A 1.5 MiB DO row budget splits those content chunks before the
+archive worker emits bounded compressed immutable segments to the configured
+SQLite or R2 store. Archive manifests are published only after every chunk passes
+integrity checks. Archive admission is therefore about pending activity-detail
+bytes, not raw event history. Recovery takes up to 256 jobs per pass, writes up to
+four jobs concurrently, and schedules the next pass after one second while it is
 successfully draining work. Each recovery invocation has an owned 60-second
-deadline; failed storage attempts retain the slower retry path.
-When the byte boundary is reached, Relay sends `session.event.deferred`, preserves
-the blocked source order, and keeps the multiplexed Runtime connection online.
-The daemon retains the event in its SQLite outbox and retries it on that same
-connection after the bounded delay. Failed jobs survive restart, so task duration
-itself is not a storage limit; actual disk/object capacity and sustained storage
-availability remain explicit safety boundaries.
+deadline; failed storage attempts retain the slower retry path. A long-running
+Turn deliberately keeps all of its raw events in the Durable Object until it
+terminates; the daemon outbox remains independently bounded at the local
+execution boundary.
 
 Every session operation receives Tenant / Project from verified credentials.
-Recording level, retention, hot event capacity, detail size, and active-session
+Recording level, retention, detail size, and active-session
 quota are explicit policies. The single current export format contains
 authoritative Turns, Attempts, Interactions, receipts, bindings, retained
 committed events, bounded projections, and integrity-checked content;

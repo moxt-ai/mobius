@@ -3,9 +3,7 @@ import { type ProjectScope, SessionRuntimeError } from "../../entity/do/session.
 import type {
     ArchiveJobPayload,
     ArtifactManifestRecord,
-    CommittedEventRecord,
     ContentManifestRecord,
-    SegmentManifestRecord,
     SessionRecord,
 } from "../../entity/do/session-records.ts";
 import {
@@ -129,6 +127,13 @@ export class SessionArchiveService {
 
     readonly hasPendingWork = (scope: ProjectScope, sessionId: string): boolean =>
         this.#storage.findPendingArchiveJob(scopeKey(scope), sessionId) !== undefined;
+
+    readonly hasHotArtifact = (scope: ProjectScope, sessionId: string, artifactId: string): boolean =>
+        this.#storage.hasHotArtifact(scopeKey(scope), sessionId, artifactId);
+
+    private readonly pendingArchiveByteLimit = (contentLimitBytes: number): number =>
+        Math.min(MAX_PENDING_ARCHIVE_BYTE_LIMIT, Math.max(MIN_PENDING_ARCHIVE_BYTE_LIMIT, contentLimitBytes * 4));
+
     readonly assertArchiveCapacity = (
         key: string,
         sessionId: string,
@@ -142,22 +147,13 @@ export class SessionArchiveService {
         if (backlog === undefined) {
             throw new SessionRuntimeError("session_storage_unavailable", "The session archive backlog is unavailable");
         }
-        const incomingPayloads = [
-            prepared.payload,
-            ...(prepared.activityDetail === null ? [] : [prepared.activityDetail.payload]),
-        ];
-        const incomingBytes = incomingPayloads.reduce(
-            (total, payload) => total + new TextEncoder().encode(payload).byteLength,
-            0,
-        );
-        const byteLimit = Math.min(
-            MAX_PENDING_ARCHIVE_BYTE_LIMIT,
-            Math.max(MIN_PENDING_ARCHIVE_BYTE_LIMIT, rowNumber(session, "content_limit_bytes") * 4),
-        );
+        const incomingBytes =
+            prepared.activityDetail === null ? 0 : new TextEncoder().encode(prepared.activityDetail.payload).byteLength;
+        const byteLimit = this.pendingArchiveByteLimit(rowNumber(session, "content_limit_bytes"));
         if (rowNumber(backlog, "pending_bytes") + incomingBytes > byteLimit) {
             throw new SessionRuntimeError(
                 "session_busy",
-                "The session archive backlog is full; event ingestion is paused until archiving recovers",
+                "The session artifact archive backlog is full; event ingestion is paused until archiving recovers",
             );
         }
     };
@@ -213,7 +209,6 @@ export class SessionArchiveService {
             scopeKey: scopeKey(scope),
             sessionId,
             targetId,
-            kind: rowString(job, "archive_kind") === "event" ? "event" : "artifact",
             byteLength: bytes.byteLength,
             sha256: digest,
             chunks: segments,
@@ -240,31 +235,11 @@ export class SessionArchiveService {
         );
     };
 
-    private readonly readArchiveSegment = async (
-        scope: ProjectScope,
-        sessionId: string,
-        segmentId: string,
-        signal: AbortSignal,
-    ): Promise<string> => {
-        const row = this.#storage.findSegmentManifest(scopeKey(scope), sessionId, segmentId);
-        if (row === undefined) {
-            throw new SessionRuntimeError("session_storage_unavailable", "The event archive segment does not exist");
-        }
-        return await this.readArchivedPayload(
-            scope,
-            sessionId,
-            segmentId,
-            row,
-            rowString(row, "state") === "published",
-            signal,
-        );
-    };
-
     private readonly readArchivedPayload = async (
         scope: ProjectScope,
         sessionId: string,
         targetId: string,
-        row: ArtifactManifestRecord | SegmentManifestRecord,
+        row: ArtifactManifestRecord,
         published: boolean,
         signal: AbortSignal,
     ): Promise<string> => {
@@ -330,18 +305,6 @@ export class SessionArchiveService {
             throw new SessionRuntimeError("session_storage_unavailable", "The archive failed integrity validation");
         }
         return new TextDecoder().decode(bytes);
-    };
-
-    readonly readEventPayload = async (
-        scope: ProjectScope,
-        sessionId: string,
-        row: CommittedEventRecord,
-        signal: AbortSignal,
-    ): Promise<string> => {
-        const payload = rowNullableString(row, "payload");
-        return (
-            payload ?? (await this.readArchiveSegment(scope, sessionId, rowString(row, "archive_segment_id"), signal))
-        );
     };
 
     readonly deleteArchivedContent = async (

@@ -12,7 +12,6 @@ export interface SessionEventCommit {
     readonly expectedPreviousSourceSequence: string | null;
     readonly messageId: string;
     readonly payload: string;
-    readonly archiveSegmentId: string;
     readonly recordedAt: number;
     readonly projection: SessionEventProjection;
     readonly activityDetail: {

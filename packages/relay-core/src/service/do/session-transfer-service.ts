@@ -76,7 +76,16 @@ export class SessionTransferService {
         const events: CommittedSessionEvent[] = [];
         let exportBytes = 0;
         for (const row of eventRows) {
-            const payload = await this.#archive.readEventPayload(scope, sessionId, row, signal);
+            const payload =
+                rowNullableString(row, "payload") ??
+                this.#storage.readActiveEventPayload({
+                    scopeKey: scopeKey(scope),
+                    sessionId,
+                    sequenceNumber: rowNumber(row, "sequence_number"),
+                });
+            if (payload === null || payload === undefined) {
+                throw new SessionRuntimeError("session_storage_unavailable", "The active event payload is unavailable");
+            }
             exportBytes += new TextEncoder().encode(payload).byteLength;
             if (exportBytes > MAX_EXPORT_BYTE_LENGTH) {
                 throw new SessionRuntimeError("content_too_large", "The session export exceeds the configured limit");
@@ -327,7 +336,6 @@ export class SessionTransferService {
                     event,
                     payloadHash: eventPayloadHashes.get(event.eventId) ?? "",
                     sourceId: event.source.kind === "attempt" ? event.source.attemptId : runtimeId,
-                    archiveSegmentId: `segment-${event.eventId}`,
                 })),
                 targetBindingId: targetBinding.bindingId,
                 configRevision: targetBinding.configRevision,

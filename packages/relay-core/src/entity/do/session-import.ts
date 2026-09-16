@@ -54,7 +54,6 @@ export interface SessionImportPlan {
         readonly event: CommittedSessionEvent;
         readonly payloadHash: string;
         readonly sourceId: string;
-        readonly archiveSegmentId: string;
     }[];
     readonly targetBindingId: string;
     readonly configRevision: number;
