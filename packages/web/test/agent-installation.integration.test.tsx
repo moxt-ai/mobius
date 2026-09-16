@@ -78,6 +78,11 @@ describe.sequential("Agent integration installation", () => {
             expect(await screen.findByText("Agent detected")).toBeTruthy();
             expect(screen.getByText("codex 0.153.0")).toBeTruthy();
             expect(screen.getByText("/opt/local/bin/codex")).toBeTruthy();
+            expect(
+                screen.getByText(
+                    "Mobius automatically installs and verifies this integration while the daemon is online. You can install it now if it needs attention.",
+                ),
+            ).toBeTruthy();
             expect(screen.getByRole("button", { name: "Install integration" })).toBeTruthy();
         } finally {
             cleanup();

@@ -195,11 +195,13 @@ The channel sidebar links directly to Agent settings and to
 `/channels/<channel-id>/access`. Agent settings shows verified local Agents
 separately from supported Agents that still need setup. A locally detected Agent
 shows its reported version and executable path; an Agent that was not detected is
-explicitly labeled `Not installed`. `Install integration` rechecks local
-discovery, then installs or repairs only the ACP integration. The public Runtime
-descriptor includes the reported path and version together with capability
-booleans observed during each ready Agent's bounded ACP probe. The page does not
-expose provider credentials or offer a remote Agent uninstall action.
+explicitly labeled `Not installed`. After the paired daemon connects, Mobius
+automatically installs or repairs only the ACP integration for each locally
+detected Agent; `Install integration` remains available as a manual retry.
+The public Runtime descriptor includes the reported path and version together
+with capability booleans observed during each ready Agent's bounded ACP probe.
+The page does not expose provider credentials or offer a remote Agent uninstall
+action.
 
 The pairing browser stores an owner host credential for the channel. The normal
 URL contains only the channel address, so opening it in another browser without
@@ -293,33 +295,36 @@ them. This means the channel owner and linked devices can read those two local
 details through the Relay. File identities, adapter paths, probe output, launch
 environment, and provider credentials stay on the local machine.
 
-Pairing and saved-channel startup are read-only. A detected Agent whose ACP
-adapter is missing, broken, or incompatible is published with
-`integration_not_installed`; an absent or unverified Agent is published with
-`agent_not_installed`. No adapter or Agent package is installed automatically
-when the daemon starts.
+The pairing claim and saved-channel startup discovery are read-only. A detected
+Agent whose ACP adapter is missing, broken, or incompatible is first published
+with `integration_not_installed`; an absent or unverified Agent is published
+with `agent_not_installed`. After the daemon has authenticated its first Relay
+connection, it automatically installs and verifies the pinned private ACP
+adapter for every locally detected `integration_not_installed` Agent. It never
+downloads, installs, upgrades, removes, or signs in to an Agent CLI.
 
 `mobius agents` prints the exact lightweight adapter recovery command when
 applicable. The one-time pairing claim remains read-only.
 
 When no verified integration is ready, the paired daemon keeps the channel
 online and Web still lists every supported Agent. The user installs the Agent CLI
-themselves. Selecting `Install integration` makes the local daemon rediscover the
-Agent at that moment, so a CLI installed after daemon startup is recognized
-without pairing again. If the Agent is still absent, the request fails with
+themselves; detected Agents are set up automatically. Selecting `Install
+integration` is a manual retry and makes the local daemon rediscover the Agent
+at that moment, so a CLI installed after daemon startup is recognized without
+pairing again. If the Agent is still absent, the request fails with
 `agent_not_installed` and asks the user to install it locally. Mobius never
-downloads, installs, upgrades, removes, or signs in to the Agent CLI through this
-button.
+downloads, installs, upgrades, removes, or signs in to an Agent CLI through this
+button or the automatic setup path.
 
-For a detected bridged Agent, the explicit request may install the exact pinned
-ACP adapter into Mobius's private cache, then repeats normal discovery and the
-ACP initialize handshake before advertising the integration as ready. Direct ACP
-Agents only repeat verification because they need no separate adapter. An
-explicit adapter override remains authoritative and is never replaced. Failure
-does not take the channel offline; the Agent remains in the setup catalog with a
-sanitized diagnostic. Progress events contain stable integration stages and
-errors, never commands, URLs, adapter paths, raw output, environment values, or
-credentials.
+For a detected bridged Agent, automatic setup or an explicit retry may install
+the exact pinned ACP adapter into Mobius's private cache, then repeats normal
+discovery and the ACP initialize handshake before advertising the integration as
+ready. Direct ACP Agents only repeat verification because they need no separate
+adapter. An explicit adapter override remains authoritative and is never
+replaced. Failure does not take the channel offline; the Agent remains in the
+setup catalog with a sanitized diagnostic and a retry action. Progress events
+contain stable integration stages and errors, never commands, URLs, adapter
+paths, raw output, environment values, or credentials.
 
 The Web request cannot change a release channel, command, URL, arguments, or
 installation target. Local provider credentials remain with the Agent process

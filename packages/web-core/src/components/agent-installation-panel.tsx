@@ -99,14 +99,14 @@ export function AgentInstallationCardsView({
                             </dl>
                         )}
                         <p
-                            aria-live={failed ? "polite" : undefined}
+                            aria-live={active || failed ? "polite" : undefined}
                             className="mt-3 text-[11px] leading-4 text-muted-foreground"
                         >
                             {installation !== undefined && !(installation instanceof IdleAgentInstallationState)
                                 ? installation.message
                                 : missing
                                   ? `Install ${agent.label} on this machine first. Then Mobius can install and verify its integration.`
-                                  : "The Agent is installed locally. Install its Mobius integration to make it available in chat."}
+                                  : "Mobius automatically installs and verifies this integration while the daemon is online. You can install it now if it needs attention."}
                         </p>
                         <div className="mt-3 flex items-center gap-2">
                             {active ? (
@@ -178,18 +178,19 @@ export function AgentInstallationPage() {
                 </span>
                 <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Local Agents</h1>
                 <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-                    No Agent integration is ready on {machineName} yet. Install Agent CLIs yourself; Mobius can then
-                    install and verify their integrations.
+                    No Agent integration is ready on {machineName} yet. Mobius automatically installs and verifies
+                    integrations for detected Agents. Install any missing Agent CLI yourself, then retry if setup needs
+                    attention.
                 </p>
                 {!runtime.canSend && (
                     <p className="mt-3 text-xs font-medium text-[#a85d00]">
-                        Keep the Mobius daemon online to check Agents and install integrations.
+                        Keep the Mobius daemon online while it checks Agents and installs integrations.
                     </p>
                 )}
                 <AgentInstallationCards compact={false} />
                 <p className="mt-6 text-xs leading-5 text-muted-foreground">
-                    Each request rechecks the local machine, so an Agent installed after the daemon started can be
-                    detected without pairing again. Provider sign-in may still be required afterward.
+                    Automatic setup and each retry recheck the local machine, so an Agent installed after the daemon
+                    started can be detected without pairing again. Provider sign-in may still be required afterward.
                 </p>
                 <Link
                     className="mx-auto mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-muted-foreground no-underline transition-colors duration-150 hover:bg-black/5 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"

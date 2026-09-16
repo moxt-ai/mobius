@@ -123,7 +123,11 @@ import type { AcpActivity } from "./acp/activity.ts";
 import { AcpExecutionError, AcpSessionManager, type AcpSessionObserver } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
-import { LocalAgentCatalogError, LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
+import {
+    AgentIntegrationDefinition,
+    LocalAgentCatalogError,
+    LocalAgentDefinition,
+} from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import {
     type AgentInstallation,
@@ -1549,6 +1553,27 @@ async function publishAgentCatalogUntilAvailable(
     }
 }
 
+async function installDetectedAgentIntegrations(
+    config: DaemonConfig,
+    installations: AgentInstallationManager,
+    signal: AbortSignal,
+): Promise<void> {
+    for (const agent of config.catalog.read().installableAgents) {
+        if (!(agent instanceof AgentIntegrationDefinition)) {
+            continue;
+        }
+        signal.throwIfAborted();
+        await installations.request(
+            {
+                agentId: agent.id,
+                kind: AGENT_INSTALL_REQUEST_KIND,
+                requestId: `automatic-integration-${randomUUID()}`,
+            },
+            signal,
+        );
+    }
+}
+
 async function runRelayConnection(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
@@ -1577,7 +1602,6 @@ async function runRelayConnection(
     const socket = await connectRelay(relayUrl, signal);
     const reconnectingTurns = [...activeTurns.values()];
     diagnostics.connectionOpened(connectionEpoch);
-    onConnected();
     const connectionController = new AbortController();
     const nativeRequests = new Map<
         string,
@@ -1597,6 +1621,7 @@ async function runRelayConnection(
         }
     >();
     installationObserver.connect(socket);
+    onConnected();
 
     try {
         await new Promise<void>((resolve, reject) => {
@@ -2626,9 +2651,24 @@ export async function runDaemon(
         installationAudit,
     );
     let connectionEpoch = 0;
+    let automaticIntegrationProvisioningStarted = false;
+    let automaticIntegrationProvisioning = Promise.resolve();
     let connectionAnnounced = false;
     let catalogPublished = false;
     let readinessAnnounced = false;
+    const startAutomaticIntegrationProvisioning = (): void => {
+        if (!connectionAnnounced || !catalogPublished || automaticIntegrationProvisioningStarted) {
+            return;
+        }
+        automaticIntegrationProvisioningStarted = true;
+        automaticIntegrationProvisioning = installDetectedAgentIntegrations(config, installations, signal).catch(
+            (error: unknown) => {
+                if (!signal.aborted) {
+                    console.error("Mobius daemon could not automatically install detected Agent integrations", error);
+                }
+            },
+        );
+    };
     const announceReadiness = (): void => {
         if (!connectionAnnounced || !catalogPublished || readinessAnnounced) {
             return;
@@ -2647,6 +2687,7 @@ export async function runDaemon(
             `${styleText(["bold", "yellow"], `Reconnect this channel later:\n  ${reconnectCommand}`)}\n\n`,
         );
         announceReadiness();
+        startAutomaticIntegrationProvisioning();
     };
     const catalogPublication = publishAgentCatalogUntilAvailable(config, diagnostics, signal, timer);
     void catalogPublication.then(() => {
@@ -2655,6 +2696,7 @@ export async function runDaemon(
         }
         catalogPublished = true;
         announceReadiness();
+        startAutomaticIntegrationProvisioning();
     });
 
     try {
@@ -2703,24 +2745,28 @@ export async function runDaemon(
             await catalogPublication;
         } finally {
             try {
-                await installations.close();
+                await automaticIntegrationProvisioning;
             } finally {
                 try {
-                    await ipc.close();
+                    await installations.close();
                 } finally {
                     try {
-                        await sessions.close();
+                        await ipc.close();
                     } finally {
                         try {
-                            sessionStore.close();
+                            await sessions.close();
                         } finally {
                             try {
-                                grants.close();
+                                sessionStore.close();
                             } finally {
                                 try {
-                                    publisher.close();
+                                    grants.close();
                                 } finally {
-                                    outbox.close();
+                                    try {
+                                        publisher.close();
+                                    } finally {
+                                        outbox.close();
+                                    }
                                 }
                             }
                         }

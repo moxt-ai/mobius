@@ -76,8 +76,9 @@ function ConnectedMobiusChat({
             <section className="rounded-xl border border-black/10 bg-background p-6">
                 <h1 className="text-xl font-semibold">Local Agents</h1>
                 <p className="mt-2 text-sm text-muted-foreground">
-                    No Agent integration is ready on {connection.machineName} yet. Install Agent CLIs yourself; Mobius
-                    can then install and verify their integrations.
+                    No Agent integration is ready on {connection.machineName} yet. Mobius automatically installs and
+                    verifies integrations for detected Agents. Install any missing Agent CLI yourself, then retry if
+                    setup needs attention.
                 </p>
                 {!runtime.canSend && (
                     <p role="status" className="mt-3 text-sm text-muted-foreground">

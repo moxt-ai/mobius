@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -205,6 +205,205 @@ if (process.argv.includes("--version")) {
                 expect(stdout).toContain(
                     `\u001B[1m\u001B[33mReconnect this channel later:\n  ${expectedCommand}\u001B[39m\u001B[22m`,
                 );
+            } finally {
+                if (daemon.exitCode === null) {
+                    daemon.kill("SIGTERM");
+                    await new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
+                }
+            }
+        } finally {
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a paired machine detects a local Codex CLI without its ACP adapter, When the daemon opens its first Relay connection, Then it installs and verifies the private integration automatically", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-auto-integration-cli-"));
+        const stateDirectory = join(temporaryDirectory, "state");
+        const connectionsDirectory = join(stateDirectory, "connections");
+        const defaultWorkspace = join(temporaryDirectory, "workspace");
+        const channelId = "automatic-integration-channel";
+        const daemonToken = "b".repeat(43);
+        const codexPath = join(temporaryDirectory, "codex");
+        const npmPath = join(temporaryDirectory, "npm");
+        const catalogBodies: string[] = [];
+        const integrationPublished = Promise.withResolvers<void>();
+        const relay = createServer((request, response) => {
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            if (
+                request.method === "PUT" &&
+                url.pathname === `${MOBIUS_API_PREFIX}/channels/${channelId}/catalog` &&
+                !url.searchParams.has("token") &&
+                request.headers.authorization === `Bearer ${daemonToken}`
+            ) {
+                let body = "";
+                request.setEncoding("utf8");
+                request.on("data", (chunk: string) => {
+                    body += chunk;
+                });
+                request.once("end", () => {
+                    catalogBodies.push(body);
+                    if (body.includes('"agents":[{"agentPath"') && body.includes('"id":"codex"')) {
+                        integrationPublished.resolve();
+                    }
+                    response.writeHead(204);
+                    response.end();
+                });
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        const relaySockets = new Set<Duplex>();
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            if (
+                typeof key !== "string" ||
+                url.pathname !== `${MOBIUS_API_PREFIX}/v1/runtimes/connect` ||
+                url.searchParams.has("token") ||
+                request.headers.authorization !== `Bearer ${daemonToken}`
+            ) {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socket.on("data", (chunk: Buffer) => {
+                if (chunk.byteLength > 0 && (chunk.readUInt8(0) & 0x0f) === 8) {
+                    socket.end(Buffer.from([0x88, 0]));
+                }
+            });
+        });
+
+        try {
+            await Promise.all([
+                mkdir(connectionsDirectory, { mode: 0o700, recursive: true }),
+                mkdir(defaultWorkspace, { mode: 0o700, recursive: true }),
+                writeFile(
+                    codexPath,
+                    executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else {
+  process.argv.push("--agent-name", "Codex");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+                    { mode: 0o700 },
+                ),
+                // The managed package registry is external to Mobius. This stateful local npm boundary
+                // creates the pinned adapter artifact while Mobius still performs its production checks.
+                writeFile(
+                    npmPath,
+                    executableSource(`
+import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+const arguments_ = process.argv.slice(2);
+const prefixIndex = arguments_.indexOf("--prefix");
+const prefix = arguments_[prefixIndex + 1];
+if (prefixIndex < 0 || prefix === undefined) process.exit(81);
+if (!arguments_.includes("@agentclientprotocol/codex-acp@1.8.0")) process.exit(82);
+const packageRoot = join(prefix, "node_modules", "@agentclientprotocol", "codex-acp");
+const adapterPath = join(packageRoot, "dist", "index.js");
+mkdirSync(join(adapterPath, ".."), { recursive: true });
+writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
+  bin: { "codex-acp": "dist/index.js" },
+  name: "@agentclientprotocol/codex-acp",
+  version: "1.8.0",
+}));
+writeFileSync(adapterPath, ${JSON.stringify(
+                        executableSource(`
+import { spawn } from "node:child_process";
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex-acp 1.8.0\\n");
+} else {
+  const executable = process.env.CODEX_PATH;
+  if (executable === undefined) process.exit(91);
+  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
+  child.once("error", () => process.exit(92));
+  child.once("exit", (code) => process.exit(code ?? 93));
+}
+`),
+                    )});
+chmodSync(adapterPath, 0o700);
+`),
+                    { mode: 0o700 },
+                ),
+            ]);
+            await Promise.all([chmod(codexPath, 0o700), chmod(npmPath, 0o700)]);
+            await listen(relay);
+            await writeFile(
+                join(connectionsDirectory, `${channelId}.json`),
+                `${JSON.stringify(
+                    {
+                        defaultWorkspace,
+                        channelId,
+                        daemonToken,
+                        relayOrigin: `http://127.0.0.1:${readPort(relay)}/`,
+                    },
+                    null,
+                    2,
+                )}\n`,
+                { mode: 0o600 },
+            );
+
+            const daemonEnvironment = {
+                ...process.env,
+                MOBIUS_CLAUDE_PATH: join(temporaryDirectory, "missing-claude"),
+                MOBIUS_CODEX_PATH: codexPath,
+                MOBIUS_COPILOT_PATH: join(temporaryDirectory, "missing-copilot"),
+                MOBIUS_CURSOR_PATH: join(temporaryDirectory, "missing-cursor"),
+                MOBIUS_DEEPSEEK_HARNESS_PATH: join(temporaryDirectory, "missing-deepseek"),
+                MOBIUS_GEMINI_PATH: join(temporaryDirectory, "missing-gemini"),
+                MOBIUS_GROK_BUILD_PATH: join(temporaryDirectory, "missing-grok"),
+                MOBIUS_HERMES_PATH: join(temporaryDirectory, "missing-hermes"),
+                MOBIUS_OPENCODE_PATH: join(temporaryDirectory, "missing-opencode"),
+                MOBIUS_PI_PATH: join(temporaryDirectory, "missing-pi"),
+                MOBIUS_STATE_DIRECTORY: stateDirectory,
+                MOBIUS_WORKBUDDY_PATH: join(temporaryDirectory, "missing-workbuddy"),
+                NO_PROXY: "127.0.0.1,localhost",
+                PATH: temporaryDirectory,
+                no_proxy: "127.0.0.1,localhost",
+            };
+            Reflect.deleteProperty(daemonEnvironment, "MOBIUS_CODEX_ACP_PATH");
+            const daemon = spawn(process.execPath, [cliPath, "start", "--channel", channelId], {
+                env: daemonEnvironment,
+                stdio: ["ignore", "pipe", "pipe"],
+            });
+            try {
+                await integrationPublished.promise;
+
+                expect(catalogBodies.some((body) => body.includes('"status":"integration_not_installed"'))).toBe(true);
+                expect(catalogBodies.at(-1)).toContain('"id":"codex"');
+                expect(catalogBodies.at(-1)).not.toContain('"status":"integration_not_installed"');
+                const adapterMetadata = await stat(
+                    join(
+                        stateDirectory,
+                        "adapters",
+                        "codex",
+                        "1.8.0",
+                        "node_modules",
+                        "@agentclientprotocol",
+                        "codex-acp",
+                        "dist",
+                        "index.js",
+                    ),
+                );
+                expect(adapterMetadata.isFile()).toBe(true);
             } finally {
                 if (daemon.exitCode === null) {
                     daemon.kill("SIGTERM");

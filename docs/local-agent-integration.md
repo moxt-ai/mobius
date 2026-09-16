@@ -35,8 +35,10 @@ then uses them for both the Agent and ACP process. A direct Agent therefore
 cannot accidentally mix identities from two executables.
 
 Managed ACP adapter metadata and installation stay under
-`packages/cli/src/agent-installation/`. Adapter installation is an explicit
-integration action and remains separate from read-only Agent discovery. Mobius
+`packages/cli/src/agent-installation/`. After a paired daemon's first Relay
+connection, Mobius automatically provisions only the pinned adapter for locally
+detected Agents whose integration is incomplete; a Web action can retry that
+same operation. It remains separate from read-only Agent discovery, and Mobius
 does not install Agent CLIs.
 
 ## Adding an Agent
@@ -58,12 +60,13 @@ does not install Agent CLIs.
    lifecycle as applicable. Run the real harness conformance path before
    advertising it as ready.
 
-Discovery is part of the local execution boundary. Remote clients can select a
-registered Agent ID and request its integration, but they cannot provide an
-executable path, command, argument, environment variable, managed artifact, or
-capability claim. The daemon re-runs local discovery for every request and
-rejects the integration with `agent_not_installed` until the Agent executable
-passes the local version probe. Detected Agent paths and versions are output
-metadata for authenticated channel clients; they are never accepted back as
-execution authority. Local and managed executables must both be resolved and
-verified immediately before use.
+Discovery is part of the local execution boundary. Automatic setup reads only
+the daemon's locally produced detected-Agent catalog; remote clients can select
+a registered Agent ID only when they explicitly retry its integration. Neither
+path can provide an executable path, command, argument, environment variable,
+managed artifact, or capability claim. The daemon re-runs local discovery for
+every automatic setup and retry, and rejects the integration with
+`agent_not_installed` until the Agent executable passes the local version probe.
+Detected Agent paths and versions are output metadata for authenticated channel
+clients; they are never accepted back as execution authority. Local and managed
+executables must both be resolved and verified immediately before use.
