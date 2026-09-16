@@ -82,10 +82,9 @@
                 },
                 {
                     "binding": "D1_SHARD_WNAM_01",
-                    // Keep the logical shard ID stable; its physical database is now in APAC.
-                    "database_name": "mobius-cloud-staging-wnam-01-apac",
+                    "database_name": "mobius-cloud-staging-wnam-01",
                     "migrations_table": "mobius_migrations",
-                    "database_id": "50fabc4b-9fe1-4cf1-b083-be8e0f6be3eb",
+                    "database_id": "c008aef6-7534-4b25-8649-ebf1b55bb4ee",
                     "migrations_dir": "../relay-core/migrations/d1"
                 },
                 {
