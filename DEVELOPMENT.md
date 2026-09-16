@@ -314,12 +314,13 @@ publishing. pnpm packing applies `publishConfig` and replaces workspace
 dependencies with registry versions.
 
 The SDK depends on `@moxt-ai/mobius-protocol`. When both versions change, the
-workflow publishes Protocol first. When only the SDK changes, it stops unless
-the matching Protocol version is already on npm. Existing exact versions are
-skipped so a GitHub Actions re-run can recover from a partial release without
-attempting to overwrite an immutable npm version. Registry failures other than
-404 stop the release. A manual dispatch from `main` provides the same recovery
-path for the current versions.
+workflow publishes Protocol first and waits for that exact Protocol version to
+be available from npm before publishing SDK. When only the SDK changes, it
+stops unless the matching Protocol version is already on npm. Existing exact
+versions are skipped so a GitHub Actions re-run can recover from a partial
+release without attempting to overwrite an immutable npm version. Registry
+failures other than 404 stop the release. A manual dispatch from `main` provides
+the same recovery path for the current versions.
 
 Configure npm trusted publishing for **both** packages with organization
 `moxt-ai`, repository `mobius`, workflow `publish-sdk.yml`, no environment, and

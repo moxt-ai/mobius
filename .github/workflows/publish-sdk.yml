@@ -231,6 +231,57 @@ jobs:
           fi
           npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public
 
+      - name: Wait for Protocol registry availability
+        if: steps.versions.outputs.sdk_changed == 'true' && steps.versions.outputs.protocol_changed == 'true' && steps.registry.outputs.protocol_exists != 'true'
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const manifestPath = "packages/protocol/package.json";
+          const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+          if (
+            manifest === null ||
+            typeof manifest !== "object" ||
+            Array.isArray(manifest) ||
+            manifest.name !== "@moxt-ai/mobius-protocol" ||
+            typeof manifest.version !== "string"
+          ) {
+            throw new Error(`Package manifest at ${manifestPath} is invalid`);
+          }
+
+          const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.version)}`;
+          const deadline = Date.now() + 5 * 60_000;
+          let available = false;
+          let lastResult = "no response";
+
+          while (!available && Date.now() < deadline) {
+            try {
+              const response = await fetch(registryUrl, {
+                signal: AbortSignal.timeout(Math.max(1, Math.min(30_000, deadline - Date.now()))),
+              });
+              await response.body?.cancel();
+              lastResult = `HTTP ${response.status}`;
+              if (response.status === 200) {
+                available = true;
+                console.log(`${manifest.name}@${manifest.version} is available in npm.`);
+                continue;
+              }
+            } catch (error) {
+              lastResult = error instanceof Error ? error.message : "request failed";
+            }
+
+            const remaining = deadline - Date.now();
+            if (remaining > 0) {
+              console.log(`Waiting for ${manifest.name}@${manifest.version} to become available in npm (${lastResult}).`);
+              await new Promise((resolve) => setTimeout(resolve, Math.min(5_000, remaining)));
+            }
+          }
+
+          if (!available) {
+            throw new Error(`${manifest.name}@${manifest.version} did not become available in npm within 5 minutes (last result: ${lastResult}).`);
+          }
+          NODE
+
       - name: Publish SDK
         if: steps.versions.outputs.sdk_changed == 'true' && steps.registry.outputs.sdk_exists != 'true'
         run: |
