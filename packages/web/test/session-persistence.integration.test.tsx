@@ -168,7 +168,7 @@ describe.sequential("Session persistence boundaries", () => {
             vi.useFakeTimers({ toFake: ["Date", "clearTimeout", "setTimeout"] });
             vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
             await environment.evictRuntime(paired.channelId);
-            await paired.daemon.waitForClose();
+            await paired.daemon.waitForClose(signal);
             await vi.advanceTimersByTimeAsync(0);
             await waitForDocumentState(() => screen.queryByRole("status", { name: "Reconnecting" }) !== null, signal);
             expect(screen.getByRole("status", { name: "Reconnecting" })).toBeDefined();

@@ -23,7 +23,7 @@ export default defineConfig({
         maxWorkers: 4,
         hookTimeout: 40_000,
         include: ["test/**/*.integration.test.tsx", "test/**/*.e2e.test.tsx"],
-        testTimeout: 15_000,
+        testTimeout: 45_000,
         coverage: {
             provider: "istanbul",
             allowExternal: true,

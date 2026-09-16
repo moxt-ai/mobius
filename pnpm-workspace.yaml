@@ -13,7 +13,7 @@ packageExtensions:
       typescript: 6.0.3
 
 overrides:
-  happy-dom: 20.8.9
+  happy-dom: 20.14.3
 
 allowBuilds:
   '@clerk/shared': true

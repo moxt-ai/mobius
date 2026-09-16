@@ -14,7 +14,7 @@ import {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
 } from "../../relay-cloudflare-platform/src/worker.ts";
-import { waitForDocumentState } from "./app-integration-harness.ts";
+import { setHappyDomUrl, waitForDocumentState } from "./app-integration-harness.ts";
 
 let bindings: Awaited<ReturnType<typeof createTestMobiusPlatformBindings>> | undefined;
 
@@ -62,6 +62,7 @@ it("Given an organization admin, When they share an invite link and a new user a
             signal: cancellation,
             onServerMessage: () => {},
         });
+        setHappyDomUrl(new URL(server.origin));
         try {
             const admin = identity.session("user_admin", "org_invites");
             const visitor = identity.session("user_visitor", "");
@@ -108,15 +109,17 @@ it("Given an organization admin, When they share an invite link and a new user a
                                 throw new Error("Membership was not created");
                             }
                             const session = identity.session("user_visitor", id, role);
-                            root.render(
-                                <PlatformApp
-                                    key={session}
-                                    endpoint={server.origin}
-                                    getToken={async () => session}
-                                    organization={organization}
-                                    userControl={null}
-                                    organizationControl={null}
-                                />,
+                            flushSync(() =>
+                                root.render(
+                                    <PlatformApp
+                                        key={session}
+                                        endpoint={server.origin}
+                                        getToken={async () => session}
+                                        organization={organization}
+                                        userControl={null}
+                                        organizationControl={null}
+                                    />,
+                                ),
                             );
                         }}
                     />,
@@ -135,6 +138,7 @@ it("Given an organization admin, When they share an invite link and a new user a
             expect(container.textContent).toContain("org_invites");
             expect(container.textContent).not.toContain("Could not join");
         } finally {
+            controller.abort();
             flushSync(() => root.unmount());
         }
     } finally {

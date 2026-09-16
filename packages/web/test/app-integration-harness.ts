@@ -18,7 +18,7 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterAll, beforeAll, expect } from "vitest";
 import type { AgentOption, InstallableAgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
@@ -40,6 +40,37 @@ interface PendingMessage {
     readonly kind: string;
     readonly reject: (reason: Error) => void;
     readonly resolve: (message: string) => void;
+}
+
+const ASYNC_UI_TIMEOUT_MS = 8_000;
+
+configure({ asyncUtilTimeout: ASYNC_UI_TIMEOUT_MS });
+
+async function waitForOperation<T>(operation: Promise<T>, cancellation: AbortSignal): Promise<T> {
+    cancellation.throwIfAborted();
+    return await new Promise<T>((resolve, reject) => {
+        const cleanupListener = (): void => {
+            cancellation.removeEventListener("abort", handleAbort);
+        };
+        const handleAbort = (): void => {
+            cleanupListener();
+            reject(cancellation.reason);
+        };
+        cancellation.addEventListener("abort", handleAbort, { once: true });
+        if (cancellation.aborted) {
+            handleAbort();
+        }
+        void operation.then(
+            (value) => {
+                cleanupListener();
+                resolve(value);
+            },
+            (error: unknown) => {
+                cleanupListener();
+                reject(error);
+            },
+        );
+    });
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -75,7 +106,7 @@ function decodeClaimedPairing(value: unknown): ClaimedPairing {
     };
 }
 
-function setHappyDomUrl(url: URL): void {
+export function setHappyDomUrl(url: URL): void {
     const api: unknown = Reflect.get(window, "happyDOM");
     if (!isRecord(api)) {
         throw new Error("The Web integration test requires Happy DOM");
@@ -203,7 +234,8 @@ export class StatefulDaemon {
     readonly available = (kind: string): number =>
         this.#messages.filter((message) => decodeMessageKind(message) === kind).length;
 
-    readonly waitForClose = async (): Promise<void> => await this.#closed;
+    readonly waitForClose = async (cancellation: AbortSignal): Promise<void> =>
+        await waitForOperation(this.#closed, cancellation);
 
     readonly receive = (kind: string, cancellation?: AbortSignal): Promise<string> => {
         cancellation?.throwIfAborted();

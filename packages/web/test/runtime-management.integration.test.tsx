@@ -214,7 +214,9 @@ describe.sequential("Project Runtime management", () => {
         }
     });
 
-    it("Given an owned Project with one paired Runtime, When another machine is paired and revoked from Web, Then both machines are shown independently and the current machine stays online", async () => {
+    it("Given an owned Project with one paired Runtime, When another machine is paired and revoked from Web, Then both machines are shown independently and the current machine stays online", async ({
+        signal,
+    }) => {
         const paired = await pairDaemon();
         const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
         window.history.replaceState(null, "", settingsPath);
@@ -266,7 +268,7 @@ describe.sequential("Project Runtime management", () => {
                 }),
             );
 
-            await additionalDaemon.waitForClose();
+            await additionalDaemon.waitForClose(signal);
             await screen.findByText("Second integration machine was revoked.");
             await waitFor(() => {
                 const remainingDirectory = screen.getByRole("list", { name: "Project runtimes" });
