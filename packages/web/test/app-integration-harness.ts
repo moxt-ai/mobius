@@ -292,6 +292,7 @@ export class StatefulDaemon {
 
 export interface PairDaemonOptions {
     readonly agents?: readonly AgentOption[];
+    readonly botSessionConfiguration?: boolean;
     readonly installableAgents?: readonly InstallableAgentOption[];
 }
 
@@ -312,6 +313,7 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
                 {
                     agentPath: "/usr/local/bin/codex",
                     agentVersion: "codex 0.153.0",
+                    ...(options.botSessionConfiguration === true ? { botSessionConfiguration: true } : {}),
                     capabilities: {
                         additionalDirectories: true,
                         audioPrompt: false,

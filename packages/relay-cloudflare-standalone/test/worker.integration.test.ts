@@ -2042,6 +2042,85 @@ describe.sequential("Cloudflare session deployment", () => {
         });
     });
 
+    it("Given a running Agent streams text deltas, When the browser receives the live events, Then the Session directory holds its start checkpoint until the terminal event arrives", async () => {
+        vi.setSystemTime(new Date("2027-09-06T00:00:00.000Z"));
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "streaming-directory-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const command = prompt(sessionId, "streaming-directory-command", "stream an answer");
+            await submitPrompt(host, daemon, command);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "streaming-directory-started", {
+                    attemptId: "streaming-directory-attempt",
+                    commandId: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+            const deltas = Array.from({ length: 8 }, (_, index) =>
+                envelope(sessionId, `streaming-directory-delta-${index.toString()}`, {
+                    commandId: command.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: `streaming-directory-message-${index.toString()}`,
+                    sessionId,
+                    text: `part ${index.toString()}`,
+                }),
+            );
+            await commitBatch(host, daemon, deltas);
+
+            const sessionStub = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+            );
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                await expect(state.storage.getAlarm()).resolves.toBe(Date.now() + 1_000);
+            });
+
+            const duringStream = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions?limit=1`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(duringStream.status).toBe(200);
+            await expect(duringStream.json()).resolves.toMatchObject({
+                sessions: [{ lastCommittedSeq: "1", sessionId }],
+            });
+
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "streaming-directory-completed", {
+                    commandId: command.commandId,
+                    kind: SESSION_COMPLETED_KIND,
+                    sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            const completed = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions?limit=1`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(completed.status).toBe(200);
+            await expect(completed.json()).resolves.toMatchObject({
+                sessions: [{ lastCommittedSeq: "10", sessionId }],
+            });
+        } finally {
+            host.socket.close(1000, "Streaming directory test complete");
+            daemon.socket.close(1000, "Streaming directory test complete");
+        }
+    });
+
     it("Given one Session sends a long ordered event burst, When another Session sends an event on the same Runtime connection, Then the second Session commits before the first burst drains", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);

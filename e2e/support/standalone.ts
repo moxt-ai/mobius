@@ -11,6 +11,26 @@ const cliPath = fileURLToPath(new URL("../../packages/cli/dist/cli.js", import.m
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
+function stopProcessTree(child: ChildProcess): void {
+    if (process.platform === "win32") {
+        child.kill("SIGTERM");
+        return;
+    }
+    if (child.pid !== undefined) {
+        process.kill(-child.pid, "SIGTERM");
+    }
+}
+
+function forceStopProcessTree(child: ChildProcess): void {
+    if (process.platform === "win32") {
+        child.kill("SIGKILL");
+        return;
+    }
+    if (child.pid !== undefined) {
+        process.kill(-child.pid, "SIGKILL");
+    }
+}
+
 export interface StandalonePairing {
     readonly channelId: string;
     readonly hostToken: string;
@@ -59,7 +79,11 @@ class ObservedProcess {
     #output = "";
 
     constructor(command: string, arguments_: readonly string[], options: Parameters<typeof spawn>[2]) {
-        this.child = spawn(command, arguments_, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+        this.child = spawn(command, arguments_, {
+            ...options,
+            detached: process.platform !== "win32",
+            stdio: ["ignore", "pipe", "pipe"],
+        });
         const collect = (chunk: Buffer): void => {
             this.#output += chunk.toString();
         };
@@ -100,16 +124,18 @@ class ObservedProcess {
     }
 
     async stop(): Promise<void> {
-        if (this.child.exitCode !== null) {
-            return;
-        }
-        this.child.kill("SIGTERM");
+        const exited =
+            this.child.exitCode === null ? once(this.child, "exit", { signal: AbortSignal.timeout(5_000) }) : null;
         try {
-            await once(this.child, "exit", { signal: AbortSignal.timeout(5_000) });
+            stopProcessTree(this.child);
+            if (exited !== null) {
+                await exited;
+            }
         } catch {
             if (this.child.exitCode === null) {
-                this.child.kill("SIGKILL");
-                await once(this.child, "exit");
+                const forcedExit = once(this.child, "exit");
+                forceStopProcessTree(this.child);
+                await forcedExit;
             }
         }
     }
@@ -201,6 +227,7 @@ if (process.argv.includes("--version")) {
     ]);
     await Promise.all([chmod(agent, 0o700), chmod(adapter, 0o700)]);
     return {
+        CODEX_PATH: agent,
         MOBIUS_CODEX_PATH: agent,
         MOBIUS_CODEX_ACP_PATH: adapter,
         MOBIUS_CLAUDE_PATH: missing,

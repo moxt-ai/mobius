@@ -9,6 +9,7 @@ import type { SqliteSessionRuntime } from "./sqlite-session-runtime.ts";
 
 const ARCHIVE_CONTINUATION_DELAY_MILLISECONDS = 1_000;
 const RECOVERY_RETRY_DELAY_MILLISECONDS = 30_000;
+const STREAMING_ARCHIVE_DELAY_MILLISECONDS = 1_000;
 
 interface SessionRecoveryContext {
     readonly runtime: SqliteSessionRuntime;
@@ -23,14 +24,33 @@ interface SessionRecoveryContext {
 
 export class SessionRecoveryService {
     readonly #cx: SessionRecoveryContext;
+    #streamingArchiveScheduled = false;
 
     constructor(cx: SessionRecoveryContext) {
         this.#cx = cx;
     }
 
-    readonly schedule = (signal: AbortSignal) => this.#cx.schedule(Date.now(), signal);
+    readonly schedule = async (signal: AbortSignal): Promise<void> => {
+        this.#streamingArchiveScheduled = false;
+        await this.#cx.schedule(Date.now(), signal);
+    };
+
+    readonly deferStreamingArchive = async (signal: AbortSignal): Promise<void> => {
+        signal.throwIfAborted();
+        if (this.#streamingArchiveScheduled) {
+            return;
+        }
+        this.#streamingArchiveScheduled = true;
+        try {
+            await this.#cx.schedule(Date.now() + STREAMING_ARCHIVE_DELAY_MILLISECONDS, signal);
+        } catch (error) {
+            this.#streamingArchiveScheduled = false;
+            throw error;
+        }
+    };
 
     readonly recover = async (signal: AbortSignal): Promise<void> => {
+        this.#streamingArchiveScheduled = false;
         const rows = this.#cx.runtime.listRecoverySessions();
         let pending = false;
         let continueArchive = false;

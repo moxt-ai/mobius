@@ -384,12 +384,23 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length !== 5 ||
+            (Object.keys(candidate).length !== 5 && Object.keys(candidate).length !== 6) ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
-            !Object.hasOwn(candidate, "label")
+            !Object.hasOwn(candidate, "label") ||
+            Object.keys(candidate).some(
+                (key) =>
+                    key !== "agentPath" &&
+                    key !== "agentVersion" &&
+                    key !== "botSessionConfiguration" &&
+                    key !== "capabilities" &&
+                    key !== "id" &&
+                    key !== "label",
+            ) ||
+            (Object.hasOwn(candidate, "botSessionConfiguration") &&
+                typeof candidate["botSessionConfiguration"] !== "boolean")
         ) {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }

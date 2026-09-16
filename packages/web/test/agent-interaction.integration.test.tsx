@@ -85,6 +85,28 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given a paired Agent advertises local Bot session configuration, When Web opens its conversation, Then the extended Agent directory remains usable", async () => {
+        const paired = await pairDaemon({ botSessionConfiguration: true });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            expect(
+                await screen.findByRole("textbox", {
+                    name: "Message the local agent",
+                }),
+            ).toBeTruthy();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then its local details are visible and navigation preserves the draft", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

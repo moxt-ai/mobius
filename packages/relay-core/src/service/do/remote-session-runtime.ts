@@ -1008,7 +1008,10 @@ export class RemoteSessionRuntime
             throw new SessionRuntimeError("session_storage_unavailable", "The committed event result is invalid");
         }
         const committed = decodeCommittedSessionEvent(JSON.stringify(value["committed"]));
-        await this.updateDirectory(decodeSummary(value["summary"]), signal);
+        const summary = value["summary"];
+        if (summary !== undefined) {
+            await this.updateDirectory(decodeSummary(summary), signal);
+        }
         return { committed, duplicate: value["duplicate"] };
     };
 

@@ -1,7 +1,10 @@
 import {
     decodeMessageKind,
     SESSION_COMPLETED_KIND,
+    SESSION_CONFIG_UPDATED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_INFO_UPDATED_KIND,
+    SESSION_STARTED_KIND,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
 import type { BotOutboundSubmission } from "../../entity/bot/bot-session.ts";
@@ -14,6 +17,19 @@ interface DoServices {
     readonly runtime: SqliteSessionRuntime;
     readonly bots: BotSessionService;
     readonly recovery: SessionRecoveryService;
+}
+
+function isTerminalSessionEvent(kind: string): boolean {
+    return kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND;
+}
+
+function requiresDirectoryUpdate(kind: string): boolean {
+    return (
+        isTerminalSessionEvent(kind) ||
+        kind === SESSION_STARTED_KIND ||
+        kind === SESSION_CONFIG_UPDATED_KIND ||
+        kind === SESSION_INFO_UPDATED_KIND
+    );
 }
 
 export class DoService {
@@ -61,9 +77,9 @@ export class DoService {
             }
             throw error;
         }
+        const kind = decodeMessageKind(envelope.payload);
         if (!result.duplicate) {
-            const kind = decodeMessageKind(envelope.payload);
-            if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
+            if (isTerminalSessionEvent(kind)) {
                 const payload: unknown = JSON.parse(envelope.payload);
                 const record =
                     typeof payload === "object" && payload !== null && !Array.isArray(payload) ? payload : {};
@@ -85,8 +101,15 @@ export class DoService {
                 await this.#services.recovery.reconcile(scope, envelope.sessionId, pending, signal);
             }
         }
+        if (isTerminalSessionEvent(kind)) {
+            await this.#services.recovery.schedule(signal);
+        } else {
+            await this.#services.recovery.deferStreamingArchive(signal);
+        }
+        if (!requiresDirectoryUpdate(kind)) {
+            return result;
+        }
         const summary = await this.#services.runtime.readSession(scope, envelope.sessionId, signal);
-        await this.#services.recovery.schedule(signal);
         return { ...result, summary };
     };
 
