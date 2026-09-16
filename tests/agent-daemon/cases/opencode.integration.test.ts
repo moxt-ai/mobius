@@ -9,7 +9,7 @@ import {
 import { OpenCodeFixture } from "../infra/opencode.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
-it("Given real OpenCode configured with a local provider, When a prompt crosses the server and daemon protocols, Then OpenCode calls the provider and its ACP response is persisted", {
+it("Given real OpenCode configured with a local provider, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
 }, async () => {
     const signal = AbortSignal.timeout(110_000);
@@ -89,14 +89,26 @@ it("Given real OpenCode configured with a local provider, When a prompt crosses 
             await subscription.completed;
         }
 
-        const history = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal);
-        expect(history.messages).toMatchObject([
-            {
-                attempt: { kind: "succeeded" },
-                prompt: "Reply using the configured model",
-                response: provider.response,
-            },
-        ]);
+        await expect
+            .poll(
+                async () =>
+                    (await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal)).messages,
+                { timeout: 10_000 },
+            )
+            .toMatchObject([
+                {
+                    attempt: { kind: "succeeded" },
+                    activities: [
+                        expect.objectContaining({
+                            activityType: "tool",
+                            status: "completed",
+                            toolCallId: expect.any(String),
+                        }),
+                    ],
+                    prompt: "Reply using the configured model",
+                    response: provider.response,
+                },
+            ]);
     } finally {
         client.close();
     }

@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { startProductionMobiusCli, startStandaloneDeployment } from "../../../e2e/support/standalone.ts";
 import {
+    MobiusAgentActivityEvent,
     MobiusClient,
     MobiusRecordingPolicy,
     MobiusTurnCompletedEvent,
@@ -10,7 +11,7 @@ import {
 import { CodexFixture } from "../infra/codex.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
-it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt crosses the server and daemon protocols, Then the ACP response is persisted", {
+it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
 }, async () => {
     const signal = AbortSignal.timeout(110_000);
@@ -31,6 +32,7 @@ it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt cr
         endpoint: deployment.origin,
         projectId: pairing.projectId,
     });
+    const observedEvents: unknown[] = [];
     try {
         await expect(client.runtimes.list(signal)).resolves.toEqual([
             expect.objectContaining({
@@ -63,6 +65,19 @@ it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt cr
             "",
             {
                 receive: (event) => {
+                    observedEvents.push(
+                        event.payload instanceof MobiusAgentActivityEvent
+                            ? {
+                                  activityType: event.payload.activityType,
+                                  kind: event.payload.kind,
+                                  name: event.payload.name,
+                                  sequence: event.payload.sequence,
+                                  status: event.payload.status,
+                                  title: event.payload.title,
+                                  toolKind: event.payload.toolKind,
+                              }
+                            : { kind: event.payload.kind, type: event.payload.constructor.name },
+                    );
                     if (event.payload instanceof MobiusTurnCompletedEvent) {
                         completed.resolve(event.payload);
                     }
@@ -93,14 +108,45 @@ it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt cr
             await subscription.completed;
         }
 
-        const history = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal);
-        expect(history.messages).toMatchObject([
-            {
-                attempt: { kind: "succeeded" },
-                prompt: "Reply using the configured model",
-                response: expect.stringContaining(provider.response),
-            },
-        ]);
+        try {
+            await expect
+                .poll(
+                    async () =>
+                        (await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal))
+                            .messages,
+                    { timeout: 10_000 },
+                )
+                .toMatchObject([
+                    {
+                        attempt: { kind: "succeeded" },
+                        activities: [
+                            expect.objectContaining({
+                                activityType: "tool",
+                                status: "completed",
+                                toolCallId: expect.any(String),
+                            }),
+                        ],
+                        prompt: "Reply using the configured model",
+                        response: expect.stringContaining(provider.response),
+                    },
+                ]);
+        } catch (error) {
+            const messages = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal);
+            process.stderr.write(
+                `Codex integration diagnostics:\n${JSON.stringify(
+                    {
+                        daemonOutput: daemon.output,
+                        messages: messages.messages,
+                        observedEvents,
+                        providerRequests: provider.diagnostics(),
+                        rollout: await codex.rolloutDiagnostics(),
+                    },
+                    null,
+                    2,
+                )}\n`,
+            );
+            throw error;
+        }
     } finally {
         client.close();
     }

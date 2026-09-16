@@ -27,8 +27,11 @@ A case must show that:
 1. the daemon discovers and starts the real Agent executable;
 2. the Agent uses its supported configuration to connect to a loopback fake
    provider;
-3. a prompt submitted through the server protocol completes; and
-4. the response returned through ACP is visible in persisted server history.
+3. the fake provider selects a real Agent tool, the Agent executes it, and the
+   result returns to the provider;
+4. the tool activity crosses ACP and is visible in persisted server history;
+   and
+5. the prompt completes with the final provider response in that history.
 
 Do not drive the scenario by calling Agent discovery, `AcpSessionManager`, an
 ACP client, or the Agent executable from the test. Those are internal links in
@@ -41,6 +44,12 @@ returns through ACP and server history proves that the Agent connected. Do not
 assert the Agent's request path, headers, payload shape, prompt rewriting, or
 auxiliary model calls unless Mobius itself depends on that behavior.
 
+Choose a harmless tool from the Agent's advertised tools by loose name and
+schema matching. Prefer a shell-like tool running `pwd`, then a read-like tool.
+Return the final answer only after a tool-result item appears in the next model
+request. This keeps the provider tolerant of Agent-specific tool names and
+unrelated model calls while proving the complete tool round trip.
+
 ## Layout
 
 ```text
@@ -49,10 +58,12 @@ tests/agent-daemon/
   cases/
     codex.integration.test.ts
     opencode.integration.test.ts
+    pi.integration.test.ts
   infra/
     codex.ts
     executable.ts
     opencode.ts
+    pi.ts
   providers/
     openai.ts
 ```
@@ -75,8 +86,8 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Codex case likewise accepts `MOBIUS_TEST_CODEX_PATH` and
-`MOBIUS_TEST_CODEX_ACP_PATH`. Without overrides, cases resolve `opencode`,
-`codex`, and `codex-acp` from `PATH`. CI installs the repository-tested versions
-before running the suite. Missing Agent software is a setup failure, not a
-skipped test.
+The Codex and Pi cases likewise accept `MOBIUS_TEST_CODEX_PATH`,
+`MOBIUS_TEST_CODEX_ACP_PATH`, `MOBIUS_TEST_PI_PATH`, and
+`MOBIUS_TEST_PI_ACP_PATH`. Without overrides, cases resolve their executables
+from `PATH`. CI installs the repository-tested versions before running the
+suite. Missing Agent software is a setup failure, not a skipped test.

@@ -91,6 +91,10 @@ class ObservedProcess {
         this.child.stderr?.on("data", collect);
     }
 
+    get output(): string {
+        return this.#output;
+    }
+
     async waitFor(text: string, timeoutMilliseconds: number): Promise<void> {
         if (this.#output.includes(text)) {
             return;
@@ -261,6 +265,10 @@ export class ProductionMobiusCli implements AsyncDisposable {
         this.#environment = environment;
         this.#process = process_;
         this.#temporaryDirectory = temporaryDirectory;
+    }
+
+    get output(): string {
+        return this.#process.output;
     }
 
     async restartFromSavedChannel(): Promise<void> {
