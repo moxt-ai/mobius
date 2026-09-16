@@ -6,9 +6,11 @@ import {
     createBotApplication,
     createPlatformMobiusApplication,
     createWorkerContext,
+    instrumentD1Database,
     type LiteSessionConfigurationEnvironment,
     PairingDirectoryError,
     type RelayContext,
+    RequestAccessMetrics,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import { type Handler, Hono } from "hono";
@@ -250,7 +252,32 @@ export function createPlatformApplication(
         .onError((error) => {
             throw error;
         })
-        .route("/", application);
+        .all("*", async (context) => {
+            const metrics = new RequestAccessMetrics();
+            return metrics.appendServerTiming(
+                await application.fetch(context.req.raw, instrumentPlatformDatabases(context.env, metrics)),
+            );
+        });
+}
+
+function instrumentPlatformDatabases(
+    environment: PlatformRelayBindings,
+    metrics: RequestAccessMetrics,
+): PlatformRelayBindings {
+    return {
+        ...environment,
+        PLATFORM_DIRECTORY_DATABASE: instrumentD1Database(environment.PLATFORM_DIRECTORY_DATABASE, metrics),
+        D1_SHARD_APAC_01: instrumentD1Database(environment.D1_SHARD_APAC_01, metrics),
+        ...(environment.D1_SHARD_APAC_02 === undefined
+            ? {}
+            : { D1_SHARD_APAC_02: instrumentD1Database(environment.D1_SHARD_APAC_02, metrics) }),
+        ...(environment.D1_SHARD_WNAM_01 === undefined
+            ? {}
+            : { D1_SHARD_WNAM_01: instrumentD1Database(environment.D1_SHARD_WNAM_01, metrics) }),
+        ...(environment.D1_SHARD_WNAM_02 === undefined
+            ? {}
+            : { D1_SHARD_WNAM_02: instrumentD1Database(environment.D1_SHARD_WNAM_02, metrics) }),
+    };
 }
 
 export function createPlatformWorker(authentication: PlatformAuthenticationConfiguration): PlatformWorker {

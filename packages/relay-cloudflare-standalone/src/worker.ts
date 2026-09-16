@@ -6,10 +6,12 @@ import {
     createBotApplication,
     createMobiusApplication,
     createWorkerContext,
+    instrumentD1Database,
     type LiteSessionConfigurationEnvironment,
     type PublicProjectBootstrapEnvironment,
     publicProjectBootstrapPolicyFromEnvironment,
     type RelayContext,
+    RequestAccessMetrics,
     StaticSessionQuotaPolicyProvider,
     sessionQuotaFromEnvironment,
     type WorkerRuntimeGateways,
@@ -96,7 +98,11 @@ export function createStandaloneApplication(
 ): Hono<{ Bindings: RelayBindings }> {
     return new Hono<{ Bindings: RelayBindings }>().all("*", async (context) => {
         const request = context.req.raw;
-        const environment = context.env;
+        const metrics = new RequestAccessMetrics();
+        const environment = {
+            ...context.env,
+            DIRECTORY_DATABASE: instrumentD1Database(context.env.DIRECTORY_DATABASE, metrics),
+        };
         const projectAuthentication = new D1ProjectAuthentication(
             environment.DIRECTORY_DATABASE,
             environment.MOBIUS_TENANT_ID,
@@ -111,7 +117,7 @@ export function createStandaloneApplication(
             apiPrefix: MOBIUS_API_PREFIX,
             quotaPolicy: new StaticSessionQuotaPolicyProvider(sessionQuotaFromEnvironment(environment)),
         });
-        return await accountlessResponse(await dispatchApplication.fetch(request, cx));
+        return metrics.appendServerTiming(await accountlessResponse(await dispatchApplication.fetch(request, cx)));
     });
 }
 

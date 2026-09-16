@@ -183,7 +183,11 @@ it.each(["apac", "wnam"])(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`, {
                 headers: credentialHeaders(secret),
             });
-        expect((await fixture.worker.fetch(request(fixture.appCredential), edge)).status).toBe(200);
+        const response = await fixture.worker.fetch(request(fixture.appCredential), edge);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("server-timing")).toMatch(
+            /(?:^|,)\s*d1;dur=[\d.]+;desc="D1 access";count=[1-9]\d*(?:,|$)/u,
+        );
         expect((await fixture.worker.fetch(request("x".repeat(48)), edge)).status).toBe(401);
         const wrong = region === "apac" ? "wnam" : "apac";
         expect((await regional(wrong).fetch(request(fixture.appCredential))).status).toBe(421);

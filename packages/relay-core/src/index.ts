@@ -149,6 +149,7 @@ export type {
     ProjectStorageDirectory,
     ProjectStoragePlacement,
 } from "./infra/project-storage-directory.ts";
+export { instrumentD1Database, RequestAccessMetrics } from "./infra/request-access-metrics.ts";
 export {
     type LiteSessionConfigurationEnvironment,
     type SessionConfigurationEnvironment,
