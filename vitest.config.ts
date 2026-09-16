@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { coverageConfigDefaults, defineConfig } from "vitest/config";
+import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
     resolve: {
@@ -8,6 +8,7 @@ export default defineConfig({
         },
     },
     test: {
+        exclude: [...configDefaults.exclude, "tests/agent-daemon/**"],
         fileParallelism: true,
         maxWorkers: 4,
         include: [

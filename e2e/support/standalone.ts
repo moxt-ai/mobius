@@ -258,14 +258,19 @@ function spawnCli(arguments_: readonly string[], environment: NodeJS.ProcessEnv)
 export async function startProductionMobiusCli(
     deployment: StandaloneDeployment,
     pairing: StandalonePairing,
+    options: {
+        readonly agentEnvironment?: Readonly<Record<string, string>>;
+    } = {},
 ): Promise<ProductionMobiusCli> {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-e2e-cli-"));
     const workspace = join(temporaryDirectory, "workspace");
     await mkdir(workspace, { recursive: true });
     const environment = {
         ...process.env,
-        ...(await createFakeCodex(temporaryDirectory)),
-        MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "agent-state"),
+        ...(options.agentEnvironment ?? (await createFakeCodex(temporaryDirectory))),
+        ...(options.agentEnvironment === undefined
+            ? { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "agent-state") }
+            : {}),
         MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "mobius-state"),
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "127.0.0.1,localhost",

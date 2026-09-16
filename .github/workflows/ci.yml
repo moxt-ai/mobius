@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:e2e", "test:web", "test:standalone", "test:platform"]
+        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:agent-daemon", "test:e2e", "test:web", "test:standalone", "test:platform"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,9 +101,17 @@ jobs:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
+      - name: Install tested OpenCode
+        if: matrix.task == 'test:agent-daemon'
+        run: npm install --global opencode-ai@1.18.29
+
+      - name: Run Agent and daemon integration tests
+        if: matrix.task == 'test:agent-daemon'
+        run: pnpm test:agent-daemon
+
       - name: Run coverage suite
         id: suite
-        if: startsWith(matrix.task, 'test:')
+        if: startsWith(matrix.task, 'test:') && matrix.task != 'test:agent-daemon'
         run: |
           suite="${TASK#test:}"
           echo "name=$suite" >> "$GITHUB_OUTPUT"

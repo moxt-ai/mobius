@@ -41,6 +41,7 @@
         "test:cli": "pnpm test:coverage:suite cli",
         "test:sdk": "pnpm test:coverage:suite sdk",
         "test:integration": "pnpm test:coverage:suite integration",
+        "test:agent-daemon": "vitest run --config vitest.agent-daemon.config.ts",
         "test:e2e": "pnpm test:coverage:suite e2e",
         "test:web": "pnpm test:coverage:suite web",
         "test:standalone": "pnpm test:coverage:suite standalone",
