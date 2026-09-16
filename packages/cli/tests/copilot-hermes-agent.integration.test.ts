@@ -10,7 +10,6 @@ import {
     AvailableAgent,
     CopilotCliAgentSpecification,
     discoverLocalAgentInventory,
-    GeminiCliAgentSpecification,
     HermesAgentSpecification,
 } from "../src/agent-catalog/discover-local-agents.ts";
 
@@ -20,7 +19,7 @@ function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
 }
 
-describe("Copilot CLI, Hermes Agent, and Gemini CLI integrations", () => {
+describe("Copilot CLI and Hermes Agent integrations", () => {
     it("Given a verified local GitHub Copilot CLI, When Mobius discovers and prompts it, Then the exact binary runs through stdio ACP with automatic updates disabled", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-copilot-cli-"));
         const executablePath = join(temporaryDirectory, "copilot");
@@ -173,83 +172,6 @@ if (JSON.stringify(process.argv.slice(2)) === JSON.stringify(["acp", "--version"
                 signal: new AbortController().signal,
             });
             expect(chunks.join("")).toBe("Hermes Agent turn 1: use the verified Hermes executable");
-        } finally {
-            await manager.close();
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a verified local Gemini CLI, When Mobius discovers and prompts it, Then the exact binary runs through its stable ACP entrypoint", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-gemini-cli-"));
-        const executablePath = join(temporaryDirectory, "gemini");
-        const manager = new AcpSessionManager();
-        try {
-            await writeFile(
-                executablePath,
-                executableSource(`
-if (JSON.stringify(process.argv.slice(2)) === JSON.stringify(["--version"])) {
-  process.stdout.write("0.59.0\\n", () => process.exit(0));
-} else {
-  if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--acp"])) process.exit(81);
-  process.argv.push(
-    "--agent-name", "Gemini CLI",
-    "--agent-version", "0.59.0",
-    "--external-authentication",
-    "--load-only",
-    "--no-additional-directories",
-    "--no-delete-session",
-    "--no-fork-session"
-  );
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(executablePath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: temporaryDirectory,
-                environment: { PATH: temporaryDirectory },
-                signal: new AbortController().signal,
-                specifications: [new GeminiCliAgentSpecification()],
-            });
-
-            expect(inventory.unavailable).toEqual([]);
-            expect(inventory.available).toHaveLength(1);
-            const discovered = inventory.available[0];
-            if (!(discovered instanceof AvailableAgent)) {
-                throw new Error("Gemini CLI was not discovered");
-            }
-            const canonicalExecutable = await realpath(executablePath);
-            expect(discovered.agent).toMatchObject({
-                adapterPath: canonicalExecutable,
-                adapterVersion: "0.59.0",
-                agentVersion: "0.59.0",
-                arguments: ["--acp"],
-                command: canonicalExecutable,
-                environment: {},
-                id: "gemini-cli",
-                label: "Gemini CLI",
-            });
-
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                commandId: "gemini-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "use the verified Gemini CLI executable",
-                resources: [],
-                sessionId: "gemini-session",
-                signal: new AbortController().signal,
-            });
-            expect(chunks.join("")).toBe("Gemini CLI turn 1: use the verified Gemini CLI executable");
         } finally {
             await manager.close();
             await rm(temporaryDirectory, { force: true, recursive: true });

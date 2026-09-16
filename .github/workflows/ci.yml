@@ -103,7 +103,7 @@ jobs:
 
       - name: Install tested Agents
         if: matrix.task == 'test:agent-daemon'
-        run: npm install --global opencode-ai@1.18.29 @openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0 @earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33
+        run: npm install --global opencode-ai@1.18.29 @openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0 @earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33 @google/gemini-cli@0.59.0
 
       - name: Run Agent and daemon integration tests
         if: matrix.task == 'test:agent-daemon'
