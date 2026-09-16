@@ -723,7 +723,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given an approved Bot binding, When its owner loads Agent settings, Then Mobius returns only the Agent’s live configuration snapshot", async () => {
+    it("Given an approved Bot binding, When its legacy owner endpoint loads Agent settings, Then Mobius preserves the legacy transient configuration snapshot", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -750,7 +750,21 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             await approveBinding(pairing, daemon, bot, behavior, target);
 
-            const pending = pairing.client.readAgentConfiguration(bot.botId, pairing.signal);
+            let deprecation = "";
+            const legacyClient = new MobiusBotOwnerClient({
+                actorReference: "project-owner",
+                credentialProvider: new StaticMobiusCredentialProvider(pairing.hostToken),
+                endpoint: relayOrigin,
+                projectId: pairing.projectId,
+                transport: {
+                    fetch: async (request) => {
+                        const response = await app.request(request);
+                        deprecation = response.headers.get("deprecation") ?? "";
+                        return response;
+                    },
+                },
+            });
+            const pending = legacyClient.readAgentConfiguration(bot.botId, pairing.signal);
             const prepare = decodeSessionPrepareCommand(await daemon.messages.next());
             expect(prepare).toMatchObject({
                 agentId: "codex",
@@ -795,6 +809,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
 
             const snapshot = await pending;
+            expect(deprecation).toBe("true");
             expect(snapshot.options).toStrictEqual([
                 expect.objectContaining({ currentValue: "test-small", id: "model", type: "select" }),
             ]);
@@ -811,6 +826,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             daemon.socket.close(1000, "Configuration inspection complete");
         }
     });
+
     it("Given an owner manages an active Bot, When its owner directories and lifecycle controls are used, Then Web-safe resources remain durable and locally sensitive binding details stay private", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);

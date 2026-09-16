@@ -27,6 +27,9 @@ export const AGENT_INSTALL_PROGRESS_KIND = "agent.integration.install.progress";
 export const AGENT_INSTALL_COMPLETED_KIND = "agent.integration.install.completed";
 export const AGENT_INSTALL_FAILED_KIND = "agent.integration.install.failed";
 export const AGENT_INSTALL_CANCELLED_KIND = "agent.integration.install.cancelled";
+export const AGENT_SETTINGS_DISCOVER_KIND = "agent.settings.discover";
+export const AGENT_SETTINGS_DISCOVERED_KIND = "agent.settings.discovered";
+export const AGENT_SETTINGS_DISCOVERY_FAILED_KIND = "agent.settings.discovery.failed";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
@@ -72,6 +75,43 @@ export const sessionConfigOptionSchema = z
 export type SessionConfigOption = z.infer<typeof sessionConfigOptionSchema>;
 
 const sessionConfigOptionsSchema = z.array(sessionConfigOptionSchema).max(100).readonly();
+
+const agentSettingsDiscoverCommandSchema = z
+    .strictObject({
+        additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
+        agentId: IDENTIFIER,
+        directoryId: DIRECTORY_IDENTIFIER,
+        kind: z.literal(AGENT_SETTINGS_DISCOVER_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentSettingsDiscoverCommand = z.infer<typeof agentSettingsDiscoverCommandSchema>;
+
+const agentSettingsDiscoveredEventSchema = z
+    .strictObject({
+        agentId: IDENTIFIER,
+        agentName: z.string().max(255),
+        agentVersion: z.string().max(128),
+        configOptions: sessionConfigOptionsSchema,
+        directoryId: DIRECTORY_IDENTIFIER,
+        kind: z.literal(AGENT_SETTINGS_DISCOVERED_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentSettingsDiscoveredEvent = z.infer<typeof agentSettingsDiscoveredEventSchema>;
+
+const agentSettingsDiscoveryFailedEventSchema = z
+    .strictObject({
+        code: IDENTIFIER,
+        kind: z.literal(AGENT_SETTINGS_DISCOVERY_FAILED_KIND),
+        message: z.string().min(1).max(500),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentSettingsDiscoveryFailedEvent = z.infer<typeof agentSettingsDiscoveryFailedEventSchema>;
 
 export const sessionConfigurationSelectionSchema = z
     .strictObject({
@@ -277,6 +317,7 @@ const sessionPrepareCommandSchema = z
             .optional(),
         kind: z.literal(SESSION_PREPARE_KIND),
         requestId: IDENTIFIER,
+        /** @deprecated Reserved for the legacy Bot Agent-configuration endpoint. */
         transient: z.boolean().optional(),
     })
     .readonly();
@@ -635,6 +676,19 @@ export const decodeSessionConfigOptions = (value: unknown): readonly SessionConf
     decodeValue(value, sessionConfigOptionsSchema);
 
 const encode = <T>(message: T, schema: z.ZodType<T>): string => JSON.stringify(decodeValue(message, schema));
+
+export const decodeAgentSettingsDiscoverCommand = (encoded: string): AgentSettingsDiscoverCommand =>
+    decode(encoded, agentSettingsDiscoverCommandSchema);
+export const encodeAgentSettingsDiscoverCommand = (message: AgentSettingsDiscoverCommand): string =>
+    encode(message, agentSettingsDiscoverCommandSchema);
+export const decodeAgentSettingsDiscoveredEvent = (encoded: string): AgentSettingsDiscoveredEvent =>
+    decode(encoded, agentSettingsDiscoveredEventSchema);
+export const encodeAgentSettingsDiscoveredEvent = (message: AgentSettingsDiscoveredEvent): string =>
+    encode(message, agentSettingsDiscoveredEventSchema);
+export const decodeAgentSettingsDiscoveryFailedEvent = (encoded: string): AgentSettingsDiscoveryFailedEvent =>
+    decode(encoded, agentSettingsDiscoveryFailedEventSchema);
+export const encodeAgentSettingsDiscoveryFailedEvent = (message: AgentSettingsDiscoveryFailedEvent): string =>
+    encode(message, agentSettingsDiscoveryFailedEventSchema);
 
 export const decodeWorkspaceListCommand = (encoded: string): WorkspaceListCommand =>
     decode(encoded, workspaceListCommandSchema);

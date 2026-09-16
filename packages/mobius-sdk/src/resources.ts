@@ -684,6 +684,7 @@ export function decodeMobiusBrowserCredential(value: unknown): MobiusBrowserCred
 export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly agentSettingsDiscovery?: boolean;
     readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
@@ -695,10 +696,14 @@ export class MobiusAgentDescriptor {
         capabilities: SessionCapabilities,
         id: string,
         label: string,
+        agentSettingsDiscovery?: boolean,
         botSessionConfiguration?: boolean,
     ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
+        if (agentSettingsDiscovery === true) {
+            this.agentSettingsDiscovery = true;
+        }
         if (botSessionConfiguration === true) {
             this.botSessionConfiguration = true;
         }
@@ -726,13 +731,14 @@ export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabiliti
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
     if (
-        (Object.keys(agent).length !== 5 && Object.keys(agent).length !== 6) ||
+        (Object.keys(agent).length !== 5 && Object.keys(agent).length !== 6 && Object.keys(agent).length !== 7) ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
         !Object.hasOwn(agent, "label") ||
-        (Object.hasOwn(agent, "botSessionConfiguration") && typeof agent["botSessionConfiguration"] !== "boolean")
+        (Object.hasOwn(agent, "botSessionConfiguration") && typeof agent["botSessionConfiguration"] !== "boolean") ||
+        (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean")
     ) {
         throw invalidResponse("The service returned an invalid Agent descriptor");
     }
@@ -748,6 +754,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         decodeMobiusAgentCapabilities(agent["capabilities"]),
         identifierField(agent, "id"),
         label.trim(),
+        agent["agentSettingsDiscovery"] === true,
         agent["botSessionConfiguration"] === true,
     );
 }

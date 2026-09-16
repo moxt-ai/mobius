@@ -195,6 +195,9 @@ export class MobiusConversationConfigurationAcceptance {
     }
 }
 
+/**
+ * @deprecated Use Runtime Agent settings discovery instead of the Bot-scoped snapshot.
+ */
 export class MobiusBotAgentConfiguration {
     readonly options: readonly SessionConfigOption[];
 
@@ -689,6 +692,9 @@ export class MobiusBotOwnerClient {
             await this.#executor.get(projectBotPath(this.#projectId, botId, "execution-bindings"), signal),
         );
 
+    /**
+     * @deprecated Use `client.runtimes.discoverAgentSettings(...)` instead.
+     */
     readonly readAgentConfiguration = async (
         botId: string,
         signal: AbortSignal,

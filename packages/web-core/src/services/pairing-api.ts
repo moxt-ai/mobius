@@ -384,7 +384,9 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            (Object.keys(candidate).length !== 5 && Object.keys(candidate).length !== 6) ||
+            (Object.keys(candidate).length !== 5 &&
+                Object.keys(candidate).length !== 6 &&
+                Object.keys(candidate).length !== 7) ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
@@ -394,13 +396,16 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
                 (key) =>
                     key !== "agentPath" &&
                     key !== "agentVersion" &&
+                    key !== "agentSettingsDiscovery" &&
                     key !== "botSessionConfiguration" &&
                     key !== "capabilities" &&
                     key !== "id" &&
                     key !== "label",
             ) ||
             (Object.hasOwn(candidate, "botSessionConfiguration") &&
-                typeof candidate["botSessionConfiguration"] !== "boolean")
+                typeof candidate["botSessionConfiguration"] !== "boolean") ||
+            (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
+                typeof candidate["agentSettingsDiscovery"] !== "boolean")
         ) {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }
@@ -426,7 +431,16 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }
         identifiers.add(id);
-        agents.push(new AgentOption(id, label.trim(), agentPath, agentVersion.trim(), capabilities));
+        agents.push(
+            new AgentOption(
+                id,
+                label.trim(),
+                agentPath,
+                agentVersion.trim(),
+                capabilities,
+                candidate["agentSettingsDiscovery"] === true,
+            ),
+        );
     }
     return agents;
 }
@@ -888,7 +902,15 @@ function runtimeConnection(
         throw new PairingApiError("invalid_relay_response", "The relay returned a Runtime from another Project.");
     }
     const agents = runtime.agents.map(
-        (agent) => new AgentOption(agent.id, agent.label, agent.agentPath, agent.agentVersion, agent.capabilities),
+        (agent) =>
+            new AgentOption(
+                agent.id,
+                agent.label,
+                agent.agentPath,
+                agent.agentVersion,
+                agent.capabilities,
+                agent.agentSettingsDiscovery,
+            ),
     );
     const installableAgents = runtime.installableAgents.map((agent): InstallableAgentOption => {
         if (agent instanceof MobiusMissingAgentDescriptor) {

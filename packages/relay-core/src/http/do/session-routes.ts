@@ -1,4 +1,5 @@
 import {
+    decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionCommand,
     decodePromptImagesValue,
     decodePromptResourcesValue,
@@ -104,6 +105,37 @@ export function createSessionRoutes() {
         .use(
             "/projects/:projectId/sessions/:sessionId/:operation{prepare|configuration}",
             operationTimingMiddleware<RelayHttpEnvironment>(),
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/agent-settings",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = context.req.valid("json");
+                assertExactKeys(body, ["agentId", "directoryId", "additionalDirectoryIds"]);
+                const command = decodeAgentSettingsDiscoverCommand(
+                    JSON.stringify({
+                        additionalDirectoryIds: readIdentifierArray(
+                            body,
+                            "additionalDirectoryIds",
+                            16,
+                            "additional_directory_id",
+                        ),
+                        agentId: readString(body, "agentId", 128),
+                        directoryId: readString(body, "directoryId", 2_048),
+                        kind: "agent.settings.discover",
+                        requestId: crypto.randomUUID(),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.discoverAgentSettings(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json(result);
+            },
         )
         .post(
             "/projects/:projectId/runtimes/:runtimeId/native-sessions",

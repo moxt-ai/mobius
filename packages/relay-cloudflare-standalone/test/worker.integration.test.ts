@@ -5,8 +5,10 @@ import {
     AGENT_INSTALL_PROGRESS_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_MESSAGE_DELTA_KIND,
+    AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentInstallProgressEvent,
     decodeAgentInstallRequestCommand,
+    decodeAgentSettingsDiscoverCommand,
     decodeCommittedSessionEvent,
     decodeMessageKind,
     decodeNativeSessionCommand,
@@ -25,6 +27,7 @@ import {
     decodeSessionPromptCommand,
     encodeAgentInstallProgressEvent,
     encodeAgentInstallRequestCommand,
+    encodeAgentSettingsDiscoveredEvent,
     encodeNativeSessionCommand,
     encodeNativeSessionResult,
     encodeRuntimeDeliveryReceived,
@@ -88,6 +91,7 @@ const verifiedAgentCapabilities = {
 };
 const readyAgents = [
     {
+        agentSettingsDiscovery: true,
         agentPath: "/usr/local/bin/codex",
         agentVersion: "codex 0.153.0",
         capabilities: verifiedAgentCapabilities,
@@ -667,6 +671,89 @@ describe.sequential("Cloudflare session deployment", () => {
             channelId: created.channelId,
             runtimeId: created.runtimeId,
         });
+    });
+
+    it("Given a paired local Agent, When a project owner discovers its settings, Then the live snapshot is returned without creating a Bot or Session", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { openChannelSocket, pairChannel } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (signal) => {
+                    signal.throwIfAborted();
+                    return pairing.created.hostToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: pairing.created.projectId,
+            transport: { fetch: async (request) => await app.request(request) },
+        });
+        const signal = new AbortController().signal;
+        try {
+            const discovery = client.runtimes.discoverAgentSettings(
+                pairing.created.runtimeId,
+                {
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    directoryId: "default",
+                },
+                signal,
+            );
+            const command = decodeAgentSettingsDiscoverCommand(await daemon.messages.next());
+            expect(command).toMatchObject({
+                agentId: "codex",
+                directoryId: "default",
+                kind: AGENT_SETTINGS_DISCOVER_KIND,
+            });
+            expect(command).not.toHaveProperty("botId");
+            expect(command).not.toHaveProperty("sessionId");
+            daemon.socket.send(
+                encodeAgentSettingsDiscoveredEvent({
+                    agentId: "codex",
+                    agentName: "Codex",
+                    agentVersion: "codex 0.153.0",
+                    configOptions: [
+                        {
+                            booleanValue: false,
+                            category: "model",
+                            currentValue: "codex-mini",
+                            description: "Select a coding model.",
+                            id: "model",
+                            name: "Model",
+                            type: "select",
+                            values: [
+                                {
+                                    description: "Fast coding model.",
+                                    groupId: "",
+                                    groupName: "",
+                                    name: "Codex Mini",
+                                    value: "codex-mini",
+                                },
+                            ],
+                        },
+                    ],
+                    directoryId: "default",
+                    kind: "agent.settings.discovered",
+                    requestId: command.requestId,
+                }),
+            );
+            const snapshot = await discovery;
+            expect(snapshot).toMatchObject({
+                agentId: "codex",
+                configOptions: [expect.objectContaining({ currentValue: "codex-mini", id: "model" })],
+            });
+            expect(snapshot).not.toHaveProperty("botId");
+            expect(snapshot).not.toHaveProperty("sessionId");
+            await expect(client.sessions.list({ cursor: "", limit: 10 }, signal)).resolves.toMatchObject({
+                sessions: [],
+            });
+        } finally {
+            client.close();
+            daemon.socket.close(1000, "Agent settings discovery test complete");
+        }
     });
 
     it("Given a ready Session with no recorded events, When a browser opens its event stream, Then the Relay immediately sends a connection frame before the first Turn", async () => {

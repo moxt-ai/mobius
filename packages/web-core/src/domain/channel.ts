@@ -16,13 +16,24 @@ const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 export class AgentOption {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly agentSettingsDiscovery?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
 
-    constructor(id: string, label: string, agentPath: string, agentVersion: string, capabilities: SessionCapabilities) {
+    constructor(
+        id: string,
+        label: string,
+        agentPath: string,
+        agentVersion: string,
+        capabilities: SessionCapabilities,
+        agentSettingsDiscovery?: boolean,
+    ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
+        if (agentSettingsDiscovery === true) {
+            this.agentSettingsDiscovery = true;
+        }
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;

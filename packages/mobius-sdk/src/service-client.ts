@@ -1,5 +1,7 @@
 import {
+    type AgentSettingsDiscoveredEvent,
     type Attempt,
+    decodeAgentSettingsDiscoveredEvent,
     decodeNativeSessionHistory,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
@@ -89,6 +91,12 @@ const MAX_EVENT_BLOCK_LENGTH = 9 * 1024 * 1024;
 
 export interface MobiusCredentialProvider {
     readonly credential: (signal: AbortSignal) => Promise<string>;
+}
+
+export interface DiscoverMobiusAgentSettingsRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly agentId: string;
+    readonly directoryId: string;
 }
 
 export class StaticMobiusCredentialProvider implements MobiusCredentialProvider {
@@ -804,6 +812,21 @@ export class MobiusRuntimeResources {
                 await this.#executor.post(
                     projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/workspace`),
                     { directoryId },
+                    signal,
+                ),
+            ),
+        );
+
+    readonly discoverAgentSettings = async (
+        runtimeId: string,
+        request: DiscoverMobiusAgentSettingsRequest,
+        signal: AbortSignal,
+    ): Promise<AgentSettingsDiscoveredEvent> =>
+        decodeAgentSettingsDiscoveredEvent(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agent-settings`),
+                    request,
                     signal,
                 ),
             ),

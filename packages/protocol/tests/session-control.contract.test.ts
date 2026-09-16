@@ -3,11 +3,17 @@ import { describe, expect, it } from "vitest";
 import {
     AGENT_CONTENT_KIND,
     AGENT_INSTALL_REQUEST_KIND,
+    AGENT_SETTINGS_DISCOVER_KIND,
+    AGENT_SETTINGS_DISCOVERED_KIND,
     type AgentContentEvent,
     type AgentDisplayContent,
     type AgentInstallRequestCommand,
+    type AgentSettingsDiscoverCommand,
+    type AgentSettingsDiscoveredEvent,
     decodeAgentContentEvent,
     decodeAgentInstallRequestCommand,
+    decodeAgentSettingsDiscoverCommand,
+    decodeAgentSettingsDiscoveredEvent,
     decodeNativeSessionHistory,
     decodeNativeSessionTurnForkCommand,
     decodeNativeSessionTurnForkRequest,
@@ -21,6 +27,8 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentContentEvent,
     encodeAgentInstallRequestCommand,
+    encodeAgentSettingsDiscoverCommand,
+    encodeAgentSettingsDiscoveredEvent,
     encodeNativeSessionTurnForkCommand,
     encodeNativeSessionTurnForkRequest,
     encodeSessionConfigureCommand,
@@ -252,6 +260,34 @@ describe("ACP session control protocol contract", () => {
             requestId: "install-1",
         };
         expect(decodeAgentInstallRequestCommand(encodeAgentInstallRequestCommand(command))).toEqual(command);
+    });
+
+    it("Given a paired local Agent, When its settings are discovered, Then the protocol contains neither Bot nor Mobius Session identity", () => {
+        const command: AgentSettingsDiscoverCommand = {
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            directoryId: "default",
+            kind: AGENT_SETTINGS_DISCOVER_KIND,
+            requestId: "settings-1",
+        };
+        const discovered: AgentSettingsDiscoveredEvent = {
+            agentId: "codex",
+            agentName: "Codex",
+            agentVersion: "codex 1.0.0",
+            configOptions: [modelOption],
+            directoryId: "default",
+            kind: AGENT_SETTINGS_DISCOVERED_KIND,
+            requestId: "settings-1",
+        };
+
+        expect(decodeAgentSettingsDiscoverCommand(encodeAgentSettingsDiscoverCommand(command))).toEqual(command);
+        expect(decodeAgentSettingsDiscoveredEvent(encodeAgentSettingsDiscoveredEvent(discovered))).toEqual(discovered);
+        expect(() =>
+            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, sessionId: "session-1" })),
+        ).toThrowError(ProtocolMessageError);
+        expect(() => decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, botId: "bot-1" }))).toThrowError(
+            ProtocolMessageError,
+        );
     });
 
     it("Given a legacy Agent installation command, When the integration-only boundary decodes it, Then the command is rejected before reaching an older installation workflow", () => {

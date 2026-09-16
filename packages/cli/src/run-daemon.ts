@@ -12,7 +12,12 @@ import {
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_INSTALL_STARTED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
+    AGENT_SETTINGS_DISCOVER_KIND,
+    AGENT_SETTINGS_DISCOVERED_KIND,
+    AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type AgentContentEvent,
+    type AgentSettingsDiscoverCommand,
+    type AgentSettingsDiscoveredEvent,
     BOT_BINDING_APPROVAL_REQUEST_KIND,
     BOT_BINDING_APPROVED_KIND,
     BOT_BINDING_UNAVAILABLE_KIND,
@@ -21,6 +26,7 @@ import {
     type BotSessionPromptCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
+    decodeAgentSettingsDiscoverCommand,
     decodeBotExecutionBindingApprovalRequest,
     decodeBotExecutionBindingApprovedEvent,
     decodeBotExecutionBindingUnavailableEvent,
@@ -52,6 +58,8 @@ import {
     encodeAgentInstallProgressEvent,
     encodeAgentInstallStartedEvent,
     encodeAgentMessageDeltaEvent,
+    encodeAgentSettingsDiscoveredEvent,
+    encodeAgentSettingsDiscoveryFailedEvent,
     encodeBotExecutionBindingApprovedEvent,
     encodeBotExecutionBindingUnavailableEvent,
     encodeNativeSessionResult,
@@ -895,6 +903,38 @@ async function resolveSessionDirectories(
     return new ResolvedSessionDirectories(cwd, additionalDirectories, additionalDirectoryEntries);
 }
 
+async function discoverAgentSettings(
+    command: AgentSettingsDiscoverCommand,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    sessions: AcpSessionManager,
+    signal: AbortSignal,
+): Promise<AgentSettingsDiscoveredEvent> {
+    const resolved = await resolveSessionDirectories(
+        directories,
+        config.bindingId,
+        command.directoryId,
+        command.additionalDirectoryIds,
+        signal,
+    );
+    const agent = config.catalog.find(command.agentId);
+    const snapshot = await sessions.inspectAgentSettings({
+        additionalDirectories: resolved.additionalDirectories,
+        agent,
+        cwd: resolved.cwd,
+        signal,
+    });
+    return {
+        agentId: command.agentId,
+        agentName: snapshot.agentName,
+        agentVersion: snapshot.agentVersion,
+        configOptions: snapshot.configOptions,
+        directoryId: command.directoryId,
+        kind: AGENT_SETTINGS_DISCOVERED_KIND,
+        requestId: command.requestId,
+    };
+}
+
 async function executeWorkspaceList(
     socket: WebSocket,
     command: WorkspaceListCommand,
@@ -1548,6 +1588,14 @@ async function runRelayConnection(
             readonly completion: Promise<void>;
         }
     >();
+    const agentSettingsDiscoveries = new Map<
+        string,
+        {
+            readonly agentId: string;
+            readonly controller: AbortController;
+            readonly completion: Promise<void>;
+        }
+    >();
     installationObserver.connect(socket);
 
     try {
@@ -2010,6 +2058,108 @@ async function runRelayConnection(
                         }
                         return;
                     }
+                    if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
+                        const command = decodeAgentSettingsDiscoverCommand(encoded);
+                        const existing = [...agentSettingsDiscoveries.values()].find(
+                            (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
+                        );
+                        if (agentSettingsDiscoveries.has(command.requestId) || existing !== undefined) {
+                            if (socket.readyState === WebSocket.OPEN) {
+                                send(
+                                    socket,
+                                    encodeAgentSettingsDiscoveryFailedEvent({
+                                        code: "agent_settings_discovery_busy",
+                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                        message: "Another settings discovery is already running for this Agent",
+                                        requestId: command.requestId,
+                                    }),
+                                );
+                            }
+                            return;
+                        }
+                        if (agentSettingsDiscoveries.size >= 4) {
+                            if (socket.readyState === WebSocket.OPEN) {
+                                send(
+                                    socket,
+                                    encodeAgentSettingsDiscoveryFailedEvent({
+                                        code: "agent_settings_discovery_busy",
+                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                        message: "Too many Agent settings discoveries are running",
+                                        requestId: command.requestId,
+                                    }),
+                                );
+                            }
+                            return;
+                        }
+                        const controller = new AbortController();
+                        const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
+                        const timeout = timer.schedule(
+                            () =>
+                                controller.abort(
+                                    new AcpExecutionError(
+                                        "Agent settings discovery timed out",
+                                        {},
+                                        "agent_settings_discovery_timeout",
+                                    ),
+                                ),
+                            90_000,
+                        );
+                        const completion = (async (): Promise<void> => {
+                            try {
+                                const result = await discoverAgentSettings(
+                                    command,
+                                    config,
+                                    directories,
+                                    sessions,
+                                    operationSignal,
+                                );
+                                audit.record({
+                                    commandId: command.requestId,
+                                    details: { agentId: command.agentId, directoryId: command.directoryId },
+                                    event: "agent_settings_discovered",
+                                    sessionId: `agent-settings:${command.agentId}`,
+                                });
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(socket, encodeAgentSettingsDiscoveredEvent(result));
+                                }
+                            } catch (error) {
+                                const failure: unknown = operationSignal.aborted
+                                    ? (controller.signal.reason ??
+                                      new AcpExecutionError(
+                                          "Agent settings discovery cancelled",
+                                          {},
+                                          "agent_settings_discovery_cancelled",
+                                      ))
+                                    : error;
+                                audit.record({
+                                    commandId: command.requestId,
+                                    details: { agentId: command.agentId, code: operationErrorCode(failure) },
+                                    event: "agent_settings_discovery_failed",
+                                    sessionId: `agent-settings:${command.agentId}`,
+                                });
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(
+                                        socket,
+                                        encodeAgentSettingsDiscoveryFailedEvent({
+                                            code: operationErrorCode(failure),
+                                            kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                            message: operationErrorMessage(failure),
+                                            requestId: command.requestId,
+                                        }),
+                                    );
+                                }
+                            } finally {
+                                timeout.cancel();
+                                agentSettingsDiscoveries.delete(command.requestId);
+                            }
+                        })();
+                        agentSettingsDiscoveries.set(command.requestId, {
+                            agentId: command.agentId,
+                            completion,
+                            controller,
+                        });
+                        return;
+                    }
                     if (kind === NATIVE_SESSION_REQUEST_KIND) {
                         const command = decodeNativeSessionCommand(encoded);
                         const previous = [...nativeRequests.values()].filter(
@@ -2423,7 +2573,10 @@ async function runRelayConnection(
         });
     } finally {
         connectionController.abort();
-        await Promise.all([...nativeRequests.values()].map((request) => request.completion));
+        await Promise.all([
+            ...[...nativeRequests.values()].map((request) => request.completion),
+            ...[...agentSettingsDiscoveries.values()].map((request) => request.completion),
+        ]);
     }
 }
 

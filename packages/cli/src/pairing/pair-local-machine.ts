@@ -247,6 +247,7 @@ async function claimPairing(
     const agents = localAgents.map((agent) => ({
         agentPath: agent.agentIdentity.requestedPath,
         agentVersion: agent.agentVersion,
+        agentSettingsDiscovery: true,
         botSessionConfiguration: true,
         capabilities: agent.capabilities,
         id: agent.id,

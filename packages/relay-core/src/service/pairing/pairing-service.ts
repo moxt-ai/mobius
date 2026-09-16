@@ -1,4 +1,4 @@
-import type { WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
+import type { AgentSettingsDiscoverCommand, WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
@@ -6,6 +6,7 @@ import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/ope
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
+    requestRuntimeAgentSettings,
     requestRuntimeControl,
     requestRuntimeWorkspace,
 } from "./runtime-control-request.ts";
@@ -108,6 +109,51 @@ export class PairingService {
                 throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
             }
             return await requestRuntimeWorkspace(response.webSocket, command, deadline);
+        } finally {
+            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+        }
+    };
+
+    readonly discoverAgentSettings = async (
+        projectId: string,
+        runtimeId: string,
+        token: string,
+        command: AgentSettingsDiscoverCommand,
+        signal: AbortSignal,
+    ) => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
+        const runtimes = await this.#pairings.listProjectRuntimes(projectId, token, deadline);
+        const runtime = runtimes.find((candidate) => candidate.runtimeId === runtimeId);
+        if (runtime === undefined) {
+            throw new PairingDirectoryError(
+                "runtime_access_denied",
+                "The project credential cannot access this Runtime",
+            );
+        }
+        const agent = runtime.agents.find((candidate) => candidate.id === command.agentId);
+        if (agent?.agentSettingsDiscovery !== true) {
+            throw new PairingDirectoryError(
+                "agent_settings_discovery_unsupported",
+                "The selected local Agent does not support settings discovery",
+            );
+        }
+        const access = await this.#pairings.openControlHost(
+            projectId,
+            runtimeId,
+            token,
+            ProjectPermission.RuntimeRead,
+            deadline,
+        );
+        try {
+            const response = await this.#channels.acceptHost(
+                access,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                deadline,
+            );
+            if (response.webSocket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            return await requestRuntimeAgentSettings(response.webSocket, command, deadline);
         } finally {
             await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
         }

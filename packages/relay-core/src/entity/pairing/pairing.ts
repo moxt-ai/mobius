@@ -33,6 +33,7 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
 export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly agentSettingsDiscovery?: boolean;
     readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
@@ -304,6 +305,7 @@ function pairingDirectoryErrorStatus(code: string): number {
             return 410;
         case "access_grant_redeemed":
         case "runtime_unavailable":
+        case "agent_settings_discovery_unsupported":
         case "idempotency_conflict":
             return 409;
         case "pairing_timeout":
@@ -524,7 +526,9 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            (Object.keys(candidate).length !== 5 && Object.keys(candidate).length !== 6) ||
+            (Object.keys(candidate).length !== 5 &&
+                Object.keys(candidate).length !== 6 &&
+                Object.keys(candidate).length !== 7) ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
@@ -534,13 +538,16 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
                 (key) =>
                     key !== "agentPath" &&
                     key !== "agentVersion" &&
+                    key !== "agentSettingsDiscovery" &&
                     key !== "botSessionConfiguration" &&
                     key !== "capabilities" &&
                     key !== "id" &&
                     key !== "label",
             ) ||
             (Object.hasOwn(candidate, "botSessionConfiguration") &&
-                typeof candidate["botSessionConfiguration"] !== "boolean")
+                typeof candidate["botSessionConfiguration"] !== "boolean") ||
+            (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
+                typeof candidate["agentSettingsDiscovery"] !== "boolean")
         ) {
             throw new PairingDirectoryError("invalid_agents", "The local agent directory is invalid");
         }
@@ -549,6 +556,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
         const agentVersion = candidate["agentVersion"];
+        const agentSettingsDiscovery = candidate["agentSettingsDiscovery"];
         const botSessionConfiguration = candidate["botSessionConfiguration"];
         if (
             typeof agentPath !== "string" ||
@@ -570,6 +578,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         agents.push({
             agentPath,
             agentVersion: agentVersion.trim(),
+            ...(agentSettingsDiscovery === true ? { agentSettingsDiscovery } : {}),
             ...(botSessionConfiguration === true ? { botSessionConfiguration } : {}),
             capabilities,
             id,

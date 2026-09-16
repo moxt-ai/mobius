@@ -99,6 +99,13 @@ export interface AcpPrepareOptions {
     readonly origin?: NativeSessionOrigin;
 }
 
+export interface AcpAgentSettingsInspectionOptions {
+    readonly additionalDirectories: readonly string[];
+    readonly agent: LocalAgentDefinition;
+    readonly cwd: string;
+    readonly signal: AbortSignal;
+}
+
 export interface AcpConfigureOptions extends AcpPrepareOptions {
     readonly booleanValue: boolean;
     readonly configId: string;
@@ -203,6 +210,18 @@ export class AcpPreparedSession {
         this.commands = commands;
         this.configOptions = configOptions;
         this.restored = restored;
+    }
+}
+
+export class AcpAgentSettingsSnapshot {
+    readonly agentName: string;
+    readonly agentVersion: string;
+    readonly configOptions: readonly SessionConfigOption[];
+
+    constructor(agentName: string, agentVersion: string, configOptions: readonly SessionConfigOption[]) {
+        this.agentName = agentName;
+        this.agentVersion = agentVersion;
+        this.configOptions = configOptions;
     }
 }
 
@@ -2026,6 +2045,7 @@ class AcpProcessSession implements AcpClientHandler {
 
 export class AcpSessionManager {
     readonly #activeCommandIds = new Map<string, string>();
+    readonly #agentSettingsObserver = new NullAcpSessionObserver();
     readonly #nativeOperations = new Set<string>();
     readonly #nativeBrowserObserver = new NullAcpSessionObserver();
     readonly #nativeBrowserPreparing = new Map<string, Promise<AcpProcessSession>>();
@@ -2259,9 +2279,32 @@ export class AcpSessionManager {
     };
 
     /**
-     * Opens a short-lived ACP session only to read the Agent's authoritative
-     * configuration options. The runtime and any persisted native-session
-     * record are released before this method resolves.
+     * Opens a short-lived native ACP session only to read the local Agent's
+     * authoritative settings. Its identity and store are private to this
+     * operation and never become a Mobius Session.
+     */
+    readonly inspectAgentSettings = async (
+        options: AcpAgentSettingsInspectionOptions,
+    ): Promise<AcpAgentSettingsSnapshot> => {
+        const runtime = await AcpProcessSession.start(
+            {
+                ...options,
+                sessionId: `agent-settings-${crypto.randomUUID()}`,
+            },
+            () => this.#agentSettingsObserver,
+            new MemoryAcpSessionStore(),
+        );
+        try {
+            const prepared = runtime.prepared();
+            return new AcpAgentSettingsSnapshot(prepared.agentName, prepared.agentVersion, prepared.configOptions);
+        } finally {
+            await runtime.close();
+        }
+    };
+
+    /**
+     * @deprecated Retained for the Bot-scoped legacy Agent-configuration API.
+     * Use inspectAgentSettings for Agent-scoped settings discovery.
      */
     readonly inspectSession = async (
         options: AcpPrepareOptions,

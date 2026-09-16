@@ -256,6 +256,10 @@ export class BotService {
         return cx.services.management.listExecutionBindings(access, signal);
     };
 
+    /**
+     * @deprecated Retained for compatibility with the Bot-scoped Agent-configuration API.
+     * Use Runtime Agent settings discovery for new integrations.
+     */
     readonly inspectAgentConfiguration = async (
         botId: string,
         token: string,

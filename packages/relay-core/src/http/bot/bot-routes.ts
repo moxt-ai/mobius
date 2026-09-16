@@ -221,6 +221,7 @@ function createBotOwnerRoutes() {
         )
         .post("/bots/:botId/agent-configuration", botBodyParser<BotHttpEnvironment>(), async (c) => {
             exactBody(c.var.body, []);
+            c.header("Deprecation", "true");
             return c.json({
                 options: await c.var.bots.inspectAgentConfiguration(
                     pathIdentifier(c.req.param("botId")),

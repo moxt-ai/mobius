@@ -6,6 +6,9 @@ import {
     AGENT_INSTALL_PROGRESS_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_INSTALL_STARTED_KIND,
+    AGENT_SETTINGS_DISCOVER_KIND,
+    AGENT_SETTINGS_DISCOVERED_KIND,
+    AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallCancelledEvent,
     decodeAgentInstallCompletedEvent,
@@ -13,6 +16,9 @@ import {
     decodeAgentInstallProgressEvent,
     decodeAgentInstallRequestCommand,
     decodeAgentInstallStartedEvent,
+    decodeAgentSettingsDiscoverCommand,
+    decodeAgentSettingsDiscoveredEvent,
+    decodeAgentSettingsDiscoveryFailedEvent,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
@@ -30,6 +36,7 @@ import {
     decodeSessionReadyEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
+    encodeAgentSettingsDiscoveryFailedEvent,
     encodeCommittedSessionEvent,
     encodeNativeSessionResult,
     encodeNativeSessionTurnForkCommand,
@@ -626,6 +633,11 @@ export class ChannelActor {
                 this.forwardControl(socket, message, command.requestId, command.sessionId);
                 return;
             }
+            if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
+                const command = decodeAgentSettingsDiscoverCommand(message);
+                this.forwardAgentSettingsDiscovery(socket, message, command.requestId);
+                return;
+            }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
                 const command = decodeNativeSessionCommand(message);
                 if (command.action === "preview") {
@@ -804,6 +816,12 @@ export class ChannelActor {
 
     private readonly validateDaemonControl = (kind: string, message: string): void => {
         switch (kind) {
+            case AGENT_SETTINGS_DISCOVERED_KIND:
+                decodeAgentSettingsDiscoveredEvent(message);
+                return;
+            case AGENT_SETTINGS_DISCOVERY_FAILED_KIND:
+                decodeAgentSettingsDiscoveryFailedEvent(message);
+                return;
             case NATIVE_SESSION_RESULT_KIND:
                 decodeNativeSessionResult(message);
                 return;
@@ -957,6 +975,25 @@ export class ChannelActor {
                     kind: SESSION_FAILED_KIND,
                     message: "The local runtime is offline",
                     sessionId: sessionId.length === 0 ? "runtime" : sessionId,
+                }),
+            );
+            return;
+        }
+        this.broadcast(this.#peers.hosts(), message);
+    };
+
+    private readonly forwardAgentSettingsDiscovery = (
+        socket: ChannelSocket,
+        message: string,
+        requestId: string,
+    ): void => {
+        if (!this.sendToDaemon(message)) {
+            socket.send(
+                encodeAgentSettingsDiscoveryFailedEvent({
+                    code: "runtime_offline",
+                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                    message: "The local runtime is offline",
+                    requestId,
                 }),
             );
             return;
