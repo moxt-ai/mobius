@@ -1267,6 +1267,37 @@ it.each(["import", "fork"] as const)(
     },
 );
 
+it("Given a paired Runtime disconnects during native session discovery, When the App backend is waiting, Then Mobius reports that the Runtime is offline", async () => {
+    const fixture = await createReadyConversation("native-discovery-disconnect");
+    const client = new MobiusClient({
+        endpoint: relayOrigin,
+        projectId: fixture.projectId,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    try {
+        const pending = client.runtimes.nativeSessions(
+            fixture.runtimeId,
+            {
+                action: "list",
+                agentId: "codex",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                cursor: null,
+                discoveryId: null,
+            },
+            new AbortController().signal,
+        );
+        await fixture.socketMessages.next();
+        fixture.socket.close();
+
+        await expect(pending).rejects.toMatchObject({ code: "runtime_offline", status: 503 });
+    } finally {
+        client.close();
+        fixture.socket.close();
+    }
+});
+
 it("Given a paired local Runtime, When the App backend browses its workspace, Then Mobius returns the locally authorized directories", async () => {
     const fixture = await createReadyConversation("workspace-browser-backend");
     const client = new MobiusClient({

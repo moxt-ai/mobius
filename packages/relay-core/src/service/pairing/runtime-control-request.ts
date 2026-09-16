@@ -2,6 +2,7 @@ import {
     decodeCommittedSessionEvent,
     decodeMessageKind,
     decodeNativeSessionResult,
+    decodeRuntimeStatusEvent,
     decodeSessionConfigUpdatedEvent,
     decodeSessionFailedEvent,
     decodeSessionOperationFailedEvent,
@@ -55,6 +56,12 @@ export async function requestRuntimeControl(
                             ? decodeCommittedSessionEvent(event.data).payload
                             : event.data;
                     const kind = decodeMessageKind(raw);
+                    if (kind === "runtime.status") {
+                        if (!decodeRuntimeStatusEvent(raw).online) {
+                            reject(new SessionRuntimeError("runtime_offline", "The Runtime connection closed"));
+                        }
+                        return;
+                    }
                     if (kind === "session.failed") {
                         const failed = decodeSessionFailedEvent(raw);
                         if (failed.commandId === command.requestId) {
