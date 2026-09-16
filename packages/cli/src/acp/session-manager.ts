@@ -50,6 +50,7 @@ import {
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readAuthorizedRaster, readInlineRaster } from "../authorization/local-raster.ts";
 import type { LocalAgentDefinition } from "../config.ts";
+import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import {
     captureProcessTree,
@@ -688,6 +689,7 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #preSessionUpdates: SessionNotification[] = [];
     readonly #processExit: Promise<void>;
+    readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
     readonly #verifiedAgentVersion: string;
@@ -730,6 +732,7 @@ class AcpProcessSession implements AcpClientHandler {
         mobiusSessionId: string,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
+        metrics: OperationMetrics,
     ) {
         this.#additionalDirectories = [...additionalDirectories];
         this.#agentId = agent.id;
@@ -737,6 +740,7 @@ class AcpProcessSession implements AcpClientHandler {
         this.#environment = agent.environment;
         this.#getObserver = getObserver;
         this.#mobiusSessionId = mobiusSessionId;
+        this.#metrics = metrics;
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
@@ -771,13 +775,18 @@ class AcpProcessSession implements AcpClientHandler {
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
         initialize: (runtime: AcpProcessSession) => Promise<void>,
+        metrics: OperationMetrics,
     ): Promise<AcpProcessSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             options.signal.throwIfAborted();
-            const [adapterUnchanged, agentUnchanged] = await Promise.all([
-                revalidateExecutable(options.agent.adapterIdentity),
-                revalidateExecutable(options.agent.agentIdentity),
-            ]);
+            const [adapterUnchanged, agentUnchanged] = await metrics.measure(
+                "executable-validation",
+                async () =>
+                    await Promise.all([
+                        revalidateExecutable(options.agent.adapterIdentity),
+                        revalidateExecutable(options.agent.agentIdentity),
+                    ]),
+            );
             options.signal.throwIfAborted();
             if (!adapterUnchanged || !agentUnchanged) {
                 throw new AcpExecutionError(
@@ -786,13 +795,18 @@ class AcpProcessSession implements AcpClientHandler {
                     "agent_runtime_changed",
                 );
             }
-            const runtime = new AcpProcessSession(
-                options.agent,
-                options.cwd,
-                options.additionalDirectories,
-                options.sessionId,
-                getObserver,
-                store,
+            const runtime = metrics.measureSync(
+                "process-spawn",
+                () =>
+                    new AcpProcessSession(
+                        options.agent,
+                        options.cwd,
+                        options.additionalDirectories,
+                        options.sessionId,
+                        getObserver,
+                        store,
+                        metrics,
+                    ),
             );
             try {
                 await initialize(runtime);
@@ -819,12 +833,14 @@ class AcpProcessSession implements AcpClientHandler {
         options: AcpPrepareOptions,
         getObserver: () => AcpSessionObserver,
         store: AcpSessionStore,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpProcessSession> =>
         await AcpProcessSession.#start(
             options,
             getObserver,
             store,
             async (runtime) => await runtime.initialize(options.signal, options.origin),
+            metrics,
         );
 
     static readonly startNativeSessionBrowser = async (
@@ -837,6 +853,7 @@ class AcpProcessSession implements AcpClientHandler {
             getObserver,
             store,
             async (runtime) => await runtime.#initializeAgent(options.signal),
+            unmeasuredOperationMetrics,
         );
 
     static readonly startSessionForkAtTurn = async (
@@ -856,6 +873,7 @@ class AcpProcessSession implements AcpClientHandler {
                     { kind: "fork", nativeSessionId: sourceNativeSessionId },
                     forkPoint,
                 ),
+            unmeasuredOperationMetrics,
         );
 
     readonly belongsTo = (agentId: string, cwd: string, additionalDirectories: readonly string[]): boolean =>
@@ -998,6 +1016,10 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     async #initializeAgent(signal: AbortSignal): Promise<void> {
+        await this.#metrics.measure("agent-initialize", async () => await this.#initializeAgentOperation(signal));
+    }
+
+    async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
         const initialized = await this.race(
             this.#connection.agent.request(
                 methods.agent.initialize,
@@ -1186,18 +1208,22 @@ class AcpProcessSession implements AcpClientHandler {
                 }
                 this.#store.remove(this.#mobiusSessionId);
             }
-            const created = await this.race(
-                this.#connection.agent.request(
-                    methods.agent.session.new,
-                    {
-                        additionalDirectories: [...this.#additionalDirectories],
-                        cwd: this.#cwd,
-                        mcpServers: [],
-                    },
-                    { cancellationSignal: signal },
-                ),
-                "ACP agent exited while starting a session",
-                signal,
+            const created = await this.#metrics.measure(
+                "session-new",
+                async () =>
+                    await this.race(
+                        this.#connection.agent.request(
+                            methods.agent.session.new,
+                            {
+                                additionalDirectories: [...this.#additionalDirectories],
+                                cwd: this.#cwd,
+                                mcpServers: [],
+                            },
+                            { cancellationSignal: signal },
+                        ),
+                        "ACP agent exited while starting a session",
+                        signal,
+                    ),
             );
             this.selectNativeSession(created.sessionId);
             lifecycleResponse = created;
@@ -2067,10 +2093,13 @@ export class AcpSessionManager {
         return await operation;
     }
 
-    async #startPreparation(options: AcpPrepareOptions): Promise<AcpProcessSession> {
+    async #startPreparation(
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
+    ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store);
+                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics);
                 this.#sessions.set(options.sessionId, runtime);
                 return runtime;
             } finally {
@@ -2105,13 +2134,17 @@ export class AcpSessionManager {
         return await operation;
     }
 
-    async #replacePreparation(existing: AcpProcessSession, options: AcpPrepareOptions): Promise<AcpProcessSession> {
+    async #replacePreparation(
+        existing: AcpProcessSession,
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics,
+    ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
                 this.#sessions.delete(options.sessionId);
                 await existing.close();
                 this.#store.remove(options.sessionId);
-                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store);
+                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics);
                 this.#sessions.set(options.sessionId, runtime);
                 return runtime;
             } finally {
@@ -2181,7 +2214,10 @@ export class AcpSessionManager {
         return await operation;
     }
 
-    readonly prepareSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
+    readonly prepareSession = async (
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
+    ): Promise<AcpPreparedSession> => {
         const stored = this.#store.read(options.sessionId);
         if (stored instanceof DeletedAcpStoredSession) {
             throw new AcpExecutionError(
@@ -2202,7 +2238,7 @@ export class AcpSessionManager {
             if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                 return runtime.prepared();
             }
-            return await this.prepareSession(options);
+            return await this.prepareSession(options, metrics);
         }
         const existing = this.#sessions.get(options.sessionId);
         if (existing !== undefined) {
@@ -2216,10 +2252,10 @@ export class AcpSessionManager {
                     "session_identity_mismatch",
                 );
             }
-            const runtime = await this.#replacePreparation(existing, options);
+            const runtime = await this.#replacePreparation(existing, options, metrics);
             return runtime.prepared();
         }
-        const runtime = await this.#startPreparation(options);
+        const runtime = await this.#startPreparation(options, metrics);
         return runtime.prepared();
     };
 

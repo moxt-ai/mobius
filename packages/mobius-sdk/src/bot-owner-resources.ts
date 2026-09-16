@@ -1,3 +1,4 @@
+import { decodeSessionReadyEvent, type SessionReadyEvent } from "@moxt-ai/mobius-protocol";
 import { MobiusProtocolError } from "./errors.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -693,30 +694,28 @@ export class MobiusProjectConversation {
     readonly idempotencyKey: string;
     readonly lifecycle: string;
     readonly projectId: string;
+    readonly ready: SessionReadyEvent | null;
     readonly sessionId: string;
     readonly title: string;
 
     constructor(value: unknown) {
         const name = "Project conversation";
         const resource = record(value, name);
-        exact(
-            resource,
-            [
-                "behaviorRevisionId",
-                "bindingId",
-                "bindingRevision",
-                "botId",
-                "clientReference",
-                "conversationId",
-                "createdAt",
-                "idempotencyKey",
-                "lifecycle",
-                "projectId",
-                "sessionId",
-                "title",
-            ],
-            name,
-        );
+        const fields = [
+            "behaviorRevisionId",
+            "bindingId",
+            "bindingRevision",
+            "botId",
+            "clientReference",
+            "conversationId",
+            "createdAt",
+            "idempotencyKey",
+            "lifecycle",
+            "projectId",
+            "sessionId",
+            "title",
+        ];
+        exact(resource, resource["ready"] === undefined ? fields : [...fields, "ready"], name);
         this.behaviorRevisionId = identifier(resource, "behaviorRevisionId", name);
         this.bindingId = identifier(resource, "bindingId", name);
         this.bindingRevision = integer(resource, "bindingRevision", name);
@@ -727,6 +726,8 @@ export class MobiusProjectConversation {
         this.idempotencyKey = identifier(resource, "idempotencyKey", name);
         this.lifecycle = text(resource, "lifecycle", name);
         this.projectId = identifier(resource, "projectId", name);
+        this.ready =
+            resource["ready"] === undefined ? null : decodeSessionReadyEvent(JSON.stringify(resource["ready"]));
         this.sessionId = identifier(resource, "sessionId", name);
         this.title = text(resource, "title", name, true);
     }

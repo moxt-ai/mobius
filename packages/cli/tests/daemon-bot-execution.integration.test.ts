@@ -387,6 +387,17 @@ describe("daemon Bot execution boundary", () => {
                 directoryId: overrideDirectoryId,
                 sessionId: unpreparedOverride.sessionId,
             });
+            expect(decodeSessionReadyEvent(await frames.next())).toMatchObject({
+                requestId: "prepare_override",
+                runtimeTimings: expect.arrayContaining([
+                    expect.objectContaining({ name: "executable-validation" }),
+                    expect.objectContaining({ name: "process-spawn" }),
+                    expect.objectContaining({ name: "agent-initialize" }),
+                    expect.objectContaining({ name: "session-new" }),
+                    expect.objectContaining({ name: "readiness-commit" }),
+                ]),
+                sessionId: unpreparedOverride.sessionId,
+            });
 
             writeServerTextFrame(
                 socket,

@@ -31,10 +31,17 @@ export interface BotProvisioningOutboxRecord extends BotConversationRecord {
     readonly payload: string;
 }
 
-export interface BotConversationPlan {
-    readonly provisioning: BotSessionProvisioning;
-    readonly response: object;
-}
+export type BotConversationPlan =
+    | {
+          readonly kind: "provisioning";
+          readonly provisioning: BotSessionProvisioning;
+          readonly response: object;
+      }
+    | {
+          readonly kind: "active";
+          readonly provisioning: BotSessionProvisioning;
+          readonly response: object;
+      };
 
 export function replyRouteFromRow(row: BotConversationRecord): BotReplyRoute {
     if (

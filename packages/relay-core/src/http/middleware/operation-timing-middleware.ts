@@ -31,6 +31,11 @@ export function operationTimingMiddleware<
                     });
                 }
             },
+            record: (name, description, durationMilliseconds) => {
+                if (Number.isFinite(durationMilliseconds) && durationMilliseconds >= 0) {
+                    metrics.push({ description, durationMilliseconds, name });
+                }
+            },
         };
         context.set("operationTiming", operationTiming);
         await next();

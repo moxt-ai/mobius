@@ -104,6 +104,7 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
     SessionPromptDisposition,
+    type SessionReadyEvent,
     type SessionUsageUpdatedEvent,
     WORKSPACE_LIST_KIND,
     type WorkspaceListCommand,
@@ -138,6 +139,7 @@ import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
 import { BotOutboundIpcServer } from "./bots/bot-outbound-ipc.ts";
 import { LocalBotAuthorizationError, LocalBotGrantStore } from "./bots/local-bot-grant-store.ts";
 import type { DaemonConfig } from "./config.ts";
+import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
@@ -936,6 +938,7 @@ async function executeSessionPrepare(
             signal,
         );
         const agent = config.catalog.find(command.agentId);
+        const metrics = new AccumulatingOperationMetrics();
         const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             agent,
@@ -946,29 +949,69 @@ async function executeSessionPrepare(
         const prepared =
             command.transient === true
                 ? await sessions.inspectSession(preparation)
-                : await sessions.prepareSession(preparation);
+                : await sessions.prepareSession(preparation, metrics);
+        const configuration = command.configuration;
+        const configOptions =
+            configuration === undefined
+                ? prepared.configOptions
+                : await metrics.measure(
+                      "configuration",
+                      async () =>
+                          await sessions.configureSession({
+                              ...preparation,
+                              booleanValue: configuration.booleanValue,
+                              configId: configuration.configId,
+                              requestId: command.requestId,
+                              value: configuration.value,
+                              valueType: configuration.valueType,
+                          }),
+                  );
         const listing = await directories.list(config.bindingId, command.directoryId, signal);
         audit.record({
             commandId: command.requestId,
             event: "session_prepared",
             sessionId: command.sessionId,
         });
-        publisher.recordRuntime(
-            command.sessionId,
-            encodeSessionReadyEvent({
-                additionalDirectories: resolved.additionalDirectoryEntries,
-                agentId: command.agentId,
-                agentName: prepared.agentName,
-                agentVersion: prepared.agentVersion,
-                capabilities: prepared.capabilities,
-                commands: prepared.commands,
-                configOptions: prepared.configOptions,
-                directoryId: command.directoryId,
-                directoryLabel: listing.directoryLabel,
-                kind: "session.ready",
-                requestId: command.requestId,
-                restored: prepared.restored,
+        if (command.configuration !== undefined) {
+            audit.record({
+                commandId: command.requestId,
+                event: "session_configured",
                 sessionId: command.sessionId,
+            });
+            publisher.recordRuntime(
+                command.sessionId,
+                encodeSessionConfigUpdatedEvent({
+                    configOptions,
+                    kind: "session.config.updated",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                }),
+            );
+        }
+        const readyEvent: SessionReadyEvent = {
+            additionalDirectories: resolved.additionalDirectoryEntries,
+            agentId: command.agentId,
+            agentName: prepared.agentName,
+            agentVersion: prepared.agentVersion,
+            capabilities: prepared.capabilities,
+            commands: prepared.commands,
+            configOptions,
+            directoryId: command.directoryId,
+            directoryLabel: listing.directoryLabel,
+            kind: "session.ready",
+            requestId: command.requestId,
+            restored: prepared.restored,
+            sessionId: command.sessionId,
+            runtimeTimings: metrics.snapshot(),
+        };
+        metrics.measureSync("readiness-commit", () => {
+            publisher.recordRuntime(command.sessionId, encodeSessionReadyEvent(readyEvent));
+        });
+        send(
+            socket,
+            encodeSessionReadyEvent({
+                ...readyEvent,
+                runtimeTimings: metrics.snapshot(),
             }),
         );
     } catch (error) {

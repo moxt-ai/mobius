@@ -266,6 +266,15 @@ const sessionIdentityFields = {
 const sessionPrepareCommandSchema = z
     .strictObject({
         ...sessionIdentityFields,
+        configuration: z
+            .strictObject({
+                booleanValue: z.boolean(),
+                configId: z.string().min(1).max(128),
+                value: z.string().max(500),
+                valueType: z.enum(["boolean", "select"]),
+            })
+            .readonly()
+            .optional(),
         kind: z.literal(SESSION_PREPARE_KIND),
         requestId: IDENTIFIER,
         transient: z.boolean().optional(),
@@ -288,6 +297,18 @@ export const sessionReadyEventSchema = z
         kind: z.literal(SESSION_READY_KIND),
         requestId: IDENTIFIER,
         restored: z.boolean(),
+        runtimeTimings: z
+            .array(
+                z
+                    .strictObject({
+                        durationMilliseconds: z.number().finite().nonnegative().max(120_000),
+                        name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+                    })
+                    .readonly(),
+            )
+            .max(16)
+            .readonly()
+            .optional(),
         sessionId: IDENTIFIER,
     })
     .readonly();

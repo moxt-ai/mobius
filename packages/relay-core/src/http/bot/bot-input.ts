@@ -41,7 +41,7 @@ export interface ConversationConfigurationInput {
     readonly booleanValue: boolean;
     readonly configId: string;
     readonly value: string;
-    readonly valueType: string;
+    readonly valueType: "boolean" | "select";
 }
 
 export function conversationConfiguration(
@@ -50,12 +50,16 @@ export function conversationConfiguration(
 ): ConversationConfigurationInput {
     const configuration = object(value, key);
     exact(configuration, ["additionalDirectoryIds", "booleanValue", "configId", "value", "valueType"]);
+    const valueType = string(configuration, "valueType", 32);
+    if (valueType !== "boolean" && valueType !== "select") {
+        throw new BotApiError("invalid_request", "The valueType field is invalid", "invalid-input");
+    }
     return {
         additionalDirectoryIds: identifiers(configuration, "additionalDirectoryIds", 16),
         booleanValue: boolean(configuration, "booleanValue"),
         configId: identifier(configuration, "configId"),
         value: string(configuration, "value", 500, true),
-        valueType: string(configuration, "valueType", 32),
+        valueType,
     };
 }
 export function string(

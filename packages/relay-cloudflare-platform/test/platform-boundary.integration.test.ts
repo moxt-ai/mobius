@@ -1865,7 +1865,7 @@ describe.sequential("Platform hosting boundary", () => {
         expect(await developer.listApps(tenant.tenantId, AbortSignal.timeout(5_000))).toEqual([]);
     });
 
-    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK creates and prepares its conversation, Then internal timings and the complete authoritative history are returned", async () => {
+    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK opens its conversation, Then configured readiness, internal timings, and the complete authoritative history are returned", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {
             let creationTiming: string | null = null;
@@ -1881,87 +1881,110 @@ describe.sequential("Platform hosting boundary", () => {
                 projectId: fixture.projectId,
                 transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
             });
-            const created = await owner.createProjectConversation(
-                {
-                    botId: fixture.botId,
-                    clientReference: "server-sdk-customer-conversation",
-                    configuration: {
-                        additionalDirectoryIds: [],
-                        booleanValue: false,
-                        configId: "model",
-                        value: "codex",
-                        valueType: "select",
-                    },
-                    idempotencyKey: "server-sdk-create-conversation",
-                    title: "Server SDK Conversation",
+            const request = {
+                botId: fixture.botId,
+                clientReference: "server-sdk-customer-conversation",
+                configuration: {
+                    additionalDirectoryIds: [],
+                    booleanValue: false,
+                    configId: "model",
+                    value: "codex",
+                    valueType: "select" as const,
                 },
-                AbortSignal.timeout(5_000),
+                idempotencyKey: "server-sdk-create-conversation",
+                title: "Server SDK Conversation",
+            };
+            const pendingCreated = owner.createProjectConversation(request, AbortSignal.timeout(5_000));
+            const preparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
+            expect(preparation).toMatchObject({
+                configuration: {
+                    configId: "model",
+                    value: "codex",
+                },
+                requestId: "server-sdk-create-conversation",
+            });
+            const agent = readyAgents[0];
+            if (agent === undefined) {
+                throw new Error("The Runtime agent is unavailable");
+            }
+            fixture.socket.send(
+                encodeSessionReadyEvent({
+                    additionalDirectories: [],
+                    agentId: agent.id,
+                    agentName: agent.label,
+                    agentVersion: agent.agentVersion,
+                    capabilities: agent.capabilities,
+                    commands: [],
+                    configOptions: [
+                        {
+                            booleanValue: false,
+                            category: "model",
+                            currentValue: "codex",
+                            description: "Model used for this Session",
+                            id: "model",
+                            name: "Model",
+                            type: "select",
+                            values: [
+                                {
+                                    description: "Codex",
+                                    groupId: "",
+                                    groupName: "",
+                                    name: "Codex",
+                                    value: "codex",
+                                },
+                            ],
+                        },
+                    ],
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    kind: "session.ready",
+                    requestId: preparation.requestId,
+                    restored: false,
+                    runtimeTimings: [
+                        { durationMilliseconds: 11, name: "executable-validation" },
+                        { durationMilliseconds: 12, name: "process-spawn" },
+                        { durationMilliseconds: 13, name: "agent-initialize" },
+                        { durationMilliseconds: 14, name: "session-new" },
+                        { durationMilliseconds: 15, name: "configuration" },
+                        { durationMilliseconds: 16, name: "readiness-commit" },
+                    ],
+                    sessionId: preparation.sessionId,
+                }),
             );
+            const created = await pendingCreated;
             expect(created).toMatchObject({
                 botId: fixture.botId,
                 clientReference: "server-sdk-customer-conversation",
                 idempotencyKey: "server-sdk-create-conversation",
                 lifecycle: "active",
                 projectId: fixture.projectId,
+                ready: {
+                    configOptions: [expect.objectContaining({ currentValue: "codex", id: "model" })],
+                    sessionId: created.sessionId,
+                },
                 title: "Server SDK Conversation",
             });
             expect(creationTiming).toEqual(
                 expect.stringMatching(
-                    /total;dur=.*create-authorize;dur=.*create-provision;dur=.*configure-accept;dur=.*configure-dispatch;dur=/u,
+                    /total;dur=.*create-authorize;dur=.*create-provision-command;dur=.*create-provision-verify;dur=.*create-provision;dur=.*prepare-control-authorize;dur=.*prepare-control-runtime;dur=.*runtime-executable-validation;dur=11\.0.*runtime-process-spawn;dur=12\.0.*runtime-agent-initialize;dur=13\.0.*runtime-session-new;dur=14\.0.*runtime-configuration;dur=15\.0.*runtime-readiness-commit;dur=16\.0.*prepare;dur=/u,
                 ),
             );
-            expect(decodeSessionConfigureCommand(await fixture.socketMessages.next())).toMatchObject({
-                configId: "model",
-                requestId: "server-sdk-create-conversation",
-                sessionId: created.sessionId,
-                value: "codex",
-            });
-
-            let preparationTiming: string | null = null;
-            const sessions = new MobiusClient({
-                credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
-                endpoint: relayOrigin,
-                observeResponse: (metadata) => {
-                    if (metadata.status === 200) {
-                        preparationTiming = metadata.serverTiming;
-                    }
-                },
-                projectId: fixture.projectId,
-                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
-            });
-            try {
-                const pendingPreparation = sessions.sessions.prepare(created.sessionId, AbortSignal.timeout(5_000));
-                const preparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
-                const agent = readyAgents[0];
-                if (agent === undefined) {
-                    throw new Error("The Runtime agent is unavailable");
-                }
-                fixture.socket.send(
-                    encodeSessionReadyEvent({
-                        additionalDirectories: [],
-                        agentId: agent.id,
-                        agentName: agent.label,
-                        agentVersion: agent.agentVersion,
-                        capabilities: agent.capabilities,
-                        commands: [],
-                        configOptions: [],
-                        directoryId: "default",
-                        directoryLabel: "Workspace",
-                        kind: "session.ready",
-                        requestId: preparation.requestId,
-                        restored: false,
-                        sessionId: preparation.sessionId,
-                    }),
-                );
-                expect(await pendingPreparation).toMatchObject({ sessionId: created.sessionId });
-                expect(preparationTiming).toEqual(
-                    expect.stringMatching(
-                        /total;dur=.*session-read;dur=.*control-authorize;dur=.*control-connect;dur=.*control-runtime;dur=.*control-close;dur=/u,
-                    ),
-                );
-            } finally {
-                sessions.close();
+            if (created.ready === null) {
+                throw new Error("The created Conversation is not ready");
             }
+            const pendingReplay = owner.createProjectConversation(request, AbortSignal.timeout(5_000));
+            const replayPreparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
+            expect(replayPreparation.configuration).toBeUndefined();
+            fixture.socket.send(
+                encodeSessionReadyEvent({
+                    ...created.ready,
+                    requestId: replayPreparation.requestId,
+                }),
+            );
+            expect(await pendingReplay).toMatchObject({
+                conversationId: created.conversationId,
+                ready: { sessionId: created.sessionId },
+            });
 
             expect(
                 await owner.readProjectConversation(created.conversationId, AbortSignal.timeout(5_000)),

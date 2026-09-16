@@ -281,7 +281,7 @@ export class BotConversationService {
             return this.planFromOutbox(duplicate);
         }
         const row = await this.readConversation(conversationId, signal);
-        return { provisioning, response: conversationResponse(row) };
+        return { kind: "provisioning", provisioning, response: conversationResponse(row) };
     };
 
     readonly projectResource = async (
@@ -318,7 +318,11 @@ export class BotConversationService {
         }
         const provisioning = decodeProvisioningPayload(row.payload);
         assertProvisioningMatches(row, provisioning);
-        return { provisioning, response: conversationResponse(row) };
+        return {
+            kind: row.lifecycle === "active" ? "active" : "provisioning",
+            provisioning,
+            response: conversationResponse(row),
+        };
     };
 
     readonly listPendingProvisioning = async (

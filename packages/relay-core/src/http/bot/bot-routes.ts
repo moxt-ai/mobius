@@ -107,24 +107,7 @@ export function createBotApplication() {
                 identifier(value, "clientReference"),
                 identifier(value, "idempotencyKey"),
                 string(value, "title", 500, true),
-                Date.now(),
-                c.var.signal,
-                c.var.operationTiming,
-            );
-            const conversationId = Reflect.get(conversation, "conversationId");
-            if (typeof conversationId !== "string") {
-                throw new Error("The created Conversation identifier is unavailable");
-            }
-            await c.var.bots.configureProjectConversation(
-                conversationId,
-                bearer(c.req.raw),
-                actorReference(c.req.raw),
-                identifier(value, "idempotencyKey"),
-                configuration.additionalDirectoryIds,
-                configuration.configId,
-                configuration.value,
-                configuration.booleanValue,
-                configuration.valueType,
+                configuration,
                 Date.now(),
                 c.var.signal,
                 c.var.operationTiming,

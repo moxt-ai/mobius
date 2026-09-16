@@ -13,6 +13,8 @@ import {
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     type SessionConfigOption,
+    type SessionPrepareCommand,
+    type SessionReadyEvent,
 } from "@moxt-ai/mobius-protocol";
 import {
     type ConversationAccessContext,
@@ -369,6 +371,9 @@ export class BotService {
         clientReference: string,
         idempotencyKey: string,
         title: string,
+        configuration: NonNullable<SessionPrepareCommand["configuration"]> & {
+            readonly additionalDirectoryIds: readonly string[];
+        },
         now: number,
         signal: AbortSignal,
         timing: OperationTiming,
@@ -417,12 +422,39 @@ export class BotService {
                     signal,
                 ),
         );
-        await timing.measure(
-            "create-provision",
-            "Provision conversation Session",
-            async () =>
-                await this.cx.gateways.botSessions.provisionConversation(access.scope, plan.provisioning, now, signal),
-        );
+        const session = await timing.measure("create-provision", "Provision conversation Session", async () => {
+            const provisioned = await timing.measure(
+                "create-provision-command",
+                "Execute conversation Session provisioning",
+                async () =>
+                    await this.cx.gateways.botSessions.provisionConversation(
+                        access.scope,
+                        plan.provisioning,
+                        now,
+                        signal,
+                    ),
+            );
+            await timing.measure("create-provision-verify", "Verify provisioned conversation Session", async () => {
+                if (
+                    provisioned.projectId !== access.scope.projectId ||
+                    provisioned.sessionId !== plan.provisioning.sessionId ||
+                    provisioned.runtimeId !== binding.runtimeId ||
+                    provisioned.agentId !== binding.agentRef ||
+                    provisioned.defaultBinding.bindingId !== binding.bindingId ||
+                    provisioned.defaultBinding.runtimeId !== binding.runtimeId ||
+                    provisioned.defaultBinding.agentRef !== binding.agentRef ||
+                    provisioned.defaultBinding.workspaceRef !== binding.workspaceRef ||
+                    provisioned.lifecycle.kind !== "ready"
+                ) {
+                    throw new BotApiError(
+                        "bot_service_unavailable",
+                        "The provisioned conversation Session is invalid",
+                        "unavailable",
+                    );
+                }
+            });
+            return provisioned;
+        });
         await timing.measure(
             "create-activate",
             "Activate conversation",
@@ -434,12 +466,138 @@ export class BotService {
                     signal,
                 ),
         );
-        return await timing.measure(
+        const conversation = await timing.measure(
             "create-read",
             "Read created conversation",
             async () =>
                 await cx.services.conversations.projectResource(access, plan.provisioning.conversationId, signal),
         );
+        const ready = await timing.measure(
+            "prepare",
+            "Prepare configured conversation Session",
+            async () =>
+                await this.prepareProjectConversation(
+                    access.scope,
+                    binding,
+                    session.sessionId,
+                    validateIdentifier(idempotencyKey, "idempotency_key"),
+                    plan.kind === "provisioning" ? configuration : null,
+                    configuration,
+                    signal,
+                    timing,
+                ),
+        );
+        return { ...conversation, ready };
+    };
+
+    private readonly prepareProjectConversation = async (
+        scope: ProjectScope,
+        binding: ApprovedBindingContext,
+        sessionId: string,
+        requestId: string,
+        initialConfiguration:
+            | (NonNullable<SessionPrepareCommand["configuration"]> & {
+                  readonly additionalDirectoryIds: readonly string[];
+              })
+            | null,
+        expectedConfiguration: NonNullable<SessionPrepareCommand["configuration"]> & {
+            readonly additionalDirectoryIds: readonly string[];
+        },
+        signal: AbortSignal,
+        timing: OperationTiming,
+    ): Promise<SessionReadyEvent> => {
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+        const control = await timing.measure(
+            "prepare-control-authorize",
+            "Authorize conversation Runtime control host",
+            async () => await this.cx.services.controls.open(scope, binding.runtimeId, deadline),
+        );
+        try {
+            const response = await timing.measure(
+                "prepare-control-connect",
+                "Connect conversation Runtime control host",
+                async () =>
+                    await this.cx.gateways.channels.acceptHost(
+                        control,
+                        new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                        deadline,
+                    ),
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new BotApiError("bot_service_unavailable", "The approved Runtime is unavailable", "unavailable");
+            }
+            const command = decodeSessionPrepareCommand(
+                JSON.stringify({
+                    additionalDirectoryIds: expectedConfiguration.additionalDirectoryIds,
+                    agentId: binding.agentRef,
+                    bindingId: binding.bindingId,
+                    ...(initialConfiguration === null
+                        ? {}
+                        : {
+                              configuration: {
+                                  booleanValue: initialConfiguration.booleanValue,
+                                  configId: initialConfiguration.configId,
+                                  value: initialConfiguration.value,
+                                  valueType: initialConfiguration.valueType,
+                              },
+                          }),
+                    directoryId: binding.workspaceRef,
+                    kind: SESSION_PREPARE_KIND,
+                    requestId,
+                    sessionId,
+                }),
+            );
+            const result = await timing.measure(
+                "prepare-control-runtime",
+                "Wait for configured Runtime Session",
+                async () => await requestRuntimeControl(socket, command, deadline),
+            );
+            if (result.kind !== "session.ready") {
+                throw new BotApiError(
+                    "binding_incompatible",
+                    "The local Agent did not confirm conversation readiness",
+                    "conflict",
+                );
+            }
+            const runtimeTimingDescriptions: Readonly<Record<string, string>> = {
+                "agent-initialize": "Initialize ACP agent",
+                configuration: "Apply initial agent configuration",
+                "executable-validation": "Validate ACP executables",
+                "process-spawn": "Spawn ACP process",
+                "readiness-commit": "Commit Runtime Session readiness",
+                "session-new": "Create ACP Session",
+            };
+            for (const metric of result.runtimeTimings ?? []) {
+                const description = runtimeTimingDescriptions[metric.name];
+                if (description !== undefined) {
+                    timing.record(`runtime-${metric.name}`, description, metric.durationMilliseconds);
+                }
+            }
+            if (
+                result.sessionId !== sessionId ||
+                result.agentId !== binding.agentRef ||
+                result.directoryId !== binding.workspaceRef ||
+                !result.configOptions.some(
+                    (option) =>
+                        option.id === expectedConfiguration.configId &&
+                        option.currentValue === expectedConfiguration.value,
+                )
+            ) {
+                throw new BotApiError(
+                    "binding_incompatible",
+                    "The local Agent did not confirm the initial conversation configuration",
+                    "conflict",
+                );
+            }
+            return result;
+        } finally {
+            await timing.measure(
+                "prepare-control-close",
+                "Close conversation Runtime control host",
+                async () => await this.cx.services.controls.close(control, AbortSignal.timeout(15_000)),
+            );
+        }
     };
 
     readonly readProjectConversationResource = async (
