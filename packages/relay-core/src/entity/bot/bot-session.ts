@@ -6,6 +6,7 @@ import type {
     PromptResource,
     SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
+import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { ExecutionPermit } from "../authentication/project-authentication.ts";
 import { type ProjectScope, type SessionMessage, SessionRuntimeError, type SessionSummary } from "../do/session.ts";
 
@@ -450,6 +451,7 @@ export interface BotSessionRuntime {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
+        timing: OperationTiming,
     ) => Promise<SessionSummary>;
     readonly settleExecution: (
         scope: ProjectScope,

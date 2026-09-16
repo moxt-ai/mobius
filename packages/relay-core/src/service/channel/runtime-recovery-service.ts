@@ -1,6 +1,7 @@
 import type { BotSessionRuntime } from "../../entity/bot/bot-session.ts";
 import { BotSessionRuntimeError } from "../../entity/bot/bot-session.ts";
 import type { ProjectScope } from "../../entity/do/session.ts";
+import { unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import type { BotRuntimeService } from "../bot/bot-runtime-service.ts";
 import type { ChannelPeers } from "./channel-actor.ts";
 
@@ -43,7 +44,13 @@ export class RuntimeRecoveryService {
         for (const plan of plans) {
             signal.throwIfAborted();
             try {
-                await this.#cx.gateways.botSessions.provisionConversation(scope, plan.provisioning, Date.now(), signal);
+                await this.#cx.gateways.botSessions.provisionConversation(
+                    scope,
+                    plan.provisioning,
+                    Date.now(),
+                    signal,
+                    unmeasuredOperationTiming,
+                );
                 await this.#cx.services.bots.activateConversation(
                     scope,
                     plan.provisioning.conversationId,

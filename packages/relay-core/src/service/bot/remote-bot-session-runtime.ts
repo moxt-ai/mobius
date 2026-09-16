@@ -18,6 +18,7 @@ import { ProjectScope, type SessionSummary } from "../../entity/do/session.ts";
 import type { SessionDirectoryGateway } from "../../gateway/session-directory-gateway.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
+import type { OperationTiming } from "../../infra/operation-timing.ts";
 import {
     decodeRemoteActivitySummaries,
     decodeRemoteAttemptSummary,
@@ -276,11 +277,21 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
+        timing: OperationTiming,
     ): Promise<SessionSummary> => {
-        const summary = decodeSessionSummary(
-            await this.request(scope, provisioning.sessionId, "bot-provision", { now, provisioning }, signal),
+        const summary = await timing.measure(
+            "create-provision-session-runtime",
+            "Provision Session runtime state",
+            async () =>
+                decodeSessionSummary(
+                    await this.request(scope, provisioning.sessionId, "bot-provision", { now, provisioning }, signal),
+                ),
         );
-        await this.#directory.synchronizeSession(summary, signal);
+        await timing.measure(
+            "create-provision-directory-sync",
+            "Synchronize Session directory",
+            async () => await this.#directory.synchronizeSession(summary, signal),
+        );
         return summary;
     };
 

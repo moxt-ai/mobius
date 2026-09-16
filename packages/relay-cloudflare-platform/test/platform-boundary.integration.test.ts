@@ -1966,7 +1966,7 @@ describe.sequential("Platform hosting boundary", () => {
             });
             expect(creationTiming).toEqual(
                 expect.stringMatching(
-                    /total;dur=.*create-authorize;dur=.*create-provision-command;dur=.*create-provision-verify;dur=.*create-provision;dur=.*prepare-control-authorize;dur=.*prepare-control-runtime;dur=.*runtime-executable-validation;dur=11\.0.*runtime-process-spawn;dur=12\.0.*runtime-agent-initialize;dur=13\.0.*runtime-session-new;dur=14\.0.*runtime-configuration;dur=15\.0.*runtime-readiness-commit;dur=16\.0.*prepare;dur=/u,
+                    /total;dur=.*create-authorize;dur=.*create-provision-session-runtime;dur=.*create-provision-directory-sync;dur=.*create-provision-command;dur=.*create-provision-verify;dur=.*create-provision;dur=.*prepare-control-authorize;dur=.*prepare-control-runtime;dur=.*runtime-executable-validation;dur=11\.0.*runtime-process-spawn;dur=12\.0.*runtime-agent-initialize;dur=13\.0.*runtime-session-new;dur=14\.0.*runtime-configuration;dur=15\.0.*runtime-readiness-commit;dur=16\.0.*prepare;dur=/u,
                 ),
             );
             if (created.ready === null) {

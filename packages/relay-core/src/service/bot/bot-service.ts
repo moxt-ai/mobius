@@ -49,7 +49,7 @@ import {
 import type { BotConnectionGateway } from "../../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway, SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
 import type { SessionArtifactGateway } from "../../gateway/session-artifact-gateway.ts";
-import type { OperationTiming } from "../../infra/operation-timing.ts";
+import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
 import type { BotConversationStorage } from "../../storage/bot-conversation-storage.ts";
@@ -432,6 +432,7 @@ export class BotService {
                         plan.provisioning,
                         now,
                         signal,
+                        timing,
                     ),
             );
             await timing.measure("create-provision-verify", "Verify provisioned conversation Session", async () => {
@@ -1493,7 +1494,13 @@ export class BotService {
             );
         };
         const plan = await createPlan();
-        await this.cx.gateways.botSessions.provisionConversation(access.scope, plan.provisioning, now, signal);
+        await this.cx.gateways.botSessions.provisionConversation(
+            access.scope,
+            plan.provisioning,
+            now,
+            signal,
+            unmeasuredOperationTiming,
+        );
         return cx.services.conversations.activateConversation(
             access.scope,
             plan.provisioning.conversationId,
