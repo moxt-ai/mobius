@@ -1269,6 +1269,52 @@ it.each(["import", "fork"] as const)(
     },
 );
 
+it("Given a paired native Agent, When the App backend finds a session by its native ID, Then Mobius returns only an opaque import capability", async () => {
+    const fixture = await createReadyConversation("native-find-backend");
+    const client = new MobiusClient({
+        endpoint: relayOrigin,
+        projectId: fixture.projectId,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    try {
+        const pending = client.runtimes.findNativeSessionByNativeSessionId(
+            fixture.runtimeId,
+            {
+                agentId: "codex",
+                directoryId: "default",
+                additionalDirectoryIds: [],
+                nativeSessionId: "native-current-session",
+            },
+            new AbortController().signal,
+        );
+        const request = decodeNativeSessionCommand(await fixture.socketMessages.next());
+        expect(request).toMatchObject({ action: "find", nativeSessionId: "native-current-session" });
+        fixture.socket.send(
+            encodeNativeSessionResult({
+                action: "find",
+                kind: "native.session.result",
+                requestId: request.requestId,
+                sessionId: request.sessionId,
+                entry: {
+                    entryId: "opaque-native-entry",
+                    title: "Current session",
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    additionalDirectories: [],
+                    updatedAt: null,
+                },
+            }),
+        );
+        const found = await pending;
+        expect(found).toMatchObject({ action: "find", entry: { entryId: "opaque-native-entry" } });
+        expect(JSON.stringify(found)).not.toContain("native-current-session");
+    } finally {
+        client.close();
+        fixture.socket.close();
+    }
+});
+
 it("Given a paired Runtime disconnects during native session discovery, When the App backend is waiting, Then Mobius reports that the Runtime is offline", async () => {
     const fixture = await createReadyConversation("native-discovery-disconnect");
     const client = new MobiusClient({

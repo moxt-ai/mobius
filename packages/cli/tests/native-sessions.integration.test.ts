@@ -82,15 +82,17 @@ async function fixture(
         title: string,
         additionalDirectories: readonly string[] = [],
         cwd = workspace,
-    ): Promise<void> => {
+    ): Promise<string> => {
         const external = new AcpSessionManager();
+        const sessionId = crypto.randomUUID();
+        const before = new Set(await readdir(native));
         try {
             await external.runPrompt({
                 agent,
                 additionalDirectories,
                 cwd,
                 signal: new AbortController().signal,
-                sessionId: crypto.randomUUID(),
+                sessionId,
                 commandId: crypto.randomUUID(),
                 prompt: title,
                 images: [],
@@ -101,6 +103,11 @@ async function fixture(
         } finally {
             await external.close();
         }
+        const created = (await readdir(native)).find((file) => file.endsWith(".json") && !before.has(file));
+        if (created === undefined) {
+            throw new Error("The fake Agent did not persist its native session");
+        }
+        return decodeURIComponent(created.slice(0, -5));
     };
     const list = async (cursor: string | null = null) => {
         const result = await service.execute({ ...identity, action: "list", cursor }, new AbortController().signal);
@@ -383,6 +390,46 @@ describe("native Agent session boundary", () => {
             }
         },
     );
+
+    it("Given paginated native sessions, When one is found by its native ID, Then only an opaque authorized entry is returned and can be imported", async () => {
+        const f = await fixture("Codex");
+        try {
+            await f.seed("Earlier conversation");
+            await f.seed("Another conversation");
+            const nativeSessionId = await f.seed("Current handoff conversation");
+            const found = await f.service.execute(
+                { ...f.identity, action: "find", nativeSessionId },
+                new AbortController().signal,
+            );
+            expect(found).toMatchObject({
+                action: "find",
+                entry: { title: "Current handoff conversation" },
+            });
+            expect(JSON.stringify(found)).not.toContain(nativeSessionId);
+            if (found.action !== "find") {
+                throw new Error("Expected an opaque native session lookup");
+            }
+            await expect(
+                f.service.execute(
+                    {
+                        ...f.identity,
+                        action: "import",
+                        entryId: found.entry.entryId,
+                        targetSessionId: "handoff-import",
+                    },
+                    new AbortController().signal,
+                ),
+            ).resolves.toMatchObject({
+                action: "import",
+                ready: { sessionId: "handoff-import" },
+                history: {
+                    messages: expect.arrayContaining([{ role: "user", text: "Current handoff conversation" }]),
+                },
+            });
+        } finally {
+            await f.close();
+        }
+    });
 
     it("Given a listed session uses a linked directory, When that directory changes before deletion, Then the local boundary requires a refreshed selection before deleting the session", async () => {
         const f = await fixture("Codex");

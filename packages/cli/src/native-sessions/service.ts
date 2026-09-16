@@ -82,6 +82,30 @@ export class NativeSessionService {
         }
         const entryScope = JSON.stringify([command.agentId, command.bindingId, command.sessionId]);
         const cursorScope = JSON.stringify([entryScope, cwd]);
+        const register = async (info: NativeSessionInfo): Promise<NativeSessionEntry | null> => {
+            const authorized = await this.authorizeEntry(command, options, info);
+            if (authorized === null) {
+                return null;
+            }
+            const entryId = randomUUID();
+            if (this.#entries.size >= 5_000) {
+                this.#entries.clear();
+            }
+            this.#entries.set(entryId, {
+                scope: entryScope,
+                nativeSessionId: info.sessionId,
+                cwd: authorized.cwd,
+                additionalDirectories: authorized.additionalDirectories,
+            });
+            return {
+                entryId,
+                title: info.title ?? "Untitled session",
+                directoryId: authorized.directoryId,
+                directoryLabel: authorized.directoryLabel,
+                updatedAt: info.updatedAt ?? null,
+                additionalDirectories: authorized.additionalEntries,
+            };
+        };
         const envelope = {
             kind: "native.session.result",
             requestId: command.requestId,
@@ -103,28 +127,10 @@ export class NativeSessionService {
             const page = await this.#sessions.listNativeSessions(options, cursor);
             const entries: NativeSessionEntry[] = [];
             for (const info of page.sessions) {
-                const authorized = await this.authorizeEntry(command, options, info);
-                if (authorized === null) {
-                    continue;
+                const entry = await register(info);
+                if (entry !== null) {
+                    entries.push(entry);
                 }
-                const entryId = randomUUID();
-                if (this.#entries.size >= 5_000) {
-                    this.#entries.clear();
-                }
-                this.#entries.set(entryId, {
-                    scope: entryScope,
-                    nativeSessionId: info.sessionId,
-                    cwd: authorized.cwd,
-                    additionalDirectories: authorized.additionalDirectories,
-                });
-                entries.push({
-                    entryId,
-                    title: info.title ?? "Untitled session",
-                    directoryId: authorized.directoryId,
-                    directoryLabel: authorized.directoryLabel,
-                    updatedAt: info.updatedAt ?? null,
-                    additionalDirectories: authorized.additionalEntries,
-                });
             }
             let nextCursor: string | null = null;
             if (page.nextCursor != null) {
@@ -152,6 +158,35 @@ export class NativeSessionService {
                 entries,
                 nextCursor,
             };
+        }
+        if (command.action === "find") {
+            let cursor: string | null = null;
+            let inspected = 0;
+            for (let pageNumber = 0; pageNumber < 500; pageNumber += 1) {
+                const page = await this.#sessions.listNativeSessions(options, cursor);
+                inspected += page.sessions.length;
+                const found = page.sessions.find((session) => session.sessionId === command.nativeSessionId);
+                if (found !== undefined) {
+                    const entry = await register(found);
+                    if (entry !== null) {
+                        this.record(command, "native_session_found");
+                        return { ...envelope, action: "find", entry };
+                    }
+                    break;
+                }
+                if (page.nextCursor == null || inspected >= 500) {
+                    break;
+                }
+                if (page.nextCursor === cursor) {
+                    throw new AcpExecutionError(
+                        "The Agent returned a repeated session cursor",
+                        {},
+                        "invalid_native_session_response",
+                    );
+                }
+                cursor = page.nextCursor;
+            }
+            throw new AcpExecutionError("The native session was not found", {}, "native_session_not_found");
         }
         const selected = this.#entries.get(command.entryId);
         if (selected?.scope !== entryScope) {

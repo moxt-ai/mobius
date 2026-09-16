@@ -112,6 +112,7 @@ export function createSessionRoutes() {
                 const body = context.req.valid("json");
                 if (
                     body["action"] !== "list" &&
+                    body["action"] !== "find" &&
                     body["action"] !== "import" &&
                     body["action"] !== "fork" &&
                     body["action"] !== "preview"
@@ -122,11 +123,13 @@ export function createSessionRoutes() {
                     body,
                     body["action"] === "list"
                         ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "cursor", "discoveryId"]
-                        : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
+                        : body["action"] === "find"
+                          ? ["action", "agentId", "directoryId", "additionalDirectoryIds", "nativeSessionId"]
+                          : ["action", "agentId", "directoryId", "additionalDirectoryIds", "entryId", "discoveryId"],
                 );
                 const { discoveryId, ...input } = body;
                 const sourceSessionId =
-                    input["action"] === "list" && discoveryId === null
+                    (input["action"] === "list" && discoveryId === null) || input["action"] === "find"
                         ? crypto.randomUUID()
                         : validateIdentifier(readString(body, "discoveryId"), "discovery_id");
                 const command = decodeNativeSessionCommand(

@@ -832,6 +832,29 @@ export class MobiusRuntimeResources {
             ),
         );
 
+    readonly findNativeSessionByNativeSessionId = async (
+        runtimeId: string,
+        request: Omit<
+            Extract<NativeSessionCommand, { readonly action: "find" }>,
+            "kind" | "requestId" | "sessionId" | "bindingId" | "action"
+        >,
+        signal: AbortSignal,
+    ) => {
+        const result = decodeNativeSessionResult(
+            JSON.stringify(
+                await this.#executor.post(
+                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/native-sessions`),
+                    { ...request, action: "find" },
+                    signal,
+                ),
+            ),
+        );
+        if (result.action !== "find") {
+            throw new MobiusProtocolError("The service returned an invalid native Session lookup");
+        }
+        return result;
+    };
+
     readonly revoke = async (runtimeId: string, signal: AbortSignal): Promise<void> => {
         if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(runtimeId)) {
             throw new MobiusValidationError("The Runtime identifier is invalid");

@@ -57,6 +57,7 @@ export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkC
 
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
     z
         .strictObject({
             ...identity,
@@ -102,6 +103,13 @@ const resultEnvelope = {
     kind: z.literal(NATIVE_SESSION_RESULT_KIND),
 };
 const nativeSessionResultSchema = z.discriminatedUnion("action", [
+    z
+        .strictObject({
+            ...resultEnvelope,
+            action: z.literal("find"),
+            entry: nativeSessionEntrySchema,
+        })
+        .readonly(),
     z
         .strictObject({
             ...resultEnvelope,

@@ -23,6 +23,11 @@ Browser <-> Mobius <-> Runtime: history, turns, configuration, events, cancellat
    `preview` action reads saved history without opening a Session; for Codex it
    reads through `thread/read`/`thread/turns/list` instead of ACP `session/load`,
    so it never contends with Codex's exclusive writer lock.
+- `client.runtimes.findNativeSessionByNativeSessionId(runtimeId, request, signal)`
+  performs a bounded, paginated lookup at the local Runtime boundary. It validates
+  the resolved workspace and returns a fresh opaque entry plus discovery context for
+  the existing import operation. Ordinary listings and lookup results never disclose
+  the native session ID.
 - `client.sessions.createAccess(sessionId, expiresInSeconds, signal)` issues an
   `msession_…` credential for an existing Session in the App's Project. Supported
   lifetimes are 60–3600 seconds. Parent App keys do not expire; their revocation
