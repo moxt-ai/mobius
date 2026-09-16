@@ -110,9 +110,11 @@ describe.sequential("Session persistence boundaries", () => {
             await closeMobiusTransport();
             cleanup();
 
-            // Cross the 256-event stream capacity with the smallest overflowing backlog.
+            // Cross the 256-event stream capacity with the smallest overflowing backlog. The production Runtime
+            // serializes one Session lane, so bounded groups keep it busy without starting every acknowledgement
+            // deadline at once.
             const recordedEventCount = 257;
-            const batchSize = 10;
+            const batchSize = 32;
             for (let offset = 0; offset < recordedEventCount; offset += batchSize) {
                 const count = Math.min(batchSize, recordedEventCount - offset);
                 await Promise.all(
