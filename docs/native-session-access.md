@@ -19,7 +19,10 @@ Browser <-> Mobius <-> Runtime: history, turns, configuration, events, cancellat
   the Runtime can resolve entries from that discovery context. Runtime and Project authorization are enforced
    before connecting to the local agent. Imports resolve to a ready Session,
    reusing its canonical identity when already imported. Failed imports propagate
-   the opening error without falling back to a read-only preview.
+   the opening error without falling back to a read-only preview. A separate
+   `preview` action reads saved history without opening a Session; for Codex it
+   reads through `thread/read`/`thread/turns/list` instead of ACP `session/load`,
+   so it never contends with Codex's exclusive writer lock.
 - `client.sessions.createAccess(sessionId, expiresInSeconds, signal)` issues an
   `msession_…` credential for an existing Session in the App's Project. Supported
   lifetimes are 60–3600 seconds. Parent App keys do not expire; their revocation

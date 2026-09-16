@@ -51,9 +51,18 @@ status describes that connection; it does not prove the original writer is idle.
 ## Implemented recovery
 
 When an authorized import fails at the ACP execution boundary, Mobius propagates
-the original typed opening error. It does not start a temporary history reader or
-return a read-only preview. Cancellation and timeout remain distinct failures.
-No native writer-conflict classification is inferred from an ACP error message.
+the original typed opening error. It does not fall back to a preview or start a
+temporary history reader on the failed-import path. Cancellation and timeout
+remain distinct failures. No native writer-conflict classification is inferred
+from an ACP error message.
+
+The explicit `preview` action remains separate from import. For Codex, it reads
+saved history through a temporary `codex app-server` connection using
+`thread/read` and `thread/turns/list`, instead of ACP `session/load`. This avoids
+acquiring Codex's exclusive writer lock, so an externally owned Codex thread stays
+previewable while its owner keeps writing. The reader is bounded, cancellable,
+and released whether it succeeds, fails, times out, or is cancelled; it never
+prompts, subscribes, or closes the source thread.
 
 The user can retry the normal import path after resolving the failure, such as
 closing the session in another application. Only successful restoration opens an

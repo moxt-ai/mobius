@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import type {
     NativeSessionCommand,
     NativeSessionEntry,
+    NativeSessionHistory,
     NativeSessionResult,
     NativeSessionTurnForkCommand,
     SessionReadyEvent,
@@ -14,6 +15,7 @@ import type { AuditStore } from "../audit/audit-store.ts";
 import { LocalAuthorizationError } from "../authorization/local-authorization-error.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import type { DaemonConfig } from "../config.ts";
+import { readCodexHistory } from "./codex-history.ts";
 
 interface ListedTarget {
     readonly scope: string;
@@ -168,10 +170,7 @@ export class NativeSessionService {
         }
         const target = await this.resolveTarget(command, options, selected);
         if (command.action === "preview") {
-            const history = await this.#sessions.previewNativeSession(
-                { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
-                target.info.sessionId,
-            );
+            const history = await this.previewHistory(command, options, target, signal);
             signal.throwIfAborted();
             this.record(command, "native_session_previewed");
             return {
@@ -326,6 +325,33 @@ export class NativeSessionService {
             targetSessionId: command.targetSessionId,
             title: command.title,
         };
+    };
+
+    private readonly previewHistory = async (
+        command: NativeSessionCommand,
+        options: AcpPrepareOptions,
+        target: AuthorizedNativeSession,
+        signal: AbortSignal,
+    ): Promise<NativeSessionHistory> => {
+        if (options.agent.id !== "codex") {
+            return await this.#sessions.previewNativeSession(
+                { ...options, cwd: target.cwd, additionalDirectories: target.additionalDirectories },
+                target.info.sessionId,
+            );
+        }
+        // Codex enforces an exclusive writer per thread. Reading through raw
+        // thread/read + thread/turns/list, instead of ACP session/load, avoids
+        // acquiring that lock so an externally owned thread stays previewable.
+        const snapshot = await readCodexHistory(options.agent, target.cwd, target.info.sessionId, signal);
+        const resolved = await this.#directories.identify(command.bindingId, snapshot.cwd, signal);
+        if (snapshot.nativeSessionId !== target.info.sessionId || resolved.path !== target.cwd) {
+            throw new AcpExecutionError(
+                "Codex returned history for a different session or workspace.",
+                {},
+                "invalid_native_session_response",
+            );
+        }
+        return snapshot.history;
     };
 
     private readonly authorizeEntry = async (

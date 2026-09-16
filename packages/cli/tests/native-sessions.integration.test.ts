@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
 import { AcpSessionManager, NullAcpSessionObserver } from "../src/acp/session-manager.ts";
@@ -11,7 +10,8 @@ import { WorkspaceDirectoryService } from "../src/authorization/workspace-direct
 import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
 import { NativeSessionService } from "../src/native-sessions/service.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const acpUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url).toString();
+const appServerUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.
@@ -33,8 +33,16 @@ async function fixture(
     await mkdir(native);
     const previous = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
     process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = native;
-    const agent = new LocalAgentDefinition(label === "Codex" ? "codex" : "claude", label, process.execPath, [
-        fakeAgentPath,
+    // Codex's saved-history preview spawns `codex app-server` separately from
+    // the ACP Agent process; dispatch to either fixture entrypoint by argv,
+    // mirroring the real Codex CLI's two entrypoints under one executable.
+    const executable = join(temporary, "agent.mjs");
+    await writeFile(
+        executable,
+        `#!${process.execPath}\nawait import(process.argv.includes("app-server") ? ${JSON.stringify(appServerUrl)} : ${JSON.stringify(acpUrl)});\n`,
+        { mode: 0o700 },
+    );
+    const agent = new LocalAgentDefinition(label === "Codex" ? "codex" : "claude", label, executable, [
         "--agent-name",
         label,
         ...(profile === "unsupported"
@@ -176,6 +184,64 @@ describe("native Agent session boundary", () => {
             expect((await f.list()).entries).toHaveLength(2);
             expect(await readFile(join(f.native, source), "utf8")).toBe(original);
         } finally {
+            await f.close();
+            vi.useRealTimers();
+        }
+    });
+    it("Given a Codex conversation is open in another writer, When its history is previewed, Then the preview succeeds without acquiring Codex's exclusive writer lock", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-16T00:00:00Z"));
+        const f = await fixture("Codex", "exclusive-writer");
+        const external = new AcpSessionManager();
+        try {
+            await external.runPrompt({
+                agent: f.agent,
+                additionalDirectories: [],
+                cwd: f.workspace,
+                signal: new AbortController().signal,
+                sessionId: "external",
+                commandId: "external-turn",
+                prompt: "Externally owned conversation",
+                images: [],
+                resources: [],
+                onText: async () => {},
+                onActivity: async () => {},
+            });
+            const entry = (await f.list()).entries[0];
+            if (entry === undefined) {
+                throw new Error("Missing native conversation");
+            }
+            // The external writer stays open for the entire preview; a lock-acquiring
+            // read (ACP session/load) would fail here with "already has an active writer".
+            const preview = await f.service.execute(
+                { ...f.identity, action: "preview", entryId: entry.entryId },
+                new AbortController().signal,
+            );
+            expect(preview).toMatchObject({
+                action: "preview",
+                reason: "requested",
+                history: {
+                    status: "available",
+                    messages: expect.arrayContaining([{ role: "user", text: "Externally owned conversation" }]),
+                },
+            });
+            await expect(
+                external.runPrompt({
+                    agent: f.agent,
+                    additionalDirectories: [],
+                    cwd: f.workspace,
+                    signal: new AbortController().signal,
+                    sessionId: "external",
+                    commandId: "external-turn-after-preview",
+                    prompt: "Still owned by the external writer",
+                    images: [],
+                    resources: [],
+                    onText: async () => {},
+                    onActivity: async () => {},
+                }),
+            ).resolves.toMatchObject({ stopReason: "end_turn" });
+        } finally {
+            await external.close();
             await f.close();
             vi.useRealTimers();
         }
