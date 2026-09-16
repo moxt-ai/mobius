@@ -12,6 +12,9 @@ import {
     encodeCommittedSessionEvent,
     encodeRuntimeStatusEvent,
     encodeSessionCompletedEvent,
+    encodeSessionConfigUpdatedEvent,
+    encodeSessionPrepareCommand,
+    encodeSessionReadyEvent,
     encodeWorkspaceEntriesEvent,
     RUNTIME_STATUS_KIND,
     SESSION_EVENT_COMMITTED_KIND,
@@ -392,6 +395,158 @@ describe("browser relay connection", () => {
                 sessionId: "session-1",
                 stopReason: "end_turn",
             });
+        } finally {
+            closeClient();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+        }
+    });
+
+    it("Given agent preparation control messages, When no conversation history changes, Then the history observer waits for a committed session event", async () => {
+        const relay = createServer();
+        const sockets = new Set<Duplex>();
+        const connections = new ValueFeed<Duplex>();
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            connections.push(socket);
+            writeServerTextFrame(
+                socket,
+                encodeRuntimeStatusEvent({
+                    kind: RUNTIME_STATUS_KIND,
+                    online: true,
+                    runtimeId: "runtime-1",
+                }),
+            );
+        });
+        await listen(relay);
+
+        const historyChanges: string[] = [];
+        const nextHistoryChange = new ValueFeed<string>();
+        const readyRequests = new ValueFeed<string>();
+        const configuredRequests = new ValueFeed<string>();
+        let closeClient = (): void => undefined;
+        try {
+            const client = await connectMobiusClient({
+                onConfig: (event) => configuredRequests.push(event.requestId),
+                onHistoryChanged: () => {
+                    historyChanges.push("changed");
+                    nextHistoryChange.push("changed");
+                },
+                onReady: (event) => readyRequests.push(event.requestId),
+                relayUrl: `ws://127.0.0.1:${readPort(relay).toString()}`,
+            });
+            closeClient = client.close;
+            const socket = await connections.next();
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionPrepareCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "codex",
+                    bindingId: "binding-1",
+                    directoryId: "workspace",
+                    kind: "session.prepare",
+                    requestId: "prepare-1",
+                    sessionId: "session-1",
+                }),
+            );
+            writeServerTextFrame(
+                socket,
+                encodeSessionReadyEvent({
+                    additionalDirectories: [],
+                    agentId: "codex",
+                    agentName: "Codex",
+                    agentVersion: "integration",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        promptQueueing: false,
+                        resumeSession: true,
+                        steering: false,
+                        unstableForkSession: true,
+                    },
+                    commands: [],
+                    configOptions: [],
+                    directoryId: "workspace",
+                    directoryLabel: "Workspace",
+                    kind: "session.ready",
+                    requestId: "prepare-1",
+                    restored: false,
+                    sessionId: "session-1",
+                }),
+            );
+            await expect(readyRequests.next()).resolves.toBe("prepare-1");
+            expect(historyChanges).toEqual([]);
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionConfigUpdatedEvent({
+                    configOptions: [],
+                    kind: "session.config.updated",
+                    requestId: "configure-1",
+                    sessionId: "session-1",
+                }),
+            );
+            await expect(configuredRequests.next()).resolves.toBe("configure-1");
+            expect(historyChanges).toEqual([]);
+
+            writeServerTextFrame(
+                socket,
+                encodeCommittedSessionEvent({
+                    cursor: "cursor-1",
+                    eventId: "delta-1",
+                    kind: SESSION_EVENT_COMMITTED_KIND,
+                    payload: encodeAgentMessageDeltaEvent({
+                        commandId: "command-1",
+                        kind: "agent.message.delta",
+                        messageId: "agent-message-1",
+                        sessionId: "session-1",
+                        text: "History changed",
+                    }),
+                    recordedAt: "2026-09-08T00:00:00.000Z",
+                    sequence: "1",
+                    sessionId: "session-1",
+                    source: {
+                        attemptId: "attempt-1",
+                        kind: "attempt",
+                        sourceSeq: "1",
+                    },
+                }),
+            );
+            await expect(nextHistoryChange.next()).resolves.toBe("changed");
+            expect(historyChanges).toEqual(["changed"]);
         } finally {
             closeClient();
             for (const socket of sockets) {

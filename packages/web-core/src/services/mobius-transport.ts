@@ -325,13 +325,13 @@ class ConnectedTransport extends TransportConnection {
     readonly #serviceClients: Promise<BrowserServiceClients>;
     readonly #turnIds = new Map<string, Promise<MobiusTurn>>();
 
-    constructor(connection: ChannelConnection, onActivity: () => void) {
+    constructor(connection: ChannelConnection, onHistoryChanged: () => void) {
         super();
         this.#channelId = connection.channelId;
         this.#connection = connection;
         this.#serviceClients = connectBrowserServiceClients(connection);
         this.#client = connectMobiusChannelClient({
-            onActivity,
+            onHistoryChanged,
             onCommands: (event) => {
                 useChatStore.getState().applySessionCommands(event);
             },
@@ -908,9 +908,9 @@ class ConnectedTransport extends TransportConnection {
 
 let transport: TransportConnection = new DisconnectedTransport();
 
-export function initializeMobiusTransport(connection: ChannelConnection, onActivity: () => void): void {
+export function initializeMobiusTransport(connection: ChannelConnection, onHistoryChanged: () => void): void {
     void transport.close();
-    transport = new ConnectedTransport(connection, onActivity);
+    transport = new ConnectedTransport(connection, onHistoryChanged);
 }
 
 export async function prepareActiveSession(expectedSessionId = ""): Promise<void> {

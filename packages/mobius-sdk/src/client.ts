@@ -120,6 +120,19 @@ const MIN_RECONNECTION_DELAY_MILLISECONDS = 500;
 const OPERATION_TIMEOUT_MILLISECONDS = 120_000;
 const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
 const TERMINAL_RELAY_CLOSE_CODES: ReadonlySet<number> = new Set([1002, 1003, 1007, 1008, 4003, 4008]);
+const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
+    AGENT_ACTIVITY_KIND,
+    AGENT_CONTENT_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
+    NATIVE_SESSION_RESULT_KIND,
+    SESSION_COMPLETED_KIND,
+    SESSION_ELICITATION_REQUESTED_KIND,
+    SESSION_ELICITATION_RESOLVED_KIND,
+    SESSION_FAILED_KIND,
+    SESSION_PERMISSION_REQUESTED_KIND,
+    SESSION_PERMISSION_RESOLVED_KIND,
+    SESSION_STARTED_KIND,
+]);
 
 export interface ConnectMobiusClientOptions {
     readonly onNativeSessionResult?: (event: NativeSessionResult) => void;
@@ -134,6 +147,7 @@ export interface ConnectMobiusClientOptions {
     readonly onInstallStarted?: (event: AgentInstallStartedEvent) => void;
     readonly onElicitation?: (event: SessionElicitationRequestedEvent) => void;
     readonly onElicitationResolved?: (event: SessionElicitationResolvedEvent) => void;
+    readonly onHistoryChanged?: () => void;
     readonly onInfo?: (event: SessionInfoUpdatedEvent) => void;
     readonly onPermission?: (event: SessionPermissionRequestedEvent) => void;
     readonly onPermissionResolved?: (event: SessionPermissionResolvedEvent) => void;
@@ -317,6 +331,7 @@ function waitForOpen(socket: ReconnectingWebSocket): Promise<void> {
 
 export class MobiusClient {
     readonly #onActivity: () => void;
+    readonly #onHistoryChanged: () => void;
     readonly #onProtocolError: (error: MobiusClientError) => void;
     readonly #onStatus: (online: boolean) => void;
     readonly #options: ConnectMobiusClientOptions;
@@ -325,6 +340,7 @@ export class MobiusClient {
     constructor(socket: ReconnectingWebSocket, options: ConnectMobiusClientOptions) {
         this.#options = options;
         this.#onActivity = options.onActivity ?? (() => undefined);
+        this.#onHistoryChanged = options.onHistoryChanged ?? (() => undefined);
         this.#onProtocolError = options.onProtocolError ?? (() => undefined);
         this.#onStatus = options.onStatus ?? (() => undefined);
         this.#socket = socket;
@@ -971,6 +987,9 @@ export class MobiusClient {
                 throw new MobiusClientError("invalid_protocol_message", "Relay sent an unsupported message kind");
             }
             this.#onActivity();
+            if (HISTORY_CHANGING_MESSAGE_KINDS.has(kind)) {
+                this.#onHistoryChanged();
+            }
         } catch (error) {
             this.#onProtocolError(
                 new MobiusClientError("invalid_protocol_message", "Received an invalid message from the relay", {
