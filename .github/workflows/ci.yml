@@ -101,9 +101,9 @@ jobs:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
-      - name: Install tested OpenCode
+      - name: Install tested Agents
         if: matrix.task == 'test:agent-daemon'
-        run: npm install --global opencode-ai@1.18.29
+        run: npm install --global opencode-ai@1.18.29 @openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.8.0
 
       - name: Run Agent and daemon integration tests
         if: matrix.task == 'test:agent-daemon'

@@ -13,7 +13,10 @@ it("Given real OpenCode configured with a local provider, When a prompt crosses 
     timeout: 120_000,
 }, async () => {
     const signal = AbortSignal.timeout(110_000);
-    await using provider = await FakeOpenAiProvider.start();
+    await using provider = await FakeOpenAiProvider.start(
+        "mobius-test-model",
+        "Response from OpenCode through the local fake provider",
+    );
     await using openCode = await OpenCodeFixture.create(provider);
     await using deployment = await startStandaloneDeployment();
     const pairing = await deployment.createPairing(signal);
@@ -91,7 +94,7 @@ it("Given real OpenCode configured with a local provider, When a prompt crosses 
             {
                 attempt: { kind: "succeeded" },
                 prompt: "Reply using the configured model",
-                response: FakeOpenAiProvider.response,
+                response: provider.response,
             },
         ]);
     } finally {

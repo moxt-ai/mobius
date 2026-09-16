@@ -1,25 +1,9 @@
-import { constants } from "node:fs";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join, resolve } from "node:path";
+import { join } from "node:path";
 
 import { FakeOpenAiProvider } from "../providers/openai.ts";
-
-async function executableOnPath(name: string): Promise<string | null> {
-    for (const directory of (process.env["PATH"] ?? "").split(delimiter)) {
-        if (directory.length === 0) {
-            continue;
-        }
-        const candidate = join(directory, process.platform === "win32" ? `${name}.exe` : name);
-        try {
-            await access(candidate, constants.X_OK);
-            return candidate;
-        } catch {
-            // Keep searching PATH.
-        }
-    }
-    return null;
-}
+import { resolveTestExecutable } from "./executable.ts";
 
 export class OpenCodeFixture implements AsyncDisposable {
     readonly environment: Readonly<Record<string, string>>;
@@ -33,12 +17,7 @@ export class OpenCodeFixture implements AsyncDisposable {
     }
 
     static async create(provider: FakeOpenAiProvider): Promise<OpenCodeFixture> {
-        const configured = process.env["MOBIUS_TEST_OPENCODE_PATH"];
-        const executable = configured === undefined ? await executableOnPath("opencode") : resolve(configured);
-        if (executable === null) {
-            throw new Error("Real OpenCode is required; set MOBIUS_TEST_OPENCODE_PATH or put opencode on PATH");
-        }
-        await access(executable, constants.X_OK);
+        const executable = await resolveTestExecutable("opencode", "MOBIUS_TEST_OPENCODE_PATH");
         const directory = await mkdtemp(join(tmpdir(), "mobius-agent-daemon-opencode-"));
         const configHome = join(directory, "config");
         const configDirectory = join(configHome, "opencode");
@@ -48,11 +27,11 @@ export class OpenCodeFixture implements AsyncDisposable {
             join(configDirectory, "opencode.json"),
             `${JSON.stringify(
                 {
-                    model: `mobius/${FakeOpenAiProvider.model}`,
+                    model: `mobius/${provider.model}`,
                     provider: {
                         mobius: {
                             models: {
-                                [FakeOpenAiProvider.model]: { name: "Mobius test model" },
+                                [provider.model]: { name: "Mobius test model" },
                             },
                             name: "Mobius fake provider",
                             npm: "@ai-sdk/openai-compatible",

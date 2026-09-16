@@ -47,8 +47,11 @@ auxiliary model calls unless Mobius itself depends on that behavior.
 tests/agent-daemon/
   README.md
   cases/
+    codex.integration.test.ts
     opencode.integration.test.ts
   infra/
+    codex.ts
+    executable.ts
     opencode.ts
   providers/
     openai.ts
@@ -72,6 +75,8 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-Without `MOBIUS_TEST_OPENCODE_PATH`, the OpenCode case resolves `opencode` from
-`PATH`. CI installs the repository-tested OpenCode version before running it.
-Missing Agent software is a setup failure, not a skipped test.
+The Codex case likewise accepts `MOBIUS_TEST_CODEX_PATH` and
+`MOBIUS_TEST_CODEX_ACP_PATH`. Without overrides, cases resolve `opencode`,
+`codex`, and `codex-acp` from `PATH`. CI installs the repository-tested versions
+before running the suite. Missing Agent software is a setup failure, not a
+skipped test.
