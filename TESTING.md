@@ -1,18 +1,48 @@
 # Testing Guide
 
+## End-to-end tests as the system control surface
+
+The end-to-end suite is a deliberately small, high-signal control surface for the
+whole product. A maintainer should be able to read its executable scenarios and
+understand the critical journeys Mobius promises, without first reading every
+package. The scenario source and its observable assertions are the coverage
+claim; a prose inventory of covered behavior is not.
+
+Each end-to-end scenario must prove both of these properties:
+
+1. It enters through the same supported public API, protocol, SDK, or executable
+   that a production user invokes and follows the production composition path.
+2. It executes the participating production subsystems together, so breaking a
+   required subsystem breaks the scenario instead of being hidden by a
+   test-specific implementation.
+
+Use real filesystems, subprocesses, sockets, databases, migrations, and local
+servers wherever the production path uses them. A test may own their lifecycle
+and configuration, but it must not bypass a participating production layer by
+calling an internal implementation directly. Stateful fakes are permitted only
+for dependencies outside the Mobius product boundary, and only through the same
+production port used by the real dependency.
+
+Keep business actions and outcomes visible in the end-to-end file. Shared support
+code may hide ports, process startup, credentials, waiting, and cleanup; it must
+not hide which public action the user performs, which production entrypoint
+receives it, or which result proves the journey. Prefer a few representative
+journeys that cross many packages over a catalogue of isolated cases. Variants,
+edge cases, and boundary-specific failures belong in integration or contract
+tests unless they change a critical journey's observable promise.
+
+Do not add an end-to-end scenario merely because behavior changed. First decide
+whether the change alters a critical journey. If it does, extend the existing
+representative scenario when that remains readable; add another scenario only
+for a distinct journey. If it does not, place the test at the boundary that owns
+the behavior.
+
+Coverage and runtime diagnostics are supporting evidence that the scenarios
+reach production code, not substitutes for inspecting the executable path.
+Coverage percentages alone cannot establish that a production user can complete
+the journey, and prose documentation cannot establish either property above.
+
 ## Verification and advisory coverage
-
-The pairing/chat e2e scenarios cover these repaired behavior slices:
-
-- After this, a user can retry a failed or cancelled native-session import and
-  see only successfully imported conversations in the Project directory.
-- After this, a user can cancel an Agent prompt and immediately continue the same
-  conversation, and see the next response after the old process is released.
-
-Native imports correlate bounded pending requests with validated Runtime results
-before publishing the destination Session. Failed local preparation removes its
-provisional native-session link. The fake Agent exposes a paused-load checkpoint
-so cancellation scenarios synchronize without sleeps or polling.
 
 `pnpm check` runs static checks, builds assets, and executes `pnpm test:coverage`.
 Coverage runs CLI, SDK, protocol/cross-package integration, E2E, web integration,
@@ -91,15 +121,20 @@ applicability of shared mechanisms rather than adding abstractions based on size
 
 ## Executable Product Specifications
 
-Deliver each behavior change as the smallest end-to-end path a user can run and observe. Before implementation, state the slice in one sentence:
+Deliver each behavior change as the smallest path a user can run and observe. Before implementation, state the slice in one sentence:
 
 > After this, a user can ... and see ...
 
 The slice should cross the necessary input, runtime, adapter, and output boundaries. Do not build complete horizontal layers that provide no runnable behavior. Extend the existing working path and implement only what the current slice requires.
 
-Behavior changes start with a failing BDD acceptance scenario before production code changes. The scenario must fail because the promised behavior is absent, prove the slice through the first supported product boundary that can observe it, and pass after the smallest implementation of that behavior. Add narrower scenarios afterward only for distinct boundary-owned risks.
+Behavior changes start with a failing test at the highest owning boundary before
+production code changes. Changes to a critical journey start by changing its
+representative end-to-end scenario. Other changes start with an integration or
+contract scenario at the boundary that owns the behavior. The scenario must fail
+because the promised behavior is absent and pass after the smallest implementation
+of that behavior.
 
-BDD scenarios are executable product specifications and the living documentation of supported behavior. Every test title uses this form:
+BDD scenarios are executable specifications. Every test title uses this form:
 
 ```text
 Given [observable context], When [an actor performs an action], Then [an observable result occurs]
@@ -111,15 +146,26 @@ Documentation-only changes and mechanical refactors with no behavior change do n
 
 ## Test Scope
 
-Give each supported product promise one primary acceptance scenario and each boundary contract one primary owning test at the boundary that provides the clearest stable failure. Add a narrower test or repeat an invariant at another level only when it covers a distinct high-impact risk or delivery failure, such as authorization, destructive side effects, data integrity, protocol compatibility, cancellation, or resource cleanup.
+Give each critical user journey one representative end-to-end scenario and each
+boundary contract one primary owning test at the boundary that provides the
+clearest stable failure. Do not promote every product rule into a separate
+end-to-end scenario. Add a narrower test or repeat an invariant at another level
+only when it covers a distinct high-impact risk or delivery failure, such as
+authorization, destructive side effects, data integrity, protocol compatibility,
+cancellation, or resource cleanup.
 
 Do not test repository tooling or scaffolding. This includes CI workflows, lint and formatter configuration, Git hooks, dependency-management configuration, build scripts, and other development-only automation. Verify those concerns by running the tools themselves. Do not test third-party library behavior or add tests solely to increase coverage.
 
 ## Required Test Levels
 
-Critical user paths must use end-to-end tests. Protocols and external boundaries must use integration or contract tests. End-to-end tests exercise supported public entrypoints; integration and contract tests exercise the production boundary contract. Use production components together with real temporary filesystems, subprocesses, sockets, and local protocol servers where the product path requires them.
+Critical user paths must use end-to-end tests. Protocols and external boundaries must use integration or contract tests. End-to-end tests start at the actual supported public entrypoint and compose the production path behind it; integration and contract tests exercise the production boundary contract. Use production components together with real temporary filesystems, subprocesses, sockets, and local protocol servers where the product path requires them.
 
 A lower-level test is not acceptance if the supported user path could break while the test still passes. Boundary tests may support a slice, but they cannot replace its user-visible acceptance scenario.
+
+Likewise, a test is not end-to-end when it invokes an internal service or helper
+in place of a public step that production users must traverse. Starting a
+production application with test-owned configuration is allowed; replacing one
+of its internal layers with test orchestration is not.
 
 Unit tests are prohibited by default. The default Vitest configuration only
 discovers `*.contract.test.ts`, `*.integration.test.ts`, and
@@ -225,7 +271,7 @@ pnpm test:integration:platform
 The Platform Vitest configuration mounts the production Platform entry, applies
 both the shared Project D1 migration stream and the independent Platform control
 plane migration stream, and uses real local D1, Durable Object, HTTP, SSE, and
-WebSocket boundaries. Its acceptance scenarios own the separation of Platform
+WebSocket boundaries. Its integration scenarios own the separation of Platform
 and Standalone, OIDC developer provisioning, AppCredential scope and rotation,
 multi-Project and multi-Runtime behavior, fixed browser Session routes, exact
 origin handling, cursor recovery, and live credential revocation.

@@ -3,7 +3,7 @@
 [![CI](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml/badge.svg)](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml)
 
 The engineering-quality target is 100% across lines, statements, functions, and
-branches, as an advisory target. `pnpm check` runs the complete acceptance suites,
+branches, as an advisory target. `pnpm check` runs the complete verification suites,
 reports combined production TS/TSX coverage, and enforces architecture constraints.
 CI saves coverage reports as downloadable artifacts. See [Testing](TESTING.md)
 for scope and commands.

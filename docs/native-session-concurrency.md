@@ -165,7 +165,7 @@ provides no shared control interface. Unverified integrations retain the saved
 snapshot, with original continuation unavailable and explicit fork governed by its
 own capability.
 
-## Acceptance scenarios
+## Required concurrency behavior
 
 - Given a Mobius turn is running, when another browser opens that session, then
   both views receive that same turn's output and opening the view does not
