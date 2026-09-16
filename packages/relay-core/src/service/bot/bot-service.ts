@@ -6,10 +6,13 @@ import {
     conversationTitleFromText,
     DraftBot,
     decodeSessionConfigureCommand,
+    decodeSessionPrepareCommand,
     type PromptImage,
     type PromptResource,
     RequiredBotCompletionDeliveryPolicy,
     SESSION_CONFIGURE_KIND,
+    SESSION_PREPARE_KIND,
+    type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
 import {
     type ConversationAccessContext,
@@ -23,12 +26,18 @@ import {
     ConversationBotAccess,
     ProjectBotAccess,
 } from "../../entity/bot/bot-access.ts";
-import { type ApprovedBindingContext, completionPolicy, stringArray } from "../../entity/bot/bot-binding.ts";
+import {
+    type ApprovedBindingContext,
+    completionPolicy,
+    sessionConfigurations,
+    stringArray,
+} from "../../entity/bot/bot-binding.ts";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import type { BotBehaviorRevision, BotProfileRevision } from "../../entity/bot/bot-revisions.ts";
 import { BotOutboundSubmission, type BotSessionRuntime, BotTurnSubmission } from "../../entity/bot/bot-session.ts";
 import { type ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
 import {
+    type ChannelHostCredential,
     createRandomToken,
     hashSecret,
     parseAgents,
@@ -41,6 +50,7 @@ import type { SessionArtifactGateway } from "../../gateway/session-artifact-gate
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
 import type { BotConversationStorage } from "../../storage/bot-conversation-storage.ts";
+import { requestRuntimeControl } from "../pairing/runtime-control-request.ts";
 import type { BotAuthorization } from "./bot-authorization.ts";
 import type { BotConversationService } from "./bot-conversation-service.ts";
 import { connectorEventPage } from "./bot-event-visibility.ts";
@@ -93,7 +103,17 @@ export interface BotProjectStorageContext {
 }
 
 export interface BotServiceContext {
-    readonly services: { readonly authorization: BotAuthorization };
+    readonly services: {
+        readonly authorization: BotAuthorization;
+        readonly controls: {
+            readonly close: (access: ChannelHostCredential, signal: AbortSignal) => Promise<void>;
+            readonly open: (
+                scope: ProjectScope,
+                runtimeId: string,
+                signal: AbortSignal,
+            ) => Promise<ChannelHostCredential>;
+        };
+    };
     readonly forProject: (project: ProjectStorageContext) => BotProjectStorageContext;
     readonly gateways: {
         readonly projects: ProjectStorageDirectory;
@@ -140,7 +160,7 @@ export class BotService {
     readonly forProject = (projectId: string): BotService =>
         new BotService({
             ...this.cx,
-            services: { authorization: this.cx.services.authorization.forProject(projectId) },
+            services: { ...this.cx.services, authorization: this.cx.services.authorization.forProject(projectId) },
         });
 
     private readonly context = async (projectId: string, signal: AbortSignal) => {
@@ -213,6 +233,107 @@ export class BotService {
         );
         const cx = await this.projectContext(access.scope, signal);
         return cx.services.management.listExecutionBindings(access, signal);
+    };
+
+    readonly inspectAgentConfiguration = async (
+        botId: string,
+        token: string,
+        actorReference: string,
+        signal: AbortSignal,
+    ): Promise<readonly SessionConfigOption[]> => {
+        const access = await this.cx.services.authorization.authorizeProjectBot(
+            botId,
+            token,
+            ProjectPermission.BotBindingWrite,
+            actorReference,
+            signal,
+        );
+        const cx = await this.projectContext(access.scope, signal);
+        const binding = await this.readApprovedBinding(cx, access.botId, signal);
+        const runtime = await cx.storages.control.readBindingRuntime(access.scope, binding.runtimeId, signal);
+        if (runtime === null) {
+            throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+        }
+        const agent = parseAgents(runtime.agents_json).find((candidate) => candidate.id === binding.agentRef);
+        if (agent?.botSessionConfiguration !== true) {
+            throw new BotApiError(
+                "binding_incompatible",
+                "Update the local Mobius CLI before configuring this Agent",
+                "conflict",
+            );
+        }
+        const deadline = AbortSignal.any([signal, AbortSignal.timeout(120_000)]);
+        let control: ChannelHostCredential;
+        try {
+            control = await this.cx.services.controls.open(access.scope, runtime.runtime_id, deadline);
+        } catch (cause) {
+            signal.throwIfAborted();
+            throw new BotApiError("bot_service_unavailable", "The approved Runtime is unavailable", "unavailable", {
+                cause,
+            });
+        }
+        try {
+            try {
+                const response = await this.cx.gateways.channels.acceptHost(
+                    control,
+                    new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                    deadline,
+                );
+                if (response.webSocket === null) {
+                    throw new BotApiError(
+                        "bot_service_unavailable",
+                        "The approved Runtime is unavailable",
+                        "unavailable",
+                    );
+                }
+                const requestId = `cfg_${createRandomToken(18)}`;
+                const result = await requestRuntimeControl(
+                    response.webSocket,
+                    decodeSessionPrepareCommand(
+                        JSON.stringify({
+                            additionalDirectoryIds: [],
+                            agentId: binding.agentRef,
+                            bindingId: binding.bindingId,
+                            directoryId: binding.workspaceRef,
+                            kind: SESSION_PREPARE_KIND,
+                            requestId,
+                            sessionId: `cfg_${createRandomToken(18)}`,
+                            transient: true,
+                        }),
+                    ),
+                    deadline,
+                );
+                if (
+                    result.kind !== "session.ready" ||
+                    result.agentId !== binding.agentRef ||
+                    result.directoryId !== binding.workspaceRef
+                ) {
+                    throw new BotApiError(
+                        "bot_service_unavailable",
+                        "The local Agent did not return a configuration snapshot",
+                        "unavailable",
+                    );
+                }
+                return result.configOptions;
+            } catch (cause) {
+                if (cause instanceof BotApiError) {
+                    throw cause;
+                }
+                signal.throwIfAborted();
+                throw new BotApiError(
+                    "bot_service_unavailable",
+                    "The local Agent configuration is temporarily unavailable",
+                    "unavailable",
+                    { cause },
+                );
+            }
+        } finally {
+            try {
+                await this.cx.services.controls.close(control, AbortSignal.timeout(15_000));
+            } catch (cause) {
+                console.warn("Mobius could not close the temporary Agent configuration control host", cause);
+            }
+        }
     };
 
     readonly listConnections = async (botId: string, token: string, actorReference: string, signal: AbortSignal) => {
@@ -511,6 +632,7 @@ export class BotService {
             signal,
         );
         const policy = completionPolicy(binding.completion_policy_json);
+        const configuration = sessionConfigurations(behavior.agent_configuration_json);
         if (typeof binding.local_grant_id !== "string") {
             throw new BotApiError("binding_not_approved", "The Bot binding is not approved", "conflict");
         }
@@ -528,6 +650,7 @@ export class BotService {
             behaviorDigest: behavior.content_digest,
             allowedDeliveryTargets: Object.freeze(targets),
             completionPolicy: policy,
+            sessionConfigurations: configuration,
         };
     };
 
@@ -774,6 +897,14 @@ export class BotService {
         if (agent === undefined) {
             throw new BotApiError("binding_incompatible", "The requested Agent is unavailable", "conflict");
         }
+        const configuration = sessionConfigurations(behavior.agent_configuration_json);
+        if (configuration.length > 0 && agent.botSessionConfiguration !== true) {
+            throw new BotApiError(
+                "binding_incompatible",
+                "Update the local Mobius CLI before configuring this Agent",
+                "conflict",
+            );
+        }
         const requirements = stringArray(behavior.required_capabilities_json, "The behavior requirements are invalid");
         if (requirements.includes("embedded-context") && !agent.capabilities.embeddedContextPrompt) {
             throw new BotApiError(
@@ -809,6 +940,7 @@ export class BotService {
             requirements,
             approvedTargets,
             policy,
+            configuration,
         );
         let written: boolean;
         try {

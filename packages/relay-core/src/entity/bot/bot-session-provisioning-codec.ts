@@ -3,9 +3,11 @@ import {
     BotConnectionReplyRoute,
     BotDeliveryTargetReference,
     type BotReplyRoute,
+    decodeSessionConfigurationSelections,
     NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
     RequiredBotCompletionDeliveryPolicy,
+    type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
 
 import { BotSessionProvisioning, BotSessionRuntimeError } from "./bot-session.ts";
@@ -25,6 +27,22 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 function exact(value: Readonly<Record<string, unknown>>, fields: readonly string[]): void {
     const keys = Object.keys(value);
     if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
+        throw invalid("The Bot conversation provisioning fields are invalid");
+    }
+}
+
+function exactWithOptional(
+    value: Readonly<Record<string, unknown>>,
+    fields: readonly string[],
+    optionalFields: readonly string[],
+): void {
+    const keys = Object.keys(value);
+    if (
+        keys.length < fields.length ||
+        keys.length > fields.length + optionalFields.length ||
+        fields.some((field) => !Object.hasOwn(value, field)) ||
+        keys.some((key) => !fields.includes(key) && !optionalFields.includes(key))
+    ) {
         throw invalid("The Bot conversation provisioning fields are invalid");
     }
 }
@@ -115,31 +133,43 @@ function replyRoute(value: unknown): BotReplyRoute {
     throw invalid("The Bot conversation provisioning reply route is invalid");
 }
 
+function sessionConfigurations(value: unknown): readonly SessionConfigurationSelection[] {
+    try {
+        return decodeSessionConfigurationSelections(value);
+    } catch (cause) {
+        throw invalid("The Bot conversation provisioning configuration is invalid", { cause });
+    }
+}
+
 export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisioning {
     if (!isRecord(value)) {
         throw invalid("The Bot conversation provisioning is invalid");
     }
-    exact(value, [
-        "agentConfigRevision",
-        "agentRef",
-        "allowedDeliveryTargets",
-        "behaviorDigest",
-        "behaviorInstructions",
-        "behaviorRevisionId",
-        "bindingId",
-        "bindingRevision",
-        "botId",
-        "completionPolicy",
-        "conversationId",
-        "creatorKind",
-        "creatorPrincipalId",
-        "localGrantId",
-        "replyRoute",
-        "runtimeId",
-        "sessionId",
-        "title",
-        "workspaceRef",
-    ]);
+    exactWithOptional(
+        value,
+        [
+            "agentConfigRevision",
+            "agentRef",
+            "allowedDeliveryTargets",
+            "behaviorDigest",
+            "behaviorInstructions",
+            "behaviorRevisionId",
+            "bindingId",
+            "bindingRevision",
+            "botId",
+            "completionPolicy",
+            "conversationId",
+            "creatorKind",
+            "creatorPrincipalId",
+            "localGrantId",
+            "replyRoute",
+            "runtimeId",
+            "sessionId",
+            "title",
+            "workspaceRef",
+        ],
+        ["sessionConfigurations"],
+    );
     const creatorKind = text(value, "creatorKind", 32);
     if (creatorKind !== "owner" && creatorKind !== "connection") {
         throw invalid("The Bot conversation provisioning creator kind is invalid");
@@ -180,6 +210,7 @@ export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisio
         targets(value["allowedDeliveryTargets"]),
         policy,
         route,
+        value["sessionConfigurations"] === undefined ? [] : sessionConfigurations(value["sessionConfigurations"]),
     );
 }
 

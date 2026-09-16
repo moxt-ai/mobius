@@ -6,8 +6,10 @@ import {
     decodeBotSessionPromptCommand,
     decodeSessionEventAcknowledgement,
     decodeSessionEventRejection,
+    decodeSessionPrepareCommand,
     encodeBotExecutionBindingApprovedEvent,
     encodeSessionEventEnvelope,
+    encodeSessionReadyEvent,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
@@ -30,28 +32,28 @@ const connectorScopeList = [
     "outbound-message:read",
     "turn:cancel",
 ];
-const readyAgents = [
-    {
-        agentPath: "/usr/local/bin/codex",
-        agentVersion: "codex 1.0.0",
-        capabilities: {
-            additionalDirectories: true,
-            audioPrompt: false,
-            closeSession: true,
-            deleteSession: true,
-            embeddedContextPrompt: true,
-            imagePrompt: true,
-            listSessions: true,
-            loadSession: true,
-            promptQueueing: false,
-            resumeSession: true,
-            steering: false,
-            unstableForkSession: false,
-        },
-        id: "codex",
-        label: "Codex",
+const readyAgent = {
+    agentPath: "/usr/local/bin/codex",
+    agentVersion: "codex 1.0.0",
+    capabilities: {
+        additionalDirectories: true,
+        audioPrompt: false,
+        closeSession: true,
+        deleteSession: true,
+        embeddedContextPrompt: true,
+        imagePrompt: true,
+        listSessions: true,
+        loadSession: true,
+        promptQueueing: false,
+        resumeSession: true,
+        steering: false,
+        unstableForkSession: false,
     },
-];
+    botSessionConfiguration: true,
+    id: "codex",
+    label: "Codex",
+};
+const readyAgents = [readyAgent];
 
 interface CreatedPairing {
     readonly app: ReturnType<typeof createTestMobiusApp>;
@@ -718,6 +720,95 @@ describe.sequential("Provider-neutral Bot API", () => {
             });
         } finally {
             daemon.socket.close();
+        }
+    });
+
+    it("Given an approved Bot binding, When its owner loads Agent settings, Then Mobius returns only the Agent’s live configuration snapshot", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const pairing = await pairRuntime(app);
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await pairing.client.createBot(
+                {
+                    displayName: "Configuration inspection",
+                    avatarRef: "",
+                    description: "Configuration inspection description",
+                },
+                pairing.signal,
+            );
+            const connection = await connectBot(pairing, bot, "configuration-inspection");
+            const target = await createTarget(pairing, bot, connection, "configuration-inspection-target");
+            const behavior = await pairing.client.createBehavior(
+                bot.botId,
+                {
+                    agentConfiguration: { sessionConfigurations: [] },
+                    expectedRevision: 0,
+                    instructions: "Inspect only the selected Agent configuration.",
+                    requiredCapabilities: ["embedded-context"],
+                },
+                pairing.signal,
+            );
+            await approveBinding(pairing, daemon, bot, behavior, target);
+
+            const pending = pairing.client.readAgentConfiguration(bot.botId, pairing.signal);
+            const prepare = decodeSessionPrepareCommand(await daemon.messages.next());
+            expect(prepare).toMatchObject({
+                agentId: "codex",
+                directoryId: "default",
+                transient: true,
+            });
+            daemon.socket.send(
+                encodeSessionReadyEvent({
+                    additionalDirectories: [],
+                    agentId: "codex",
+                    agentName: "Codex",
+                    agentVersion: "codex 1.0.0",
+                    capabilities: readyAgent.capabilities,
+                    commands: [],
+                    configOptions: [
+                        {
+                            booleanValue: false,
+                            category: "model",
+                            currentValue: "test-small",
+                            description: "Choose the coding model.",
+                            id: "model",
+                            name: "Model",
+                            type: "select",
+                            values: [
+                                {
+                                    description: "Default model",
+                                    groupId: "default",
+                                    groupName: "Default",
+                                    name: "Test Small",
+                                    value: "test-small",
+                                },
+                            ],
+                        },
+                    ],
+                    directoryId: "default",
+                    directoryLabel: "Mobius",
+                    kind: "session.ready",
+                    requestId: prepare.requestId,
+                    restored: false,
+                    sessionId: prepare.sessionId,
+                }),
+            );
+
+            const snapshot = await pending;
+            expect(snapshot.options).toStrictEqual([
+                expect.objectContaining({ currentValue: "test-small", id: "model", type: "select" }),
+            ]);
+            expect(snapshot).not.toHaveProperty("sessionId");
+            expect(
+                (
+                    await app.request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.projectId}/sessions/${prepare.sessionId}`,
+                        { headers: ownerHeaders(pairing) },
+                    )
+                ).status,
+            ).toBe(404);
+        } finally {
+            daemon.socket.close(1000, "Configuration inspection complete");
         }
     });
     it("Given an owner manages an active Bot, When its owner directories and lifecycle controls are used, Then Web-safe resources remain durable and locally sensitive binding details stay private", async () => {

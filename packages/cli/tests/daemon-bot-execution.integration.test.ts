@@ -41,6 +41,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
+    type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -290,6 +291,14 @@ describe("daemon Bot execution boundary", () => {
         try {
             const socket = await socketReady.promise;
             const frames = new ClientFrames(socket);
+            const selectedConfigurations: readonly SessionConfigurationSelection[] = [
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "test-large",
+                    valueType: "select",
+                },
+            ];
             const proposal = new BotExecutionBindingApprovalRequest(
                 "approval_alpha",
                 "bot_alpha",
@@ -305,6 +314,7 @@ describe("daemon Bot execution boundary", () => {
                 ["embedded-context"],
                 [],
                 new NoBotCompletionDeliveryPolicy(),
+                selectedConfigurations,
             );
             const approvalFrame = frames.next();
             writeServerTextFrame(socket, encodeBotExecutionBindingApprovalRequest(proposal));
@@ -343,6 +353,7 @@ describe("daemon Bot execution boundary", () => {
                 proposal.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
+                selectedConfigurations,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(unpreparedOverride));
             const unpreparedFailure = decodeSessionEventEnvelope(await frames.next());
@@ -423,10 +434,42 @@ describe("daemon Bot execution boundary", () => {
                 proposal.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
+                selectedConfigurations,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(preparedOverride));
             expect(await readCompletedText(frames)).toBe(
                 `test-large|${await realpath(overrideWorkspace)}|bot-context|relay-cleared`,
+            );
+
+            const configuredBotPrompt = new BotSessionPromptCommand(
+                "session_bot_configuration",
+                "message_bot_configuration",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "Report Bot execution settings",
+                "execution_bot_configuration",
+                "capability_bot_configuration",
+                "d".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_alpha",
+                "turn_bot_configuration",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedConfigurations,
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(configuredBotPrompt));
+            expect(await readCompletedText(frames)).toBe(
+                `test-large|${await realpath(workspace)}|bot-context|relay-cleared`,
             );
 
             const prompt = new BotSessionPromptCommand(
@@ -453,6 +496,7 @@ describe("daemon Bot execution boundary", () => {
                 proposal.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
+                selectedConfigurations,
             );
             const deliveryId = "delivery_bot_prompt_alpha";
             writeServerTextFrame(
@@ -541,6 +585,7 @@ describe("daemon Bot execution boundary", () => {
                 proposal.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
+                selectedConfigurations,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(changedTargetPrompt));
             const failure = decodeSessionEventEnvelope(await frames.next());
@@ -606,6 +651,7 @@ describe("daemon Bot execution boundary", () => {
                 proposal.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
+                selectedConfigurations,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(retry));
             expect(await readCompletedText(frames)).toContain("Recovered");

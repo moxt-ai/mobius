@@ -27,6 +27,7 @@ import {
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeSessionReadyEvent,
     decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
     encodeCommittedSessionEvent,
@@ -64,6 +65,7 @@ import {
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    SESSION_READY_KIND,
     type SessionEventEnvelope,
     SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
@@ -577,6 +579,10 @@ export class ChannelActor {
             }
             if (kind === SESSION_PREPARE_KIND) {
                 const command = decodeSessionPrepareCommand(message);
+                if (command.transient === true) {
+                    this.forwardControl(socket, message, command.requestId, command.sessionId);
+                    return;
+                }
                 const now = this.#clock.now();
                 try {
                     await this.#commands.createSession(
@@ -806,6 +812,9 @@ export class ChannelActor {
                 return;
             case SESSION_OPERATION_FAILED_KIND:
                 decodeSessionOperationFailedEvent(message);
+                return;
+            case SESSION_READY_KIND:
+                decodeSessionReadyEvent(message);
                 return;
             case AGENT_INSTALL_STARTED_KIND:
                 decodeAgentInstallStartedEvent(message);

@@ -2,8 +2,10 @@ import { ProtocolMessageError } from "./codecs/messages.ts";
 import {
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigurationSelections,
     type PromptImage,
     type PromptResource,
+    type SessionConfigurationSelection,
 } from "./control-messages.ts";
 
 export const BOT_BINDING_APPROVAL_REQUEST_KIND = "bot.binding.approval.request";
@@ -997,6 +999,7 @@ export class BotExecutionBindingApprovalRequest {
     readonly requestId: string;
     readonly requiredCapabilities: readonly string[];
     readonly runtimeId: string;
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly workspaceRef: string;
 
     constructor(
@@ -1014,6 +1017,7 @@ export class BotExecutionBindingApprovalRequest {
         requiredCapabilities: readonly string[],
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         completionPolicy: BotCompletionDeliveryPolicy,
+        sessionConfigurations: readonly SessionConfigurationSelection[] = [],
     ) {
         this.requestId = requestId;
         this.botId = botId;
@@ -1027,12 +1031,21 @@ export class BotExecutionBindingApprovalRequest {
         this.behaviorInstructions = behaviorInstructions;
         this.behaviorDigest = behaviorDigest;
         this.requiredCapabilities = Object.freeze([...requiredCapabilities]);
+        this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
         this.allowedDeliveryTargets = Object.freeze(
             allowedDeliveryTargets.map(
                 (target) => new BotDeliveryTargetReference(target.alias, target.deliveryTargetId),
             ),
         );
         this.completionPolicy = completionPolicy;
+    }
+
+    toJSON(): object {
+        const { sessionConfigurations, ...request } = this;
+        return {
+            ...request,
+            ...(sessionConfigurations.length === 0 ? {} : { sessionConfigurations }),
+        };
     }
 }
 
@@ -1120,6 +1133,7 @@ export class BotSessionPromptCommand {
     readonly prompt: string;
     readonly replyRoute: BotReplyRoute;
     readonly resources: readonly PromptResource[];
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly sessionId: string;
     readonly turnId: string;
 
@@ -1147,6 +1161,7 @@ export class BotSessionPromptCommand {
         behaviorDigest: string,
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         replyRoute: BotReplyRoute,
+        sessionConfigurations: readonly SessionConfigurationSelection[] = [],
     ) {
         this.sessionId = sessionId;
         this.commandId = commandId;
@@ -1175,6 +1190,15 @@ export class BotSessionPromptCommand {
             ),
         );
         this.replyRoute = replyRoute;
+        this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
+    }
+
+    toJSON(): object {
+        const { sessionConfigurations, ...command } = this;
+        return {
+            ...command,
+            ...(sessionConfigurations.length === 0 ? {} : { sessionConfigurations }),
+        };
     }
 }
 
@@ -1198,6 +1222,22 @@ function parseJson(encoded: string): Readonly<Record<string, unknown>> {
 function assertExactKeys(value: Readonly<Record<string, unknown>>, expected: readonly string[]): void {
     const keys = Object.keys(value);
     if (keys.length !== expected.length || keys.some((key) => !expected.includes(key))) {
+        throw new ProtocolMessageError("Message fields do not match the Bot protocol");
+    }
+}
+
+function assertKeysWithOptional(
+    value: Readonly<Record<string, unknown>>,
+    expected: readonly string[],
+    optional: readonly string[],
+): void {
+    const keys = Object.keys(value);
+    if (
+        keys.length < expected.length ||
+        keys.length > expected.length + optional.length ||
+        expected.some((key) => !Object.hasOwn(value, key)) ||
+        keys.some((key) => !expected.includes(key) && !optional.includes(key))
+    ) {
         throw new ProtocolMessageError("Message fields do not match the Bot protocol");
     }
 }
@@ -1309,6 +1349,13 @@ function readTargets(value: Readonly<Record<string, unknown>>, key: string): rea
     return Object.freeze(targets);
 }
 
+function readSessionConfigurations(value: Readonly<Record<string, unknown>>): readonly SessionConfigurationSelection[] {
+    if (!Object.hasOwn(value, "sessionConfigurations")) {
+        return [];
+    }
+    return decodeSessionConfigurationSelections(value["sessionConfigurations"]);
+}
+
 function readCompletionPolicy(value: unknown): BotCompletionDeliveryPolicy {
     if (!isRecord(value)) {
         throw new ProtocolMessageError("Invalid Bot completion policy");
@@ -1349,23 +1396,27 @@ function readReplyRoute(value: unknown): BotReplyRoute {
 
 export function decodeBotExecutionBindingApprovalRequest(encoded: string): BotExecutionBindingApprovalRequest {
     const value = parseJson(encoded);
-    assertExactKeys(value, [
-        "agentConfigRevision",
-        "agentRef",
-        "allowedDeliveryTargets",
-        "behaviorDigest",
-        "behaviorInstructions",
-        "behaviorRevisionId",
-        "bindingId",
-        "bindingRevision",
-        "botId",
-        "completionPolicy",
-        "kind",
-        "requestId",
-        "requiredCapabilities",
-        "runtimeId",
-        "workspaceRef",
-    ]);
+    assertKeysWithOptional(
+        value,
+        [
+            "agentConfigRevision",
+            "agentRef",
+            "allowedDeliveryTargets",
+            "behaviorDigest",
+            "behaviorInstructions",
+            "behaviorRevisionId",
+            "bindingId",
+            "bindingRevision",
+            "botId",
+            "completionPolicy",
+            "kind",
+            "requestId",
+            "requiredCapabilities",
+            "runtimeId",
+            "workspaceRef",
+        ],
+        ["sessionConfigurations"],
+    );
     if (value["kind"] !== BOT_BINDING_APPROVAL_REQUEST_KIND) {
         throw new ProtocolMessageError("Invalid Bot binding approval request kind");
     }
@@ -1384,6 +1435,7 @@ export function decodeBotExecutionBindingApprovalRequest(encoded: string): BotEx
         readIdentifiers(value, "requiredCapabilities", 32),
         readTargets(value, "allowedDeliveryTargets"),
         readCompletionPolicy(value["completionPolicy"]),
+        readSessionConfigurations(value),
     );
 }
 
@@ -1455,32 +1507,36 @@ export function encodeBotExecutionBindingUnavailableEvent(event: BotExecutionBin
 
 export function decodeBotSessionPromptCommand(encoded: string): BotSessionPromptCommand {
     const value = parseJson(encoded);
-    assertExactKeys(value, [
-        "additionalDirectoryIds",
-        "agentId",
-        "allowedDeliveryTargets",
-        "behaviorDigest",
-        "behaviorInstructions",
-        "behaviorRevisionId",
-        "bindingId",
-        "bindingRevision",
-        "botId",
-        "commandId",
-        "conversationId",
-        "directoryId",
-        "executionCapabilityId",
-        "executionCapabilitySecret",
-        "executionDeadlineAt",
-        "executionId",
-        "images",
-        "kind",
-        "localGrantId",
-        "prompt",
-        "replyRoute",
-        "resources",
-        "sessionId",
-        "turnId",
-    ]);
+    assertKeysWithOptional(
+        value,
+        [
+            "additionalDirectoryIds",
+            "agentId",
+            "allowedDeliveryTargets",
+            "behaviorDigest",
+            "behaviorInstructions",
+            "behaviorRevisionId",
+            "bindingId",
+            "bindingRevision",
+            "botId",
+            "commandId",
+            "conversationId",
+            "directoryId",
+            "executionCapabilityId",
+            "executionCapabilitySecret",
+            "executionDeadlineAt",
+            "executionId",
+            "images",
+            "kind",
+            "localGrantId",
+            "prompt",
+            "replyRoute",
+            "resources",
+            "sessionId",
+            "turnId",
+        ],
+        ["sessionConfigurations"],
+    );
     if (value["kind"] !== BOT_SESSION_PROMPT_KIND) {
         throw new ProtocolMessageError("Invalid Bot Session prompt kind");
     }
@@ -1508,6 +1564,7 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
         readDigest(value, "behaviorDigest"),
         readTargets(value, "allowedDeliveryTargets"),
         readReplyRoute(value["replyRoute"]),
+        readSessionConfigurations(value),
     );
 }
 

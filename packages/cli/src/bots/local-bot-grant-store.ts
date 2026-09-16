@@ -5,6 +5,8 @@ import {
     type BotExecutionBindingApprovalRequest,
     BotExecutionBindingApprovedEvent,
     type BotSessionPromptCommand,
+    decodeSessionConfigurationSelections,
+    type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
 
@@ -134,6 +136,25 @@ function exactTargets(left: readonly string[], right: readonly string[]): boolea
     return expected.every((target, index) => target === actual[index]);
 }
 
+function exactSessionConfigurations(
+    left: readonly SessionConfigurationSelection[],
+    right: readonly SessionConfigurationSelection[],
+): boolean {
+    if (left.length !== right.length) {
+        return false;
+    }
+    const expected = new Map(left.map((selection) => [selection.configId, selection]));
+    return right.every((selection) => {
+        const approved = expected.get(selection.configId);
+        return (
+            approved !== undefined &&
+            approved.booleanValue === selection.booleanValue &&
+            approved.value === selection.value &&
+            approved.valueType === selection.valueType
+        );
+    });
+}
+
 function rowString(row: object, key: string): string {
     const value = Reflect.get(row, key);
     if (typeof value !== "string") {
@@ -161,6 +182,16 @@ function parseTargets(encoded: string): readonly string[] {
         throw new LocalBotAuthorizationError("local_grant_invalid", "The local Bot grant is invalid");
     }
     return value.filter((target) => typeof target === "string");
+}
+
+function parseSessionConfigurations(encoded: string): readonly SessionConfigurationSelection[] {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+        return decodeSessionConfigurationSelections(value);
+    } catch (cause) {
+        throw new LocalBotAuthorizationError("local_grant_invalid", "The local Bot grant is invalid", { cause });
+    }
 }
 
 export class LocalBotGrantStore {
@@ -215,6 +246,10 @@ export class LocalBotGrantStore {
             result TEXT NOT NULL CHECK (result IN ('approved', 'unavailable')),
             error_code TEXT,
             error_message TEXT
+          ) STRICT;
+          CREATE TABLE IF NOT EXISTS local_bot_grant_configurations (
+            local_grant_id TEXT PRIMARY KEY,
+            session_configurations_json TEXT NOT NULL
           ) STRICT;
         `);
     }
@@ -369,6 +404,13 @@ export class LocalBotGrantStore {
                 );
             this.#database
                 .prepare(
+                    `INSERT INTO local_bot_grant_configurations (
+                       local_grant_id, session_configurations_json
+                     ) VALUES (?, ?)`,
+                )
+                .run(localGrantId, JSON.stringify(request.sessionConfigurations));
+            this.#database
+                .prepare(
                     `INSERT INTO local_bot_binding_resolutions (
                        request_id, binding_id, local_grant_id, resolved_at, result
                      ) VALUES (?, ?, ?, ?, 'approved')`,
@@ -403,8 +445,12 @@ export class LocalBotGrantStore {
         signal.throwIfAborted();
         const row = this.#database
             .prepare(
-                `SELECT * FROM local_bot_grants
-                  WHERE local_grant_id = ? AND bot_id = ?
+                `SELECT grants.*, COALESCE(configurations.session_configurations_json, '[]')
+                            AS session_configurations_json
+                   FROM local_bot_grants AS grants
+                   LEFT JOIN local_bot_grant_configurations AS configurations
+                     ON configurations.local_grant_id = grants.local_grant_id
+                  WHERE grants.local_grant_id = ? AND grants.bot_id = ?
                     AND behavior_revision_id = ? AND behavior_digest = ?
                     AND binding_id = ? AND binding_revision = ?
                     AND agent_ref = ?
@@ -432,6 +478,13 @@ export class LocalBotGrantStore {
             throw new LocalBotAuthorizationError(
                 "binding_not_approved",
                 "The Bot execution target policy changed after local approval",
+            );
+        }
+        const approvedConfigurations = parseSessionConfigurations(rowString(row, "session_configurations_json"));
+        if (!exactSessionConfigurations(approvedConfigurations, command.sessionConfigurations)) {
+            throw new LocalBotAuthorizationError(
+                "binding_not_approved",
+                "The Bot Agent configuration changed after local approval",
             );
         }
         const agent = catalog.find(command.agentId);

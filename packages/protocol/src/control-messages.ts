@@ -56,7 +56,7 @@ const configValueSchema = z
 
 export type SessionConfigValue = z.infer<typeof configValueSchema>;
 
-const configOptionSchema = z
+export const sessionConfigOptionSchema = z
     .strictObject({
         booleanValue: z.boolean(),
         category: z.string().max(128),
@@ -69,7 +69,38 @@ const configOptionSchema = z
     })
     .readonly();
 
-export type SessionConfigOption = z.infer<typeof configOptionSchema>;
+export type SessionConfigOption = z.infer<typeof sessionConfigOptionSchema>;
+
+const sessionConfigOptionsSchema = z.array(sessionConfigOptionSchema).max(100).readonly();
+
+export const sessionConfigurationSelectionSchema = z
+    .strictObject({
+        booleanValue: z.boolean(),
+        configId: IDENTIFIER,
+        value: z.string().max(500),
+        valueType: z.enum(["boolean", "select"]),
+    })
+    .readonly();
+
+export type SessionConfigurationSelection = z.infer<typeof sessionConfigurationSelectionSchema>;
+
+const sessionConfigurationSelectionsSchema = z
+    .array(sessionConfigurationSelectionSchema)
+    .max(100)
+    .superRefine((selections, context) => {
+        const identifiers = new Set<string>();
+        for (const [index, selection] of selections.entries()) {
+            if (identifiers.has(selection.configId)) {
+                context.addIssue({
+                    code: "custom",
+                    message: "Session configuration identifiers must be unique",
+                    path: [index, "configId"],
+                });
+            }
+            identifiers.add(selection.configId);
+        }
+    })
+    .readonly();
 
 export const sessionCapabilitiesSchema = z
     .strictObject({
@@ -237,6 +268,7 @@ const sessionPrepareCommandSchema = z
         ...sessionIdentityFields,
         kind: z.literal(SESSION_PREPARE_KIND),
         requestId: IDENTIFIER,
+        transient: z.boolean().optional(),
     })
     .readonly();
 
@@ -250,7 +282,7 @@ export const sessionReadyEventSchema = z
         agentVersion: z.string().max(128),
         capabilities: sessionCapabilitiesSchema,
         commands: z.array(sessionCommandSchema).max(500).readonly(),
-        configOptions: z.array(configOptionSchema).max(100).readonly(),
+        configOptions: sessionConfigOptionsSchema,
         directoryId: DIRECTORY_IDENTIFIER,
         directoryLabel: z.string().min(1).max(2_048),
         kind: z.literal(SESSION_READY_KIND),
@@ -278,7 +310,7 @@ export type SessionConfigureCommand = z.infer<typeof sessionConfigureCommandSche
 
 const sessionConfigUpdatedEventSchema = z
     .strictObject({
-        configOptions: z.array(configOptionSchema).max(100).readonly(),
+        configOptions: sessionConfigOptionsSchema,
         kind: z.literal(SESSION_CONFIG_UPDATED_KIND),
         requestId: IDENTIFIER,
         sessionId: IDENTIFIER,
@@ -572,6 +604,12 @@ export const decodePromptImagesValue = (value: unknown): readonly PromptImage[] 
 
 export const decodePromptResourcesValue = (value: unknown): readonly PromptResource[] =>
     decodeValue(value, z.array(promptResourceSchema).max(16).readonly());
+
+export const decodeSessionConfigurationSelections = (value: unknown): readonly SessionConfigurationSelection[] =>
+    decodeValue(value, sessionConfigurationSelectionsSchema);
+
+export const decodeSessionConfigOptions = (value: unknown): readonly SessionConfigOption[] =>
+    decodeValue(value, sessionConfigOptionsSchema);
 
 const encode = <T>(message: T, schema: z.ZodType<T>): string => JSON.stringify(decodeValue(message, schema));
 

@@ -936,13 +936,17 @@ async function executeSessionPrepare(
             signal,
         );
         const agent = config.catalog.find(command.agentId);
-        const prepared = await sessions.prepareSession({
+        const preparation = {
             additionalDirectories: resolved.additionalDirectories,
             agent,
             cwd: resolved.cwd,
             sessionId: command.sessionId,
             signal,
-        });
+        };
+        const prepared =
+            command.transient === true
+                ? await sessions.inspectSession(preparation)
+                : await sessions.prepareSession(preparation);
         const listing = await directories.list(config.bindingId, command.directoryId, signal);
         audit.record({
             commandId: command.requestId,
@@ -1277,6 +1281,20 @@ async function executeBotPrompt(
                 sessionId: command.sessionId,
                 signal: executionSignal,
             });
+            for (const selection of command.sessionConfigurations) {
+                await sessions.configureSession({
+                    additionalDirectories: resolved.additionalDirectories,
+                    agent,
+                    booleanValue: selection.booleanValue,
+                    configId: selection.configId,
+                    cwd: resolved.cwd,
+                    requestId: `cfg_${randomUUID()}`,
+                    sessionId: command.sessionId,
+                    signal: executionSignal,
+                    value: selection.value,
+                    valueType: selection.valueType,
+                });
+            }
             audit.record({
                 commandId: command.commandId,
                 details: {

@@ -93,7 +93,8 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
             sessionEventStreams: sessions,
         },
     };
-    const bots = infrastructure.bots === null ? null : createBots(infrastructure.bots, infrastructure, sessions);
+    const bots =
+        infrastructure.bots === null ? null : createBots(infrastructure.bots, infrastructure, sessions, pairings);
     const pairingRequests = new PairingRequestService(pairings, infrastructure.gateways.publicProjectBootstrap);
     return Object.freeze({
         ...cx,
@@ -112,6 +113,7 @@ function createBots(
     infrastructure: NonNullable<RelayInfrastructure["bots"]>,
     cx: RelayInfrastructure,
     sessions: RemoteSessionRuntime,
+    pairings: PairingDirectoryService,
 ) {
     return new BotService({
         forProject: (project) => {
@@ -150,6 +152,10 @@ function createBots(
                     return new BotCredentialStorage(cx.databases.resolve(project.storagePlacement));
                 },
             ),
+            controls: {
+                close: pairings.closeControlHost,
+                open: pairings.openProjectScopeControlHost,
+            },
         },
         gateways: {
             projects: cx.projects,

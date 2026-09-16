@@ -1,9 +1,11 @@
 import {
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigOptions,
     MOBIUS_API_PREFIX,
     type PromptImage,
     type PromptResource,
+    type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
 import {
     decodeMobiusBot,
@@ -184,6 +186,22 @@ export class MobiusConversationConfigurationAcceptance {
         }
         this.duplicate = resource["duplicate"];
         this.requestId = identifier(resource["requestId"], "Conversation configuration request");
+    }
+}
+
+export class MobiusBotAgentConfiguration {
+    readonly options: readonly SessionConfigOption[];
+
+    constructor(value: unknown) {
+        const resource = responseRecord(value);
+        if (Object.keys(resource).length !== 1 || !Object.hasOwn(resource, "options")) {
+            throw new MobiusProtocolError("The Bot Agent configuration response is invalid");
+        }
+        try {
+            this.options = decodeSessionConfigOptions(resource["options"]);
+        } catch (cause) {
+            throw new MobiusProtocolError("The Bot Agent configuration response is invalid", { cause });
+        }
     }
 }
 
@@ -657,6 +675,14 @@ export class MobiusBotOwnerClient {
     readonly listBindings = async (botId: string, signal: AbortSignal): Promise<MobiusBotBindingDirectory> =>
         new MobiusBotBindingDirectory(
             await this.#executor.get(projectBotPath(this.#projectId, botId, "execution-bindings"), signal),
+        );
+
+    readonly readAgentConfiguration = async (
+        botId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusBotAgentConfiguration> =>
+        new MobiusBotAgentConfiguration(
+            await this.#executor.post(projectBotPath(this.#projectId, botId, "agent-configuration"), {}, signal),
         );
 
     readonly createBinding = async (

@@ -77,11 +77,29 @@ describe("Bot protocol", () => {
                 },
             ],
             new NoBotCompletionDeliveryPolicy(),
+            [
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "test-large",
+                    valueType: "select",
+                },
+            ],
         );
 
         expect(decodeBotExecutionBindingApprovalRequest(encodeBotExecutionBindingApprovalRequest(request))).toEqual(
             request,
         );
+        expect(JSON.parse(encodeBotExecutionBindingApprovalRequest(request))).toMatchObject({
+            sessionConfigurations: [
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "test-large",
+                    valueType: "select",
+                },
+            ],
+        });
 
         expect(() =>
             decodeBotExecutionBindingApprovalRequest(
@@ -125,9 +143,27 @@ describe("Bot protocol", () => {
                 },
             ],
             new BotConnectionReplyRoute("connection_alpha", "target_alpha"),
+            [
+                {
+                    booleanValue: true,
+                    configId: "fast_mode",
+                    value: "",
+                    valueType: "boolean",
+                },
+            ],
         );
 
         expect(decodeBotSessionPromptCommand(encodeBotSessionPromptCommand(command))).toEqual(command);
+        expect(JSON.parse(encodeBotSessionPromptCommand(command))).toMatchObject({
+            sessionConfigurations: [
+                {
+                    booleanValue: true,
+                    configId: "fast_mode",
+                    value: "",
+                    valueType: "boolean",
+                },
+            ],
+        });
 
         const encoded: unknown = JSON.parse(encodeBotSessionPromptCommand(command));
         if (typeof encoded !== "object" || encoded === null || Array.isArray(encoded)) {

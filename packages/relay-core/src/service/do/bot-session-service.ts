@@ -8,12 +8,14 @@ import {
     decodeBotSessionPromptCommand,
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigurationSelections,
     encodeBotSessionPromptCommand,
     encodeSessionPromptCommand,
     NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
     RequiredBotCompletionDeliveryPolicy,
     SESSION_PROMPT_KIND,
+    type SessionConfigurationSelection,
     type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -79,6 +81,7 @@ interface BotSessionContext {
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly workspaceRef: string;
 }
 
@@ -97,6 +100,7 @@ class BotSessionContextRecord implements BotSessionContext {
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute = new OwnerBotReplyRoute();
     readonly runtimeId: string;
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly workspaceRef: string;
 
     constructor(row: DoSqlRow) {
@@ -112,6 +116,7 @@ class BotSessionContextRecord implements BotSessionContext {
         this.conversationId = rowText(row, "conversation_id");
         this.localGrantId = rowText(row, "local_grant_id");
         this.runtimeId = rowText(row, "runtime_id");
+        this.sessionConfigurations = decodeSessionConfigurations(rowText(row, "session_configurations_json"));
         this.workspaceRef = rowText(row, "workspace_ref");
     }
 }
@@ -221,6 +226,18 @@ function decodeTargets(encoded: string): readonly BotDeliveryTargetReference[] {
         targets.push({ alias, deliveryTargetId });
     }
     return Object.freeze(targets);
+}
+
+function decodeSessionConfigurations(encoded: string): readonly SessionConfigurationSelection[] {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+        return decodeSessionConfigurationSelections(value);
+    } catch (cause) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot session configuration is invalid", {
+            cause,
+        });
+    }
 }
 
 function decodeCompletionPolicy(encoded: string): NoBotCompletionDeliveryPolicy {
@@ -538,6 +555,7 @@ export class BotSessionService {
                     context.behaviorDigest,
                     context.allowedDeliveryTargets,
                     context.replyRoute,
+                    context.sessionConfigurations,
                 ),
             ),
         );

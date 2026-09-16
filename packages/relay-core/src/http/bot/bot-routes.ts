@@ -224,6 +224,17 @@ function createBotOwnerRoutes() {
                 ),
             ),
         )
+        .post("/bots/:botId/agent-configuration", botBodyParser<BotHttpEnvironment>(), async (c) => {
+            exactBody(c.var.body, []);
+            return c.json({
+                options: await c.var.bots.inspectAgentConfiguration(
+                    pathIdentifier(c.req.param("botId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    c.var.signal,
+                ),
+            });
+        })
         .get("/bots/:botId/connections", async (c) =>
             c.json(
                 await c.var.bots.listConnections(

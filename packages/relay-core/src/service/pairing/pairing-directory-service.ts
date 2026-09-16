@@ -63,7 +63,25 @@ export class PairingDirectoryService implements PairingOperations {
     ) => {
         const access = await this.authorizeProject(projectId, token, permission, signal);
         const storage = await this.projectStorage(access.scope, signal);
-        const runtime = await this.readProjectRuntime(storage, access.scope, runtimeId, signal);
+        return await this.openControlHostForScope(storage, access.scope, runtimeId, signal);
+    };
+
+    readonly openProjectScopeControlHost = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        signal: AbortSignal,
+    ): Promise<ChannelHostCredential> => {
+        const storage = await this.projectStorage(scope, signal);
+        return await this.openControlHostForScope(storage, scope, runtimeId, signal);
+    };
+
+    private readonly openControlHostForScope = async (
+        storage: PairingStorage,
+        scope: ProjectScope,
+        runtimeId: string,
+        signal: AbortSignal,
+    ): Promise<ChannelHostCredential> => {
+        const runtime = await this.readProjectRuntime(storage, scope, runtimeId, signal);
         const credentialId = `ctl_${createRandomToken(18)}`;
         try {
             await storage.createControlHost(
@@ -77,7 +95,7 @@ export class PairingDirectoryService implements PairingOperations {
             await storage.removeControlHost(runtime.channelId, credentialId, AbortSignal.timeout(15000));
             throw cause;
         }
-        return new ChannelHostCredential(runtime.channelId, runtime.runtimeId, projectId, credentialId);
+        return new ChannelHostCredential(runtime.channelId, runtime.runtimeId, scope.projectId, credentialId);
     };
 
     readonly closeControlHost: PairingOperations["closeControlHost"] = async (access, signal) => {

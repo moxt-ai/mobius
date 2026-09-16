@@ -128,18 +128,24 @@ export class BotSessionStorage {
         );
 
     readonly readContext = (input: { readonly scopeKey: string; readonly sessionId: string }) =>
-        this.#database.query(`SELECT * FROM bot_session_context WHERE scope_key = ? AND session_id = ?`, [
-            input.scopeKey,
-            input.sessionId,
-        ]);
+        this.#database.query(
+            `SELECT context.*, COALESCE(configurations.session_configurations_json, '[]') AS session_configurations_json
+               FROM bot_session_context AS context
+               LEFT JOIN bot_session_configurations AS configurations
+                 ON configurations.scope_key = context.scope_key
+                AND configurations.session_id = context.session_id
+              WHERE context.scope_key = ? AND context.session_id = ?`,
+            [input.scopeKey, input.sessionId],
+        );
 
     readonly insertContext = (input: {
         readonly scopeKey: string;
         readonly provisioning: BotSessionProvisioning;
         readonly createdAt: number;
     }) =>
-        this.#database.run(
-            `INSERT INTO bot_session_context (
+        this.#database.transaction(() => {
+            const result = this.#database.run(
+                `INSERT INTO bot_session_context (
                scope_key, session_id, conversation_id, bot_id,
                behavior_revision_id, binding_id, binding_revision,
                runtime_id, agent_ref, workspace_ref, agent_config_revision,
@@ -147,30 +153,42 @@ export class BotSessionStorage {
                behavior_instructions, behavior_digest,
                allowed_delivery_targets_json, completion_policy_json,
                reply_route_json, created_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                input.scopeKey,
-                input.provisioning.sessionId,
-                input.provisioning.conversationId,
-                input.provisioning.botId,
-                input.provisioning.behaviorRevisionId,
-                input.provisioning.bindingId,
-                input.provisioning.bindingRevision,
-                input.provisioning.runtimeId,
-                input.provisioning.agentRef,
-                input.provisioning.workspaceRef,
-                input.provisioning.agentConfigRevision,
-                input.provisioning.localGrantId,
-                input.provisioning.creatorKind,
-                input.provisioning.creatorPrincipalId,
-                input.provisioning.behaviorInstructions,
-                input.provisioning.behaviorDigest,
-                JSON.stringify(input.provisioning.allowedDeliveryTargets),
-                JSON.stringify(input.provisioning.completionPolicy),
-                JSON.stringify(input.provisioning.replyRoute),
-                input.createdAt,
-            ],
-        );
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                    input.scopeKey,
+                    input.provisioning.sessionId,
+                    input.provisioning.conversationId,
+                    input.provisioning.botId,
+                    input.provisioning.behaviorRevisionId,
+                    input.provisioning.bindingId,
+                    input.provisioning.bindingRevision,
+                    input.provisioning.runtimeId,
+                    input.provisioning.agentRef,
+                    input.provisioning.workspaceRef,
+                    input.provisioning.agentConfigRevision,
+                    input.provisioning.localGrantId,
+                    input.provisioning.creatorKind,
+                    input.provisioning.creatorPrincipalId,
+                    input.provisioning.behaviorInstructions,
+                    input.provisioning.behaviorDigest,
+                    JSON.stringify(input.provisioning.allowedDeliveryTargets),
+                    JSON.stringify(input.provisioning.completionPolicy),
+                    JSON.stringify(input.provisioning.replyRoute),
+                    input.createdAt,
+                ],
+            );
+            this.#database.run(
+                `INSERT INTO bot_session_configurations (
+                   scope_key, session_id, session_configurations_json
+                 ) VALUES (?, ?, ?)`,
+                [
+                    input.scopeKey,
+                    input.provisioning.sessionId,
+                    JSON.stringify(input.provisioning.sessionConfigurations),
+                ],
+            );
+            return result;
+        });
 
     readonly registerClientCursor = (input: {
         readonly scopeKey: string;

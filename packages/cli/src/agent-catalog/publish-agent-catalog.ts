@@ -41,6 +41,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                 agents: catalog.agents.map((agent) => ({
                     agentPath: agent.agentIdentity.requestedPath,
                     agentVersion: agent.agentVersion,
+                    botSessionConfiguration: true,
                     capabilities: agent.capabilities,
                     id: agent.id,
                     label: agent.label,

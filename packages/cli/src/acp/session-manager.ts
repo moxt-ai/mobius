@@ -2223,6 +2223,30 @@ export class AcpSessionManager {
         return runtime.prepared();
     };
 
+    /**
+     * Opens a short-lived ACP session only to read the Agent's authoritative
+     * configuration options. The runtime and any persisted native-session
+     * record are released before this method resolves.
+     */
+    readonly inspectSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
+        if (this.#preparing.has(options.sessionId) || this.#sessions.has(options.sessionId)) {
+            throw new AcpExecutionError("The configuration inspection session is already in use", {}, "session_busy");
+        }
+        const runtime = await this.#startPreparation(options);
+        try {
+            return runtime.prepared();
+        } finally {
+            if (this.#sessions.get(options.sessionId) === runtime) {
+                this.#sessions.delete(options.sessionId);
+            }
+            try {
+                await runtime.close();
+            } finally {
+                this.#store.remove(options.sessionId);
+            }
+        }
+    };
+
     readonly prepareExecutionSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
         const pending = this.#preparing.get(options.sessionId);
         if (pending !== undefined) {

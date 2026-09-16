@@ -4,6 +4,7 @@ import type {
     BotReplyRoute,
     PromptImage,
     PromptResource,
+    SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
 import type { ExecutionPermit } from "../authentication/project-authentication.ts";
 import { type ProjectScope, type SessionMessage, SessionRuntimeError } from "../do/session.ts";
@@ -29,6 +30,7 @@ export class BotSessionProvisioning {
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly sessionId: string;
     readonly title: string;
     readonly workspaceRef: string;
@@ -53,6 +55,7 @@ export class BotSessionProvisioning {
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         completionPolicy: BotCompletionDeliveryPolicy,
         replyRoute: BotReplyRoute,
+        sessionConfigurations: readonly SessionConfigurationSelection[] = [],
     ) {
         this.sessionId = sessionId;
         this.conversationId = conversationId;
@@ -73,6 +76,15 @@ export class BotSessionProvisioning {
         this.allowedDeliveryTargets = Object.freeze([...allowedDeliveryTargets]);
         this.completionPolicy = completionPolicy;
         this.replyRoute = replyRoute;
+        this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
+    }
+
+    toJSON(): object {
+        const { sessionConfigurations, ...provisioning } = this;
+        return {
+            ...provisioning,
+            ...(sessionConfigurations.length === 0 ? {} : { sessionConfigurations }),
+        };
     }
 }
 

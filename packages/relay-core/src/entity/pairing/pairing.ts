@@ -33,6 +33,7 @@ const SESSION_CAPABILITY_FIELDS: readonly string[] = [
 export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
@@ -523,12 +524,23 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            Object.keys(candidate).length !== 5 ||
+            (Object.keys(candidate).length !== 5 && Object.keys(candidate).length !== 6) ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
             !Object.hasOwn(candidate, "id") ||
-            !Object.hasOwn(candidate, "label")
+            !Object.hasOwn(candidate, "label") ||
+            Object.keys(candidate).some(
+                (key) =>
+                    key !== "agentPath" &&
+                    key !== "agentVersion" &&
+                    key !== "botSessionConfiguration" &&
+                    key !== "capabilities" &&
+                    key !== "id" &&
+                    key !== "label",
+            ) ||
+            (Object.hasOwn(candidate, "botSessionConfiguration") &&
+                typeof candidate["botSessionConfiguration"] !== "boolean")
         ) {
             throw new PairingDirectoryError("invalid_agents", "The local agent directory is invalid");
         }
@@ -537,6 +549,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         const label = candidate["label"];
         const agentPath = candidate["agentPath"];
         const agentVersion = candidate["agentVersion"];
+        const botSessionConfiguration = candidate["botSessionConfiguration"];
         if (
             typeof agentPath !== "string" ||
             agentPath.trim().length === 0 ||
@@ -557,6 +570,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         agents.push({
             agentPath,
             agentVersion: agentVersion.trim(),
+            ...(botSessionConfiguration === true ? { botSessionConfiguration } : {}),
             capabilities,
             id,
             label: label.trim(),

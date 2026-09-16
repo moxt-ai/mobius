@@ -684,13 +684,24 @@ export function decodeMobiusBrowserCredential(value: unknown): MobiusBrowserCred
 export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
+    readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
 
-    constructor(agentPath: string, agentVersion: string, capabilities: SessionCapabilities, id: string, label: string) {
+    constructor(
+        agentPath: string,
+        agentVersion: string,
+        capabilities: SessionCapabilities,
+        id: string,
+        label: string,
+        botSessionConfiguration?: boolean,
+    ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
+        if (botSessionConfiguration === true) {
+            this.botSessionConfiguration = true;
+        }
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
@@ -715,12 +726,13 @@ export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabiliti
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
     if (
-        Object.keys(agent).length !== 5 ||
+        (Object.keys(agent).length !== 5 && Object.keys(agent).length !== 6) ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
-        !Object.hasOwn(agent, "label")
+        !Object.hasOwn(agent, "label") ||
+        (Object.hasOwn(agent, "botSessionConfiguration") && typeof agent["botSessionConfiguration"] !== "boolean")
     ) {
         throw invalidResponse("The service returned an invalid Agent descriptor");
     }
@@ -736,6 +748,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         decodeMobiusAgentCapabilities(agent["capabilities"]),
         identifierField(agent, "id"),
         label.trim(),
+        agent["botSessionConfiguration"] === true,
     );
 }
 

@@ -202,6 +202,7 @@ export class BotConversationService {
             binding.allowedDeliveryTargets,
             binding.completionPolicy,
             replyRoute,
+            binding.sessionConfigurations,
         );
         try {
             if (
