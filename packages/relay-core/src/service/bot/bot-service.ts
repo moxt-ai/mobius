@@ -549,11 +549,18 @@ export class BotService {
                     sessionId,
                 }),
             );
-            const result = await timing.measure(
-                "prepare-control-runtime",
-                "Wait for configured Runtime Session",
-                async () => await requestRuntimeControl(socket, command, deadline),
-            );
+            const result = await timing
+                .measure(
+                    "prepare-control-runtime",
+                    "Wait for configured Runtime Session",
+                    async () => await requestRuntimeControl(socket, command, deadline),
+                )
+                .catch((error: unknown) => {
+                    if (error instanceof SessionRuntimeError) {
+                        this.recordRuntimeTimings(error.runtimeTimings, timing);
+                    }
+                    throw error;
+                });
             if (result.kind !== "session.ready") {
                 throw new BotApiError(
                     "binding_incompatible",
@@ -561,20 +568,7 @@ export class BotService {
                     "conflict",
                 );
             }
-            const runtimeTimingDescriptions: Readonly<Record<string, string>> = {
-                "agent-initialize": "Initialize ACP agent",
-                configuration: "Apply initial agent configuration",
-                "executable-validation": "Validate ACP executables",
-                "process-spawn": "Spawn ACP process",
-                "readiness-commit": "Commit Runtime Session readiness",
-                "session-new": "Create ACP Session",
-            };
-            for (const metric of result.runtimeTimings ?? []) {
-                const description = runtimeTimingDescriptions[metric.name];
-                if (description !== undefined) {
-                    timing.record(`runtime-${metric.name}`, description, metric.durationMilliseconds);
-                }
-            }
+            this.recordRuntimeTimings(result.runtimeTimings ?? [], timing);
             if (
                 result.sessionId !== sessionId ||
                 result.agentId !== binding.agentRef ||
@@ -598,6 +592,35 @@ export class BotService {
                 "Close conversation Runtime control host",
                 async () => await this.cx.services.controls.close(control, AbortSignal.timeout(15_000)),
             );
+        }
+    };
+
+    private readonly recordRuntimeTimings = (
+        runtimeTimings: NonNullable<SessionReadyEvent["runtimeTimings"]>,
+        timing: OperationTiming,
+    ): void => {
+        const descriptions: Readonly<Record<string, string>> = {
+            "agent-initialize": "Initialize ACP agent",
+            configuration: "Apply initial agent configuration",
+            "executable-validation": "Validate ACP executables",
+            "prepare-total": "Prepare local Runtime Session",
+            "process-spawn": "Spawn ACP process",
+            "readiness-commit": "Commit Runtime Session readiness",
+            "runtime-replacement-close": "Close replaced ACP runtime",
+            "session-fork": "Fork ACP Session",
+            "session-load": "Load ACP Session",
+            "session-new": "Create ACP Session",
+            "session-preparation-wait": "Wait for concurrent Session preparation",
+            "session-resume": "Resume ACP Session",
+            "session-state-read": "Read persisted Session state",
+            "workspace-list": "Read workspace metadata",
+            "workspace-resolve": "Resolve authorized workspaces",
+        };
+        for (const metric of runtimeTimings) {
+            const description = descriptions[metric.name];
+            if (description !== undefined) {
+                timing.record(`runtime-${metric.name}`, description, metric.durationMilliseconds);
+            }
         }
     };
 

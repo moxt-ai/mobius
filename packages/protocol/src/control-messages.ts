@@ -283,6 +283,18 @@ const sessionPrepareCommandSchema = z
 
 export type SessionPrepareCommand = z.infer<typeof sessionPrepareCommandSchema>;
 
+const runtimeTimingsSchema = z
+    .array(
+        z
+            .strictObject({
+                durationMilliseconds: z.number().finite().nonnegative().max(120_000),
+                name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
+            })
+            .readonly(),
+    )
+    .max(16)
+    .readonly();
+
 export const sessionReadyEventSchema = z
     .strictObject({
         additionalDirectories: z.array(workspaceEntrySchema).max(16).readonly(),
@@ -297,18 +309,7 @@ export const sessionReadyEventSchema = z
         kind: z.literal(SESSION_READY_KIND),
         requestId: IDENTIFIER,
         restored: z.boolean(),
-        runtimeTimings: z
-            .array(
-                z
-                    .strictObject({
-                        durationMilliseconds: z.number().finite().nonnegative().max(120_000),
-                        name: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
-                    })
-                    .readonly(),
-            )
-            .max(16)
-            .readonly()
-            .optional(),
+        runtimeTimings: runtimeTimingsSchema.optional(),
         sessionId: IDENTIFIER,
     })
     .readonly();
@@ -483,6 +484,7 @@ const sessionOperationFailedEventSchema = z
         kind: z.literal(SESSION_OPERATION_FAILED_KIND),
         message: z.string().min(1).max(500),
         requestId: IDENTIFIER,
+        runtimeTimings: runtimeTimingsSchema.optional(),
         sessionId: z.string().max(128),
     })
     .readonly();

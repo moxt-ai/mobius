@@ -17,6 +17,7 @@ import {
     decodeRuntimeDeliveryReceived,
     decodeSessionConfigUpdatedEvent,
     decodeSessionEventEnvelope,
+    decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
     encodeBotExecutionBindingApprovalRequest,
     encodeBotExecutionBindingApprovedEvent,
@@ -390,13 +391,38 @@ describe("daemon Bot execution boundary", () => {
             expect(decodeSessionReadyEvent(await frames.next())).toMatchObject({
                 requestId: "prepare_override",
                 runtimeTimings: expect.arrayContaining([
+                    expect.objectContaining({ name: "prepare-total" }),
+                    expect.objectContaining({ name: "workspace-resolve" }),
+                    expect.objectContaining({ name: "session-state-read" }),
                     expect.objectContaining({ name: "executable-validation" }),
                     expect.objectContaining({ name: "process-spawn" }),
                     expect.objectContaining({ name: "agent-initialize" }),
                     expect.objectContaining({ name: "session-new" }),
+                    expect.objectContaining({ name: "workspace-list" }),
                     expect.objectContaining({ name: "readiness-commit" }),
                 ]),
                 sessionId: unpreparedOverride.sessionId,
+            });
+
+            writeServerTextFrame(
+                socket,
+                encodeSessionPrepareCommand({
+                    additionalDirectoryIds: [],
+                    agentId: "missing-agent",
+                    bindingId: config.bindingId,
+                    directoryId: overrideDirectoryId,
+                    kind: SESSION_PREPARE_KIND,
+                    requestId: "prepare_missing_agent",
+                    sessionId: "session_missing_agent",
+                }),
+            );
+            expect(decodeSessionOperationFailedEvent(await frames.next())).toMatchObject({
+                requestId: "prepare_missing_agent",
+                runtimeTimings: expect.arrayContaining([
+                    expect.objectContaining({ name: "workspace-resolve" }),
+                    expect.objectContaining({ name: "prepare-total" }),
+                ]),
+                sessionId: "session_missing_agent",
             });
 
             writeServerTextFrame(

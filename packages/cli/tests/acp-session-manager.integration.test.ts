@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AcpSessionManager, createWritableAcpStream } from "../src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../src/config.ts";
+import { AccumulatingOperationMetrics } from "../src/infra/operation-metrics.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
@@ -160,15 +161,25 @@ child.once("exit", (code) => process.exit(code ?? 84));
             const secondStore = new SqliteAcpSessionStore(databasePath);
             const second = new AcpSessionManager(undefined, secondStore);
             try {
+                const metrics = new AccumulatingOperationMetrics();
                 await expect(
-                    second.prepareSession({
-                        additionalDirectories: [],
-                        agent,
-                        cwd: temporaryDirectory,
-                        sessionId: "persisted-pi-conversation",
-                        signal,
-                    }),
+                    second.prepareSession(
+                        {
+                            additionalDirectories: [],
+                            agent,
+                            cwd: temporaryDirectory,
+                            sessionId: "persisted-pi-conversation",
+                            signal,
+                        },
+                        metrics,
+                    ),
                 ).resolves.toMatchObject({ restored: true });
+                expect(metrics.snapshot()).toEqual(
+                    expect.arrayContaining([
+                        expect.objectContaining({ name: "session-state-read" }),
+                        expect.objectContaining({ name: "session-load" }),
+                    ]),
+                );
                 const secondText: string[] = [];
                 await second.runPrompt({
                     additionalDirectories: [],
@@ -218,15 +229,25 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 sessionId: "rebound-conversation",
                 signal: new AbortController().signal,
             });
+            const metrics = new AccumulatingOperationMetrics();
             await expect(
-                manager.prepareSession({
-                    additionalDirectories: [],
-                    agent: claude,
-                    cwd: process.cwd(),
-                    sessionId: "rebound-conversation",
-                    signal: new AbortController().signal,
-                }),
+                manager.prepareSession(
+                    {
+                        additionalDirectories: [],
+                        agent: claude,
+                        cwd: process.cwd(),
+                        sessionId: "rebound-conversation",
+                        signal: new AbortController().signal,
+                    },
+                    metrics,
+                ),
             ).resolves.toMatchObject({ restored: false });
+            expect(metrics.snapshot()).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ name: "runtime-replacement-close" }),
+                    expect.objectContaining({ name: "session-new" }),
+                ]),
+            );
 
             const chunks: string[] = [];
             await manager.runPrompt({

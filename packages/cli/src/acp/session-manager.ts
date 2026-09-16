@@ -1047,7 +1047,7 @@ class AcpProcessSession implements AcpClientHandler {
         forkPoint?: AcpSessionForkPoint,
     ): Promise<void> => {
         await this.#initializeAgent(signal);
-        let stored =
+        let stored = this.#metrics.measureSync("session-state-read", () =>
             origin?.kind === "import"
                 ? new FoundAcpStoredSession(
                       new AcpStoredSession(
@@ -1059,10 +1059,11 @@ class AcpProcessSession implements AcpClientHandler {
                           true,
                       ),
                   )
-                : this.#store.read(this.#mobiusSessionId);
+                : this.#store.read(this.#mobiusSessionId),
+        );
         if (stored instanceof FoundAcpStoredSession && !stored.session.prompted) {
             this.#store.remove(this.#mobiusSessionId);
-            stored = this.#store.read(this.#mobiusSessionId);
+            stored = this.#metrics.measureSync("session-state-read", () => this.#store.read(this.#mobiusSessionId));
         }
         if (stored instanceof DeletedAcpStoredSession) {
             throw new AcpExecutionError(
@@ -1087,35 +1088,39 @@ class AcpProcessSession implements AcpClientHandler {
                     "native_session_unsupported",
                 );
             }
-            const forked = await this.race(
-                this.#connection.agent.request(
-                    methods.agent.session.fork,
-                    {
-                        sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
-                        cwd: this.#cwd,
-                        additionalDirectories: [...this.#additionalDirectories],
-                        mcpServers: [],
-                        ...(forkPoint === undefined
-                            ? {}
-                            : {
-                                  _meta: {
-                                      jetbrains: {
-                                          air: {
-                                              fork: {
-                                                  version: 1,
-                                                  messageFingerprint: forkPoint.messageFingerprint,
-                                                  messageId: forkPoint.messageId,
-                                                  messageOccurrence: forkPoint.messageOccurrence,
+            const forked = await this.#metrics.measure(
+                "session-fork",
+                async () =>
+                    await this.race(
+                        this.#connection.agent.request(
+                            methods.agent.session.fork,
+                            {
+                                sessionId: nativeSessionIdSchema.parse(origin.nativeSessionId),
+                                cwd: this.#cwd,
+                                additionalDirectories: [...this.#additionalDirectories],
+                                mcpServers: [],
+                                ...(forkPoint === undefined
+                                    ? {}
+                                    : {
+                                          _meta: {
+                                              jetbrains: {
+                                                  air: {
+                                                      fork: {
+                                                          version: 1,
+                                                          messageFingerprint: forkPoint.messageFingerprint,
+                                                          messageId: forkPoint.messageId,
+                                                          messageOccurrence: forkPoint.messageOccurrence,
+                                                      },
+                                                  },
                                               },
                                           },
-                                      },
-                                  },
-                              }),
-                    },
-                    { cancellationSignal: signal },
-                ),
-                "ACP agent exited while forking a session",
-                signal,
+                                      }),
+                            },
+                            { cancellationSignal: signal },
+                        ),
+                        "ACP agent exited while forking a session",
+                        signal,
+                    ),
             );
             this.selectNativeSession(forked.sessionId);
             if (
@@ -1141,36 +1146,44 @@ class AcpProcessSession implements AcpClientHandler {
             this.#prompted = stored.session.prompted;
             this.#restored = true;
             if (this.#capabilities.resumeSession) {
-                lifecycleResponse = await this.race(
-                    this.#connection.agent.request(
-                        methods.agent.session.resume,
-                        {
-                            additionalDirectories: [...this.#additionalDirectories],
-                            cwd: this.#cwd,
-                            mcpServers: [],
-                            sessionId: this.#nativeSessionId,
-                        },
-                        { cancellationSignal: signal },
-                    ),
-                    "ACP agent exited while resuming a session",
-                    signal,
+                lifecycleResponse = await this.#metrics.measure(
+                    "session-resume",
+                    async () =>
+                        await this.race(
+                            this.#connection.agent.request(
+                                methods.agent.session.resume,
+                                {
+                                    additionalDirectories: [...this.#additionalDirectories],
+                                    cwd: this.#cwd,
+                                    mcpServers: [],
+                                    sessionId: this.#nativeSessionId,
+                                },
+                                { cancellationSignal: signal },
+                            ),
+                            "ACP agent exited while resuming a session",
+                            signal,
+                        ),
                 );
             } else if (this.#capabilities.loadSession) {
                 this.#replay = { kind: "discard" };
                 try {
-                    lifecycleResponse = await this.race(
-                        this.#connection.agent.request(
-                            methods.agent.session.load,
-                            {
-                                additionalDirectories: [...this.#additionalDirectories],
-                                cwd: this.#cwd,
-                                mcpServers: [],
-                                sessionId: this.#nativeSessionId,
-                            },
-                            { cancellationSignal: signal },
-                        ),
-                        "ACP agent exited while loading a session",
-                        signal,
+                    lifecycleResponse = await this.#metrics.measure(
+                        "session-load",
+                        async () =>
+                            await this.race(
+                                this.#connection.agent.request(
+                                    methods.agent.session.load,
+                                    {
+                                        additionalDirectories: [...this.#additionalDirectories],
+                                        cwd: this.#cwd,
+                                        mcpServers: [],
+                                        sessionId: this.#nativeSessionId,
+                                    },
+                                    { cancellationSignal: signal },
+                                ),
+                                "ACP agent exited while loading a session",
+                                signal,
+                            ),
                     );
                 } finally {
                     await this.#updateTail;
@@ -2128,7 +2141,7 @@ export class AcpSessionManager {
         const operation = (async () => {
             try {
                 this.#sessions.delete(options.sessionId);
-                await existing.close();
+                await metrics.measure("runtime-replacement-close", async () => await existing.close());
                 this.#store.remove(options.sessionId);
                 const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics);
                 this.#sessions.set(options.sessionId, runtime);
@@ -2204,7 +2217,7 @@ export class AcpSessionManager {
         options: AcpPrepareOptions,
         metrics: OperationMetrics = unmeasuredOperationMetrics,
     ): Promise<AcpPreparedSession> => {
-        const stored = this.#store.read(options.sessionId);
+        const stored = metrics.measureSync("session-state-read", () => this.#store.read(options.sessionId));
         if (stored instanceof DeletedAcpStoredSession) {
             throw new AcpExecutionError(
                 "The native Agent session was deleted. Start a new chat.",
@@ -2220,7 +2233,7 @@ export class AcpSessionManager {
         }
         const pending = this.#preparing.get(options.sessionId);
         if (pending !== undefined) {
-            const runtime = await pending;
+            const runtime = await metrics.measure("session-preparation-wait", async () => await pending);
             if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
                 return runtime.prepared();
             }
@@ -2250,11 +2263,14 @@ export class AcpSessionManager {
      * configuration options. The runtime and any persisted native-session
      * record are released before this method resolves.
      */
-    readonly inspectSession = async (options: AcpPrepareOptions): Promise<AcpPreparedSession> => {
+    readonly inspectSession = async (
+        options: AcpPrepareOptions,
+        metrics: OperationMetrics = unmeasuredOperationMetrics,
+    ): Promise<AcpPreparedSession> => {
         if (this.#preparing.has(options.sessionId) || this.#sessions.has(options.sessionId)) {
             throw new AcpExecutionError("The configuration inspection session is already in use", {}, "session_busy");
         }
-        const runtime = await this.#startPreparation(options);
+        const runtime = await this.#startPreparation(options, metrics);
         try {
             return runtime.prepared();
         } finally {

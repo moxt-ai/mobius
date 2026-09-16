@@ -49,13 +49,13 @@ export function createBotApplication() {
     return new Hono<BotHttpEnvironment>({ strict: false })
         .basePath(`${MOBIUS_API_PREFIX}/v1`)
         .onError(rethrowHonoError)
-        .use("*", errorMiddleware)
-        .use("*", requestTimeoutMiddleware<BotHttpEnvironment>(15_000))
         .use("/projects/:projectId/conversations", operationTimingMiddleware<BotHttpEnvironment>())
         .use(
             "/projects/:projectId/conversations/:conversationId/configuration-revisions",
             operationTimingMiddleware<BotHttpEnvironment>(),
         )
+        .use("*", errorMiddleware)
+        .use("*", requestTimeoutMiddleware<BotHttpEnvironment>(15_000))
         .use("*", async (c, next) => {
             c.set("bots", c.env.services.bots);
             await next();

@@ -139,7 +139,7 @@ import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
 import { BotOutboundIpcServer } from "./bots/bot-outbound-ipc.ts";
 import { LocalBotAuthorizationError, LocalBotGrantStore } from "./bots/local-bot-grant-store.ts";
 import type { DaemonConfig } from "./config.ts";
-import { AccumulatingOperationMetrics } from "./infra/operation-metrics.ts";
+import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
@@ -843,7 +843,13 @@ function operationErrorMessage(error: unknown): string {
     return "The local agent operation could not be completed";
 }
 
-function reportOperationFailure(socket: WebSocket, requestId: string, sessionId: string, error: unknown): void {
+function reportOperationFailure(
+    socket: WebSocket,
+    requestId: string,
+    sessionId: string,
+    error: unknown,
+    runtimeTimings: readonly DurationMetric[] = [],
+): void {
     if (socket.readyState !== WebSocket.OPEN) {
         return;
     }
@@ -854,6 +860,7 @@ function reportOperationFailure(socket: WebSocket, requestId: string, sessionId:
             kind: "session.operation.failed",
             message: operationErrorMessage(error),
             requestId,
+            ...(runtimeTimings.length === 0 ? {} : { runtimeTimings }),
             sessionId,
         }),
     );
@@ -929,83 +936,93 @@ async function executeSessionPrepare(
     sessions: AcpSessionManager,
     signal: AbortSignal,
 ): Promise<void> {
+    const metrics = new AccumulatingOperationMetrics();
     try {
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const agent = config.catalog.find(command.agentId);
-        const metrics = new AccumulatingOperationMetrics();
-        const preparation = {
-            additionalDirectories: resolved.additionalDirectories,
-            agent,
-            cwd: resolved.cwd,
-            sessionId: command.sessionId,
-            signal,
-        };
-        const prepared =
-            command.transient === true
-                ? await sessions.inspectSession(preparation)
-                : await sessions.prepareSession(preparation, metrics);
-        const configuration = command.configuration;
-        const configOptions =
-            configuration === undefined
-                ? prepared.configOptions
-                : await metrics.measure(
-                      "configuration",
-                      async () =>
-                          await sessions.configureSession({
-                              ...preparation,
-                              booleanValue: configuration.booleanValue,
-                              configId: configuration.configId,
-                              requestId: command.requestId,
-                              value: configuration.value,
-                              valueType: configuration.valueType,
-                          }),
-                  );
-        const listing = await directories.list(config.bindingId, command.directoryId, signal);
-        audit.record({
-            commandId: command.requestId,
-            event: "session_prepared",
-            sessionId: command.sessionId,
-        });
-        if (command.configuration !== undefined) {
+        const readyEvent = await metrics.measure("prepare-total", async () => {
+            const resolved = await metrics.measure(
+                "workspace-resolve",
+                async () =>
+                    await resolveSessionDirectories(
+                        directories,
+                        config.bindingId,
+                        command.directoryId,
+                        command.additionalDirectoryIds,
+                        signal,
+                    ),
+            );
+            const agent = config.catalog.find(command.agentId);
+            const preparation = {
+                additionalDirectories: resolved.additionalDirectories,
+                agent,
+                cwd: resolved.cwd,
+                sessionId: command.sessionId,
+                signal,
+            };
+            const prepared =
+                command.transient === true
+                    ? await sessions.inspectSession(preparation, metrics)
+                    : await sessions.prepareSession(preparation, metrics);
+            const configuration = command.configuration;
+            const configOptions =
+                configuration === undefined
+                    ? prepared.configOptions
+                    : await metrics.measure(
+                          "configuration",
+                          async () =>
+                              await sessions.configureSession({
+                                  ...preparation,
+                                  booleanValue: configuration.booleanValue,
+                                  configId: configuration.configId,
+                                  requestId: command.requestId,
+                                  value: configuration.value,
+                                  valueType: configuration.valueType,
+                              }),
+                      );
+            const listing = await metrics.measure(
+                "workspace-list",
+                async () => await directories.list(config.bindingId, command.directoryId, signal),
+            );
             audit.record({
                 commandId: command.requestId,
-                event: "session_configured",
+                event: "session_prepared",
                 sessionId: command.sessionId,
             });
-            publisher.recordRuntime(
-                command.sessionId,
-                encodeSessionConfigUpdatedEvent({
-                    configOptions,
-                    kind: "session.config.updated",
-                    requestId: command.requestId,
+            if (command.configuration !== undefined) {
+                audit.record({
+                    commandId: command.requestId,
+                    event: "session_configured",
                     sessionId: command.sessionId,
-                }),
-            );
-        }
-        const readyEvent: SessionReadyEvent = {
-            additionalDirectories: resolved.additionalDirectoryEntries,
-            agentId: command.agentId,
-            agentName: prepared.agentName,
-            agentVersion: prepared.agentVersion,
-            capabilities: prepared.capabilities,
-            commands: prepared.commands,
-            configOptions,
-            directoryId: command.directoryId,
-            directoryLabel: listing.directoryLabel,
-            kind: "session.ready",
-            requestId: command.requestId,
-            restored: prepared.restored,
-            sessionId: command.sessionId,
-            runtimeTimings: metrics.snapshot(),
-        };
-        metrics.measureSync("readiness-commit", () => {
-            publisher.recordRuntime(command.sessionId, encodeSessionReadyEvent(readyEvent));
+                });
+                publisher.recordRuntime(
+                    command.sessionId,
+                    encodeSessionConfigUpdatedEvent({
+                        configOptions,
+                        kind: "session.config.updated",
+                        requestId: command.requestId,
+                        sessionId: command.sessionId,
+                    }),
+                );
+            }
+            const event: SessionReadyEvent = {
+                additionalDirectories: resolved.additionalDirectoryEntries,
+                agentId: command.agentId,
+                agentName: prepared.agentName,
+                agentVersion: prepared.agentVersion,
+                capabilities: prepared.capabilities,
+                commands: prepared.commands,
+                configOptions,
+                directoryId: command.directoryId,
+                directoryLabel: listing.directoryLabel,
+                kind: "session.ready",
+                requestId: command.requestId,
+                restored: prepared.restored,
+                sessionId: command.sessionId,
+                runtimeTimings: metrics.snapshot(),
+            };
+            metrics.measureSync("readiness-commit", () => {
+                publisher.recordRuntime(command.sessionId, encodeSessionReadyEvent(event));
+            });
+            return event;
         });
         send(
             socket,
@@ -1024,7 +1041,7 @@ async function executeSessionPrepare(
             event: "session_prepare_failed",
             sessionId: command.sessionId,
         });
-        reportOperationFailure(socket, command.requestId, command.sessionId, error);
+        reportOperationFailure(socket, command.requestId, command.sessionId, error, metrics.snapshot());
     }
 }
 

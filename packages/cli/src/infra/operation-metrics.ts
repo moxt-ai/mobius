@@ -36,7 +36,10 @@ export class AccumulatingOperationMetrics implements OperationMetrics {
         );
 
     private readonly record = (name: string, durationMilliseconds: number): void => {
-        this.#durations.set(name, (this.#durations.get(name) ?? 0) + Math.max(0, durationMilliseconds));
+        this.#durations.set(
+            name,
+            Math.min(120_000, (this.#durations.get(name) ?? 0) + Math.max(0, durationMilliseconds)),
+        );
     };
 }
 

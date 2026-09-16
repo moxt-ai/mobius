@@ -72,7 +72,11 @@ export async function requestRuntimeControl(
                     if (kind === "session.operation.failed") {
                         const failed = decodeSessionOperationFailedEvent(raw);
                         if (failed.requestId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
+                            reject(
+                                new SessionRuntimeError(failed.code, failed.message, {
+                                    runtimeTimings: failed.runtimeTimings,
+                                }),
+                            );
                         }
                         return;
                     }
@@ -146,7 +150,11 @@ export async function requestRuntimeWorkspace(
                     if (kind === "session.operation.failed") {
                         const failed = decodeSessionOperationFailedEvent(raw);
                         if (failed.requestId === command.requestId) {
-                            reject(new SessionRuntimeError(failed.code, failed.message));
+                            reject(
+                                new SessionRuntimeError(failed.code, failed.message, {
+                                    runtimeTimings: failed.runtimeTimings,
+                                }),
+                            );
                         }
                         return;
                     }

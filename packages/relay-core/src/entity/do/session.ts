@@ -9,6 +9,7 @@ import type {
     SessionLifecycle as ResourceSessionLifecycle,
     SessionBinding,
     SessionConfigOption,
+    SessionOperationFailedEvent,
     SessionPromptCommand,
     Turn,
 } from "@moxt-ai/mobius-protocol";
@@ -592,15 +593,21 @@ function sessionRuntimeErrorStatus(code: string): number {
     return 503;
 }
 
+interface SessionRuntimeErrorOptions extends ErrorOptions {
+    readonly runtimeTimings?: NonNullable<SessionOperationFailedEvent["runtimeTimings"]> | undefined;
+}
+
 export class SessionRuntimeError extends Error implements HttpError {
     readonly code: string;
     readonly httpStatus: number;
+    readonly runtimeTimings: NonNullable<SessionOperationFailedEvent["runtimeTimings"]>;
 
-    constructor(code: string, message: string, options: ErrorOptions = {}) {
+    constructor(code: string, message: string, options: SessionRuntimeErrorOptions = {}) {
         super(message, options);
         this.code = code;
         this.httpStatus = sessionRuntimeErrorStatus(code);
         this.name = "SessionRuntimeError";
+        this.runtimeTimings = options.runtimeTimings ?? [];
     }
 
     readonly toHttpJson: HttpError["toHttpJson"] = () => ({
