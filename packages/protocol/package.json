@@ -1,6 +1,6 @@
 {
     "name": "@moxt-ai/mobius-protocol",
-    "version": "0.0.3",
+    "version": "0.0.4",
     "description": "Versioned public Mobius protocol resources and codecs.",
     "type": "module",
     "types": "./src/index.ts",
