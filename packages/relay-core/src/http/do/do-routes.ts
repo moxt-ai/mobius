@@ -22,6 +22,7 @@ import {
 } from "../../entity/do/session.ts";
 import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
+import { createOperationTimingCollector, encodeOperationTiming } from "../../infra/operation-timing.ts";
 import type { BotSessionService } from "../../service/do/bot-session-service.ts";
 import type { DoService } from "../../service/do/do-service.ts";
 import type { SqliteSessionRuntime } from "../../service/do/sqlite-session-runtime.ts";
@@ -361,13 +362,16 @@ class DoRoutes {
             const scope = readScope(body);
             if (operation === "bot-provision") {
                 assertExactKeys(body, ["now", "provisioning", "scope"]);
+                const collector = createOperationTimingCollector();
                 return Response.json(
                     await this.#bots.provisionConversation(
                         scope,
                         decodeBotSessionProvisioning(body["provisioning"]),
                         readInteger(body, "now"),
                         request.signal,
+                        collector.timing,
                     ),
+                    { headers: { "Server-Timing": encodeOperationTiming(collector.snapshot()) } },
                 );
             }
             if (operation === "bot-accept") {

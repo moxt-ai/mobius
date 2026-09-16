@@ -565,6 +565,7 @@ export class BotService {
                     sessionId,
                 }),
             );
+            const daemonStartedAt = performance.now();
             const result = await timing
                 .measure(
                     "prepare-control-runtime",
@@ -572,8 +573,12 @@ export class BotService {
                     async () => await requestRuntimeControl(socket, command, deadline),
                 )
                 .catch((error: unknown) => {
+                    const durationMilliseconds = Math.max(0, performance.now() - daemonStartedAt);
                     if (error instanceof SessionRuntimeError) {
                         this.recordRuntimeTimings(error.runtimeTimings, timing);
+                        this.recordDaemonAccess(error.runtimeTimings, durationMilliseconds, timing);
+                    } else {
+                        this.recordDaemonAccess([], durationMilliseconds, timing);
                     }
                     throw error;
                 });
@@ -584,7 +589,9 @@ export class BotService {
                     "conflict",
                 );
             }
-            this.recordRuntimeTimings(result.runtimeTimings ?? [], timing);
+            const runtimeTimings = result.runtimeTimings ?? [];
+            this.recordRuntimeTimings(runtimeTimings, timing);
+            this.recordDaemonAccess(runtimeTimings, Math.max(0, performance.now() - daemonStartedAt), timing);
             const expectedConfiguration = preparation.expectedConfiguration;
             const matchesExpectedConfiguration =
                 expectedConfiguration === undefined ||
@@ -642,6 +649,23 @@ export class BotService {
                 timing.record(`runtime-${metric.name}`, description, metric.durationMilliseconds);
             }
         }
+    };
+
+    private readonly recordDaemonAccess = (
+        runtimeTimings: NonNullable<SessionReadyEvent["runtimeTimings"]>,
+        durationMilliseconds: number,
+        timing: OperationTiming,
+    ): void => {
+        const localPreparation = runtimeTimings.find((metric) => metric.name === "prepare-total");
+        if (localPreparation !== undefined) {
+            timing.record(
+                "prepare-control-runtime-relay",
+                "Wait for Runtime relay transport",
+                Math.max(0, durationMilliseconds - localPreparation.durationMilliseconds),
+            );
+        }
+        timing.record("daemon-access-total", "Total daemon access time", durationMilliseconds);
+        timing.record("daemon-access-count", "Daemon access count", 1);
     };
 
     readonly readProjectConversationResource = async (

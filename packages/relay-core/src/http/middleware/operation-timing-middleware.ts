@@ -1,15 +1,14 @@
 import type { Env, MiddlewareHandler } from "hono";
 import { logger } from "../../infra/logger.ts";
-import type { OperationTiming } from "../../infra/operation-timing.ts";
+import {
+    createOperationTimingCollector,
+    encodeOperationTiming,
+    type OperationTiming,
+    type OperationTimingMetric,
+} from "../../infra/operation-timing.ts";
 
 interface OperationTimingEnvironment extends Env {
     readonly Variables: { readonly operationTiming: OperationTiming };
-}
-
-interface TimingMetric {
-    readonly description: string;
-    readonly durationMilliseconds: number;
-    readonly name: string;
 }
 
 export function operationTimingMiddleware<
@@ -17,45 +16,18 @@ export function operationTimingMiddleware<
 >(): MiddlewareHandler<TEnvironment> {
     return async (context, next) => {
         const startedAt = performance.now();
-        const metrics: TimingMetric[] = [];
-        const operationTiming: OperationTiming = {
-            measure: async (name, description, operation) => {
-                const operationStartedAt = performance.now();
-                try {
-                    return await operation();
-                } finally {
-                    metrics.push({
-                        description,
-                        durationMilliseconds: Math.max(0, performance.now() - operationStartedAt),
-                        name,
-                    });
-                }
-            },
-            record: (name, description, durationMilliseconds) => {
-                if (Number.isFinite(durationMilliseconds) && durationMilliseconds >= 0) {
-                    metrics.push({ description, durationMilliseconds, name });
-                }
-            },
-        };
-        context.set("operationTiming", operationTiming);
+        const collector = createOperationTimingCollector();
+        context.set("operationTiming", collector.timing);
         await next();
-        const completed: readonly TimingMetric[] = [
+        const completed: readonly OperationTimingMetric[] = [
             {
                 description: "Total Platform operation time",
                 durationMilliseconds: Math.max(0, performance.now() - startedAt),
                 name: "total",
             },
-            ...metrics,
+            ...collector.snapshot(),
         ];
-        context.header(
-            "Server-Timing",
-            completed
-                .map(
-                    (metric) =>
-                        `${metric.name};dur=${metric.durationMilliseconds.toFixed(1)};desc="${metric.description}"`,
-                )
-                .join(","),
-        );
+        context.header("Server-Timing", encodeOperationTiming(completed));
         logger.info(
             {
                 event: "operation-request-timing",

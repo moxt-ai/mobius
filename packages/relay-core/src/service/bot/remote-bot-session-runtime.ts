@@ -26,6 +26,15 @@ import {
 } from "../do/remote-session-runtime.ts";
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 8 * 1024 * 1024;
+const MAX_INTERNAL_TIMING_LENGTH = 2 * 1024;
+const internalTimingMetric = /^([a-z][a-z0-9-]{0,63});dur=(\d+(?:\.\d+)?);desc="([^"\\]{1,120})"$/u;
+const provisionTimingDescriptions: Readonly<Record<string, string>> = {
+    "context-insert": "Insert Bot Session context",
+    "context-read": "Read Bot Session context",
+    "existing-session-read": "Read existing conversation Session",
+    "recovery-session-read": "Read concurrently created conversation Session",
+    "session-create": "Create conversation Session",
+};
 const EXECUTION_PERMIT_FIELDS = Object.freeze([
     "allowedTargetIds",
     "behaviorRevisionId",
@@ -119,6 +128,36 @@ function infrastructureScope(scope: ProjectScope): Readonly<Record<string, strin
     return {
         projectId: scope.projectId,
     };
+}
+
+function recordProvisionTimings(encoded: string | null, timing: OperationTiming): number {
+    if (encoded === null || encoded.length > MAX_INTERNAL_TIMING_LENGTH) {
+        return 0;
+    }
+    let measuredMilliseconds = 0;
+    for (const entry of encoded.split(",")) {
+        const match = internalTimingMetric.exec(entry.trim());
+        if (match === null) {
+            continue;
+        }
+        const [, name, duration] = match;
+        if (name === undefined || duration === undefined) {
+            continue;
+        }
+        const description = provisionTimingDescriptions[name];
+        const durationMilliseconds = Number(duration);
+        if (
+            description === undefined ||
+            !Number.isFinite(durationMilliseconds) ||
+            durationMilliseconds < 0 ||
+            durationMilliseconds > 120_000
+        ) {
+            continue;
+        }
+        timing.record(`create-provision-session-runtime-${name}`, description, durationMilliseconds);
+        measuredMilliseconds += durationMilliseconds;
+    }
+    return measuredMilliseconds;
 }
 
 function record(value: Readonly<Record<string, unknown>>, key: string): Readonly<Record<string, unknown>> {
@@ -280,13 +319,26 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         signal: AbortSignal,
         timing: OperationTiming,
     ): Promise<SessionSummary> => {
+        const startedAt = performance.now();
         const summary = await timing.measure(
             "create-provision-session-runtime",
             "Provision Session runtime state",
-            async () =>
-                decodeSessionSummary(
-                    await this.request(scope, provisioning.sessionId, "bot-provision", { now, provisioning }, signal),
-                ),
+            async () => {
+                const response = await this.requestWithMetadata(
+                    scope,
+                    provisioning.sessionId,
+                    "bot-provision",
+                    { now, provisioning },
+                    signal,
+                );
+                const measuredMilliseconds = recordProvisionTimings(response.serverTiming, timing);
+                timing.record(
+                    "create-provision-session-runtime-boundary",
+                    "Reach Session runtime Durable Object",
+                    Math.max(0, performance.now() - startedAt - measuredMilliseconds),
+                );
+                return decodeSessionSummary(response.value);
+            },
         );
         await timing.measure(
             "create-provision-directory-sync",
@@ -452,7 +504,15 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         operation: string,
         body: Readonly<Record<string, unknown>>,
         signal: AbortSignal,
-    ): Promise<unknown> => {
+    ): Promise<unknown> => (await this.requestWithMetadata(scope, sessionId, operation, body, signal)).value;
+
+    private readonly requestWithMetadata = async (
+        scope: ProjectScope,
+        sessionId: string,
+        operation: string,
+        body: Readonly<Record<string, unknown>>,
+        signal: AbortSignal,
+    ): Promise<{ readonly serverTiming: string | null; readonly value: unknown }> => {
         signal.throwIfAborted();
         let response: Response;
         try {
@@ -505,6 +565,6 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
                 "The Bot Session Durable Object rejected the operation",
             );
         }
-        return value;
+        return { serverTiming: response.headers.get("server-timing"), value };
     };
 }

@@ -48,6 +48,7 @@ import { createRandomToken, hashSecret } from "../../entity/pairing/pairing.ts";
 import type { SessionCommandGateway } from "../../gateway/session-command-gateway.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { DoSqlRow } from "../../infra/do-sql-database.ts";
+import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { BotSessionStorage } from "../../storage/do/bot-session-storage.ts";
 import { sha256 } from "./session-archive-codec.ts";
 import {
@@ -63,6 +64,15 @@ const MAX_OUTBOUND_MESSAGE_LENGTH = 10_000;
 const MAX_ACTOR_REFERENCE_LENGTH = 500;
 const MAX_PENDING_OUTBOUND_BATCH = 100;
 const BOT_CLIENT_CURSOR_PATTERN = /^bcu_[A-Za-z0-9_-]{32}$/;
+
+function measureSync<T>(timing: OperationTiming, name: string, description: string, operation: () => T): T {
+    const startedAt = performance.now();
+    try {
+        return operation();
+    } finally {
+        timing.record(name, description, Math.max(0, performance.now() - startedAt));
+    }
+}
 
 interface BotBackingSessionRuntime {
     readonly createSession: SessionCommandGateway["createSession"];
@@ -412,11 +422,17 @@ export class BotSessionService {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
+        timing: OperationTiming,
     ): Promise<SessionSummary> => {
         signal.throwIfAborted();
         validateTimestamp(now);
         const key = scopeKey(scope);
-        const existing = this.#storage.readContext({ scopeKey: key, sessionId: provisioning.sessionId })[0];
+        const existing = measureSync(
+            timing,
+            "context-read",
+            "Read Bot Session context",
+            () => this.#storage.readContext({ scopeKey: key, sessionId: provisioning.sessionId })[0],
+        );
         if (existing !== undefined) {
             const context = contextFromRow(existing);
             if (
@@ -432,34 +448,47 @@ export class BotSessionService {
                     "The Session is already attached to another Bot conversation",
                 );
             }
-            return await this.#sessions.readSession(scope, provisioning.sessionId, signal);
+            return await timing.measure(
+                "existing-session-read",
+                "Read existing conversation Session",
+                async () => await this.#sessions.readSession(scope, provisioning.sessionId, signal),
+            );
         }
         let session: SessionSummary;
         try {
-            session = await this.#sessions.createSession(
-                scope,
-                new CreateSessionRequest(
-                    provisioning.sessionId,
-                    provisioning.runtimeId,
-                    provisioning.agentRef,
-                    provisioning.bindingId,
-                    provisioning.workspaceRef,
-                    new SessionRecordingPolicy(
-                        "full",
-                        DEFAULT_RETENTION_MILLISECONDS,
-                        DEFAULT_HOT_EVENT_LIMIT,
-                        DEFAULT_CONTENT_LIMIT_BYTES,
+            session = await timing.measure(
+                "session-create",
+                "Create conversation Session",
+                async () =>
+                    await this.#sessions.createSession(
+                        scope,
+                        new CreateSessionRequest(
+                            provisioning.sessionId,
+                            provisioning.runtimeId,
+                            provisioning.agentRef,
+                            provisioning.bindingId,
+                            provisioning.workspaceRef,
+                            new SessionRecordingPolicy(
+                                "full",
+                                DEFAULT_RETENTION_MILLISECONDS,
+                                DEFAULT_HOT_EVENT_LIMIT,
+                                DEFAULT_CONTENT_LIMIT_BYTES,
+                            ),
+                            provisioning.title,
+                            provisioning.creatorPrincipalId,
+                        ),
+                        now,
+                        signal,
                     ),
-                    provisioning.title,
-                    provisioning.creatorPrincipalId,
-                ),
-                now,
-                signal,
             );
         } catch (cause) {
             signal.throwIfAborted();
             try {
-                session = await this.#sessions.readSession(scope, provisioning.sessionId, signal);
+                session = await timing.measure(
+                    "recovery-session-read",
+                    "Read concurrently created conversation Session",
+                    async () => await this.#sessions.readSession(scope, provisioning.sessionId, signal),
+                );
             } catch {
                 signal.throwIfAborted();
                 throw new BotSessionRuntimeError(
@@ -470,7 +499,9 @@ export class BotSessionService {
             }
         }
         signal.throwIfAborted();
-        this.#storage.insertContext({ scopeKey: key, provisioning, createdAt: now });
+        measureSync(timing, "context-insert", "Insert Bot Session context", () =>
+            this.#storage.insertContext({ scopeKey: key, provisioning, createdAt: now }),
+        );
         return session;
     };
 
