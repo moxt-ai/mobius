@@ -2798,6 +2798,96 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given a native fork is still being registered, When its Agent emits an event first, Then the Relay defers and later commits the event without dropping the daemon", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const command = {
+                action: "fork",
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: "workspace",
+                directoryId: "workspace",
+                entryId: "active-native-entry",
+                kind: "native.session.request",
+                requestId: "fork-active-native",
+                sessionId: "native-session-browser",
+                targetSessionId: "forked-native-session",
+            } as const;
+            host.socket.send(encodeNativeSessionCommand(command));
+            expect(decodeNativeSessionCommand(await daemon.messages.next())).toEqual(command);
+            expect(decodeNativeSessionCommand(await host.messages.next())).toEqual(command);
+
+            const earlyEvent = envelope(command.targetSessionId, "forked-native-ready-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: command.targetSessionId,
+                title: "Forked native session",
+                updatedAt: "2026-09-16T00:00:00.000Z",
+            });
+            daemon.socket.send(encodeSessionEventEnvelope(earlyEvent));
+            expect(decodeSessionEventDeferred(await daemon.messages.next())).toMatchObject({
+                eventId: earlyEvent.eventId,
+                sessionId: command.targetSessionId,
+            });
+
+            const result = {
+                action: "fork",
+                history: {
+                    coveredCommandIds: [],
+                    coveredMessageIds: [],
+                    messages: [],
+                    status: "available",
+                    truncated: false,
+                },
+                kind: "native.session.result",
+                ready: {
+                    additionalDirectories: [],
+                    agentId: command.agentId,
+                    agentName: "Codex",
+                    agentVersion: "test",
+                    capabilities: { ...verifiedAgentCapabilities, unstableForkSession: true },
+                    commands: [],
+                    configOptions: [],
+                    directoryId: command.directoryId,
+                    directoryLabel: "/workspace",
+                    kind: "session.ready",
+                    requestId: command.requestId,
+                    restored: true,
+                    sessionId: command.targetSessionId,
+                },
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+                targetSessionId: command.targetSessionId,
+                title: "Forked native session",
+            } satisfies NativeSessionResult;
+            daemon.socket.send(encodeNativeSessionResult(result));
+            expect(decodeNativeSessionResult(await host.messages.next())).toEqual(result);
+
+            daemon.socket.send(encodeSessionEventEnvelope(earlyEvent));
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                eventId: earlyEvent.eventId,
+                sessionId: command.targetSessionId,
+            });
+            expect(decodeCommittedSessionEvent(await host.messages.next())).toMatchObject({
+                eventId: earlyEvent.eventId,
+                sessionId: command.targetSessionId,
+            });
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            host.socket.close(1000, "Native fork ordering test complete");
+            daemon.socket.close(1000, "Native fork ordering test complete");
+        }
+    });
+
     it("Given an Attempt is running, When its daemon disconnects and restarts, Then the indeterminate outcome is retained until explicit reconciliation", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);

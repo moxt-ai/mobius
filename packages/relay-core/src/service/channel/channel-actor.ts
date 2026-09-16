@@ -357,6 +357,11 @@ export class ChannelActor {
                         return;
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_not_found") {
+                        if (this.hasPendingNativeSessionRegistration(envelope.sessionId)) {
+                            this.#backpressuredEventBySource.set(sourceKey, envelope.eventId);
+                            this.deferSessionEvent(socket, envelope);
+                            return;
+                        }
                         socket.send(
                             encodeSessionEventRejection({
                                 code: SessionEventRejectionCode.SessionNotFound,
@@ -420,7 +425,6 @@ export class ChannelActor {
                     ) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
                     }
-                    this.#pendingNativeImports.delete(result.requestId);
                     await this.#commands.createSession(this.#scope, pending.request, this.#clock.now(), signal);
                     const target = await this.#queries.readSession(this.#scope, result.targetSessionId, signal);
                     if (
@@ -959,6 +963,15 @@ export class ChannelActor {
                 this.#pendingNativeImports.delete(requestId);
             }
         }
+    };
+
+    private readonly hasPendingNativeSessionRegistration = (sessionId: string): boolean => {
+        for (const pending of this.#pendingNativeImports.values()) {
+            if (pending.action !== "preview" && pending.request.sessionId === sessionId) {
+                return true;
+            }
+        }
+        return false;
     };
 
     private readonly forwardControl = (
