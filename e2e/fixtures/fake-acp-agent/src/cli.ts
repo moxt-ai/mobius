@@ -1220,6 +1220,20 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     sessionUpdate: "agent_message_chunk",
                 },
             });
+            const echoedPrompt =
+                prompt === "generate markdown image"
+                    ? (() => {
+                          const path = join(process.cwd(), "generated-image.png");
+                          writeFileSync(
+                              path,
+                              Buffer.from(
+                                  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                  "base64",
+                              ),
+                          );
+                          return `![Generated image](<${path}> "Generated locally")`;
+                      })()
+                    : prompt;
             if (
                 prompt !== "exercise ACP controls" &&
                 prompt !== "Report working directory" &&
@@ -1230,7 +1244,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     sessionId: context.params.sessionId,
                     update: {
                         content: {
-                            text: prompt,
+                            text: echoedPrompt,
                             type: "text",
                         },
                         messageId: `assistant-${turnNumber.toString()}`,
@@ -1249,7 +1263,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     prompt === "Report Bot execution settings" ||
                     prompt === "Report prompt blocks"
                         ? ""
-                        : prompt),
+                        : echoedPrompt),
             });
             persistState(context.params.sessionId, state);
 

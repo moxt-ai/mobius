@@ -141,6 +141,47 @@ describe("ACP session features", () => {
         }
     });
 
+    it("Given an ACP agent links an authorized local image in Markdown, When Mobius records the reply, Then it uploads the image instead of forwarding an unavailable link", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const output: string[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "markdown-image-command",
+                cwd: directory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    output.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "generate markdown image",
+                resources: [],
+                sessionId: "markdown-image-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(output.join("")).not.toContain("![Generated image]");
+            expect(observer.importedImages).toHaveLength(1);
+            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png", name: "generated-image.png" });
+            expect(observer.content).toContainEqual(
+                expect.objectContaining({
+                    content: expect.objectContaining({
+                        artifactId: "artifact-inline-image",
+                        name: "generated-image.png",
+                        type: "image",
+                    }),
+                }),
+            );
+        } finally {
+            await manager.close();
+            await rm(directory, { force: true, recursive: true });
+        }
+    });
+
     it("Given an Agent turn is running, When a targeted steering prompt is submitted, Then it is injected into that exact turn and preserves the Agent message anchor", async () => {
         const manager = new AcpSessionManager();
         const signal = new AbortController().signal;

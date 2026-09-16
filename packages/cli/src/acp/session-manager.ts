@@ -66,6 +66,7 @@ import {
     normalizeContentBlock,
 } from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
+import { emitMarkdownWithLocalImages } from "./markdown-images.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
@@ -933,28 +934,13 @@ class AcpProcessSession implements AcpClientHandler {
 
     private readonly emitAgentText = async (text: string, messageId: string): Promise<void> => {
         const signal = AbortSignal.timeout(20_000);
-        const parts = text.split(/(\[@image\]\([^)\r\n]*(?:\)|$))/);
-        let leftover = "";
-        for (const part of parts) {
-            const marker = /^\[@image\]\(([^)\r\n]*)(?:\)|$)/.exec(part);
-            if (marker === null) {
-                leftover += part;
-                continue;
-            }
-            if (leftover.length > 0) {
-                await this.#turn.onText(leftover, messageId);
-                leftover = "";
-            }
-            const raster = await readAuthorizedRaster(marker[1] ?? "", this.imageRoots(), signal);
-            if (raster === null) {
-                leftover += "[Image unavailable]";
-                continue;
-            }
-            await this.emitRaster(raster, messageId, signal);
-        }
-        if (leftover.length > 0) {
-            await this.#turn.onText(leftover, messageId);
-        }
+        await emitMarkdownWithLocalImages({
+            markdown: text,
+            onImage: async (image) => await this.emitRaster(image, messageId, signal),
+            onText: async (content) => await this.#turn.onText(content, messageId),
+            roots: this.imageRoots(),
+            signal,
+        });
     };
 
     private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
