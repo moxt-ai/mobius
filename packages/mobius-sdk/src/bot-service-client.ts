@@ -143,7 +143,7 @@ export interface MobiusInitialConversationConfigurationRequest {
 export interface CreateMobiusProjectConversationRequest {
     readonly botId: string;
     readonly clientReference: string;
-    readonly configuration: MobiusInitialConversationConfigurationRequest;
+    readonly configuration?: MobiusInitialConversationConfigurationRequest;
     readonly idempotencyKey: string;
     readonly title: string;
 }
@@ -783,13 +783,16 @@ export class MobiusBotOwnerClient {
         request: CreateMobiusProjectConversationRequest,
         signal: AbortSignal,
     ): Promise<MobiusProjectConversation> => {
+        const hasConfiguration = request.configuration !== undefined;
         const value = requestRecord(
             request,
-            ["botId", "clientReference", "configuration", "idempotencyKey", "title"],
+            hasConfiguration
+                ? ["botId", "clientReference", "configuration", "idempotencyKey", "title"]
+                : ["botId", "clientReference", "idempotencyKey", "title"],
             "Project Conversation request",
         );
         const configuration = value["configuration"];
-        if (!isRecord(configuration)) {
+        if (configuration !== undefined && !isRecord(configuration)) {
             throw new MobiusValidationError("The initial Conversation configuration is invalid");
         }
         return new MobiusProjectConversation(
@@ -798,7 +801,9 @@ export class MobiusBotOwnerClient {
                 {
                     botId: identifier(value["botId"], "Bot"),
                     clientReference: identifier(value["clientReference"], "client reference"),
-                    configuration: serializedInitialConversationConfiguration(configuration),
+                    ...(configuration === undefined
+                        ? {}
+                        : { configuration: serializedInitialConversationConfiguration(configuration) }),
                     idempotencyKey: identifier(value["idempotencyKey"], "Conversation idempotency key"),
                     title: boundedText(value["title"], "Conversation title", 500, true),
                 },

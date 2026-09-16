@@ -91,23 +91,24 @@ export function createBotApplication() {
             );
         })
         .post("/projects/:projectId/conversations", botBodyParser<BotHttpEnvironment>(), async (c) => {
-            const value = exactBody(c.var.body, [
-                "botId",
-                "clientReference",
-                "configuration",
-                "idempotencyKey",
-                "title",
-            ]);
-            const configuration = conversationConfiguration(value);
+            const value = exactBody(
+                c.var.body,
+                c.var.body["configuration"] === undefined
+                    ? ["botId", "clientReference", "idempotencyKey", "title"]
+                    : ["botId", "clientReference", "configuration", "idempotencyKey", "title"],
+            );
+            const configuration = value["configuration"] === undefined ? undefined : conversationConfiguration(value);
             const conversation = await c.var.bots.createProjectConversationResource(
                 pathIdentifier(c.req.param("projectId")),
-                identifier(value, "botId"),
                 bearer(c.req.raw),
                 actorReference(c.req.raw),
-                identifier(value, "clientReference"),
-                identifier(value, "idempotencyKey"),
-                string(value, "title", 500, true),
-                configuration,
+                {
+                    botId: identifier(value, "botId"),
+                    clientReference: identifier(value, "clientReference"),
+                    ...(configuration === undefined ? {} : { configuration }),
+                    idempotencyKey: identifier(value, "idempotencyKey"),
+                    title: string(value, "title", 500, true),
+                },
                 Date.now(),
                 c.var.signal,
                 c.var.operationTiming,

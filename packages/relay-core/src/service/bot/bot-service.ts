@@ -65,6 +65,24 @@ const BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS = 30 * 24 * 60 * 60 * 1_00
 const BOT_CONNECTION_CREDENTIAL_OVERLAP_MILLISECONDS = 5 * 60 * 1_000;
 const BOT_CONVERSATION_EVENT_PAGE_LIMIT = 20;
 
+type ProjectConversationConfiguration = NonNullable<SessionPrepareCommand["configuration"]> & {
+    readonly additionalDirectoryIds: readonly string[];
+};
+
+interface CreateProjectConversationResourceRequest {
+    readonly botId: string;
+    readonly clientReference: string;
+    readonly configuration?: ProjectConversationConfiguration;
+    readonly idempotencyKey: string;
+    readonly title: string;
+}
+
+interface PrepareProjectConversationRequest {
+    readonly additionalDirectoryIds: readonly string[];
+    readonly expectedConfiguration?: ProjectConversationConfiguration;
+    readonly initialConfiguration?: ProjectConversationConfiguration;
+}
+
 function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit, now: number): void {
     if (
         permit.scope.projectId !== runtime.scope.projectId ||
@@ -365,15 +383,9 @@ export class BotService {
 
     readonly createProjectConversationResource = async (
         projectId: string,
-        botId: string,
         token: string,
         actorReference: string,
-        clientReference: string,
-        idempotencyKey: string,
-        title: string,
-        configuration: NonNullable<SessionPrepareCommand["configuration"]> & {
-            readonly additionalDirectoryIds: readonly string[];
-        },
+        request: CreateProjectConversationResourceRequest,
         now: number,
         signal: AbortSignal,
         timing: OperationTiming,
@@ -383,7 +395,7 @@ export class BotService {
             "Authorize conversation creation",
             async () =>
                 await this.cx.services.authorization.authorizeProjectBot(
-                    botId,
+                    request.botId,
                     token,
                     ProjectPermission.ConversationCreate,
                     actorReference,
@@ -401,7 +413,7 @@ export class BotService {
         const binding = await timing.measure(
             "create-binding",
             "Read approved Bot binding",
-            async () => await this.readApprovedBinding(cx, botId, signal),
+            async () => await this.readApprovedBinding(cx, request.botId, signal),
         );
         await timing.measure(
             "create-runtime",
@@ -415,9 +427,9 @@ export class BotService {
                 await cx.services.conversations.createCanonicalProjectConversation(
                     access,
                     binding,
-                    validateIdentifier(idempotencyKey, "idempotency_key"),
-                    validateIdentifier(clientReference, "client_reference"),
-                    title,
+                    validateIdentifier(request.idempotencyKey, "idempotency_key"),
+                    validateIdentifier(request.clientReference, "client_reference"),
+                    request.title,
                     now,
                     signal,
                 ),
@@ -481,9 +493,16 @@ export class BotService {
                     access.scope,
                     binding,
                     session.sessionId,
-                    validateIdentifier(idempotencyKey, "idempotency_key"),
-                    plan.kind === "provisioning" ? configuration : null,
-                    configuration,
+                    validateIdentifier(request.idempotencyKey, "idempotency_key"),
+                    {
+                        additionalDirectoryIds: request.configuration?.additionalDirectoryIds ?? [],
+                        ...(plan.kind === "provisioning" && request.configuration !== undefined
+                            ? { initialConfiguration: request.configuration }
+                            : {}),
+                        ...(request.configuration === undefined
+                            ? {}
+                            : { expectedConfiguration: request.configuration }),
+                    },
                     signal,
                     timing,
                 ),
@@ -496,14 +515,7 @@ export class BotService {
         binding: ApprovedBindingContext,
         sessionId: string,
         requestId: string,
-        initialConfiguration:
-            | (NonNullable<SessionPrepareCommand["configuration"]> & {
-                  readonly additionalDirectoryIds: readonly string[];
-              })
-            | null,
-        expectedConfiguration: NonNullable<SessionPrepareCommand["configuration"]> & {
-            readonly additionalDirectoryIds: readonly string[];
-        },
+        preparation: PrepareProjectConversationRequest,
         signal: AbortSignal,
         timing: OperationTiming,
     ): Promise<SessionReadyEvent> => {
@@ -530,17 +542,17 @@ export class BotService {
             }
             const command = decodeSessionPrepareCommand(
                 JSON.stringify({
-                    additionalDirectoryIds: expectedConfiguration.additionalDirectoryIds,
+                    additionalDirectoryIds: preparation.additionalDirectoryIds,
                     agentId: binding.agentRef,
                     bindingId: binding.bindingId,
-                    ...(initialConfiguration === null
+                    ...(preparation.initialConfiguration === undefined
                         ? {}
                         : {
                               configuration: {
-                                  booleanValue: initialConfiguration.booleanValue,
-                                  configId: initialConfiguration.configId,
-                                  value: initialConfiguration.value,
-                                  valueType: initialConfiguration.valueType,
+                                  booleanValue: preparation.initialConfiguration.booleanValue,
+                                  configId: preparation.initialConfiguration.configId,
+                                  value: preparation.initialConfiguration.value,
+                                  valueType: preparation.initialConfiguration.valueType,
                               },
                           }),
                     directoryId: binding.workspaceRef,
@@ -569,15 +581,19 @@ export class BotService {
                 );
             }
             this.recordRuntimeTimings(result.runtimeTimings ?? [], timing);
+            const expectedConfiguration = preparation.expectedConfiguration;
+            const matchesExpectedConfiguration =
+                expectedConfiguration === undefined ||
+                result.configOptions.some(
+                    (option) =>
+                        option.id === expectedConfiguration.configId &&
+                        option.currentValue === expectedConfiguration.value,
+                );
             if (
                 result.sessionId !== sessionId ||
                 result.agentId !== binding.agentRef ||
                 result.directoryId !== binding.workspaceRef ||
-                !result.configOptions.some(
-                    (option) =>
-                        option.id === expectedConfiguration.configId &&
-                        option.currentValue === expectedConfiguration.value,
-                )
+                !matchesExpectedConfiguration
             ) {
                 throw new BotApiError(
                     "binding_incompatible",

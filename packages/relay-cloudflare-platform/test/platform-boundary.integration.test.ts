@@ -2311,6 +2311,58 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
+    it("Given an approved Project Bot without a session setting, When the server SDK opens its conversation, Then Mobius preserves the local Agent native default", async () => {
+        const fixture = await createReadyConversation("server-sdk-native-default");
+        try {
+            const owner = new MobiusBotOwnerClient({
+                actorReference: "server-sdk-owner",
+                credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+                endpoint: relayOrigin,
+                projectId: fixture.projectId,
+                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+            });
+            const pendingCreated = owner.createProjectConversation(
+                {
+                    botId: fixture.botId,
+                    clientReference: "server-sdk-native-default-conversation",
+                    idempotencyKey: "server-sdk-native-default-conversation",
+                    title: "Server SDK Native Default Conversation",
+                },
+                AbortSignal.timeout(5_000),
+            );
+            const preparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
+            expect(preparation.configuration).toBeUndefined();
+            const agent = readyAgents[0];
+            if (agent === undefined) {
+                throw new Error("The Runtime agent is unavailable");
+            }
+            fixture.socket.send(
+                encodeSessionReadyEvent({
+                    additionalDirectories: [],
+                    agentId: agent.id,
+                    agentName: agent.label,
+                    agentVersion: agent.agentVersion,
+                    capabilities: agent.capabilities,
+                    commands: [],
+                    configOptions: [],
+                    directoryId: "default",
+                    directoryLabel: "Workspace",
+                    kind: "session.ready",
+                    requestId: preparation.requestId,
+                    restored: false,
+                    sessionId: preparation.sessionId,
+                }),
+            );
+            await expect(pendingCreated).resolves.toMatchObject({
+                botId: fixture.botId,
+                clientReference: "server-sdk-native-default-conversation",
+                lifecycle: "active",
+            });
+        } finally {
+            fixture.socket.close(1000, "Server SDK native default test complete");
+        }
+    });
+
     it("Given an organization with bounded capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(
