@@ -56,17 +56,20 @@ unrelated model calls while proving the complete tool round trip.
 tests/agent-daemon/
   README.md
   cases/
+    claude.integration.test.ts
     codex.integration.test.ts
     gemini.integration.test.ts
     opencode.integration.test.ts
     pi.integration.test.ts
   infra/
+    claude.ts
     codex.ts
     executable.ts
     gemini.ts
     opencode.ts
     pi.ts
   providers/
+    anthropic.ts
     gemini.ts
     openai.ts
 ```
@@ -89,9 +92,10 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Codex, Gemini, and Pi cases likewise accept `MOBIUS_TEST_CODEX_PATH`,
-`MOBIUS_TEST_CODEX_ACP_PATH`, `MOBIUS_TEST_PI_PATH`, and
-`MOBIUS_TEST_PI_ACP_PATH`, with Gemini using `MOBIUS_TEST_GEMINI_PATH`. Without
-overrides, cases resolve their executables from `PATH`. CI installs the
-repository-tested versions before running the suite. Missing Agent software is
-a setup failure, not a skipped test.
+The Claude, Codex, Gemini, and Pi cases likewise accept
+`MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
+`MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
+`MOBIUS_TEST_PI_PATH`, and `MOBIUS_TEST_PI_ACP_PATH`, with Gemini using
+`MOBIUS_TEST_GEMINI_PATH`. Without overrides, cases resolve their executables
+from `PATH`. CI installs the repository-tested versions before running the
+suite. Missing Agent software is a setup failure, not a skipped test.
