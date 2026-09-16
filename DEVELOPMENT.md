@@ -304,24 +304,30 @@ After trusted publishing is configured, merge a CLI version change to `main` to
 publish it. No release tag is required. The workflow uses npm trusted publishing,
 so it does not require an `NPM_TOKEN` repository secret.
 
-## Publishing the SDK
+## Publishing the Protocol and SDK
 
-`.github/workflows/publish-sdk.yml` publishes `@moxt-ai/mobius-sdk` when the
-version in `packages/mobius-sdk/package.json` changes on `main`, following the CLI
-release policy. It packs the protocol and SDK with pnpm, and
-prints an npm publication dry run before publishing. pnpm packing applies
-`publishConfig` and replaces workspace dependencies with registry versions.
+`.github/workflows/publish-sdk.yml` publishes `@moxt-ai/mobius-protocol` and
+`@moxt-ai/mobius-sdk` independently when either package version changes on
+`main`. It detects both changes against the pushed commit's base, packs only the
+changed release artifacts with pnpm, and prints an npm publication dry run before
+publishing. pnpm packing applies `publishConfig` and replaces workspace
+dependencies with registry versions.
 
-The SDK depends on `@moxt-ai/mobius-protocol`. The workflow publishes the local
-protocol version first if npm returns 404 for that version; an existing version
-is reused. Bump the protocol version alongside the SDK when protocol changes
-must ship. Registry failures other than 404 stop the release.
+The SDK depends on `@moxt-ai/mobius-protocol`. When both versions change, the
+workflow publishes Protocol first. When only the SDK changes, it stops unless
+the matching Protocol version is already on npm. Existing exact versions are
+skipped so a GitHub Actions re-run can recover from a partial release without
+attempting to overwrite an immutable npm version. Registry failures other than
+404 stop the release. A manual dispatch from `main` provides the same recovery
+path for the current versions.
 
 Configure npm trusted publishing for **both** packages with organization
 `moxt-ai`, repository `mobius`, workflow `publish-sdk.yml`, no environment, and
-direct `npm publish` enabled. For a package that does not yet exist, bootstrap
-its first publication with an authorized npm account, then configure its trusted
-publisher. No npm token is committed or required by this workflow.
+direct `npm publish` enabled. The workflow uses GitHub-hosted OIDC, installs
+npm 11.5.1 before publishing, and deliberately removes token-based npm
+configuration so no `NPM_TOKEN` repository secret is required. For a package
+that does not yet exist, bootstrap its first publication with an authorized npm
+account, then configure its trusted publisher.
 
 To inspect the exact release artifacts locally without publishing:
 
@@ -333,8 +339,8 @@ npm publish /path/to/release-preview/mobius-protocol.tgz --access public --dry-r
 npm publish /path/to/release-preview/mobius-sdk.tgz --access public --dry-run
 ```
 
-Adding the workflow alone does not release a version; merge an SDK version bump
-after the npm publishers are configured.
+Adding the workflow alone does not release a version; merge a Protocol or SDK
+version bump after the npm publishers are configured.
 
 ## Adding a Local Agent
 

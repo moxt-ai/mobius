@@ -1,23 +1,25 @@
-name: Publish SDK
+name: Publish Protocol and SDK
 
 on:
   push:
     branches: [main]
     paths:
+      - packages/protocol/package.json
       - packages/mobius-sdk/package.json
+  workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
 
 concurrency:
-  group: publish-sdk
+  group: publish-protocol-and-sdk
   cancel-in-progress: false
 
 jobs:
   publish:
     name: npm
-    if: github.repository == 'moxt-ai/mobius'
+    if: github.repository == 'moxt-ai/mobius' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,84 +32,211 @@ jobs:
         with:
           node-version-file: .nvmrc
           package-manager-cache: false
-          registry-url: https://registry.npmjs.org
 
-      - name: Detect SDK version change
-        id: sdk-version
+      - name: Detect package version changes
+        id: versions
         env:
           BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
           import { appendFileSync, readFileSync } from "node:fs";
 
           const before = process.env.BEFORE_SHA;
+          const eventName = process.env.EVENT_NAME;
           const output = process.env.GITHUB_OUTPUT;
-          if (before === undefined || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(before) || output === undefined) {
-            throw new Error("Required GitHub Actions inputs are unavailable or invalid");
+          const manual = eventName === "workflow_dispatch";
+          if (output === undefined || eventName === undefined) {
+            throw new Error("Required GitHub Actions inputs are unavailable");
           }
-          const manifest = "packages/mobius-sdk/package.json";
-          const readVersion = (text) => {
-            const value = JSON.parse(text);
-            if (value === null || typeof value !== "object" || Array.isArray(value) || typeof value.version !== "string") {
-              throw new Error("Package manifest has no string version");
+          if (!manual && (before === undefined || !/^([0-9a-f]{40}|[0-9a-f]{64})$/.test(before))) {
+            throw new Error("The previous commit SHA is invalid");
+          }
+
+          const packages = [
+            {
+              label: "Protocol",
+              manifest: "packages/protocol/package.json",
+              name: "@moxt-ai/mobius-protocol",
+              output: "protocol",
+            },
+            {
+              label: "SDK",
+              manifest: "packages/mobius-sdk/package.json",
+              legacyManifest: "packages/web-sdk/package.json",
+              name: "@moxt-ai/mobius-sdk",
+              output: "sdk",
+            },
+          ];
+
+          const readManifest = (path, expectedName) => {
+            const manifest = JSON.parse(readFileSync(path, "utf8"));
+            if (
+              manifest === null ||
+              typeof manifest !== "object" ||
+              Array.isArray(manifest) ||
+              manifest.name !== expectedName ||
+              typeof manifest.version !== "string"
+            ) {
+              throw new Error(`Package manifest at ${path} is invalid`);
             }
-            return value.version;
+            return manifest.version;
           };
-          const previousPath = execFileSync("git", ["ls-tree", "--name-only", before, manifest], { encoding: "utf8", timeout: 30_000 }).trim();
-          // The rename commit still has the SDK at its original path in the previous revision.
-          const previousManifest = previousPath === "" ? "packages/web-sdk/package.json" : manifest;
-          const previous = readVersion(execFileSync("git", ["show", `${before}:${previousManifest}`], { encoding: "utf8", timeout: 30_000 }));
-          const current = readVersion(readFileSync(manifest, "utf8"));
-          const changed = previous !== current;
-          console.log(changed ? `SDK version changed from ${previous} to ${current}.` : `SDK version remains ${current}; publication will be skipped.`);
-          appendFileSync(output, `changed=${changed}\n`);
+
+          const readManifestAtCommit = (manifest, expectedName) => {
+            const text = execFileSync("git", ["show", `${before}:${manifest}`], {
+              encoding: "utf8",
+              timeout: 30_000,
+            });
+            const packageJson = JSON.parse(text);
+            if (
+              packageJson === null ||
+              typeof packageJson !== "object" ||
+              Array.isArray(packageJson) ||
+              packageJson.name !== expectedName ||
+              typeof packageJson.version !== "string"
+            ) {
+              throw new Error(`Package manifest at ${manifest} is invalid`);
+            }
+            return packageJson.version;
+          };
+
+          for (const packageDefinition of packages) {
+            const current = readManifest(packageDefinition.manifest, packageDefinition.name);
+            let previous = current;
+            if (!manual) {
+              try {
+                previous = readManifestAtCommit(packageDefinition.manifest, packageDefinition.name);
+              } catch (error) {
+                if (packageDefinition.legacyManifest === undefined) throw error;
+                previous = readManifestAtCommit(packageDefinition.legacyManifest, packageDefinition.name);
+              }
+            }
+            const changed = manual || previous !== current;
+            console.log(
+              manual
+                ? `${packageDefinition.label} manual release selected at ${current}.`
+                : changed
+                  ? `${packageDefinition.label} version changed from ${previous} to ${current}.`
+                  : `${packageDefinition.label} version remains ${current}; publication will be skipped.`,
+            );
+            appendFileSync(output, `${packageDefinition.output}_changed=${String(changed)}\n`);
+          }
           NODE
 
       - name: Enable pnpm
-        if: steps.sdk-version.outputs.changed == 'true'
+        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
         run: |
           corepack enable
           pnpm --version
-          npm --version
 
-      - if: steps.sdk-version.outputs.changed == 'true'
+      - name: Install release dependencies
+        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
         run: pnpm install --frozen-lockfile
 
-      - name: Pack release artifacts
-        if: steps.sdk-version.outputs.changed == 'true'
+      - name: Ensure npm supports OIDC trusted publishing
+        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
         run: |
-          pnpm --dir packages/protocol pack --out "$RUNNER_TEMP/mobius-protocol.tgz"
-          pnpm --dir packages/mobius-sdk pack --out "$RUNNER_TEMP/mobius-sdk.tgz"
-          npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public --dry-run
-          npm publish "$RUNNER_TEMP/mobius-sdk.tgz" --access public --dry-run
+          npm install --global npm@11.5.1
+          npm --version
 
-      - name: Check protocol dependency on npm
-        if: steps.sdk-version.outputs.changed == 'true'
-        id: protocol
+      - name: Pack release artifacts
+        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        env:
+          PROTOCOL_CHANGED: ${{ steps.versions.outputs.protocol_changed }}
+          SDK_CHANGED: ${{ steps.versions.outputs.sdk_changed }}
+        run: |
+          set -euo pipefail
+          if [ "$PROTOCOL_CHANGED" = "true" ]; then
+            pnpm --dir packages/protocol pack --out "$RUNNER_TEMP/mobius-protocol.tgz"
+            npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public --dry-run
+          fi
+          if [ "$SDK_CHANGED" = "true" ]; then
+            pnpm --dir packages/mobius-sdk pack --out "$RUNNER_TEMP/mobius-sdk.tgz"
+            npm publish "$RUNNER_TEMP/mobius-sdk.tgz" --access public --dry-run
+          fi
+
+      - name: Check npm publication state
+        id: registry
+        if: steps.versions.outputs.protocol_changed == 'true' || steps.versions.outputs.sdk_changed == 'true'
+        env:
+          PROTOCOL_CHANGED: ${{ steps.versions.outputs.protocol_changed }}
+          SDK_CHANGED: ${{ steps.versions.outputs.sdk_changed }}
         run: |
           node --input-type=module <<'NODE'
           import { appendFileSync, readFileSync } from "node:fs";
-          const manifest = JSON.parse(readFileSync("packages/protocol/package.json", "utf8"));
-          if (manifest?.name !== "@moxt-ai/mobius-protocol" || typeof manifest.version !== "string") {
-            throw new Error("Protocol manifest is invalid");
-          }
+
           const output = process.env.GITHUB_OUTPUT;
-          if (output === undefined) throw new Error("GitHub output path is unavailable");
-          const response = await fetch(`https://registry.npmjs.org/@moxt-ai%2Fmobius-protocol/${encodeURIComponent(manifest.version)}`, {
-            signal: AbortSignal.timeout(30_000),
-          });
-          await response.body?.cancel();
-          if (response.status !== 200 && response.status !== 404) {
-            throw new Error(`npm registry returned HTTP ${response.status}`);
+          const protocolChanged = process.env.PROTOCOL_CHANGED === "true";
+          const sdkChanged = process.env.SDK_CHANGED === "true";
+          if (output === undefined) {
+            throw new Error("GitHub output path is unavailable");
           }
-          appendFileSync(output, `missing=${response.status === 404}\n`);
+
+          const packages = [
+            {
+              output: "protocol_exists",
+              required: protocolChanged || sdkChanged,
+              manifest: "packages/protocol/package.json",
+              name: "@moxt-ai/mobius-protocol",
+            },
+            {
+              output: "sdk_exists",
+              required: sdkChanged,
+              manifest: "packages/mobius-sdk/package.json",
+              name: "@moxt-ai/mobius-sdk",
+            },
+          ];
+
+          for (const packageDefinition of packages) {
+            if (!packageDefinition.required) continue;
+            const manifest = JSON.parse(readFileSync(packageDefinition.manifest, "utf8"));
+            if (
+              manifest === null ||
+              typeof manifest !== "object" ||
+              Array.isArray(manifest) ||
+              manifest.name !== packageDefinition.name ||
+              typeof manifest.version !== "string"
+            ) {
+              throw new Error(`Package manifest at ${packageDefinition.manifest} is invalid`);
+            }
+            const response = await fetch(
+              `https://registry.npmjs.org/${encodeURIComponent(packageDefinition.name)}/${encodeURIComponent(manifest.version)}`,
+              { signal: AbortSignal.timeout(30_000) },
+            );
+            await response.body?.cancel();
+            if (response.status !== 200 && response.status !== 404) {
+              throw new Error(`npm registry returned HTTP ${response.status} for ${packageDefinition.name}@${manifest.version}`);
+            }
+            const exists = response.status === 200;
+            console.log(`${packageDefinition.name}@${manifest.version} is ${exists ? "already published" : "not yet published"}.`);
+            appendFileSync(output, `${packageDefinition.output}=${String(exists)}\n`);
+          }
           NODE
 
-      - name: Publish protocol dependency
-        if: steps.sdk-version.outputs.changed == 'true' && steps.protocol.outputs.missing == 'true'
-        run: npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public
+      - name: Require the SDK Protocol dependency
+        if: steps.versions.outputs.sdk_changed == 'true' && steps.versions.outputs.protocol_changed != 'true' && steps.registry.outputs.protocol_exists != 'true'
+        run: |
+          echo "::error title=Missing Protocol release::The SDK requires the current @moxt-ai/mobius-protocol version, but it is not published. Bump the Protocol version in this release or publish it first."
+          exit 1
+
+      - name: Publish Protocol
+        if: steps.versions.outputs.protocol_changed == 'true' && steps.registry.outputs.protocol_exists != 'true'
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            rm -f "$NPM_CONFIG_USERCONFIG"
+          fi
+          npm publish "$RUNNER_TEMP/mobius-protocol.tgz" --access public
 
       - name: Publish SDK
-        if: steps.sdk-version.outputs.changed == 'true'
-        run: npm publish "$RUNNER_TEMP/mobius-sdk.tgz" --access public
+        if: steps.versions.outputs.sdk_changed == 'true' && steps.registry.outputs.sdk_exists != 'true'
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            rm -f "$NPM_CONFIG_USERCONFIG"
+          fi
+          npm publish "$RUNNER_TEMP/mobius-sdk.tgz" --access public
