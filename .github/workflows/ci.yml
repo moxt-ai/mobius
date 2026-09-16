@@ -59,7 +59,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:agent-daemon", "test:e2e", "test:web", "test:standalone", "test:platform"]
+        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:e2e", "test:web", "test:standalone", "test:platform"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -101,17 +101,9 @@ jobs:
           # Build-only fixture; this bundle is never deployed.
           VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
 
-      - name: Install tested Agents
-        if: matrix.task == 'test:agent-daemon'
-        run: npm install --global opencode-ai@1.18.29 @openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0 @earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33 @google/gemini-cli@0.59.0 @anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0
-
-      - name: Run Agent and daemon integration tests
-        if: matrix.task == 'test:agent-daemon'
-        run: pnpm test:agent-daemon
-
       - name: Run coverage suite
         id: suite
-        if: startsWith(matrix.task, 'test:') && matrix.task != 'test:agent-daemon'
+        if: startsWith(matrix.task, 'test:')
         run: |
           suite="${TASK#test:}"
           echo "name=$suite" >> "$GITHUB_OUTPUT"
@@ -128,9 +120,77 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  agent-daemon:
+    name: test:agent-daemon:${{ matrix.agent }}
+    # Post-merge pushes to main skip tests; the merge queue already verified them.
+    if: github.event_name != 'push'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: agent-daemon-${{ matrix.agent }}-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - agent: opencode
+            packages: opencode-ai@1.18.29
+          - agent: codex
+            packages: "@openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0"
+          - agent: pi
+            packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33"
+          - agent: gemini
+            packages: "@google/gemini-cli@0.59.0"
+          - agent: claude
+            packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0"
+          - agent: deepseek
+            packages: "@deepseek-ai/dsh@0.1.2-rc.1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Enable pnpm
+        id: pnpm
+        shell: bash
+        run: |
+          corepack enable
+          pnpm --version
+          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.pnpm.outputs.store-path }}
+          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build test assets
+        run: pnpm build
+        env:
+          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+
+      - name: Install ${{ matrix.agent }}
+        run: npm install --global $AGENT_PACKAGES
+        env:
+          AGENT_PACKAGES: ${{ matrix.packages }}
+
+      - name: Run ${{ matrix.agent }} Agent and daemon integration test
+        run: pnpm exec vitest run --config vitest.agent-daemon.config.ts "$TEST_FILE"
+        env:
+          TEST_FILE: tests/agent-daemon/cases/${{ matrix.agent }}.integration.test.ts
+
   check:
     name: check
-    needs: checks
+    needs: [checks, agent-daemon]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -185,8 +245,11 @@ jobs:
 
       - name: Require every check to pass
         if: always()
-        run: test "$CHECKS_RESULT" = success || test "$CHECKS_RESULT" = skipped
+        run: |
+          test "$CHECKS_RESULT" = success || test "$CHECKS_RESULT" = skipped
+          test "$AGENT_DAEMON_RESULT" = success || test "$AGENT_DAEMON_RESULT" = skipped
         env:
+          AGENT_DAEMON_RESULT: ${{ needs.agent-daemon.result }}
           CHECKS_RESULT: ${{ needs.checks.result }}
 
   deploy-cloudflare:

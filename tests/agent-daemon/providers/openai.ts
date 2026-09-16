@@ -100,7 +100,12 @@ function selectTool(tools: readonly AvailableTool[]): SelectedTool | undefined {
         }
         const command = stringProperty(shell.parameters, ["command", "cmd"]);
         if (command !== undefined) {
-            return { ...shell, input: JSON.stringify({ [command]: "pwd" }) };
+            const input: Record<string, string> = { [command]: "pwd" };
+            const description = stringProperty(shell.parameters, ["description"]);
+            if (description !== undefined) {
+                input[description] = "Print the current working directory";
+            }
+            return { ...shell, input: JSON.stringify(input) };
         }
     }
 

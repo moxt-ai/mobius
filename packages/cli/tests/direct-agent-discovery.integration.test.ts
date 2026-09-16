@@ -1,12 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AcpSessionManager } from "../src/acp/session-manager.ts";
 import {
     AvailableAgent,
     DeepSeekHarnessAgentSpecification,
@@ -25,131 +24,6 @@ function executableSource(source: string): string {
 }
 
 describe("direct ACP Agent discovery", () => {
-    it("Given a verified local DeepSeek Harness installation, When Mobius discovers Agents, Then it uses the canonical local launch and publishes only its verified ACP capabilities", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-discovery-"));
-        const dshPath = join(temporaryDirectory, "dsh");
-        const homeDirectory = join(temporaryDirectory, "dsh-home");
-        const homeLink = join(temporaryDirectory, "selected-dsh-home");
-        const manager = new AcpSessionManager();
-        try {
-            await mkdir(homeDirectory, { mode: 0o700 });
-            await symlink(homeDirectory, homeLink);
-            const canonicalHome = await realpath(homeDirectory);
-            await writeFile(
-                dshPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("0.1.2-rc.1\\n");
-} else {
-  if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--profile", "acp"])) process.exit(81);
-  if (process.env.DSH_PERMISSION_MODE !== "workspace-write") process.exit(82);
-  if (process.env.DSH_HOME !== ${JSON.stringify(canonicalHome)}) process.exit(83);
-  process.argv.push(
-    "--agent-name", "DeepSeek Harness",
-    "--agent-version", "0.0.1",
-    "--announce-config-while-creating",
-    "--http-mcp",
-    "--no-load-session",
-    "--no-additional-directories",
-    "--no-delete-session",
-    "--no-embedded-context",
-    "--no-fork-session",
-    "--no-image-prompt",
-    "--no-prompt-queueing",
-    "--no-steering"
-  );
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(dshPath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: temporaryDirectory,
-                environment: {
-                    DSH_HOME: homeLink,
-                    DSH_PERMISSION_MODE: "danger-full-access",
-                    PATH: temporaryDirectory,
-                },
-                signal: new AbortController().signal,
-                specifications: [new DeepSeekHarnessAgentSpecification()],
-            });
-
-            expect(inventory.unavailable).toEqual([]);
-            expect(inventory.available).toHaveLength(1);
-            const discovered = inventory.available[0];
-            if (!(discovered instanceof AvailableAgent)) {
-                throw new Error("DeepSeek Harness was not discovered");
-            }
-            const canonicalExecutable = await realpath(dshPath);
-            expect(discovered.agent.command).toBe(canonicalExecutable);
-            expect(discovered.agent.agentIdentity.realPath).toBe(canonicalExecutable);
-            expect(discovered.agent.adapterIdentity.realPath).toBe(canonicalExecutable);
-            expect(discovered.agent.arguments).toEqual(["--profile", "acp"]);
-            expect(discovered.agent.environment).toEqual({
-                DSH_HOME: canonicalHome,
-                DSH_PERMISSION_MODE: "workspace-write",
-            });
-            expect(discovered.agent.agentVersion).toBe("0.1.2-rc.1");
-            expect(discovered.agent.adapterVersion).toBe("0.1.2-rc.1");
-            expect(discovered.agent.capabilities).toEqual({
-                additionalDirectories: false,
-                audioPrompt: false,
-                closeSession: true,
-                deleteSession: false,
-                embeddedContextPrompt: false,
-                imagePrompt: false,
-                listSessions: true,
-                loadSession: false,
-                promptQueueing: false,
-                resumeSession: true,
-                steering: false,
-                unstableForkSession: false,
-            });
-
-            const prepared = await manager.prepareSession({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                cwd: temporaryDirectory,
-                sessionId: "deepseek-session",
-                signal: new AbortController().signal,
-            });
-            expect(prepared.agentVersion).toBe("0.1.2-rc.1");
-            expect(prepared.configOptions).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({ category: "model", id: "model" }),
-                    expect.objectContaining({
-                        category: "thought_level",
-                        id: "reasoning_effort",
-                    }),
-                ]),
-            );
-
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                commandId: "deepseek-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "use the verified DeepSeek Harness executable",
-                resources: [],
-                sessionId: "deepseek-session",
-                signal: new AbortController().signal,
-            });
-            expect(chunks.join("")).toBe("DeepSeek Harness turn 1: use the verified DeepSeek Harness executable");
-        } finally {
-            await manager.close();
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
     it("Given an untrusted relative DSH_HOME, When DeepSeek Harness discovery runs, Then Mobius refuses to launch the ACP profile", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-home-"));
         const dshPath = join(temporaryDirectory, "dsh");
