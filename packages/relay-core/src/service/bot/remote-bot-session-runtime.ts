@@ -14,10 +14,15 @@ import {
     type BotTurnSubmission,
     PendingBotOutbound,
 } from "../../entity/bot/bot-session.ts";
-import { ProjectScope } from "../../entity/do/session.ts";
+import { ProjectScope, type SessionSummary } from "../../entity/do/session.ts";
+import type { SessionDirectoryGateway } from "../../gateway/session-directory-gateway.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
-import { decodeRemoteActivitySummaries, decodeRemoteAttemptSummary } from "../do/remote-session-runtime.ts";
+import {
+    decodeRemoteActivitySummaries,
+    decodeRemoteAttemptSummary,
+    decodeSessionSummary,
+} from "../do/remote-session-runtime.ts";
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 8 * 1024 * 1024;
 const EXECUTION_PERMIT_FIELDS = Object.freeze([
@@ -237,10 +242,12 @@ function runtimeErrorCode(value: string): string {
 }
 
 export class RemoteBotSessionRuntime implements BotSessionRuntime {
+    readonly #directory: SessionDirectoryGateway;
     readonly #transport: SessionTransport;
     readonly #sessions: SessionQueryGateway;
 
-    constructor(transport: SessionTransport, sessions: SessionQueryGateway) {
+    constructor(transport: SessionTransport, sessions: SessionQueryGateway, directory: SessionDirectoryGateway) {
+        this.#directory = directory;
         this.#transport = transport;
         this.#sessions = sessions;
     }
@@ -269,9 +276,12 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
-        await this.request(scope, provisioning.sessionId, "bot-provision", { now, provisioning }, signal);
-        await this.#sessions.readSession(scope, provisioning.sessionId, signal);
+    ): Promise<SessionSummary> => {
+        const summary = decodeSessionSummary(
+            await this.request(scope, provisioning.sessionId, "bot-provision", { now, provisioning }, signal),
+        );
+        await this.#directory.synchronizeSession(summary, signal);
+        return summary;
     };
 
     readonly acceptTurn = async (

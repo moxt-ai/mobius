@@ -154,7 +154,7 @@ function decodeLifecycle(value: unknown): SessionLifecycle {
     throw new SessionRuntimeError("session_storage_unavailable", "The session lifecycle is invalid");
 }
 
-function decodeSummary(value: unknown): SessionSummary {
+export function decodeSessionSummary(value: unknown): SessionSummary {
     if (!isRecord(value) || !isRecord(value["policy"]) || !isRecord(value["defaultBinding"])) {
         throw new SessionRuntimeError("session_storage_unavailable", "The session summary is invalid");
     }
@@ -586,7 +586,7 @@ function decodeExport(value: unknown): SessionExport {
         minimumSequence: readString(value, "minimumSequence"),
         nativeHistory: value["nativeHistory"] === null ? null : decodeNativeSessionHistory(value["nativeHistory"]),
         nextSequence: readString(value, "nextSequence"),
-        session: decodeSummary(value["session"]),
+        session: decodeSessionSummary(value["session"]),
         toolCallViews: value["toolCallViews"].map((activity) => {
             if (!isRecord(activity)) {
                 throw new SessionRuntimeError("session_storage_unavailable", "The exported activity is invalid");
@@ -769,7 +769,9 @@ export class RemoteSessionRuntime
     ): Promise<SessionSummary> => {
         validateCreateSessionRequest(request);
         await this.reserveSession(scope, request.sessionId, now, signal);
-        const summary = decodeSummary(await this.request(scope, request.sessionId, "create", { now, request }, signal));
+        const summary = decodeSessionSummary(
+            await this.request(scope, request.sessionId, "create", { now, request }, signal),
+        );
         await this.updateDirectory(summary, signal);
         return summary;
     };
@@ -1010,7 +1012,7 @@ export class RemoteSessionRuntime
         const committed = decodeCommittedSessionEvent(JSON.stringify(value["committed"]));
         const summary = value["summary"];
         if (summary !== undefined) {
-            await this.updateDirectory(decodeSummary(summary), signal);
+            await this.updateDirectory(decodeSessionSummary(summary), signal);
         }
         return { committed, duplicate: value["duplicate"] };
     };
@@ -1022,7 +1024,7 @@ export class RemoteSessionRuntime
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
-        const summary = decodeSummary(
+        const summary = decodeSessionSummary(
             await this.request(scope, sessionId, "set-binding", { binding, now, sessionId }, signal),
         );
         await this.updateDirectory(summary, signal);
@@ -1071,7 +1073,7 @@ export class RemoteSessionRuntime
         sessionId: string,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
-        const summary = decodeSummary(await this.request(scope, sessionId, "read", { sessionId }, signal));
+        const summary = decodeSessionSummary(await this.request(scope, sessionId, "read", { sessionId }, signal));
         await this.updateDirectory(summary, signal);
         return summary;
     };
@@ -1131,7 +1133,7 @@ export class RemoteSessionRuntime
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
-        const summary = decodeSummary(
+        const summary = decodeSessionSummary(
             await this.request(
                 scope,
                 sessionId,
@@ -1338,7 +1340,7 @@ export class RemoteSessionRuntime
                         { cause },
                     );
                 }
-                return decodeSummary(value);
+                return decodeSessionSummary(value);
             }),
         };
     };
@@ -1393,7 +1395,7 @@ export class RemoteSessionRuntime
         const reservation = await this.reserveSession(scope, sessionId, now, signal);
         let summary: SessionSummary;
         try {
-            summary = decodeSummary(
+            summary = decodeSessionSummary(
                 await this.request(scope, sessionId, "import", { binding: targetBinding, exported, now }, signal),
             );
         } catch (error) {
@@ -1588,7 +1590,7 @@ export class RemoteSessionRuntime
             return null;
         }
         try {
-            return decodeSummary(JSON.parse(row.summary_json));
+            return decodeSessionSummary(JSON.parse(row.summary_json));
         } catch (cause) {
             throw new SessionRuntimeError("session_storage_unavailable", "The D1 session directory is invalid", {
                 cause,
@@ -1603,7 +1605,7 @@ export class RemoteSessionRuntime
     ): Promise<void> => {
         try {
             const value = await this.request(scope, sessionId, "read", { sessionId }, signal);
-            await this.updateDirectory(decodeSummary(value), signal);
+            await this.updateDirectory(decodeSessionSummary(value), signal);
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -1612,7 +1614,7 @@ export class RemoteSessionRuntime
         }
     };
 
-    private readonly updateDirectory = async (summary: SessionSummary, signal: AbortSignal): Promise<void> => {
+    readonly synchronizeSession = async (summary: SessionSummary, signal: AbortSignal): Promise<void> => {
         try {
             const project = await this.#projects.resolve(summary.projectId, signal);
             await this.#directory.update(project, summary, signal);
@@ -1625,4 +1627,6 @@ export class RemoteSessionRuntime
             );
         }
     };
+
+    private readonly updateDirectory = this.synchronizeSession;
 }

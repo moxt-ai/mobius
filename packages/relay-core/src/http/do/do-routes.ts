@@ -361,13 +361,14 @@ class DoRoutes {
             const scope = readScope(body);
             if (operation === "bot-provision") {
                 assertExactKeys(body, ["now", "provisioning", "scope"]);
-                await this.#bots.provisionConversation(
-                    scope,
-                    decodeBotSessionProvisioning(body["provisioning"]),
-                    readInteger(body, "now"),
-                    request.signal,
+                return Response.json(
+                    await this.#bots.provisionConversation(
+                        scope,
+                        decodeBotSessionProvisioning(body["provisioning"]),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
                 );
-                return Response.json({ provisioned: true });
             }
             if (operation === "bot-accept") {
                 assertExactKeys(body, ["now", "scope", "sessionId", "submission"]);

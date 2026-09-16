@@ -38,7 +38,12 @@ import {
     type BotTurnSubmission,
     PendingBotOutbound,
 } from "../../entity/bot/bot-session.ts";
-import { CreateSessionRequest, type ProjectScope, SessionRecordingPolicy } from "../../entity/do/session.ts";
+import {
+    CreateSessionRequest,
+    type ProjectScope,
+    SessionRecordingPolicy,
+    type SessionSummary,
+} from "../../entity/do/session.ts";
 import { createRandomToken, hashSecret } from "../../entity/pairing/pairing.ts";
 import type { SessionCommandGateway } from "../../gateway/session-command-gateway.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
@@ -407,7 +412,7 @@ export class BotSessionService {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<SessionSummary> => {
         signal.throwIfAborted();
         validateTimestamp(now);
         const key = scopeKey(scope);
@@ -427,10 +432,11 @@ export class BotSessionService {
                     "The Session is already attached to another Bot conversation",
                 );
             }
-            return;
+            return await this.#sessions.readSession(scope, provisioning.sessionId, signal);
         }
+        let session: SessionSummary;
         try {
-            await this.#sessions.createSession(
+            session = await this.#sessions.createSession(
                 scope,
                 new CreateSessionRequest(
                     provisioning.sessionId,
@@ -453,7 +459,7 @@ export class BotSessionService {
         } catch (cause) {
             signal.throwIfAborted();
             try {
-                await this.#sessions.readSession(scope, provisioning.sessionId, signal);
+                session = await this.#sessions.readSession(scope, provisioning.sessionId, signal);
             } catch {
                 signal.throwIfAborted();
                 throw new BotSessionRuntimeError(
@@ -465,6 +471,7 @@ export class BotSessionService {
         }
         signal.throwIfAborted();
         this.#storage.insertContext({ scopeKey: key, provisioning, createdAt: now });
+        return session;
     };
 
     readonly acceptTurn = async (

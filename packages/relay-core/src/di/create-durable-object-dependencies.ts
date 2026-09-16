@@ -283,7 +283,7 @@ export function createDurableObjectDependencies(cx: {
     const gateways = {
         ...cx.gateways,
         sessions,
-        botSessions: new RemoteBotSessionRuntime(cx.gateways.sessionTransport, sessions),
+        botSessions: new RemoteBotSessionRuntime(cx.gateways.sessionTransport, sessions, sessions),
     };
     const runtime = createRuntimeRelayDependencies({ database: cx.doDatabase, gateways });
     const session = createSessionRelayDependencies({

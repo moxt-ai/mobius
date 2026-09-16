@@ -162,7 +162,7 @@ function createBots(
             channels: cx.gateways.channelGateway,
             connections: infrastructure.connections,
             sessions,
-            botSessions: new RemoteBotSessionRuntime(cx.gateways.sessionTransport, sessions),
+            botSessions: new RemoteBotSessionRuntime(cx.gateways.sessionTransport, sessions, sessions),
         },
     });
 }

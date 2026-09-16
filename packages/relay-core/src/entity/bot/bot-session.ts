@@ -7,7 +7,7 @@ import type {
     SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
 import type { ExecutionPermit } from "../authentication/project-authentication.ts";
-import { type ProjectScope, type SessionMessage, SessionRuntimeError } from "../do/session.ts";
+import { type ProjectScope, type SessionMessage, SessionRuntimeError, type SessionSummary } from "../do/session.ts";
 
 export const BOT_EXECUTION_LIFETIME_MILLISECONDS = 30 * 60 * 1_000;
 export const BOT_EXECUTION_OUTBOUND_USAGE_LIMIT = 16;
@@ -450,7 +450,7 @@ export interface BotSessionRuntime {
         provisioning: BotSessionProvisioning,
         now: number,
         signal: AbortSignal,
-    ) => Promise<void>;
+    ) => Promise<SessionSummary>;
     readonly settleExecution: (
         scope: ProjectScope,
         sessionId: string,
