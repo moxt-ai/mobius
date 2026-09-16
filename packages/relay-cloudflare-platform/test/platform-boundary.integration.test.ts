@@ -7,12 +7,14 @@ import {
     decodeNativeSessionCommand,
     decodeSessionConfigureCommand,
     decodeSessionEventAcknowledgement,
+    decodeSessionPrepareCommand,
     decodeWorkspaceListCommand,
     encodeBotExecutionBindingApprovedEvent,
     encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionEventEnvelope,
     encodeSessionOperationFailedEvent,
+    encodeSessionReadyEvent,
     encodeWorkspaceEntriesEvent,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
@@ -1863,13 +1865,19 @@ describe.sequential("Platform hosting boundary", () => {
         expect(await developer.listApps(tenant.tenantId, AbortSignal.timeout(5_000))).toEqual([]);
     });
 
-    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK reads its Bot-scoped Messages snapshot, Then the complete authoritative history and opaque tail cursor are returned without Session storage details", async () => {
+    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK creates and prepares its conversation, Then internal timings and the complete authoritative history are returned", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {
+            let creationTiming: string | null = null;
             const owner = new MobiusBotOwnerClient({
                 actorReference: "server-sdk-owner",
                 credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
                 endpoint: relayOrigin,
+                observeResponse: (metadata) => {
+                    if (metadata.status === 201) {
+                        creationTiming = metadata.serverTiming;
+                    }
+                },
                 projectId: fixture.projectId,
                 transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
             });
@@ -1897,12 +1905,63 @@ describe.sequential("Platform hosting boundary", () => {
                 projectId: fixture.projectId,
                 title: "Server SDK Conversation",
             });
+            expect(creationTiming).toEqual(
+                expect.stringMatching(
+                    /total;dur=.*create-authorize;dur=.*create-provision;dur=.*configure-accept;dur=.*configure-dispatch;dur=/u,
+                ),
+            );
             expect(decodeSessionConfigureCommand(await fixture.socketMessages.next())).toMatchObject({
                 configId: "model",
                 requestId: "server-sdk-create-conversation",
                 sessionId: created.sessionId,
                 value: "codex",
             });
+
+            let preparationTiming: string | null = null;
+            const sessions = new MobiusClient({
+                credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+                endpoint: relayOrigin,
+                observeResponse: (metadata) => {
+                    if (metadata.status === 200) {
+                        preparationTiming = metadata.serverTiming;
+                    }
+                },
+                projectId: fixture.projectId,
+                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+            });
+            try {
+                const pendingPreparation = sessions.sessions.prepare(created.sessionId, AbortSignal.timeout(5_000));
+                const preparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
+                const agent = readyAgents[0];
+                if (agent === undefined) {
+                    throw new Error("The Runtime agent is unavailable");
+                }
+                fixture.socket.send(
+                    encodeSessionReadyEvent({
+                        additionalDirectories: [],
+                        agentId: agent.id,
+                        agentName: agent.label,
+                        agentVersion: agent.agentVersion,
+                        capabilities: agent.capabilities,
+                        commands: [],
+                        configOptions: [],
+                        directoryId: "default",
+                        directoryLabel: "Workspace",
+                        kind: "session.ready",
+                        requestId: preparation.requestId,
+                        restored: false,
+                        sessionId: preparation.sessionId,
+                    }),
+                );
+                expect(await pendingPreparation).toMatchObject({ sessionId: created.sessionId });
+                expect(preparationTiming).toEqual(
+                    expect.stringMatching(
+                        /total;dur=.*session-read;dur=.*control-authorize;dur=.*control-connect;dur=.*control-runtime;dur=.*control-close;dur=/u,
+                    ),
+                );
+            } finally {
+                sessions.close();
+            }
 
             expect(
                 await owner.readProjectConversation(created.conversationId, AbortSignal.timeout(5_000)),

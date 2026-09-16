@@ -2,6 +2,7 @@ import type { WorkspaceListCommand } from "@moxt-ai/mobius-protocol";
 import { ProjectPermission } from "../../entity/authentication/project-authentication.ts";
 import { PairingDirectoryError } from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
+import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import type { PairingOperations } from "./pairing-operations.ts";
 import {
     type RuntimeControlCommand,
@@ -36,29 +37,49 @@ export class PairingService {
         token: string,
         command: RuntimeControlCommand,
         signal: AbortSignal,
+        timing: OperationTiming = unmeasuredOperationTiming,
     ) => {
         const deadline = AbortSignal.any([signal, AbortSignal.timeout(120000)]);
-        const access = await this.#pairings.openControlHost(
-            projectId,
-            runtimeId,
-            token,
-            command.kind === "native.session.request" && command.action === "list"
-                ? ProjectPermission.RuntimeRead
-                : ProjectPermission.SessionWrite,
-            deadline,
+        const access = await timing.measure(
+            "control-authorize",
+            "Authorize Runtime control host",
+            async () =>
+                await this.#pairings.openControlHost(
+                    projectId,
+                    runtimeId,
+                    token,
+                    command.kind === "native.session.request" && command.action === "list"
+                        ? ProjectPermission.RuntimeRead
+                        : ProjectPermission.SessionWrite,
+                    deadline,
+                ),
         );
         try {
-            const response = await this.#channels.acceptHost(
-                access,
-                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
-                deadline,
+            const response = await timing.measure(
+                "control-connect",
+                "Connect Runtime control host",
+                async () =>
+                    await this.#channels.acceptHost(
+                        access,
+                        new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                        deadline,
+                    ),
             );
-            if (response.webSocket === null) {
+            const socket = response.webSocket;
+            if (socket === null) {
                 throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
             }
-            return await requestRuntimeControl(response.webSocket, command, deadline);
+            return await timing.measure(
+                "control-runtime",
+                "Wait for Runtime control response",
+                async () => await requestRuntimeControl(socket, command, deadline),
+            );
         } finally {
-            await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000));
+            await timing.measure(
+                "control-close",
+                "Close Runtime control host",
+                async () => await this.#pairings.closeControlHost(access, AbortSignal.timeout(15000)),
+            );
         }
     };
 

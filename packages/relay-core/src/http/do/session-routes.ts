@@ -41,6 +41,7 @@ import {
 import { isRecord } from "../../service/do/session-codec.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
+import { operationTimingMiddleware } from "../middleware/operation-timing-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 function readIdentifierArray(
@@ -100,6 +101,10 @@ export function createSessionRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
+        .use(
+            "/projects/:projectId/sessions/:sessionId/:operation{prepare|configuration}",
+            operationTimingMiddleware<RelayHttpEnvironment>(),
+        )
         .post(
             "/projects/:projectId/runtimes/:runtimeId/native-sessions",
             bodyParser<RelayHttpEnvironment>(),
@@ -180,7 +185,11 @@ export function createSessionRoutes() {
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const token = bearerToken(context.req.raw);
                 const signal = context.req.raw.signal;
-                const session = await context.env.services.sessions.readSession(projectId, token, sessionId, signal);
+                const session = await context.var.operationTiming.measure(
+                    "session-read",
+                    "Read controlled Session",
+                    async () => await context.env.services.sessions.readSession(projectId, token, sessionId, signal),
+                );
                 const body = context.req.valid("json");
                 const prepare = context.req.param("operation") === "prepare";
                 assertExactKeys(body, prepare ? [] : ["configId", "value", "booleanValue", "valueType"]);
@@ -204,6 +213,7 @@ export function createSessionRoutes() {
                         token,
                         prepare ? decodeSessionPrepareCommand(encoded) : decodeSessionConfigureCommand(encoded),
                         signal,
+                        context.var.operationTiming,
                     ),
                 );
             },

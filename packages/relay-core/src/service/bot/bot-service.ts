@@ -47,6 +47,7 @@ import {
 import type { BotConnectionGateway } from "../../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway, SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
 import type { SessionArtifactGateway } from "../../gateway/session-artifact-gateway.ts";
+import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
 import type { BotConversationStorage } from "../../storage/bot-conversation-storage.ts";
@@ -370,37 +371,75 @@ export class BotService {
         title: string,
         now: number,
         signal: AbortSignal,
+        timing: OperationTiming,
     ) => {
-        const access = await this.cx.services.authorization.authorizeProjectBot(
-            botId,
-            token,
-            ProjectPermission.ConversationCreate,
-            actorReference,
-            signal,
+        const access = await timing.measure(
+            "create-authorize",
+            "Authorize conversation creation",
+            async () =>
+                await this.cx.services.authorization.authorizeProjectBot(
+                    botId,
+                    token,
+                    ProjectPermission.ConversationCreate,
+                    actorReference,
+                    signal,
+                ),
         );
         if (access.scope.projectId !== validateIdentifier(projectId, "project_id")) {
             throw new BotApiError("bot_not_found", "The Bot does not exist", "not-found");
         }
-        const cx = await this.projectContext(access.scope, signal);
-        const binding = await this.readApprovedBinding(cx, botId, signal);
-        await this.readRuntimeAccess(cx, access.scope, binding.runtimeId, signal);
-        const plan = await cx.services.conversations.createCanonicalProjectConversation(
-            access,
-            binding,
-            validateIdentifier(idempotencyKey, "idempotency_key"),
-            validateIdentifier(clientReference, "client_reference"),
-            title,
-            now,
-            signal,
+        const cx = await timing.measure(
+            "create-context",
+            "Resolve project context",
+            async () => await this.projectContext(access.scope, signal),
         );
-        await this.cx.gateways.botSessions.provisionConversation(access.scope, plan.provisioning, now, signal);
-        await cx.services.conversations.activateConversation(
-            access.scope,
-            plan.provisioning.conversationId,
-            now,
-            signal,
+        const binding = await timing.measure(
+            "create-binding",
+            "Read approved Bot binding",
+            async () => await this.readApprovedBinding(cx, botId, signal),
         );
-        return await cx.services.conversations.projectResource(access, plan.provisioning.conversationId, signal);
+        await timing.measure(
+            "create-runtime",
+            "Verify Runtime access",
+            async () => await this.readRuntimeAccess(cx, access.scope, binding.runtimeId, signal),
+        );
+        const plan = await timing.measure(
+            "create-plan",
+            "Plan conversation creation",
+            async () =>
+                await cx.services.conversations.createCanonicalProjectConversation(
+                    access,
+                    binding,
+                    validateIdentifier(idempotencyKey, "idempotency_key"),
+                    validateIdentifier(clientReference, "client_reference"),
+                    title,
+                    now,
+                    signal,
+                ),
+        );
+        await timing.measure(
+            "create-provision",
+            "Provision conversation Session",
+            async () =>
+                await this.cx.gateways.botSessions.provisionConversation(access.scope, plan.provisioning, now, signal),
+        );
+        await timing.measure(
+            "create-activate",
+            "Activate conversation",
+            async () =>
+                await cx.services.conversations.activateConversation(
+                    access.scope,
+                    plan.provisioning.conversationId,
+                    now,
+                    signal,
+                ),
+        );
+        return await timing.measure(
+            "create-read",
+            "Read created conversation",
+            async () =>
+                await cx.services.conversations.projectResource(access, plan.provisioning.conversationId, signal),
+        );
     };
 
     readonly readProjectConversationResource = async (
@@ -490,18 +529,40 @@ export class BotService {
         valueType: string,
         now: number,
         signal: AbortSignal,
+        timing: OperationTiming,
     ) => {
-        const access = await this.cx.services.authorization.authorizeProjectConversation(
-            conversationId,
-            token,
-            ProjectPermission.SessionWrite,
-            actorReference,
-            signal,
+        const access = await timing.measure(
+            "configure-authorize",
+            "Authorize conversation configuration",
+            async () =>
+                await this.cx.services.authorization.authorizeProjectConversation(
+                    conversationId,
+                    token,
+                    ProjectPermission.SessionWrite,
+                    actorReference,
+                    signal,
+                ),
         );
-        const cx = await this.projectContext(access.scope, signal);
-        await this.authorizeConversation(cx, access, access.conversationId, signal);
-        const session = await this.cx.gateways.sessions.readSession(access.scope, access.sessionId, signal);
-        const runtime = await this.readRuntimeAccess(cx, access.scope, session.defaultBinding.runtimeId, signal);
+        const cx = await timing.measure(
+            "configure-context",
+            "Resolve configuration project context",
+            async () => await this.projectContext(access.scope, signal),
+        );
+        await timing.measure(
+            "configure-conversation",
+            "Authorize configured conversation",
+            async () => await this.authorizeConversation(cx, access, access.conversationId, signal),
+        );
+        const session = await timing.measure(
+            "configure-session",
+            "Read configured Session",
+            async () => await this.cx.gateways.sessions.readSession(access.scope, access.sessionId, signal),
+        );
+        const runtime = await timing.measure(
+            "configure-runtime",
+            "Verify configuration Runtime",
+            async () => await this.readRuntimeAccess(cx, access.scope, session.defaultBinding.runtimeId, signal),
+        );
         const command = decodeSessionConfigureCommand(
             JSON.stringify({
                 additionalDirectoryIds,
@@ -517,15 +578,24 @@ export class BotService {
                 valueType,
             }),
         );
-        const acceptance = await this.cx.gateways.sessions.acceptConfiguration(
-            access.scope,
-            runtime.runtimeId,
-            command,
-            now,
-            signal,
+        const acceptance = await timing.measure(
+            "configure-accept",
+            "Accept Session configuration",
+            async () =>
+                await this.cx.gateways.sessions.acceptConfiguration(
+                    access.scope,
+                    runtime.runtimeId,
+                    command,
+                    now,
+                    signal,
+                ),
         );
         if (acceptance.pendingWork.state.kind !== "completed") {
-            await this.cx.gateways.channels.dispatchPending(runtime, signal);
+            await timing.measure(
+                "configure-dispatch",
+                "Dispatch Session configuration",
+                async () => await this.cx.gateways.channels.dispatchPending(runtime, signal),
+            );
         }
         return acceptance;
     };

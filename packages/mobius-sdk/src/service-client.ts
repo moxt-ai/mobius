@@ -121,6 +121,11 @@ export interface MobiusHttpTransport {
     readonly fetch: (request: Request) => Promise<Response>;
 }
 
+export interface MobiusResponseMetadata {
+    readonly serverTiming: string | null;
+    readonly status: number;
+}
+
 class PlatformMobiusHttpTransport implements MobiusHttpTransport {
     readonly fetch = async (request: Request): Promise<Response> => await globalThis.fetch(request);
 }
@@ -130,6 +135,7 @@ export interface MobiusEndpointOptions {
     readonly credentialProvider: MobiusCredentialProvider;
     readonly endpoint: string;
     readonly maxStreamReconnectAttempts?: number;
+    readonly observeResponse?: (metadata: MobiusResponseMetadata) => void;
     readonly operationTimeoutMilliseconds?: number;
     readonly streamConnectionTimeoutMilliseconds?: number;
     readonly streamLivenessTimeoutMilliseconds?: number;
@@ -347,6 +353,7 @@ export class MobiusRequestExecutor {
     readonly #credentialProvider: MobiusCredentialProvider;
     readonly #endpoint: URL;
     readonly #operationTimeoutMilliseconds: number;
+    readonly #observeResponse: ((metadata: MobiusResponseMetadata) => void) | undefined;
     readonly #streamConnectionTimeoutMilliseconds: number;
     readonly #streamLivenessTimeoutMilliseconds: number;
     readonly #transport: MobiusHttpTransport;
@@ -367,6 +374,7 @@ export class MobiusRequestExecutor {
             options.operationTimeoutMilliseconds ?? DEFAULT_OPERATION_TIMEOUT_MILLISECONDS,
             "operation timeout",
         );
+        this.#observeResponse = options.observeResponse;
         this.#streamConnectionTimeoutMilliseconds = validatePositiveInteger(
             options.streamConnectionTimeoutMilliseconds ?? DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS,
             "stream connection timeout",
@@ -418,6 +426,10 @@ export class MobiusRequestExecutor {
                     signal: deadline.signal,
                 }),
             );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
             if (!response.ok) {
                 await throwApiError(response);
             }
@@ -443,6 +455,10 @@ export class MobiusRequestExecutor {
                     signal: deadline.signal,
                 }),
             );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
             if (!response.ok) {
                 await throwApiError(response);
             }
@@ -557,6 +573,10 @@ export class MobiusRequestExecutor {
                     signal: deadline.signal,
                 }),
             );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
             if (!response.ok) {
                 await throwApiError(response);
             }
@@ -579,6 +599,10 @@ export class MobiusRequestExecutor {
                     signal: deadline.signal,
                 }),
             );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
             if (!response.ok) {
                 await throwApiError(response);
             }

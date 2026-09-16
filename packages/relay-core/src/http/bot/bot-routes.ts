@@ -1,8 +1,10 @@
 import { decodePromptImagesValue, decodePromptResourcesValue, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
+import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { BotService } from "../../service/bot/bot-service.ts";
 import { botBodyParser } from "../middleware/bot-body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
+import { operationTimingMiddleware } from "../middleware/operation-timing-middleware.ts";
 import { requestTimeoutMiddleware } from "../middleware/request-timeout-middleware.ts";
 import {
     actorReference,
@@ -38,6 +40,7 @@ interface BotHttpEnvironment {
     readonly Variables: {
         readonly bots: BotService;
         readonly body: Readonly<Record<string, unknown>>;
+        readonly operationTiming: OperationTiming;
         readonly signal: AbortSignal;
     };
 }
@@ -48,6 +51,11 @@ export function createBotApplication() {
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
         .use("*", requestTimeoutMiddleware<BotHttpEnvironment>(15_000))
+        .use("/projects/:projectId/conversations", operationTimingMiddleware<BotHttpEnvironment>())
+        .use(
+            "/projects/:projectId/conversations/:conversationId/configuration-revisions",
+            operationTimingMiddleware<BotHttpEnvironment>(),
+        )
         .use("*", async (c, next) => {
             c.set("bots", c.env.services.bots);
             await next();
@@ -101,6 +109,7 @@ export function createBotApplication() {
                 string(value, "title", 500, true),
                 Date.now(),
                 c.var.signal,
+                c.var.operationTiming,
             );
             const conversationId = Reflect.get(conversation, "conversationId");
             if (typeof conversationId !== "string") {
@@ -118,6 +127,7 @@ export function createBotApplication() {
                 configuration.valueType,
                 Date.now(),
                 c.var.signal,
+                c.var.operationTiming,
             );
             return c.json(conversation, 201);
         })
@@ -199,6 +209,7 @@ function createBotOwnerRoutes() {
                         string(value, "valueType", 32),
                         Date.now(),
                         c.var.signal,
+                        c.var.operationTiming,
                     ),
                     202,
                 );

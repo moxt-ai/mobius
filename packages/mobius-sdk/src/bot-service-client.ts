@@ -60,8 +60,14 @@ const MAX_RESPONSE_LENGTH = 8 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
 
+export interface MobiusBotResponseMetadata {
+    readonly serverTiming: string | null;
+    readonly status: number;
+}
+
 export interface MobiusBotApiOptions {
     readonly endpoint: string;
+    readonly observeResponse?: (metadata: MobiusBotResponseMetadata) => void;
     readonly operationTimeoutMilliseconds?: number;
     readonly transport?: MobiusHttpTransport;
 }
@@ -425,6 +431,7 @@ class BotRequestExecutor {
     readonly #authentication: BotRequestAuthentication;
     readonly #endpoint: URL;
     readonly #operationTimeoutMilliseconds: number;
+    readonly #observeResponse: ((metadata: MobiusBotResponseMetadata) => void) | undefined;
     readonly #transport: MobiusHttpTransport;
 
     constructor(options: MobiusBotApiOptions, authentication: BotRequestAuthentication, actorReference: string) {
@@ -437,6 +444,7 @@ class BotRequestExecutor {
             1,
             300_000,
         );
+        this.#observeResponse = options.observeResponse;
         this.#transport = options.transport ?? new PlatformMobiusBotTransport();
     }
 
@@ -474,6 +482,10 @@ class BotRequestExecutor {
                 : new Request(url, { headers, method, signal: deadline.signal });
             const response = await this.#transport.fetch(request);
             deadline.signal.throwIfAborted();
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
             const encoded = await response.text();
             if (encoded.length === 0 || encoded.length > MAX_RESPONSE_LENGTH) {
                 throw new MobiusProtocolError("The Mobius Bot API returned an invalid response");
