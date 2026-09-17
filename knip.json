@@ -4,21 +4,6 @@
         "packages/cli": {
             "entry": ["src/index.ts", "src/runtime.ts"]
         },
-        "packages/web-core": {
-            "project": ["src/**/*.{ts,tsx}"]
-        },
-        "packages/web": {
-            "ignoreDependencies": [
-                "@radix-ui/react-select",
-                "class-variance-authority",
-                "clsx",
-                "lucide-react",
-                "react-router",
-                "streamdown",
-                "tailwind-merge",
-                "zustand"
-            ]
-        },
         "packages/relay-cloudflare-standalone": {
             "ignoreDependencies": ["cloudflare"]
         },

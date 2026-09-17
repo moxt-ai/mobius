@@ -8,7 +8,7 @@ export default defineConfig({
     plugins: [react()],
     resolve: {
         alias: {
-            "@": fileURLToPath(new URL("../web-core/src", import.meta.url)),
+            "@": fileURLToPath(new URL("./src", import.meta.url)),
         },
     },
     root: packageDirectory,
@@ -30,7 +30,7 @@ export default defineConfig({
             reporter: ["text-summary", "json"],
             reportsDirectory: "../../coverage/web",
             reportOnFailure: true,
-            include: ["src/**/*.{ts,tsx}", "../web-core/src/**/*.{ts,tsx}"],
+            include: ["src/**/*.{ts,tsx}"],
             exclude: ["**/*.d.ts", "**/testing/**"],
         },
     },

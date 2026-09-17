@@ -4,7 +4,7 @@ import { configDefaults, coverageConfigDefaults, defineConfig } from "vitest/con
 export default defineConfig({
     resolve: {
         alias: {
-            "@": fileURLToPath(new URL("./packages/web-core/src", import.meta.url)),
+            "@": fileURLToPath(new URL("./packages/web/src", import.meta.url)),
         },
     },
     test: {

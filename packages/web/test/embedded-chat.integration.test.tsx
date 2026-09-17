@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { MobiusChat, readChannelConnection } from "../../web-core/src/index.ts";
+import { MobiusChat, readChannelConnection } from "../src/index.ts";
 import {
     pairDaemon,
     saveBrowserCredential,

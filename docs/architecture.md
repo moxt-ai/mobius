@@ -372,9 +372,8 @@ events use bounded stages and sanitized stable codes.
   boundaries.
 - `packages/mobius-sdk` owns the public provider-neutral Bot connector client as
   well as the Session resource client.
-- `packages/web` owns the Vite application shell, runtime dependencies, and
-  Tailwind CSS entrypoint.
-- `packages/web-core` owns the reusable React agent experience, including chat
+- `packages/web` owns the Vite application shell, runtime dependencies,
+  Tailwind CSS entrypoint, and reusable React agent experience, including chat
   and integration components.
 - `packages/mobius-sdk` owns the browser-and-Node TypeScript resource API and the
   browser channel-control transport used by the built-in Web application.

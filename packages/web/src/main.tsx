@@ -1,5 +1,5 @@
-import { App } from "@moxt-ai/mobius-web-core";
 import { createRoot } from "react-dom/client";
+import { App } from "./app";
 
 import "./index.css";
 
