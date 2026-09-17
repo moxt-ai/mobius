@@ -26,11 +26,12 @@ describe("agent and daemon test planning", () => {
             "deepseek",
             "hermes",
             "grok",
+            "workbuddy",
         ]);
     });
 
     it("selects all Agents for shared production and test infrastructure", () => {
-        const all = ["opencode", "codex", "pi", "gemini", "claude", "deepseek", "hermes", "grok"];
+        const all = ["opencode", "codex", "pi", "gemini", "claude", "deepseek", "hermes", "grok", "workbuddy"];
         assert.deepEqual(selected(["packages/cli/src/acp/session-manager.ts"]), all);
         assert.deepEqual(selected(["tests/agent-daemon/new-shared-helper.ts"]), all);
         assert.deepEqual(selected(["scripts/plan-agent-daemon-tests.mjs"]), all);

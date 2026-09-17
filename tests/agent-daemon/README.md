@@ -64,6 +64,7 @@ tests/agent-daemon/
     hermes.integration.test.ts
     opencode.integration.test.ts
     pi.integration.test.ts
+    workbuddy.integration.test.ts
   infra/
     claude.ts
     codex.ts
@@ -74,6 +75,7 @@ tests/agent-daemon/
     hermes.ts
     opencode.ts
     pi.ts
+    workbuddy.ts
   providers/
     anthropic.ts
     gemini.ts
@@ -98,13 +100,13 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Claude, Codex, DeepSeek Harness, Gemini, Grok Build, Hermes, and Pi cases likewise accept
+The Claude, Codex, DeepSeek Harness, Gemini, Grok Build, Hermes, Pi, and WorkBuddy cases likewise accept
 `MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
 `MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
 `MOBIUS_TEST_GROK_BUILD_PATH`,
 `MOBIUS_TEST_HERMES_PATH`,
-`MOBIUS_TEST_PI_PATH`, and `MOBIUS_TEST_PI_ACP_PATH`, with Gemini using
+`MOBIUS_TEST_PI_PATH`, `MOBIUS_TEST_PI_ACP_PATH`, and `MOBIUS_TEST_WORKBUDDY_PATH`, with Gemini using
 `MOBIUS_TEST_GEMINI_PATH`. Without overrides, cases resolve their executables
 from `PATH`. CI installs the repository-tested versions and runs each Agent as
 an independent matrix job. Missing Agent software is a setup failure, not a

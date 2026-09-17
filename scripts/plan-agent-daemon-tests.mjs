@@ -10,10 +10,11 @@ export const agentDaemonConfigurations = [
     { agent: "deepseek", packages: "@deepseek-ai/dsh@0.1.2-rc.1" },
     { agent: "hermes", packages: "" },
     { agent: "grok", packages: "@xai-official/grok@1.0.21" },
+    { agent: "workbuddy", packages: "@tencent-ai/codebuddy-code@2.146.0" },
 ];
 
 const allAgents = agentDaemonConfigurations.map(({ agent }) => agent);
-const openAiAgents = ["opencode", "codex", "pi", "deepseek", "hermes", "grok"];
+const openAiAgents = ["opencode", "codex", "pi", "deepseek", "hermes", "grok", "workbuddy"];
 const agentFiles = new Map(
     [
         ["claude", "claude-code-agent"],
@@ -24,6 +25,7 @@ const agentFiles = new Map(
         ["grok", "grok-build-agent"],
         ["opencode", "opencode-agent"],
         ["pi", "pi-agent"],
+        ["workbuddy", "workbuddy-agent"],
     ].flatMap(([agent, specification]) => [
         [`tests/agent-daemon/cases/${agent}.integration.test.ts`, agent],
         [`tests/agent-daemon/infra/${agent}.ts`, agent],

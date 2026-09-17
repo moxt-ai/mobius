@@ -5,7 +5,6 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AcpSessionManager } from "../src/acp/session-manager.ts";
 import { formatAgentDiagnostics } from "../src/agent-catalog/agent-diagnostics.ts";
 import {
     AvailableAgent,
@@ -33,7 +32,6 @@ describe("WorkBuddy Agent integration", () => {
             "bin",
             "codebuddy",
         );
-        const manager = new AcpSessionManager();
         try {
             await mkdir(dirname(executablePath), { recursive: true });
             await writeFile(
@@ -79,27 +77,7 @@ if (process.argv.includes("--version")) {
                 id: "workbuddy",
                 label: "WorkBuddy",
             });
-
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                commandId: "workbuddy-application-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "use the installed WorkBuddy application",
-                resources: [],
-                sessionId: "workbuddy-application-session",
-                signal: new AbortController().signal,
-            });
-            expect(chunks.join("")).toBe("WorkBuddy turn 1: use the installed WorkBuddy application");
         } finally {
-            await manager.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
@@ -153,76 +131,6 @@ if (process.argv.includes("--version")) {
                 ],
             });
         } finally {
-            await rm(temporaryDirectory, { force: true, recursive: true });
-        }
-    });
-
-    it("Given a verified local CodeBuddy Code runtime, When Mobius discovers and prompts WorkBuddy, Then the exact binary runs through ACP with updates disabled", async () => {
-        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-workbuddy-"));
-        const executablePath = join(temporaryDirectory, "codebuddy");
-        const manager = new AcpSessionManager();
-        try {
-            await writeFile(
-                executablePath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("2.146.0\\n");
-} else {
-  if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(["--acp"])) process.exit(81);
-  if (process.env.DISABLE_AUTOUPDATER !== "1") process.exit(82);
-  process.argv.push("--agent-name", "WorkBuddy", "--agent-version", "2.146.0");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(executablePath, 0o700);
-
-            const inventory = await discoverLocalAgentInventory({
-                defaultWorkspace: temporaryDirectory,
-                environment: { DISABLE_AUTOUPDATER: "0", PATH: temporaryDirectory },
-                signal: new AbortController().signal,
-                specifications: [new WorkBuddyAgentSpecification()],
-            });
-
-            expect(inventory.unavailable).toEqual([]);
-            expect(inventory.available).toHaveLength(1);
-            const discovered = inventory.available[0];
-            if (!(discovered instanceof AvailableAgent)) {
-                throw new Error("WorkBuddy was not discovered");
-            }
-            const canonicalExecutable = await realpath(executablePath);
-            expect(discovered.agent).toMatchObject({
-                adapterPath: canonicalExecutable,
-                adapterVersion: "2.146.0",
-                agentVersion: "2.146.0",
-                arguments: ["--acp"],
-                command: canonicalExecutable,
-                environment: { DISABLE_AUTOUPDATER: "1" },
-                id: "workbuddy",
-                label: "WorkBuddy",
-            });
-
-            const chunks: string[] = [];
-            await manager.runPrompt({
-                additionalDirectories: [],
-                agent: discovered.agent,
-                commandId: "workbuddy-command",
-                cwd: temporaryDirectory,
-                images: [],
-                onActivity: () => Promise.resolve(),
-                onText: (text) => {
-                    chunks.push(text);
-                    return Promise.resolve();
-                },
-                prompt: "use the verified WorkBuddy executable",
-                resources: [],
-                sessionId: "workbuddy-session",
-                signal: new AbortController().signal,
-            });
-            expect(chunks.join("")).toBe("WorkBuddy turn 1: use the verified WorkBuddy executable");
-        } finally {
-            await manager.close();
             await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
