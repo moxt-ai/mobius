@@ -236,14 +236,13 @@ normal product boundary; the destination performs the existing authorization.
 A backend rejects a Project from the other logical region with HTTP 421.
 Requests without a Project in the URL continue through the public Worker.
 
-`regional-placement.json` specifies explicit placement hints, separate from
-logical shard names. Platform staging's WNAM shard is physically in APAC, so
-both staging backends currently target Singapore. Production WNAM targets the
-western US; its two database primaries need not occupy the same city. Placement
-hints select nearby Cloudflare execution and are not data-center guarantees.
+The public router and both regional backends use Cloudflare Smart Placement.
+Logical APAC and WNAM routing still selects the Project's configured D1 and R2
+bindings, while Cloudflare places each Worker near the services it accesses
+instead of relying on a fixed execution-region hint.
 
 Each product owns a small regional override template in `wrangler.regional.template.json`.
-It contains only the Worker name, entrypoint, placement hint, logical region, and
+It contains only the Worker name, entrypoint, smart placement mode, logical region, and
 deployment flags. Shared bindings and settings are inherited from the existing
 Wrangler configuration. The renderer JSON-encodes `<%% name %%>` substitutions
 and validates the rendered overrides before merging them. Public routes, assets,

@@ -10,7 +10,6 @@ const { values } = parseArgs({
     options: {
         config: { type: "string" },
         env: { type: "string" },
-        placement: { type: "string" },
         output: { type: "string" },
         built: { type: "boolean" },
         template: { type: "string" },
@@ -28,15 +27,9 @@ const configPath =
     deployment === null
         ? sourceConfigPath
         : resolve(dirname(sourceConfigPath), ".wrangler/deploy", deployment.configPath);
-const placementPath = resolve(v.parse(v.string(), values.placement));
 const output = resolve(v.parse(v.string(), values.output));
 const template = await readFile(resolve(v.parse(v.string(), values.template)), "utf8");
 JSON.parse(template);
-const regionSchema = v.object({ apac: v.string(), wnam: v.string() });
-const placements = v.parse(
-    v.object({ staging: regionSchema, production: regionSchema }),
-    JSON.parse(await readFile(placementPath, "utf8")),
-);
 const base = v.parse(
     v.object({
         name: v.string(),
@@ -71,7 +64,6 @@ for (const region of ["apac", "wnam"] satisfies readonly ("apac" | "wnam")[]) {
         Object.entries({
             workerName: `${base.name}-${region}`,
             entrypoint,
-            placementRegion: placements[environment][region],
             projectRegion: region,
         }),
     );
@@ -92,7 +84,7 @@ for (const region of ["apac", "wnam"] satisfies readonly ("apac" | "wnam")[]) {
         v.object({
             name: v.string(),
             main: v.string(),
-            placement: v.object({ region: v.string() }),
+            placement: v.object({ mode: v.literal("smart") }),
             vars: v.object({ MOBIUS_WORKER_REGION: v.picklist(["apac", "wnam"]) }),
             workers_dev: v.literal(false),
             preview_urls: v.literal(false),

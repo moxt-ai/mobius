@@ -56,7 +56,7 @@
     "env": {
         "staging": {
             "name": "mobius-platform-staging",
-            "placement": { "mode": "off" },
+            "placement": { "mode": "smart" },
             "services": [
                 { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-staging-apac" },
                 { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-staging-wnam" }
@@ -103,7 +103,7 @@
         },
         "production": {
             "name": "mobius-platform-production",
-            "placement": { "mode": "off" },
+            "placement": { "mode": "smart" },
             "services": [
                 { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-production-apac" },
                 { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-production-wnam" }

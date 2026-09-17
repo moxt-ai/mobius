@@ -350,8 +350,6 @@ async function run(signal: AbortSignal): Promise<void> {
                 resolve(target.configDirectory, "wrangler.jsonc"),
                 "--env",
                 environment,
-                "--placement",
-                resolve(target.configDirectory, "regional-placement.json"),
                 "--output",
                 regionalDirectory,
             ],
