@@ -75,10 +75,27 @@ const readyAgents = [
             steering: false,
             unstableForkSession: false,
         },
+        botSessionConfiguration: true,
         id: "codex",
         label: "Codex",
     },
 ];
+
+const requiredExecutionConfiguration = {
+    model: {
+        booleanValue: false,
+        configId: "model",
+        value: "gpt-5.6",
+        valueType: "select",
+    },
+    permissionMode: "workspace-write",
+    reasoningEffort: {
+        booleanValue: false,
+        configId: "reasoning_effort",
+        value: "high",
+        valueType: "select",
+    },
+};
 
 interface PlatformProjectFixture {
     readonly appCredential: string;
@@ -648,6 +665,7 @@ async function createReadyConversation(label: string, workspaceRef = "default"):
                         allowedDeliveryTargetIds: [],
                         behaviorRevisionId: text(behavior, "behaviorRevisionId"),
                         completionPolicy: { kind: "none" },
+                        executionConfiguration: requiredExecutionConfiguration,
                         expectedRevision: integerField(bot, "lifecycleRevision"),
                         runtimeId: project.runtimeId,
                         workspaceRef,
@@ -661,6 +679,7 @@ async function createReadyConversation(label: string, workspaceRef = "default"):
         202,
     );
     const approval = decodeBotExecutionBindingApprovalRequest(await socketMessages.next());
+    expect(approval.executionConfiguration).toEqual(requiredExecutionConfiguration);
     const approved = new BotExecutionBindingApprovedEvent(
         approval.requestId,
         approval.botId,
@@ -1439,7 +1458,7 @@ describe.sequential("Platform hosting boundary", () => {
         await expect(denied.json()).resolves.toMatchObject({ error: { code: "project_credential_invalid" } });
     });
 
-    it("Given a Bot binding with an invalid Runtime directory identifier, When the Platform receives it, Then it rejects the request before persisting an approval", async () => {
+    it("Given a Bot binding omits required execution settings or names an invalid Runtime directory, When the Platform receives it, Then it rejects the request before persisting an approval", async () => {
         const project = await provisionPlatformProject("invalid-binding-directory");
         const bot = await json(
             await project.worker.fetch(
@@ -1476,24 +1495,39 @@ describe.sequential("Platform hosting boundary", () => {
             201,
         );
 
+        const bindingUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${text(bot, "botId")}/execution-bindings`;
+        const bindingFields = {
+            agentConfigRevision: 1,
+            agentRef: "codex",
+            allowedDeliveryTargetIds: [],
+            behaviorRevisionId: text(behavior, "behaviorRevisionId"),
+            completionPolicy: { kind: "none" },
+            expectedRevision: integerField(bot, "lifecycleRevision"),
+            runtimeId: project.runtimeId,
+        };
+        const missingExecutionConfiguration = await project.worker.fetch(
+            new Request(bindingUrl, {
+                body: JSON.stringify({ ...bindingFields, workspaceRef: "default" }),
+                headers: credentialHeaders(project.appCredential),
+                method: "POST",
+            }),
+            project.environment,
+        );
+        expect(missingExecutionConfiguration.status).toBe(400);
+        await expect(missingExecutionConfiguration.json()).resolves.toMatchObject({
+            error: { code: "invalid_request" },
+        });
+
         const response = await project.worker.fetch(
-            new Request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${project.projectId}/bots/${text(bot, "botId")}/execution-bindings`,
-                {
-                    body: JSON.stringify({
-                        agentConfigRevision: 1,
-                        agentRef: "codex",
-                        allowedDeliveryTargetIds: [],
-                        behaviorRevisionId: text(behavior, "behaviorRevisionId"),
-                        completionPolicy: { kind: "none" },
-                        expectedRevision: integerField(bot, "lifecycleRevision"),
-                        runtimeId: project.runtimeId,
-                        workspaceRef: ".",
-                    }),
-                    headers: credentialHeaders(project.appCredential),
-                    method: "POST",
-                },
-            ),
+            new Request(bindingUrl, {
+                body: JSON.stringify({
+                    ...bindingFields,
+                    executionConfiguration: requiredExecutionConfiguration,
+                    workspaceRef: ".",
+                }),
+                headers: credentialHeaders(project.appCredential),
+                method: "POST",
+            }),
             project.environment,
         );
 
@@ -1926,6 +1960,7 @@ describe.sequential("Platform hosting boundary", () => {
                 botId: fixture.botId,
                 commandId: "server-sdk-turn",
                 conversationId: created.conversationId,
+                executionConfiguration: requiredExecutionConfiguration,
                 executionId: accepted.executionId,
                 additionalDirectoryIds: ["approved-reference-directory"],
                 images: [submittedImage],

@@ -75,11 +75,10 @@ export class DeepSeekHarnessAgentSpecification extends DirectAcpAgentDefinition 
             // An unavailable managed package cannot select the managed DSH home.
         }
         if (selectedHome === undefined || selectedHome.length === 0) {
-            return Object.freeze({ DSH_PERMISSION_MODE: "workspace-write" });
+            return Object.freeze({});
         }
         return Object.freeze({
             DSH_HOME: await validateAgentHome(selectedHome),
-            DSH_PERMISSION_MODE: "workspace-write",
         });
     };
 

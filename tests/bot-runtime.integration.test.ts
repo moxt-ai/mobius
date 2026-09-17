@@ -1,4 +1,4 @@
-import { MobiusNoBotCompletionPolicy } from "@moxt-ai/mobius-sdk/server";
+import { DEFAULT_AGENT_EXECUTION_CONFIGURATION, MobiusNoBotCompletionPolicy } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { StandaloneProjectStorageDirectory } from "../packages/relay-cloudflare-standalone/src/project-storage-directory.ts";
 import { D1DatabaseAdapter } from "../packages/relay-core/src/infra/d1-database.ts";
@@ -47,6 +47,7 @@ it("Given a Bot needing setup, When its owner configures a local Runtime, Then l
             allowedDeliveryTargetIds: [],
             behaviorRevisionId: behavior.behaviorRevisionId,
             completionPolicy: new MobiusNoBotCompletionPolicy(),
+            executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
             expectedRevision: bot.lifecycleRevision,
             runtimeId: runtime.runtimeId,
             workspaceRef: "default",
@@ -54,6 +55,14 @@ it("Given a Bot needing setup, When its owner configures a local Runtime, Then l
         signal,
     );
     await runtime.waitForBinding(binding.bindingId, signal);
+    expect(await owner.listBindings(bot.botId, signal)).toMatchObject({
+        executionBindings: [
+            expect.objectContaining({
+                bindingId: binding.bindingId,
+                executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+            }),
+        ],
+    });
     expect(await owner.readBot(bot.botId, signal)).toMatchObject({
         state: {
             kind: "active",

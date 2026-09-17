@@ -2,6 +2,7 @@ import { env, runInDurableObject } from "cloudflare:test";
 import {
     AGENT_ACTIVITY_KIND,
     BotExecutionBindingApprovedEvent,
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
     decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     decodeSessionEventAcknowledgement,
@@ -17,7 +18,11 @@ import {
     type SessionEventEnvelope,
     SessionEventRejectionCode,
 } from "@moxt-ai/mobius-protocol";
-import { MobiusBotOwnerClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
+import {
+    MobiusBotOwnerClient,
+    MobiusNoBotCompletionPolicy,
+    StaticMobiusCredentialProvider,
+} from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusApp } from "../../../tests/infra/app.ts";
 import { createStandaloneGateways } from "../src/worker.ts";
@@ -415,6 +420,7 @@ async function approveBinding(
                     allowedDeliveryTargetIds: [target.deliveryTargetId],
                     behaviorRevisionId: behavior.behaviorRevisionId,
                     completionPolicy: policy,
+                    executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
                     expectedRevision,
                     runtimeId: pairing.runtimeId,
                     workspaceRef,
@@ -686,6 +692,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                             allowedDeliveryTargetIds: [],
                             behaviorRevisionId: behavior.behaviorRevisionId,
                             completionPolicy: { kind: "none" },
+                            executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
                             expectedRevision: 1,
                             runtimeId: pairing.runtimeId,
                             workspaceRef: "default",
@@ -717,6 +724,56 @@ describe.sequential("Provider-neutral Bot API", () => {
         } finally {
             daemon.socket.close();
         }
+    });
+
+    it("Given a Bot behavior overrides the required permission setting, When its owner creates a binding, Then the Relay rejects the conflicting configuration", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const pairing = await pairRuntime(app);
+        const bot = await pairing.client.createBot(
+            {
+                avatarRef: "",
+                description: "Required execution settings stay binding-owned",
+                displayName: "Permission override",
+            },
+            pairing.signal,
+        );
+        const behavior = await pairing.client.createBehavior(
+            bot.botId,
+            {
+                agentConfiguration: {
+                    sessionConfigurations: [
+                        {
+                            booleanValue: false,
+                            configId: "permission_mode",
+                            value: "danger-full-access",
+                            valueType: "select",
+                        },
+                    ],
+                },
+                expectedRevision: 0,
+                instructions: "Use only the binding-owned execution settings.",
+                requiredCapabilities: ["embedded-context"],
+            },
+            pairing.signal,
+        );
+
+        await expect(
+            pairing.client.createBinding(
+                bot.botId,
+                {
+                    agentConfigRevision: 1,
+                    agentRef: "codex",
+                    allowedDeliveryTargetIds: [],
+                    behaviorRevisionId: behavior.behaviorRevisionId,
+                    completionPolicy: new MobiusNoBotCompletionPolicy(),
+                    executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+                    expectedRevision: bot.lifecycleRevision,
+                    runtimeId: pairing.runtimeId,
+                    workspaceRef: "default",
+                },
+                pairing.signal,
+            ),
+        ).rejects.toMatchObject({ code: "invalid_request" });
     });
 
     it("Given an approved Bot binding, When its legacy owner endpoint loads Agent settings, Then Mobius preserves the legacy transient configuration snapshot", async () => {
@@ -880,7 +937,12 @@ describe.sequential("Provider-neutral Bot API", () => {
                 200,
             );
             const binding = recordArrayField(bindings, "executionBindings")[0];
-            expect(binding).toMatchObject({ agentRef: "codex", lifecycle: "approved", workspaceRef: "default" });
+            expect(binding).toMatchObject({
+                agentRef: "codex",
+                executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+                lifecycle: "approved",
+                workspaceRef: "default",
+            });
             expect(binding).not.toHaveProperty("localGrantId");
             expect(binding).not.toHaveProperty("agentIdentityDigest");
             expect(binding).not.toHaveProperty("workspaceIdentityDigest");
@@ -1253,6 +1315,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 allowedDeliveryTargetIds: [target.deliveryTargetId],
                 behaviorRevisionId: behavior.behaviorRevisionId,
                 completionPolicy: { kind: "none" },
+                executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
                 expectedRevision: bot.lifecycleRevision,
                 runtimeId: pairing.runtimeId,
                 workspaceRef: "default",
@@ -1677,6 +1740,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                     allowedDeliveryTargetIds: [],
                     behaviorRevisionId: behavior.behaviorRevisionId,
                     completionPolicy: { kind: "none" },
+                    executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
                     expectedRevision: bot.lifecycleRevision,
                     runtimeId: foreign.runtimeId,
                     workspaceRef: "default",

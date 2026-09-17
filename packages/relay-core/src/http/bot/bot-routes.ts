@@ -8,6 +8,7 @@ import { operationTimingMiddleware } from "../middleware/operation-timing-middle
 import { requestTimeoutMiddleware } from "../middleware/request-timeout-middleware.ts";
 import {
     actorReference,
+    agentExecutionConfiguration,
     bearer,
     boolean,
     completionPolicy,
@@ -338,6 +339,7 @@ function createBotOwnerRoutes() {
                 "allowedDeliveryTargetIds",
                 "behaviorRevisionId",
                 "completionPolicy",
+                "executionConfiguration",
                 "expectedRevision",
                 "runtimeId",
                 "workspaceRef",
@@ -353,6 +355,7 @@ function createBotOwnerRoutes() {
                     identifier(value, "agentRef"),
                     directoryIdentifier(value, "workspaceRef"),
                     positiveInteger(value, "agentConfigRevision"),
+                    agentExecutionConfiguration(value, "executionConfiguration"),
                     identifiers(value, "allowedDeliveryTargetIds", 64),
                     completionPolicy(value),
                     Date.now(),

@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { BotConnectionReplyRoute, BotSessionPromptCommand, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import {
+    BotConnectionReplyRoute,
+    BotSessionPromptCommand,
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+    MOBIUS_API_PREFIX,
+} from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
 import { BotExecutionContextRegistry } from "../src/bots/bot-execution-context.ts";
@@ -59,6 +64,7 @@ function command(deadline: string): BotSessionPromptCommand {
         "a".repeat(64),
         [{ alias: "team-notifications", deliveryTargetId: "target_team" }],
         new BotConnectionReplyRoute("connection_alpha", "target_current"),
+        DEFAULT_AGENT_EXECUTION_CONFIGURATION,
     );
 }
 

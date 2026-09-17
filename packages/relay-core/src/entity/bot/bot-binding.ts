@@ -1,6 +1,8 @@
 import {
+    type AgentExecutionConfiguration,
     type BotCompletionDeliveryPolicy,
     type BotDeliveryTargetReference,
+    decodeAgentExecutionConfiguration,
     decodeSessionConfigurationSelections,
     NoBotCompletionDeliveryPolicy,
     RequiredBotCompletionDeliveryPolicy,
@@ -19,10 +21,29 @@ export interface ApprovedBindingContext {
     readonly bindingRevision: number;
     readonly botId: string;
     readonly completionPolicy: BotCompletionDeliveryPolicy;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly localGrantId: string;
     readonly runtimeId: string;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly workspaceRef: string;
+}
+
+export function executionConfiguration(encoded: string): AgentExecutionConfiguration {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+    } catch (cause) {
+        throw new BotApiError("bot_service_unavailable", "The execution configuration is invalid", "unavailable", {
+            cause,
+        });
+    }
+    try {
+        return decodeAgentExecutionConfiguration(value);
+    } catch (cause) {
+        throw new BotApiError("bot_service_unavailable", "The execution configuration is invalid", "unavailable", {
+            cause,
+        });
+    }
 }
 
 export function sessionConfigurations(encodedConfiguration: string): readonly SessionConfigurationSelection[] {

@@ -341,7 +341,10 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     const created = decodeCreatedPairing(await createdResponse.json());
     const claimResponse = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings/claim`, window.location.origin), {
         body: JSON.stringify({
-            agents: options.agents ?? [
+            agents: options.agents?.map((agent) => ({
+                ...agent,
+                ...(options.botSessionConfiguration === true ? { botSessionConfiguration: true } : {}),
+            })) ?? [
                 {
                     agentPath: "/usr/local/bin/codex",
                     agentVersion: "codex 0.153.0",

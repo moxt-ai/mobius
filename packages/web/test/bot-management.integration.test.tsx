@@ -103,6 +103,7 @@ describe.sequential("Bot management and conversations", () => {
         signal,
     }) => {
         const paired = await pairDaemon({
+            botSessionConfiguration: true,
             agents: [
                 new AgentOption("codex", "Codex", "/usr/local/bin/codex", "codex 0.153.0", {
                     additionalDirectories: true,
@@ -196,7 +197,7 @@ describe.sequential("Bot management and conversations", () => {
     it("Given an Agent without Bot instructions, When the owner activates an identity-only Bot, Then the local boundary approves an empty behavior contract", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
+        const paired = await pairDaemon({ botSessionConfiguration: true });
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
@@ -245,7 +246,7 @@ describe.sequential("Bot management and conversations", () => {
     it("Given an active Bot and a new local chat, When the user switches the conversation target from Local Agents to Bots, Then Web starts a Bot conversation that can send a message", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
+        const paired = await pairDaemon({ botSessionConfiguration: true });
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
@@ -341,7 +342,7 @@ describe.sequential("Bot management and conversations", () => {
     it("Given an owner Bot already has an untouched New chat, When the user starts one again and sends the first prompt, Then Web reuses the draft and derives its title", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
+        const paired = await pairDaemon({ botSessionConfiguration: true });
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
@@ -540,7 +541,7 @@ describe.sequential("Bot management and conversations", () => {
     it("Given an owned Channel with a compatible local Agent, When the user creates and activates a Bot and sends it a message, Then Web restores the durable Bot conversation and response", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
+        const paired = await pairDaemon({ botSessionConfiguration: true });
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);

@@ -1,4 +1,6 @@
 import {
+    type AgentExecutionConfiguration,
+    decodeAgentExecutionConfiguration,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeSessionConfigOptions,
@@ -114,6 +116,7 @@ export interface CreateMobiusBotBindingRequest {
     readonly allowedDeliveryTargetIds: readonly string[];
     readonly behaviorRevisionId: string;
     readonly completionPolicy: MobiusBotCompletionPolicy;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly expectedRevision: number;
     readonly runtimeId: string;
     readonly workspaceRef: string;
@@ -269,6 +272,14 @@ function requestRecord(value: unknown, fields: readonly string[], name: string):
         throw new MobiusValidationError(`The ${name} fields are invalid`);
     }
     return value;
+}
+
+function executionConfiguration(value: unknown): AgentExecutionConfiguration {
+    try {
+        return decodeAgentExecutionConfiguration(value);
+    } catch (cause) {
+        throw new MobiusValidationError("The Agent execution configuration is invalid", { cause });
+    }
 }
 
 function identifier(value: unknown, name: string): string {
@@ -735,6 +746,7 @@ export class MobiusBotOwnerClient {
                 "allowedDeliveryTargetIds",
                 "behaviorRevisionId",
                 "completionPolicy",
+                "executionConfiguration",
                 "expectedRevision",
                 "runtimeId",
                 "workspaceRef",
@@ -759,6 +771,7 @@ export class MobiusBotOwnerClient {
                     allowedDeliveryTargetIds: identifiers(value["allowedDeliveryTargetIds"], "delivery target", 64),
                     behaviorRevisionId: identifier(value["behaviorRevisionId"], "Bot behavior"),
                     completionPolicy: serializedCompletionPolicy(policy),
+                    executionConfiguration: executionConfiguration(value["executionConfiguration"]),
                     expectedRevision: boundedInteger(
                         value["expectedRevision"],
                         "Bot lifecycle revision",

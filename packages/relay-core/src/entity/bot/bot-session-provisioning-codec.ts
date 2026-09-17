@@ -3,6 +3,8 @@ import {
     BotConnectionReplyRoute,
     BotDeliveryTargetReference,
     type BotReplyRoute,
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+    decodeAgentExecutionConfiguration,
     decodeSessionConfigurationSelections,
     NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
@@ -140,6 +142,14 @@ function sessionConfigurations(value: unknown): readonly SessionConfigurationSel
     }
 }
 
+function executionConfiguration(value: unknown) {
+    try {
+        return decodeAgentExecutionConfiguration(value);
+    } catch (cause) {
+        throw invalid("The Bot conversation execution configuration is invalid", { cause });
+    }
+}
+
 export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisioning {
     if (!isRecord(value)) {
         throw invalid("The Bot conversation provisioning is invalid");
@@ -167,7 +177,7 @@ export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisio
             "title",
             "workspaceRef",
         ],
-        ["sessionConfigurations"],
+        ["executionConfiguration", "sessionConfigurations"],
     );
     const creatorKind = text(value, "creatorKind", 32);
     if (creatorKind !== "owner" && creatorKind !== "connection") {
@@ -209,6 +219,9 @@ export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisio
         targets(value["allowedDeliveryTargets"]),
         policy,
         route,
+        value["executionConfiguration"] === undefined
+            ? DEFAULT_AGENT_EXECUTION_CONFIGURATION
+            : executionConfiguration(value["executionConfiguration"]),
         value["sessionConfigurations"] === undefined ? [] : sessionConfigurations(value["sessionConfigurations"]),
     );
 }

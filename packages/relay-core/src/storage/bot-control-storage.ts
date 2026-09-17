@@ -72,6 +72,7 @@ interface BindingRow {
     readonly bot_id: string;
     readonly completion_policy_json: string;
     readonly created_at: number;
+    readonly execution_configuration_json: string;
     readonly lifecycle: string;
     readonly local_grant_id: unknown;
     readonly runtime_id: string;
@@ -384,6 +385,7 @@ export class BotControlStorage {
             workspaceRef,
             agentConfigRevision,
             completionPolicy,
+            executionConfiguration,
         } = request;
         const results = await this.#database.batch(
             [
@@ -392,9 +394,9 @@ export class BotControlStorage {
                         `INSERT INTO bot_execution_bindings (
                        binding_id, bot_id, behavior_revision_id, binding_revision,
                        runtime_id, agent_ref, workspace_ref, agent_config_revision,
-                       allowed_delivery_target_ids_json, completion_policy_json,
+                       allowed_delivery_target_ids_json, completion_policy_json, execution_configuration_json,
                        lifecycle, created_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?)`,
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?)`,
                     )
                     .bind(
                         bindingId,
@@ -407,6 +409,7 @@ export class BotControlStorage {
                         agentConfigRevision,
                         JSON.stringify(allowedDeliveryTargetIds),
                         JSON.stringify(completionPolicy),
+                        JSON.stringify(executionConfiguration),
                         now,
                     ),
                 this.#database

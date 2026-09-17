@@ -174,6 +174,68 @@ for the permission matrix, Platform backend example, and recovery/rotation
 runbook. App registration and AppCredential lifecycle belong exclusively to
 `@moxt-ai/mobius-sdk/platform`.
 
+## Required Bot execution settings
+
+Before creating a Bot execution binding, a server-side Platform consumer such
+as Moxt discovers the selected local Agent's settings through the ordinary
+Project client:
+
+```ts
+const settings = await client.runtimes.discoverAgentSettings(
+  runtimeId,
+  {
+    additionalDirectoryIds: [],
+    agentId,
+    directoryId: workspaceRef,
+  },
+  signal,
+);
+```
+
+`settings.configOptions` always contains **Permissions**, **Model**, and
+**Reasoning effort**. A field that the Agent cannot adjust has one explicit
+fixed choice: normally `agent_default`, or the effective mode when Mobius can
+identify it safely, such as Pi's `danger-full-access`. Use the selected option
+IDs and values to construct the required `AgentExecutionConfiguration`, then pass it to
+`MobiusBotOwnerClient.createBinding`:
+
+```ts
+await bots.createBinding(
+  botId,
+  {
+    agentConfigRevision: 1,
+    agentRef: agentId,
+    allowedDeliveryTargetIds: [],
+    behaviorRevisionId,
+    completionPolicy,
+    executionConfiguration: {
+      model: {
+        booleanValue: false,
+        configId: selectedModel.id,
+        value: selectedModelValue,
+        valueType: "select",
+      },
+      permissionMode: selectedPermissionMode,
+      reasoningEffort: {
+        booleanValue: false,
+        configId: selectedEffort.id,
+        value: selectedEffortValue,
+        valueType: "select",
+      },
+    },
+    expectedRevision,
+    runtimeId,
+    workspaceRef,
+  },
+  signal,
+);
+```
+
+The SDK validates the complete shape before sending it. The Relay persists and
+returns the configuration on `MobiusBotExecutionBinding`, while the local
+daemon remains the authority that validates support and applies it to the
+Agent process.
+
 The SDK does not loop on authentication failures. `credential_expired` and
 `credential_revoked` are returned immediately. After obtaining a replacement,
 an application may retry a read or reconnect a subscription. A Turn may be

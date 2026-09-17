@@ -4,6 +4,7 @@ import { styleText } from "node:util";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -102,7 +103,9 @@ import {
     SESSION_STARTED_KIND,
     type SessionCancelCommand,
     type SessionCommandsUpdatedEvent,
+    type SessionConfigOption,
     type SessionConfigUpdatedEvent,
+    type SessionConfigurationSelection,
     type SessionConfigureCommand,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
@@ -1303,7 +1306,75 @@ function botExecutionAgent(
         agent.agentIdentity,
         agent.promptTimeoutMilliseconds,
         agent.capabilities,
+        agent.permissionProfile,
     );
+}
+
+function assertPreparedPermission(configOptions: readonly SessionConfigOption[], permissionMode: string): void {
+    const permission = configOptions.find((option) => option.id === "permission_mode");
+    if (
+        permission === undefined ||
+        permission.type !== "select" ||
+        (permissionMode !== AGENT_DEFAULT_EXECUTION_SETTING && permission.currentValue !== permissionMode)
+    ) {
+        throw new AcpExecutionError(
+            "The required Agent permission mode is unavailable",
+            {},
+            "invalid_session_configuration",
+        );
+    }
+}
+
+async function applyRequiredExecutionSelection(
+    sessions: AcpSessionManager,
+    configOptions: readonly SessionConfigOption[],
+    selection: SessionConfigurationSelection,
+    category: string,
+    agent: LocalAgentDefinition,
+    cwd: string,
+    additionalDirectories: readonly string[],
+    sessionId: string,
+    signal: AbortSignal,
+): Promise<readonly SessionConfigOption[]> {
+    const option = configOptions.find((candidate) => candidate.id === selection.configId);
+    if (
+        option === undefined ||
+        option.type !== "select" ||
+        option.category !== category ||
+        selection.valueType !== "select" ||
+        selection.booleanValue
+    ) {
+        throw new AcpExecutionError(
+            `The required Agent setting ${selection.configId} is unavailable`,
+            {},
+            "invalid_session_configuration",
+        );
+    }
+    if (selection.value === AGENT_DEFAULT_EXECUTION_SETTING) {
+        return configOptions;
+    }
+    if (!option.values.some((value) => value.value === selection.value)) {
+        throw new AcpExecutionError(
+            `The required Agent setting ${selection.configId} is unavailable`,
+            {},
+            "invalid_session_configuration",
+        );
+    }
+    if (option.currentValue === selection.value) {
+        return configOptions;
+    }
+    return await sessions.configureSession({
+        additionalDirectories,
+        agent,
+        booleanValue: false,
+        configId: selection.configId,
+        cwd,
+        requestId: `cfg_${randomUUID()}`,
+        sessionId,
+        signal,
+        value: selection.value,
+        valueType: "select",
+    });
 }
 
 async function executeBotPrompt(
@@ -1430,13 +1501,36 @@ async function executeBotPrompt(
             const lease = contexts.activate(command);
             try {
                 const agent = botExecutionAgent(grant.agent, lease.context.contextHandle, ipc.socketPath);
-                await sessions.prepareExecutionSession({
+                const prepared = await sessions.prepareExecutionSession({
                     additionalDirectories: resolved.additionalDirectories,
                     agent,
                     cwd: resolved.cwd,
                     sessionId: command.sessionId,
                     signal: executionSignal,
                 });
+                assertPreparedPermission(prepared.configOptions, grant.executionConfiguration.permissionMode);
+                let configOptions = await applyRequiredExecutionSelection(
+                    sessions,
+                    prepared.configOptions,
+                    grant.executionConfiguration.model,
+                    "model",
+                    agent,
+                    resolved.cwd,
+                    resolved.additionalDirectories,
+                    command.sessionId,
+                    executionSignal,
+                );
+                configOptions = await applyRequiredExecutionSelection(
+                    sessions,
+                    configOptions,
+                    grant.executionConfiguration.reasoningEffort,
+                    "thought_level",
+                    agent,
+                    resolved.cwd,
+                    resolved.additionalDirectories,
+                    command.sessionId,
+                    executionSignal,
+                );
                 for (const selection of command.sessionConfigurations) {
                     await sessions.configureSession({
                         additionalDirectories: resolved.additionalDirectories,

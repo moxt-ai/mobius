@@ -342,20 +342,31 @@ DeepSeek Harness reads credentials from its validated local home or launch
 environment; use the local `dsh web` Models page or `DEEPSEEK_API_KEY` to
 configure the default route. `mobius agents` reports ACP
 authentication failures as `authentication_required` without exposing a
-credential. Pairing authorizes this channel to request work within
-the operating-system permissions of the user running Mobius. Agent-specific
-sandbox and approval behavior remains under the Agent's own configuration.
+credential.
+
+Every ready Agent exposes three required run settings: **Permissions**,
+**Model**, and **Reasoning effort**. Model and reasoning choices come from the
+Agent when its ACP integration supports them; otherwise Mobius keeps a visible,
+single-choice `Agent default` value instead of dropping the field. Permissions
+are owned by the local execution boundary. DeepSeek Harness maps the selected
+mode to `DSH_PERMISSION_MODE`, and OpenCode receives an equivalent native
+`permission` policy through its highest-precedence inline configuration. An
+Agent without a verified native mapping exposes a disabled `Agent default`
+choice rather than pretending to enforce a sandbox it does not support. Pi is
+explicitly reported as disabled `Full access (Pi default)` because it runs with
+the local Runtime user's authority and has no built-in sandbox. A selected
+adjustable mode is applied before the Agent process starts.
 
 Each conversation negotiates its available ACP capabilities with the selected
-agent. When provided by that agent, the Web chat exposes session mode, model,
-reasoning effort, boolean options such as fast mode, context-window usage and
+agent. The Web chat always exposes the three required run settings and, when
+provided by that agent, also exposes session mode, boolean options such as fast mode, context-window usage and
 cost, slash commands, permission requests, form or URL elicitation, image and
 embedded-resource prompts, rich agent content, and structured tool details.
 Rapid snapshots for one activity are coalesced before they enter the durable
 Relay outbox: the first snapshot and terminal state are immediate, while only the
 latest intermediate snapshot is emitted in each 100-millisecond window. Final
 activity content is preserved.
-Unsupported controls are omitted instead of being simulated by Mobius.
+Unsupported optional controls are omitted instead of being simulated by Mobius.
 In particular, Pi does not advertise ACP filesystem delegation, terminal
 delegation, or MCP passthrough while `pi-acp@0.0.33` does not implement them.
 Pi prompts have a five-minute outer Mobius deadline. A timeout closes the ACP

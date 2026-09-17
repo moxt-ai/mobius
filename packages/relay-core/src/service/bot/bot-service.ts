@@ -1,4 +1,6 @@
 import {
+    AGENT_PERMISSION_MODE_CONFIG_ID,
+    type AgentExecutionConfiguration,
     type BotCompletionDeliveryPolicy,
     BotConnectionReplyRoute,
     BotDeliveryTargetReference,
@@ -31,6 +33,7 @@ import {
 import {
     type ApprovedBindingContext,
     completionPolicy,
+    executionConfiguration,
     sessionConfigurations,
     stringArray,
 } from "../../entity/bot/bot-binding.ts";
@@ -980,6 +983,7 @@ export class BotService {
             behaviorDigest: behavior.content_digest,
             allowedDeliveryTargets: Object.freeze(targets),
             completionPolicy: policy,
+            executionConfiguration: executionConfiguration(binding.execution_configuration_json),
             sessionConfigurations: configuration,
         };
     };
@@ -1020,6 +1024,7 @@ export class BotService {
                 behaviorDigest: execution.behavior_content_digest,
                 allowedDeliveryTargets: Object.freeze(targets),
                 completionPolicy: completionPolicy(execution.completion_policy_json),
+                executionConfiguration: executionConfiguration(execution.execution_configuration_json),
                 sessionConfigurations: sessionConfigurations(execution.behavior_agent_configuration_json),
             },
             runtimeId: execution.paired_runtime_id,
@@ -1117,6 +1122,7 @@ export class BotService {
                     "Invalid delivery targets",
                 ),
                 completionPolicy: completionPolicy(binding.completion_policy_json),
+                executionConfiguration: executionConfiguration(binding.execution_configuration_json),
             },
         };
     };
@@ -1226,6 +1232,7 @@ export class BotService {
         agentRef: string,
         workspaceRef: string,
         agentConfigRevision: number,
+        requestedExecutionConfiguration: AgentExecutionConfiguration,
         targets: readonly string[],
         policy: BotCompletionDeliveryPolicy,
         now: number,
@@ -1270,11 +1277,23 @@ export class BotService {
             throw new BotApiError("binding_incompatible", "The requested Agent is unavailable", "conflict");
         }
         const configuration = sessionConfigurations(behavior.agent_configuration_json);
-        if (configuration.length > 0 && agent.botSessionConfiguration !== true) {
+        if (agent.botSessionConfiguration !== true) {
             throw new BotApiError(
                 "binding_incompatible",
                 "Update the local Mobius CLI before configuring this Agent",
                 "conflict",
+            );
+        }
+        const requiredConfigurationIdentifiers = new Set([
+            AGENT_PERMISSION_MODE_CONFIG_ID,
+            requestedExecutionConfiguration.model.configId,
+            requestedExecutionConfiguration.reasoningEffort.configId,
+        ]);
+        if (configuration.some((selection) => requiredConfigurationIdentifiers.has(selection.configId))) {
+            throw new BotApiError(
+                "invalid_request",
+                "Behavior configuration cannot override required execution settings",
+                "invalid-input",
             );
         }
         const requirements = stringArray(behavior.required_capabilities_json, "The behavior requirements are invalid");
@@ -1312,6 +1331,7 @@ export class BotService {
             requirements,
             approvedTargets,
             policy,
+            requestedExecutionConfiguration,
             configuration,
         );
         let written: boolean;

@@ -11,6 +11,16 @@ export interface SessionConfigSection {
     readonly options: readonly SessionConfigOption[];
 }
 
+export function isRequiredSessionConfigOption(option: SessionConfigOption): boolean {
+    return (
+        option.id === "permission_mode" ||
+        option.id === "model" ||
+        option.id === "reasoning_effort" ||
+        option.category === "model" ||
+        option.category === "thought_level"
+    );
+}
+
 function currentOptionLabel(option: SessionConfigOption): string {
     if (option.type === "boolean") {
         return option.booleanValue ? "On" : "Off";
@@ -23,7 +33,13 @@ function firstCategory(options: readonly SessionConfigOption[], category: string
 }
 
 function isModelConfigurationOption(option: SessionConfigOption): boolean {
-    return option.category === "model" || option.category === "thought_level" || option.category === "model_config";
+    return (
+        option.id === "model" ||
+        option.id === "reasoning_effort" ||
+        option.category === "model" ||
+        option.category === "thought_level" ||
+        option.category === "model_config"
+    );
 }
 
 export function summarizeSessionConfig(options: readonly SessionConfigOption[]): SessionConfigSummary {
@@ -54,7 +70,11 @@ function sectionId(option: SessionConfigOption): SessionConfigSection["id"] {
     if (isModelConfigurationOption(option)) {
         return "model";
     }
-    if (option.category === "mode" || option.category === "collaboration_mode") {
+    if (
+        option.category === "mode" ||
+        option.category === "collaboration_mode" ||
+        option.category === "_mobius_permission"
+    ) {
         return "execution";
     }
     return "other";

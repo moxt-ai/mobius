@@ -1,3 +1,11 @@
+export type { AgentExecutionConfiguration } from "@moxt-ai/mobius-protocol";
+export {
+    AGENT_DEFAULT_EXECUTION_SETTING,
+    AGENT_PERMISSION_MODE_CONFIG_ID,
+    AGENT_PERMISSION_MODES,
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+    decodeAgentExecutionConfiguration,
+} from "@moxt-ai/mobius-protocol";
 export * from "./bot-owner-resources.ts";
 export * from "./bot-resources.ts";
 export * from "./bot-service-client.ts";

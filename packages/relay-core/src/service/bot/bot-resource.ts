@@ -1,5 +1,5 @@
 import { ActiveBot, ArchivedBot, DraftBot, SuspendedBot } from "@moxt-ai/mobius-protocol";
-import { completionPolicy, stringArray } from "../../entity/bot/bot-binding.ts";
+import { completionPolicy, executionConfiguration, stringArray } from "../../entity/bot/bot-binding.ts";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import type { BotConnectionStorage } from "../../storage/bot-connection-storage.ts";
 import type { BotControlStorage } from "../../storage/bot-control-storage.ts";
@@ -128,6 +128,7 @@ export function bindingResource(row: Awaited<ReturnType<BotControlStorage["listE
         botId: row.bot_id,
         completionPolicy: completionPolicy(row.completion_policy_json),
         createdAt: timestamp(row.created_at),
+        executionConfiguration: executionConfiguration(row.execution_configuration_json),
         lifecycle: row.lifecycle,
         runtimeId: row.runtime_id,
         workspaceRef: row.workspace_ref,

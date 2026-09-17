@@ -107,11 +107,46 @@ unattended policy, and approved outbound targets. It then stores a
 `LocalBotGrant` in daemon-local SQLite and returns only sanitized readiness to
 the Relay. The grant never leaves the local execution boundary.
 
+Every execution binding also freezes a required `executionConfiguration`:
+
+```json
+{
+  "model": {
+    "booleanValue": false,
+    "configId": "model",
+    "value": "gpt-5.6",
+    "valueType": "select"
+  },
+  "permissionMode": "workspace-write",
+  "reasoningEffort": {
+    "booleanValue": false,
+    "configId": "reasoning_effort",
+    "value": "high",
+    "valueType": "select"
+  }
+}
+```
+
+Platform applications such as Moxt obtain the authoritative choices with
+`client.runtimes.discoverAgentSettings(runtimeId, { agentId, directoryId,
+additionalDirectoryIds: [] }, signal)`. They must submit one discovered model,
+one discovered reasoning-effort value, and the discovered permission mode in
+`MobiusBotOwnerClient.createBinding`. The HTTP endpoint rejects a missing or
+malformed configuration. Binding directory and setup responses return the
+frozen value so a tenant can render exactly what will execute.
+
+The daemon stores the same value in `LocalBotGrant`, checks every Bot prompt
+against it, applies permissions before process launch, and configures model then
+reasoning effort before optional behavior settings. A stale or unsupported
+selection fails locally with a typed configuration error. Behavior
+`agentConfiguration` remains available for additional Agent options, but it
+cannot override the required model or reasoning configuration IDs.
+
 Every turn revalidates the Bot, pinned behavior and binding, executable,
 workspace, expiration, and revocation epoch. When the same registered Agent and
 workspace selection resolve to a refreshed local identity, the daemon renews the
 grant in place and records `bot_binding_target_refreshed`; the user does not run
-a local approval command. A different Agent, workspace selection, configuration,
+a local approval command. A different Agent, workspace selection, execution configuration,
 behavior, binding, or delivery policy is rejected and must be changed through the
 owner-facing binding flow. Local side effects outside the approved unattended
 policy remain pending for an owner-authorized path; a connector can observe only

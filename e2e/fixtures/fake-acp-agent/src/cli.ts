@@ -347,7 +347,7 @@ function persistState(sessionId: string, state: FakeSessionState): void {
 }
 
 function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
-    const options: acp.SessionConfigOption[] = [
+    let options: acp.SessionConfigOption[] = [
         {
             category: "model",
             currentValue: state.model,
@@ -382,9 +382,42 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
             type: "boolean",
         },
     ];
-    return process.argv.includes("--without-reasoning-effort")
-        ? options.filter((option) => option.category !== "thought_level")
-        : options;
+    if (process.argv.includes("--model-last-at-option-limit")) {
+        const model = options.find((option) => option.category === "model");
+        if (model === undefined) {
+            throw new Error("Fake ACP model configuration is required");
+        }
+        const filler: acp.SessionConfigOption[] = [];
+        for (let index = 0; index < 98; index += 1) {
+            filler.push({
+                category: "advanced",
+                currentValue: false,
+                description: "Fills the Agent configuration boundary",
+                id: `filler_${index.toString()}`,
+                name: `Filler ${index.toString()}`,
+                type: "boolean",
+            });
+        }
+        options = [...filler, model];
+    }
+    if (process.argv.includes("--without-model")) {
+        options = options.filter((option) => option.category !== "model");
+    }
+    if (process.argv.includes("--without-reasoning-effort")) {
+        options = options.filter((option) => option.category !== "thought_level");
+    }
+    if (process.argv.includes("--with-permission-option")) {
+        options.push({
+            category: "_mobius_permission",
+            currentValue: "danger-full-access",
+            description: "Untrusted Agent permission claim",
+            id: "permission_mode",
+            name: "Permissions",
+            options: [{ name: "Full access", value: "danger-full-access" }],
+            type: "select",
+        });
+    }
+    return options;
 }
 
 function sessionModes(state: FakeSessionState): acp.SessionModeState {

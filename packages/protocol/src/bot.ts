@@ -1,5 +1,7 @@
 import { ProtocolMessageError } from "./codecs/messages.ts";
 import {
+    type AgentExecutionConfiguration,
+    decodeAgentExecutionConfiguration,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeSessionConfigurationSelections,
@@ -996,6 +998,7 @@ export class BotExecutionBindingApprovalRequest {
     readonly bindingRevision: number;
     readonly botId: string;
     readonly completionPolicy: BotCompletionDeliveryPolicy;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly kind = BOT_BINDING_APPROVAL_REQUEST_KIND;
     readonly requestId: string;
     readonly requiredCapabilities: readonly string[];
@@ -1018,6 +1021,7 @@ export class BotExecutionBindingApprovalRequest {
         requiredCapabilities: readonly string[],
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         completionPolicy: BotCompletionDeliveryPolicy,
+        executionConfiguration: AgentExecutionConfiguration,
         sessionConfigurations: readonly SessionConfigurationSelection[] = [],
     ) {
         this.requestId = requestId;
@@ -1039,6 +1043,7 @@ export class BotExecutionBindingApprovalRequest {
             ),
         );
         this.completionPolicy = completionPolicy;
+        this.executionConfiguration = decodeAgentExecutionConfiguration(executionConfiguration);
     }
 
     toJSON(): object {
@@ -1129,6 +1134,7 @@ export class BotSessionPromptCommand {
     readonly executionCapabilitySecret: string;
     readonly executionDeadlineAt: string;
     readonly executionId: string;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly images: readonly PromptImage[];
     readonly kind = BOT_SESSION_PROMPT_KIND;
     readonly localGrantId: string;
@@ -1164,6 +1170,7 @@ export class BotSessionPromptCommand {
         behaviorDigest: string,
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         replyRoute: BotReplyRoute,
+        executionConfiguration: AgentExecutionConfiguration,
         sessionConfigurations: readonly SessionConfigurationSelection[] = [],
         disposition: string = SessionPromptDisposition.Reject,
         targetCommandId = "",
@@ -1196,6 +1203,7 @@ export class BotSessionPromptCommand {
             ),
         );
         this.replyRoute = replyRoute;
+        this.executionConfiguration = decodeAgentExecutionConfiguration(executionConfiguration);
         this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
         this.targetCommandId = targetCommandId;
     }
@@ -1417,6 +1425,7 @@ export function decodeBotExecutionBindingApprovalRequest(encoded: string): BotEx
             "bindingRevision",
             "botId",
             "completionPolicy",
+            "executionConfiguration",
             "kind",
             "requestId",
             "requiredCapabilities",
@@ -1443,6 +1452,7 @@ export function decodeBotExecutionBindingApprovalRequest(encoded: string): BotEx
         readIdentifiers(value, "requiredCapabilities", 32),
         readTargets(value, "allowedDeliveryTargets"),
         readCompletionPolicy(value["completionPolicy"]),
+        decodeAgentExecutionConfiguration(value["executionConfiguration"]),
         readSessionConfigurations(value),
     );
 }
@@ -1534,6 +1544,7 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
             "executionCapabilitySecret",
             "executionDeadlineAt",
             "executionId",
+            "executionConfiguration",
             "images",
             "kind",
             "localGrantId",
@@ -1591,6 +1602,7 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
         readDigest(value, "behaviorDigest"),
         readTargets(value, "allowedDeliveryTargets"),
         readReplyRoute(value["replyRoute"]),
+        decodeAgentExecutionConfiguration(value["executionConfiguration"]),
         readSessionConfigurations(value),
         disposition,
         targetCommandId,

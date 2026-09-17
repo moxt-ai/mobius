@@ -1,4 +1,9 @@
-import { decodeSessionReadyEvent, type SessionReadyEvent } from "@moxt-ai/mobius-protocol";
+import {
+    type AgentExecutionConfiguration,
+    decodeAgentExecutionConfiguration,
+    decodeSessionReadyEvent,
+    type SessionReadyEvent,
+} from "@moxt-ai/mobius-protocol";
 import { MobiusProtocolError } from "./errors.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -406,6 +411,7 @@ export class MobiusBotExecutionBinding {
     readonly botId: string;
     readonly completionPolicy: MobiusBotCompletionPolicy;
     readonly createdAt: string;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly runtimeId: string;
     readonly state: MobiusBotBindingState;
     readonly workspaceRef: string;
@@ -420,6 +426,11 @@ export class MobiusBotExecutionBinding {
         this.botId = identifier(resource, "botId", "Bot execution binding");
         this.completionPolicy = decodeCompletionPolicy(resource["completionPolicy"]);
         this.createdAt = timestamp(resource, "createdAt", "Bot execution binding");
+        try {
+            this.executionConfiguration = decodeAgentExecutionConfiguration(resource["executionConfiguration"]);
+        } catch (cause) {
+            throw new MobiusProtocolError("The service returned an invalid Bot execution binding", { cause });
+        }
         this.runtimeId = identifier(resource, "runtimeId", "Bot execution binding");
         this.state = state;
         this.workspaceRef = text(resource, "workspaceRef", "Bot execution binding");
@@ -436,6 +447,7 @@ const BINDING_FIELDS = [
     "botId",
     "completionPolicy",
     "createdAt",
+    "executionConfiguration",
     "lifecycle",
     "runtimeId",
     "workspaceRef",

@@ -1,5 +1,7 @@
 import {
+    type AgentExecutionConfiguration,
     type BotCompletionDeliveryPolicy,
+    decodeAgentExecutionConfiguration,
     NoBotCompletionDeliveryPolicy,
     RequiredBotCompletionDeliveryPolicy,
     SessionPromptDisposition,
@@ -122,6 +124,16 @@ export function object(value: Readonly<Record<string, unknown>>, key: string): R
         throw new BotApiError("invalid_request", `The ${key} field is invalid`, "invalid-input");
     }
     return Object.fromEntries(Object.entries(field));
+}
+export function agentExecutionConfiguration(
+    value: Readonly<Record<string, unknown>>,
+    key: string,
+): AgentExecutionConfiguration {
+    try {
+        return decodeAgentExecutionConfiguration(value[key]);
+    } catch (cause) {
+        throw new BotApiError("invalid_request", `The ${key} field is invalid`, "invalid-input", { cause });
+    }
 }
 export function identifiers(
     value: Readonly<Record<string, unknown>>,

@@ -1,13 +1,16 @@
 import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import {
+    type AgentExecutionConfiguration,
     type BotExecutionBindingApprovalRequest,
     BotExecutionBindingApprovedEvent,
     type BotSessionPromptCommand,
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
+    decodeAgentExecutionConfiguration,
     decodeSessionConfigurationSelections,
     type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
-
+import { AgentPermissionConfigurationError } from "../agent-catalog/agent-permission-profile.ts";
 import type { LocalAgentCatalog, LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { revalidateExecutable } from "../process/executable.ts";
@@ -34,6 +37,7 @@ export class LocalBotGrant {
     readonly bindingRevision: number;
     readonly botId: string;
     readonly expiresAt: number;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly localGrantId: string;
     readonly revocationEpoch: number;
     readonly workspaceIdentityDigest: string;
@@ -53,6 +57,7 @@ export class LocalBotGrant {
         workspacePath: string,
         workspaceIdentityDigest: string,
         allowedDeliveryTargetIds: readonly string[],
+        executionConfiguration: AgentExecutionConfiguration,
         expiresAt: number,
         revocationEpoch: number,
     ) {
@@ -68,6 +73,7 @@ export class LocalBotGrant {
         this.workspacePath = workspacePath;
         this.workspaceIdentityDigest = workspaceIdentityDigest;
         this.allowedDeliveryTargetIds = Object.freeze([...allowedDeliveryTargetIds]);
+        this.executionConfiguration = executionConfiguration;
         this.expiresAt = expiresAt;
         this.revocationEpoch = revocationEpoch;
     }
@@ -101,6 +107,17 @@ function agentDigest(agent: LocalAgentDefinition): string {
     );
 }
 
+function configurePermission(agent: LocalAgentDefinition, permissionMode: string): LocalAgentDefinition {
+    try {
+        return agent.withPermissionMode(permissionMode);
+    } catch (cause) {
+        if (cause instanceof AgentPermissionConfigurationError) {
+            throw new LocalBotAuthorizationError("binding_incompatible", cause.message, { cause });
+        }
+        throw cause;
+    }
+}
+
 function workspaceDigest(path: string): string {
     return digest(path);
 }
@@ -131,6 +148,13 @@ function exactSessionConfigurations(
             approved.valueType === selection.valueType
         );
     });
+}
+
+function exactExecutionConfiguration(left: AgentExecutionConfiguration, right: AgentExecutionConfiguration): boolean {
+    return (
+        left.permissionMode === right.permissionMode &&
+        exactSessionConfigurations([left.model, left.reasoningEffort], [right.model, right.reasoningEffort])
+    );
 }
 
 function rowString(row: object, key: string): string {
@@ -183,6 +207,16 @@ function parseSessionConfigurations(encoded: string): readonly SessionConfigurat
     }
 }
 
+function parseExecutionConfiguration(encoded: string): AgentExecutionConfiguration {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+        return decodeAgentExecutionConfiguration(value);
+    } catch (cause) {
+        throw new LocalBotAuthorizationError("local_grant_invalid", "The local Bot grant is invalid", { cause });
+    }
+}
+
 export class LocalBotGrantStore {
     readonly #database: DatabaseSync;
 
@@ -220,6 +254,10 @@ export class LocalBotGrantStore {
           CREATE TABLE IF NOT EXISTS local_bot_grant_configurations (
             local_grant_id TEXT PRIMARY KEY,
             session_configurations_json TEXT NOT NULL
+          ) STRICT;
+          CREATE TABLE IF NOT EXISTS local_bot_grant_execution_configurations (
+            local_grant_id TEXT PRIMARY KEY,
+            execution_configuration_json TEXT NOT NULL
           ) STRICT;
         `);
     }
@@ -295,6 +333,13 @@ export class LocalBotGrantStore {
                 .run(localGrantId, JSON.stringify(request.sessionConfigurations));
             this.#database
                 .prepare(
+                    `INSERT INTO local_bot_grant_execution_configurations (
+                       local_grant_id, execution_configuration_json
+                     ) VALUES (?, ?)`,
+                )
+                .run(localGrantId, JSON.stringify(request.executionConfiguration));
+            this.#database
+                .prepare(
                     `INSERT INTO local_bot_binding_resolutions (
                        request_id, binding_id, local_grant_id, resolved_at, result
                      ) VALUES (?, ?, ?, ?, 'approved')`,
@@ -330,16 +375,21 @@ export class LocalBotGrantStore {
         const row = this.#database
             .prepare(
                 `SELECT grants.*, COALESCE(configurations.session_configurations_json, '[]')
-                            AS session_configurations_json
+                            AS session_configurations_json,
+                        COALESCE(execution.execution_configuration_json, ?)
+                            AS execution_configuration_json
                    FROM local_bot_grants AS grants
                    LEFT JOIN local_bot_grant_configurations AS configurations
                      ON configurations.local_grant_id = grants.local_grant_id
+                   LEFT JOIN local_bot_grant_execution_configurations AS execution
+                     ON execution.local_grant_id = grants.local_grant_id
                   WHERE grants.local_grant_id = ? AND grants.bot_id = ?
                     AND behavior_revision_id = ? AND behavior_digest = ?
                     AND binding_id = ? AND binding_revision = ?
                     AND agent_ref = ?`,
             )
             .get(
+                JSON.stringify(DEFAULT_AGENT_EXECUTION_CONFIGURATION),
                 command.localGrantId,
                 command.botId,
                 command.behaviorRevisionId,
@@ -369,7 +419,16 @@ export class LocalBotGrantStore {
                 "The Bot Agent configuration differs from its binding",
             );
         }
-        const agent = catalog.find(command.agentId);
+        const approvedExecutionConfiguration = parseExecutionConfiguration(
+            rowString(row, "execution_configuration_json"),
+        );
+        if (!exactExecutionConfiguration(approvedExecutionConfiguration, command.executionConfiguration)) {
+            throw new LocalBotAuthorizationError(
+                "binding_not_approved",
+                "The Bot execution configuration differs from its binding",
+            );
+        }
+        const agent = configurePermission(catalog.find(command.agentId), command.executionConfiguration.permissionMode);
         const [adapterUnchanged, agentUnchanged] = await Promise.all([
             revalidateExecutable(agent.adapterIdentity),
             revalidateExecutable(agent.agentIdentity),
@@ -424,6 +483,7 @@ export class LocalBotGrantStore {
             workspacePath,
             currentWorkspaceDigest,
             approvedTargets,
+            approvedExecutionConfiguration,
             expiresAt,
             revocationEpoch,
         );
@@ -456,7 +516,10 @@ export class LocalBotGrantStore {
         bindingAuthorityId: string,
         signal: AbortSignal,
     ): Promise<GrantResolution> => {
-        const agent = catalog.find(request.agentRef);
+        const agent = configurePermission(
+            catalog.find(request.agentRef),
+            request.executionConfiguration.permissionMode,
+        );
         if (request.requiredCapabilities.includes("embedded-context") && !agent.capabilities.embeddedContextPrompt) {
             throw new LocalBotAuthorizationError(
                 "binding_incompatible",

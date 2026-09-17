@@ -33,8 +33,15 @@ export class OpenCodeAgentSpecification extends DirectAcpAgentDefinition {
 
     override readonly createLaunchEnvironment = async (
         _agent: ResolvedExecutable,
-        _context: LocalAgentDiscoveryContext,
-    ): Promise<Readonly<Record<string, string>>> => Object.freeze({ OPENCODE_DISABLE_AUTOUPDATE: "1" });
+        context: LocalAgentDiscoveryContext,
+    ): Promise<Readonly<Record<string, string>>> => {
+        const environment: Record<string, string> = { OPENCODE_DISABLE_AUTOUPDATE: "1" };
+        const inlineConfiguration = context.environment["OPENCODE_CONFIG_CONTENT"];
+        if (typeof inlineConfiguration === "string" && inlineConfiguration.length > 0) {
+            environment["OPENCODE_CONFIG_CONTENT"] = inlineConfiguration;
+        }
+        return Object.freeze(environment);
+    };
 
     override readonly resolveManagedAgent = async (
         stateDirectory: string,

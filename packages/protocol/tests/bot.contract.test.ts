@@ -4,6 +4,7 @@ import {
     ActiveBot,
     ActiveBotConversation,
     ActiveBotDeliveryTarget,
+    type AgentExecutionConfiguration,
     BotConnectionCredential,
     BotConnectionGrant,
     BotConnectionReplyRoute,
@@ -14,6 +15,7 @@ import {
     ConnectedBotConversation,
     DisabledBotDeliveryTarget,
     DraftBot,
+    decodeAgentExecutionConfiguration,
     decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     encodeBotExecutionBindingApprovalRequest,
@@ -24,6 +26,22 @@ import {
     ProvisioningBotConversation,
     QueuedOutboundMessage,
 } from "../src/index.ts";
+
+const executionConfiguration: AgentExecutionConfiguration = {
+    model: {
+        booleanValue: false,
+        configId: "model",
+        value: "test-large",
+        valueType: "select",
+    },
+    permissionMode: "workspace-write",
+    reasoningEffort: {
+        booleanValue: false,
+        configId: "reasoning_effort",
+        value: "high",
+        valueType: "select",
+    },
+};
 
 describe("Bot protocol", () => {
     it("Given draft and active Bot resources, When clients inspect lifecycle state, Then each concrete class exposes only fields valid in that state", () => {
@@ -77,11 +95,12 @@ describe("Bot protocol", () => {
                 },
             ],
             new NoBotCompletionDeliveryPolicy(),
+            executionConfiguration,
             [
                 {
                     booleanValue: false,
-                    configId: "model",
-                    value: "test-large",
+                    configId: "fast_mode",
+                    value: "balanced",
                     valueType: "select",
                 },
             ],
@@ -91,11 +110,12 @@ describe("Bot protocol", () => {
             request,
         );
         expect(JSON.parse(encodeBotExecutionBindingApprovalRequest(request))).toMatchObject({
+            executionConfiguration,
             sessionConfigurations: [
                 {
                     booleanValue: false,
-                    configId: "model",
-                    value: "test-large",
+                    configId: "fast_mode",
+                    value: "balanced",
                     valueType: "select",
                 },
             ],
@@ -110,6 +130,12 @@ describe("Bot protocol", () => {
                     providerToken: "secret",
                 }),
             ),
+        ).toThrow(ProtocolMessageError);
+        expect(() =>
+            decodeAgentExecutionConfiguration({
+                ...executionConfiguration,
+                model: { ...executionConfiguration.model, configId: "permission_mode" },
+            }),
         ).toThrow(ProtocolMessageError);
     });
 
@@ -143,6 +169,7 @@ describe("Bot protocol", () => {
                 },
             ],
             new BotConnectionReplyRoute("connection_alpha", "target_alpha"),
+            executionConfiguration,
             [
                 {
                     booleanValue: true,
@@ -155,6 +182,7 @@ describe("Bot protocol", () => {
 
         expect(decodeBotSessionPromptCommand(encodeBotSessionPromptCommand(command))).toEqual(command);
         expect(JSON.parse(encodeBotSessionPromptCommand(command))).toMatchObject({
+            executionConfiguration,
             sessionConfigurations: [
                 {
                     booleanValue: true,

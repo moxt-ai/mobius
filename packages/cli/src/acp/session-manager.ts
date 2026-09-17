@@ -47,6 +47,11 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
+import {
+    AgentPermissionConfigurationError,
+    type AgentPermissionProfile,
+    PERMISSION_MODE_CONFIG_ID,
+} from "../agent-catalog/agent-permission-profile.ts";
 import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readAuthorizedRaster, readInlineRaster } from "../authorization/local-raster.ts";
@@ -76,7 +81,11 @@ import {
     nativeSessionPageSchema,
 } from "./native-session.ts";
 import { normalizeAcpCapabilities } from "./session-capabilities.ts";
-import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
+import {
+    ensureRequiredExecutionOptions,
+    type SessionConfigProtocol,
+    SessionConfigProtocolError,
+} from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
 import {
@@ -809,6 +818,7 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #preSessionUpdates: SessionNotification[] = [];
     readonly #processExit: Promise<void>;
     readonly #metrics: OperationMetrics;
+    readonly #permissionProfile: AgentPermissionProfile;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
     readonly #verifiedAgentVersion: string;
@@ -860,6 +870,7 @@ class AcpProcessSession implements AcpClientHandler {
         this.#getObserver = getObserver;
         this.#mobiusSessionId = mobiusSessionId;
         this.#metrics = metrics;
+        this.#permissionProfile = agent.permissionProfile;
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
@@ -1369,7 +1380,10 @@ class AcpProcessSession implements AcpClientHandler {
             this.selectNativeSession(created.sessionId);
             lifecycleResponse = created;
         }
-        this.#configOptions = this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse);
+        this.#configOptions = ensureRequiredExecutionOptions(
+            this.#sessionConfigProtocol.normalizeLifecycle(lifecycleResponse),
+            this.#permissionProfile.option(this.#environment),
+        );
         await this.#updateTail;
         signal.throwIfAborted();
         if (this.#prompted) {
@@ -1477,7 +1491,10 @@ class AcpProcessSession implements AcpClientHandler {
             );
             await this.#updateTail;
             if (this.#configRevision === configRevision) {
-                this.#configOptions = configured;
+                this.#configOptions = ensureRequiredExecutionOptions(
+                    configured,
+                    this.#permissionProfile.option(this.#environment),
+                );
             }
         } catch (error) {
             if (error instanceof SessionConfigProtocolError) {
@@ -1992,9 +2009,9 @@ class AcpProcessSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "config_option_update") {
-            this.#configOptions = this.#sessionConfigProtocol.normalizeUpdate(
-                this.#configOptions,
-                update.configOptions,
+            this.#configOptions = ensureRequiredExecutionOptions(
+                this.#sessionConfigProtocol.normalizeUpdate(this.#configOptions, update.configOptions),
+                this.#permissionProfile.option(this.#environment),
             );
             this.#configRevision += 1;
             await this.emitConfigUpdate();
@@ -2635,6 +2652,9 @@ export class AcpSessionManager {
                 );
                 try {
                     for (const desired of desiredConfigOptions) {
+                        if (desired.id === PERMISSION_MODE_CONFIG_ID) {
+                            continue;
+                        }
                         const current = runtime.prepared().configOptions.find((option) => option.id === desired.id);
                         if (current === undefined || current.type !== desired.type) {
                             continue;
@@ -2849,6 +2869,40 @@ export class AcpSessionManager {
         this.#beginSessionUse(options.sessionId);
         try {
             const runtime = await this.ensureSession(options);
+            if (options.configId === PERMISSION_MODE_CONFIG_ID) {
+                const permission = runtime
+                    .prepared()
+                    .configOptions.find((candidate) => candidate.id === PERMISSION_MODE_CONFIG_ID);
+                if (
+                    permission === undefined ||
+                    permission.type !== "select" ||
+                    options.valueType !== "select" ||
+                    permission.values.length < 2 ||
+                    !permission.values.some((value) => value.value === options.value)
+                ) {
+                    throw new AcpExecutionError(
+                        "The requested Agent permission mode is unavailable",
+                        {},
+                        "invalid_session_configuration",
+                    );
+                }
+                if (permission.currentValue === options.value) {
+                    return runtime.prepared().configOptions;
+                }
+                try {
+                    return (
+                        await this.prepareExecutionSession({
+                            ...options,
+                            agent: options.agent.withPermissionMode(options.value),
+                        })
+                    ).configOptions;
+                } catch (error) {
+                    if (error instanceof AgentPermissionConfigurationError) {
+                        throw new AcpExecutionError(error.message, { cause: error }, error.code);
+                    }
+                    throw error;
+                }
+            }
             return await runtime.configure(options);
         } finally {
             this.#endSessionUse(options.sessionId);

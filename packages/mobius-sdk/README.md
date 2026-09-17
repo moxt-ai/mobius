@@ -28,6 +28,13 @@ then uses Project-scoped clients for Runtime and Bot management, conversation
 work, and event projection. App lifecycle and AppCredentials belong to the
 Platform SDK entry point only.
 
+Bot execution bindings require an `AgentExecutionConfiguration` containing a
+permission mode, model selection, and reasoning-effort selection. Discover the
+authoritative choices with `client.runtimes.discoverAgentSettings(...)`, then
+pass the selected values to `MobiusBotOwnerClient.createBinding(...)`. See the
+[TypeScript SDK guide](https://github.com/moxt-ai/mobius/blob/main/docs/typescript-sdk.md#required-bot-execution-settings)
+for the Platform/Moxt flow.
+
 Existing users of `MobiusProjectAuthenticationClient.applications` and
 `.applicationCredentials` should migrate to `MobiusPlatformDeveloperClient`.
 The [migration table](https://github.com/moxt-ai/mobius/blob/main/docs/project-authentication.md#migrating-app-management-to-platform)

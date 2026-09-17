@@ -1,10 +1,12 @@
 import {
+    type AgentExecutionConfiguration,
     BOT_SESSION_PROMPT_KIND,
     type BotCompletionDeliveryPolicy,
     BotConnectionReplyRoute,
     type BotDeliveryTargetReference,
     type BotReplyRoute,
     BotSessionPromptCommand,
+    decodeAgentExecutionConfiguration,
     decodeBotSessionPromptCommand,
     decodePromptImagesValue,
     decodePromptResourcesValue,
@@ -95,6 +97,7 @@ interface BotSessionContext {
     readonly botId: string;
     readonly completionPolicy: BotCompletionDeliveryPolicy;
     readonly conversationId: string;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
@@ -114,6 +117,7 @@ class BotSessionContextRecord implements BotSessionContext {
     readonly botId: string;
     readonly completionPolicy: BotCompletionDeliveryPolicy = new NoBotCompletionDeliveryPolicy();
     readonly conversationId: string;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute = new OwnerBotReplyRoute();
     readonly runtimeId: string;
@@ -131,6 +135,7 @@ class BotSessionContextRecord implements BotSessionContext {
         this.bindingRevision = rowInteger(row, "binding_revision");
         this.botId = rowText(row, "bot_id");
         this.conversationId = rowText(row, "conversation_id");
+        this.executionConfiguration = decodeExecutionConfiguration(rowText(row, "execution_configuration_json"));
         this.localGrantId = rowText(row, "local_grant_id");
         this.runtimeId = rowText(row, "runtime_id");
         this.sessionConfigurations = decodeSessionConfigurations(rowText(row, "session_configurations_json"));
@@ -255,6 +260,32 @@ function decodeSessionConfigurations(encoded: string): readonly SessionConfigura
             cause,
         });
     }
+}
+
+function decodeExecutionConfiguration(encoded: string): AgentExecutionConfiguration {
+    let value: unknown;
+    try {
+        value = JSON.parse(encoded);
+        return decodeAgentExecutionConfiguration(value);
+    } catch (cause) {
+        throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot execution configuration is invalid", {
+            cause,
+        });
+    }
+}
+
+function sameExecutionConfiguration(left: AgentExecutionConfiguration, right: AgentExecutionConfiguration): boolean {
+    return (
+        left.permissionMode === right.permissionMode &&
+        left.model.configId === right.model.configId &&
+        left.model.value === right.model.value &&
+        left.model.valueType === right.model.valueType &&
+        left.model.booleanValue === right.model.booleanValue &&
+        left.reasoningEffort.configId === right.reasoningEffort.configId &&
+        left.reasoningEffort.value === right.reasoningEffort.value &&
+        left.reasoningEffort.valueType === right.reasoningEffort.valueType &&
+        left.reasoningEffort.booleanValue === right.reasoningEffort.booleanValue
+    );
 }
 
 function decodeCompletionPolicy(encoded: string): NoBotCompletionDeliveryPolicy {
@@ -443,7 +474,8 @@ export class BotSessionService {
                 context.behaviorRevisionId !== provisioning.behaviorRevisionId ||
                 context.bindingId !== provisioning.bindingId ||
                 context.bindingRevision !== provisioning.bindingRevision ||
-                context.runtimeId !== provisioning.runtimeId
+                context.runtimeId !== provisioning.runtimeId ||
+                !sameExecutionConfiguration(context.executionConfiguration, provisioning.executionConfiguration)
             ) {
                 throw new BotSessionRuntimeError(
                     "conversation_access_denied",
@@ -621,6 +653,7 @@ export class BotSessionService {
                     context.behaviorDigest,
                     context.allowedDeliveryTargets,
                     context.replyRoute,
+                    context.executionConfiguration,
                     context.sessionConfigurations,
                     submission.disposition,
                     targetCommandId,
@@ -797,6 +830,7 @@ export class BotSessionService {
             botCommand.behaviorDigest,
             botCommand.allowedDeliveryTargets,
             botCommand.replyRoute,
+            botCommand.executionConfiguration,
             botCommand.sessionConfigurations,
             SessionPromptDisposition.Steer,
             botCommand.targetCommandId,

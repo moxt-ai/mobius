@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_EXECUTION_CONFIGURATION } from "@moxt-ai/mobius-protocol";
 import type { BotSessionProvisioning } from "../../entity/bot/bot-session.ts";
 import type { DoSqlDatabase, DoSqlRow } from "../../infra/do-sql-database.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
@@ -140,13 +141,18 @@ export class BotSessionStorage {
 
     readonly readContext = (input: { readonly scopeKey: string; readonly sessionId: string }) =>
         this.#database.query(
-            `SELECT context.*, COALESCE(configurations.session_configurations_json, '[]') AS session_configurations_json
+            `SELECT context.*,
+                    COALESCE(configurations.session_configurations_json, '[]') AS session_configurations_json,
+                    COALESCE(execution.execution_configuration_json, ?) AS execution_configuration_json
                FROM bot_session_context AS context
                LEFT JOIN bot_session_configurations AS configurations
                  ON configurations.scope_key = context.scope_key
                 AND configurations.session_id = context.session_id
+               LEFT JOIN bot_session_execution_configurations AS execution
+                 ON execution.scope_key = context.scope_key
+                AND execution.session_id = context.session_id
               WHERE context.scope_key = ? AND context.session_id = ?`,
-            [input.scopeKey, input.sessionId],
+            [JSON.stringify(DEFAULT_AGENT_EXECUTION_CONFIGURATION), input.scopeKey, input.sessionId],
         );
 
     readonly insertContext = (input: {
@@ -196,6 +202,16 @@ export class BotSessionStorage {
                     input.scopeKey,
                     input.provisioning.sessionId,
                     JSON.stringify(input.provisioning.sessionConfigurations),
+                ],
+            );
+            this.#database.run(
+                `INSERT INTO bot_session_execution_configurations (
+                   scope_key, session_id, execution_configuration_json
+                 ) VALUES (?, ?, ?)`,
+                [
+                    input.scopeKey,
+                    input.provisioning.sessionId,
+                    JSON.stringify(input.provisioning.executionConfiguration),
                 ],
             );
             return result;

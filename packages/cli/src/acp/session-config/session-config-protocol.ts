@@ -183,8 +183,81 @@ export function normalizeConfigOptions(value: unknown, modes: unknown): readonly
     return normalized.slice(0, 100);
 }
 
+function insertRequiredOption(
+    current: readonly SessionConfigOption[],
+    required: SessionConfigOption,
+    afterCategory = "",
+): readonly SessionConfigOption[] {
+    if (current.some((option) => option.id === required.id || option.category === required.category)) {
+        return current;
+    }
+    if (current.length < MAXIMUM_CONFIG_OPTIONS) {
+        if (afterCategory.length === 0) {
+            return [required, ...current];
+        }
+        const index = current.findIndex((option) => option.category === afterCategory);
+        if (index < 0) {
+            return [...current, required];
+        }
+        return [...current.slice(0, index + 1), required, ...current.slice(index + 1)];
+    }
+    if (afterCategory.length === 0) {
+        return [required, ...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 1)];
+    }
+    const index = current.findIndex((option) => option.category === afterCategory);
+    if (index < 0) {
+        return [...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 1), required];
+    }
+    if (index < MAXIMUM_CONFIG_OPTIONS - 1) {
+        return [...current.slice(0, index + 1), required, ...current.slice(index + 1, MAXIMUM_CONFIG_OPTIONS - 1)];
+    }
+    const anchor = current[index];
+    if (anchor === undefined) {
+        throw new SessionConfigProtocolError("The required Agent execution setting is unavailable");
+    }
+    return [...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 2), anchor, required];
+}
+
+function validRequiredSelect(option: SessionConfigOption): boolean {
+    return (
+        option.type === "select" &&
+        option.currentValue.length > 0 &&
+        option.values.some((value) => value.value === option.currentValue)
+    );
+}
+
+function ensureModelOption(current: readonly SessionConfigOption[]): readonly SessionConfigOption[] {
+    const existing = current.find((option) => option.id === "model" || option.category === "model");
+    if (existing !== undefined && validRequiredSelect(existing)) {
+        return current;
+    }
+    const unavailable: SessionConfigOption = {
+        booleanValue: false,
+        category: "model",
+        currentValue: AGENT_DEFAULT_REASONING_EFFORT,
+        description: "This Agent does not expose an adjustable model.",
+        id: "model",
+        name: "Model",
+        type: "select",
+        values: [
+            {
+                description: "Selected by the Agent",
+                groupId: "",
+                groupName: "",
+                name: "Agent default",
+                value: AGENT_DEFAULT_REASONING_EFFORT,
+            },
+        ],
+    };
+    return insertRequiredOption(
+        current.filter((option) => option.id !== "model" && option.category !== "model"),
+        unavailable,
+    );
+}
+
 export function ensureReasoningEffortOption(current: readonly SessionConfigOption[]): readonly SessionConfigOption[] {
-    if (current.some((option) => option.category === "thought_level")) {
+    const existing = current.find((option) => option.id === "reasoning_effort" || option.category === "thought_level");
+    if (existing !== undefined && validRequiredSelect(existing)) {
         return current;
     }
     const unavailable: SessionConfigOption = {
@@ -205,28 +278,38 @@ export function ensureReasoningEffortOption(current: readonly SessionConfigOptio
             },
         ],
     };
-    const modelIndex = current.findIndex((option) => option.category === "model");
-    if (current.length < MAXIMUM_CONFIG_OPTIONS) {
-        if (modelIndex < 0) {
-            return [...current, unavailable];
-        }
-        return [...current.slice(0, modelIndex + 1), unavailable, ...current.slice(modelIndex + 1)];
+    return insertRequiredOption(
+        current.filter((option) => option.id !== "reasoning_effort" && option.category !== "thought_level"),
+        unavailable,
+        "model",
+    );
+}
+
+export function ensureRequiredExecutionOptions(
+    current: readonly SessionConfigOption[],
+    permission: SessionConfigOption,
+): readonly SessionConfigOption[] {
+    const normalized = ensureReasoningEffortOption(ensureModelOption(current));
+    const model = normalized.find(
+        (option) => (option.id === "model" || option.category === "model") && validRequiredSelect(option),
+    );
+    const reasoningEffort = normalized.find(
+        (option) =>
+            (option.id === "reasoning_effort" || option.category === "thought_level") && validRequiredSelect(option),
+    );
+    if (model === undefined || reasoningEffort === undefined) {
+        throw new SessionConfigProtocolError("The required Agent execution settings are unavailable");
     }
-    if (modelIndex < 0) {
-        return [...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 1), unavailable];
-    }
-    if (modelIndex < MAXIMUM_CONFIG_OPTIONS - 1) {
-        return [
-            ...current.slice(0, modelIndex + 1),
-            unavailable,
-            ...current.slice(modelIndex + 1, MAXIMUM_CONFIG_OPTIONS - 1),
-        ];
-    }
-    const model = current[modelIndex];
-    if (model === undefined) {
-        return [...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 1), unavailable];
-    }
-    return [...current.slice(0, MAXIMUM_CONFIG_OPTIONS - 2), model, unavailable];
+    const optional = normalized.filter(
+        (option) =>
+            option.id !== permission.id &&
+            option.category !== permission.category &&
+            option.id !== "model" &&
+            option.category !== "model" &&
+            option.id !== "reasoning_effort" &&
+            option.category !== "thought_level",
+    );
+    return [permission, model, reasoningEffort, ...optional].slice(0, MAXIMUM_CONFIG_OPTIONS);
 }
 
 function normalizeStandardLifecycle(response: unknown): readonly SessionConfigOption[] {

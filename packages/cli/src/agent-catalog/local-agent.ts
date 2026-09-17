@@ -3,6 +3,11 @@ import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
 import { ExecutableIdentity } from "../process/executable.ts";
+import {
+    AGENT_DEFAULT_PERMISSION_MODE,
+    type AgentPermissionProfile,
+    permissionProfileForAgent,
+} from "./agent-permission-profile.ts";
 
 function readTrustedIdentity(path: string): ExecutableIdentity {
     const resolvedPath = realpathSync(path);
@@ -29,6 +34,7 @@ export class LocalAgentDefinition {
     readonly environment: Readonly<Record<string, string>>;
     readonly id: string;
     readonly label: string;
+    readonly permissionProfile: AgentPermissionProfile;
     readonly promptTimeoutMilliseconds: number;
 
     constructor(
@@ -43,6 +49,7 @@ export class LocalAgentDefinition {
         agentIdentity: ExecutableIdentity = adapterIdentity,
         promptTimeoutMilliseconds = 30 * 60 * 1_000,
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
+        permissionProfile: AgentPermissionProfile = permissionProfileForAgent(id),
     ) {
         if (!Number.isSafeInteger(promptTimeoutMilliseconds) || promptTimeoutMilliseconds < 1) {
             throw new Error("The local Agent prompt deadline is invalid");
@@ -55,11 +62,35 @@ export class LocalAgentDefinition {
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
+        this.permissionProfile = permissionProfile;
         this.promptTimeoutMilliseconds = promptTimeoutMilliseconds;
         this.command = adapterIdentity.realPath;
         this.arguments = Object.freeze([...arguments_]);
-        this.environment = Object.freeze({ ...environment });
+        this.environment = permissionProfile.apply(environment, permissionProfile.currentMode(environment));
     }
+
+    readonly withPermissionMode = (permissionMode: string): LocalAgentDefinition => {
+        if (
+            permissionMode === AGENT_DEFAULT_PERMISSION_MODE &&
+            this.permissionProfile.currentMode(this.environment) === AGENT_DEFAULT_PERMISSION_MODE
+        ) {
+            return this;
+        }
+        return new LocalAgentDefinition(
+            this.id,
+            this.label,
+            this.command,
+            this.arguments,
+            this.permissionProfile.apply(this.environment, permissionMode),
+            this.adapterVersion,
+            this.agentVersion,
+            this.adapterIdentity,
+            this.agentIdentity,
+            this.promptTimeoutMilliseconds,
+            this.capabilities,
+            this.permissionProfile,
+        );
+    };
 }
 
 export abstract class InstallableAgentDefinition {

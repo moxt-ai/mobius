@@ -1,4 +1,5 @@
 import type {
+    AgentExecutionConfiguration,
     BotCompletionDeliveryPolicy,
     BotDeliveryTargetReference,
     BotReplyRoute,
@@ -33,6 +34,7 @@ export class BotSessionProvisioning {
     readonly conversationId: string;
     readonly creatorKind: string;
     readonly creatorPrincipalId: string;
+    readonly executionConfiguration: AgentExecutionConfiguration;
     readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
@@ -61,6 +63,7 @@ export class BotSessionProvisioning {
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         completionPolicy: BotCompletionDeliveryPolicy,
         replyRoute: BotReplyRoute,
+        executionConfiguration: AgentExecutionConfiguration,
         sessionConfigurations: readonly SessionConfigurationSelection[] = [],
     ) {
         this.sessionId = sessionId;
@@ -82,6 +85,7 @@ export class BotSessionProvisioning {
         this.allowedDeliveryTargets = Object.freeze([...allowedDeliveryTargets]);
         this.completionPolicy = completionPolicy;
         this.replyRoute = replyRoute;
+        this.executionConfiguration = executionConfiguration;
         this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
     }
 

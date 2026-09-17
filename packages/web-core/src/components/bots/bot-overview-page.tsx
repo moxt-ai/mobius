@@ -1,4 +1,5 @@
 import {
+    DEFAULT_AGENT_EXECUTION_CONFIGURATION,
     MobiusApiError,
     type MobiusBotBehaviorRevision,
     type MobiusBotExecutionBinding,
@@ -314,6 +315,10 @@ export function BotOverviewPage() {
                                   completionSelection.messageTemplate.trim(),
                               )
                             : new MobiusNoBotCompletionPolicy(),
+                    executionConfiguration:
+                        ready.bindings.find(
+                            (binding) => binding.state.kind === "approved" && binding.agentRef === agentRef,
+                        )?.executionConfiguration ?? DEFAULT_AGENT_EXECUTION_CONFIGURATION,
                     expectedRevision: bot.lifecycleRevision,
                     runtimeId: connection.runtimeId,
                     workspaceRef: workspaceRef.trim(),

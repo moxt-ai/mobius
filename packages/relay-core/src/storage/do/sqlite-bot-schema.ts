@@ -34,6 +34,12 @@ export function initializeBotSessionSchema(database: DoSqlDatabase): void {
         session_configurations_json TEXT NOT NULL,
         PRIMARY KEY (scope_key, session_id)
       ) STRICT;
+      CREATE TABLE IF NOT EXISTS bot_session_execution_configurations (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        execution_configuration_json TEXT NOT NULL,
+        PRIMARY KEY (scope_key, session_id)
+      ) STRICT;
       CREATE TABLE IF NOT EXISTS bot_client_cursors (
         scope_key TEXT NOT NULL,
         session_id TEXT NOT NULL,

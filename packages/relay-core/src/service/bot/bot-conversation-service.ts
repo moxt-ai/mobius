@@ -192,6 +192,7 @@ export class BotConversationService {
             binding.allowedDeliveryTargets,
             binding.completionPolicy,
             replyRoute,
+            binding.executionConfiguration,
             binding.sessionConfigurations,
         );
         try {

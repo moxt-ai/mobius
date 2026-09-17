@@ -22,7 +22,11 @@ import {
     type SessionConfigPanelPlacement,
     sessionConfigPanelMode,
 } from "@/services/session-config-panel-placement";
-import { groupSessionConfigOptions, summarizeSessionConfig } from "@/services/session-config-presentation";
+import {
+    groupSessionConfigOptions,
+    isRequiredSessionConfigOption,
+    summarizeSessionConfig,
+} from "@/services/session-config-presentation";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const FOCUSABLE_CONTROL_SELECTOR = [
@@ -115,6 +119,14 @@ function SelectConfigControl({
                 <p className="text-xs font-semibold text-foreground" id={labelId}>
                     {option.name}
                 </p>
+                {isRequiredSessionConfigOption(option) && (
+                    <span
+                        aria-hidden="true"
+                        className="mt-1 inline-flex rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.04em] text-primary uppercase"
+                    >
+                        Required
+                    </span>
+                )}
                 {option.description.length > 0 && (
                     <p className="mt-0.5 text-[11px] leading-[17px] text-muted-foreground" id={descriptionId}>
                         {option.description}
