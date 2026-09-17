@@ -19,6 +19,15 @@ interface ProviderRequestDiagnostic {
     readonly url: string;
 }
 
+interface ToolPreference {
+    readonly customInput?: string;
+    readonly name: RegExp;
+}
+
+interface ProviderOptions {
+    readonly toolPreference?: ToolPreference;
+}
+
 const toolCallId = "call_mobius";
 
 function isObject(value: unknown): value is JsonObject {
@@ -87,7 +96,12 @@ function stringProperty(parameters: JsonObject | undefined, candidates: readonly
     return candidates.find((candidate) => isObject(properties[candidate]));
 }
 
-function selectTool(tools: readonly AvailableTool[]): SelectedTool | undefined {
+function selectTool(tools: readonly AvailableTool[], preference?: ToolPreference): SelectedTool | undefined {
+    const preferred = preference === undefined ? undefined : tools.find((tool) => preference.name.test(tool.name));
+    if (preferred?.kind === "function") {
+        return { ...preferred, input: "{}" };
+    }
+
     const shell = tools.find((tool) =>
         /(?:^|\.)(?:terminal|exec|bash|shell|command|run_terminal_command)$/iu.test(tool.name),
     );
@@ -97,7 +111,9 @@ function selectTool(tools: readonly AvailableTool[]): SelectedTool | undefined {
                 kind: "custom",
                 name: shell.name.slice(shell.name.lastIndexOf(".") + 1),
                 parameters: undefined,
-                input: 'const result = await tools.exec_command({ cmd: "pwd", max_output_tokens: 1000 });\ntext(result.output);',
+                input:
+                    preference?.customInput ??
+                    'const result = await tools.exec_command({ cmd: "pwd", max_output_tokens: 1000 });\ntext(result.output);',
             };
         }
         const command = stringProperty(shell.parameters, ["command", "cmd"]);
@@ -343,6 +359,7 @@ function sendChatCompletion(
 export class FakeOpenAiProvider implements AsyncDisposable {
     static readonly apiKey = "mobius-agent-daemon-fixture";
 
+    readonly apiKey = FakeOpenAiProvider.apiKey;
     readonly model: string;
     readonly origin: string;
     readonly response: string;
@@ -367,7 +384,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
         return this.#requests;
     }
 
-    static async start(model: string, answer: string): Promise<FakeOpenAiProvider> {
+    static async start(model: string, answer: string, options: ProviderOptions = {}): Promise<FakeOpenAiProvider> {
         const requests: ProviderRequestDiagnostic[] = [];
         const server = createServer(async (request, response) => {
             if (request.method === "GET" && request.url?.endsWith("/models") === true) {
@@ -396,7 +413,7 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             }
             const tools = availableTools(payload);
             const hasToolResult = includesToolResult(payload);
-            const tool = hasToolResult ? undefined : selectTool(tools);
+            const tool = hasToolResult ? undefined : selectTool(tools, options.toolPreference);
             requests.push({
                 hasToolResult,
                 selectedTool: tool === undefined ? undefined : { kind: tool.kind, name: tool.name },

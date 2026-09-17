@@ -154,11 +154,11 @@ export async function requestRuntimeControl(
                         return;
                     }
                     const result =
-                        kind === "native.session.result"
+                        command.kind === "native.session.request" && kind === "native.session.result"
                             ? decodeNativeSessionResult(raw)
-                            : kind === "session.ready"
+                            : command.kind === "session.prepare" && kind === "session.ready"
                               ? decodeSessionReadyEvent(raw)
-                              : kind === "session.config.updated"
+                              : command.kind === "session.configure" && kind === "session.config.updated"
                                 ? decodeSessionConfigUpdatedEvent(raw)
                                 : null;
                     if (result !== null && result.requestId === command.requestId) {

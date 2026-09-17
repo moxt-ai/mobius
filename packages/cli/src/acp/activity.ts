@@ -327,6 +327,43 @@ async function normalizeToolContent(
     return normalized;
 }
 
+function rawMcpToolContent(rawOutput: unknown): readonly ToolCallContent[] {
+    if (!isRecord(rawOutput)) {
+        return [];
+    }
+    const result = isRecord(rawOutput["result"]) ? rawOutput["result"] : rawOutput;
+    const content = result["content"];
+    if (!Array.isArray(content)) {
+        return [];
+    }
+    return content.flatMap((item): readonly ToolCallContent[] => {
+        if (
+            !isRecord(item) ||
+            item["type"] !== "image" ||
+            typeof item["data"] !== "string" ||
+            typeof item["mimeType"] !== "string"
+        ) {
+            return [];
+        }
+        const uri = item["uri"];
+        return [
+            {
+                type: "content",
+                content: {
+                    type: "image",
+                    data: item["data"],
+                    mimeType: item["mimeType"],
+                    ...(typeof uri === "string" ? { uri } : {}),
+                },
+            },
+        ];
+    });
+}
+
+function toolContent(content: readonly ToolCallContent[] | null | undefined, rawOutput: unknown) {
+    return content !== undefined && content !== null && content.length > 0 ? content : rawMcpToolContent(rawOutput);
+}
+
 function normalizeLocations(locations: readonly ToolCallLocation[]): readonly string[] {
     const normalized: string[] = [];
     const unique = new Set<string>();
@@ -511,7 +548,10 @@ export class AcpActivityTracker {
             update.rawOutput === undefined
                 ? readContentOutputDetail(update.content)
                 : formatUnknownDetail(update.rawOutput);
-        const detailContent = await normalizeToolContent(update.content ?? [], this.#prepareContent);
+        const detailContent = await normalizeToolContent(
+            toolContent(update.content, update.rawOutput),
+            this.#prepareContent,
+        );
         await this.#record(
             key,
             new AcpActivity(
@@ -543,10 +583,11 @@ export class AcpActivityTracker {
                 : update.content !== undefined && update.content !== null
                   ? readContentOutput(update.content)
                   : (previous?.output ?? "");
+        const nextContent = toolContent(update.content, update.rawOutput);
         const content =
-            update.content === undefined || update.content === null
+            nextContent.length === 0
                 ? (previous?.content ?? [])
-                : await normalizeToolContent(update.content, this.#prepareContent);
+                : await normalizeToolContent(nextContent, this.#prepareContent);
         const detailInput =
             update.rawInput === undefined
                 ? (previousDetail?.input ?? previous?.input ?? "")
@@ -557,10 +598,7 @@ export class AcpActivityTracker {
                 : update.content !== undefined && update.content !== null
                   ? readContentOutputDetail(update.content)
                   : (previousDetail?.output ?? previous?.output ?? "");
-        const detailContent =
-            update.content === undefined || update.content === null
-                ? (previousDetail?.content ?? previous?.content ?? [])
-                : content;
+        const detailContent = nextContent.length === 0 ? (previousDetail?.content ?? previous?.content ?? []) : content;
         await this.#record(
             key,
             new AcpActivity(
