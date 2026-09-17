@@ -60,6 +60,7 @@ tests/agent-daemon/
     codex.integration.test.ts
     deepseek.integration.test.ts
     gemini.integration.test.ts
+    grok.integration.test.ts
     hermes.integration.test.ts
     opencode.integration.test.ts
     pi.integration.test.ts
@@ -69,6 +70,7 @@ tests/agent-daemon/
     deepseek.ts
     executable.ts
     gemini.ts
+    grok.ts
     hermes.ts
     opencode.ts
     pi.ts
@@ -96,10 +98,11 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Claude, Codex, DeepSeek Harness, Gemini, Hermes, and Pi cases likewise accept
+The Claude, Codex, DeepSeek Harness, Gemini, Grok Build, Hermes, and Pi cases likewise accept
 `MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
 `MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
+`MOBIUS_TEST_GROK_BUILD_PATH`,
 `MOBIUS_TEST_HERMES_PATH`,
 `MOBIUS_TEST_PI_PATH`, and `MOBIUS_TEST_PI_ACP_PATH`, with Gemini using
 `MOBIUS_TEST_GEMINI_PATH`. Without overrides, cases resolve their executables

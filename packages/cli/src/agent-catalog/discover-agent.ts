@@ -39,7 +39,7 @@ function integrationProbeFailure(
             return new AuthenticationRequiredAgent(specification, agent);
         }
         return error.code === "acp_incompatible"
-            ? new IncompatibleAdapter(specification, agent)
+            ? new IncompatibleAdapter(specification, agent, error.message)
             : new IntegrationProbeFailed(specification, agent, error.code, error.message);
     }
     if (error instanceof ProcessExecutionError) {

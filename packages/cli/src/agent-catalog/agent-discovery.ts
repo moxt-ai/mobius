@@ -90,11 +90,12 @@ export class IntegrationProbeFailed extends UnavailableInstalledAgent {
 
 export class IncompatibleAdapter extends UnavailableInstalledAgent {
     readonly code = "acp_incompatible";
-    readonly message = "ACP adapter is incompatible";
+    readonly message: string;
     readonly status = "incompatible_adapter";
 
-    constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition) {
+    constructor(specification: LocalAgentSpecification, agent: AgentIntegrationDefinition, message: string) {
         super(specification, agent);
+        this.message = message;
     }
 }
 

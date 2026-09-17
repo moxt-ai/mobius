@@ -1,7 +1,12 @@
 import { realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
-import type { AgentCapabilities, ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
+import {
+    type AgentCapabilities,
+    type ClientConnection,
+    type InitializeResponse,
+    RequestError,
+} from "@agentclientprotocol/sdk";
 
 import { GROK_BUILD_MANAGED_VERSION, grokBuildManagedPackage } from "../../agent-installation/grok-managed-package.ts";
 import { validateManagedNpmPackage } from "../../agent-installation/managed-npm-package.ts";
@@ -84,16 +89,27 @@ export class GrokBuildAgentSpecification extends DirectAcpAgentDefinition {
         signal: AbortSignal,
     ): Promise<void> => {
         const capabilities: AgentCapabilities = initialized.agentCapabilities ?? {};
-        const session = capabilities.sessionCapabilities;
-        if (
-            capabilities.loadSession !== true ||
-            session?.close == null ||
-            session.list == null ||
-            session.resume == null ||
-            !(initialized.authMethods ?? []).some((method) => method.id === "xai.api_key" || method.id === "grok.com")
-        ) {
-            throw new AgentProbeError("acp_incompatible", "Grok Build reported an unsupported ACP capability set");
+        if (capabilities.loadSession !== true) {
+            throw new AgentProbeError("acp_incompatible", "Grok Build did not report ACP session loading");
         }
-        await verifySessionCreation(connection, capabilities, defaultWorkspace, signal, this.label);
+        const authMethods = initialized.authMethods ?? [];
+        if (authMethods.length === 0) {
+            throw new AgentProbeError("acp_incompatible", "Grok Build did not report an ACP authentication method");
+        }
+        try {
+            await verifySessionCreation(connection, capabilities, defaultWorkspace, signal, this.label);
+        } catch (cause) {
+            const detail =
+                cause instanceof RequestError
+                    ? `ACP error ${cause.code}: ${cause.message}`
+                    : cause instanceof Error
+                      ? `${cause.name}: ${cause.message}`
+                      : "unknown error";
+            throw new AgentProbeError(
+                "acp_incompatible",
+                `Grok Build could not create an ACP session (${detail}; auth methods: ${authMethods.map(({ id }) => id).join(", ")})`,
+                { cause },
+            );
+        }
     };
 }

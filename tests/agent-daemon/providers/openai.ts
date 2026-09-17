@@ -88,7 +88,9 @@ function stringProperty(parameters: JsonObject | undefined, candidates: readonly
 }
 
 function selectTool(tools: readonly AvailableTool[]): SelectedTool | undefined {
-    const shell = tools.find((tool) => /(?:^|\.)(?:terminal|exec|bash|shell|command)$/iu.test(tool.name));
+    const shell = tools.find((tool) =>
+        /(?:^|\.)(?:terminal|exec|bash|shell|command|run_terminal_command)$/iu.test(tool.name),
+    );
     if (shell !== undefined) {
         if (shell.kind === "custom") {
             return {
@@ -161,8 +163,10 @@ function completedResponse(model: string, output: readonly JsonObject[]): JsonOb
     };
 }
 
-function responsesEvent(response: ServerResponse, type: string, payload: JsonObject): void {
-    response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...payload })}\n\n`);
+function responsesEvent(response: ServerResponse, type: string, sequenceNumber: number, payload: JsonObject): void {
+    response.write(
+        `event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequenceNumber, ...payload })}\n\n`,
+    );
 }
 
 function sendResponsesText(response: ServerResponse, model: string, answer: string): void {
@@ -174,34 +178,34 @@ function sendResponsesText(response: ServerResponse, model: string, answer: stri
         content: [{ type: "output_text", text: answer, annotations: [] }],
     };
     const completed = completedResponse(model, [item]);
-    responsesEvent(response, "response.created", { response: { ...completed, status: "in_progress", output: [] } });
-    responsesEvent(response, "response.output_item.added", { output_index: 0, item: { ...item, content: [] } });
-    responsesEvent(response, "response.content_part.added", {
+    responsesEvent(response, "response.created", 0, { response: { ...completed, status: "in_progress", output: [] } });
+    responsesEvent(response, "response.output_item.added", 1, { output_index: 0, item: { ...item, content: [] } });
+    responsesEvent(response, "response.content_part.added", 2, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         part: { type: "output_text", text: "", annotations: [] },
     });
-    responsesEvent(response, "response.output_text.delta", {
+    responsesEvent(response, "response.output_text.delta", 3, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         delta: answer,
     });
-    responsesEvent(response, "response.output_text.done", {
+    responsesEvent(response, "response.output_text.done", 4, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         text: answer,
     });
-    responsesEvent(response, "response.content_part.done", {
+    responsesEvent(response, "response.content_part.done", 5, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         part: item.content[0],
     });
-    responsesEvent(response, "response.output_item.done", { output_index: 0, item });
-    responsesEvent(response, "response.completed", { response: completed });
+    responsesEvent(response, "response.output_item.done", 6, { output_index: 0, item });
+    responsesEvent(response, "response.completed", 7, { response: completed });
     response.end();
 }
 
@@ -216,36 +220,36 @@ function sendResponsesToolCall(response: ServerResponse, model: string, tool: Se
         ...(tool.kind === "custom" ? { input: tool.input } : { arguments: tool.input }),
     };
     const completed = completedResponse(model, [item]);
-    responsesEvent(response, "response.created", { response: { ...completed, status: "in_progress", output: [] } });
-    responsesEvent(response, "response.output_item.added", {
+    responsesEvent(response, "response.created", 0, { response: { ...completed, status: "in_progress", output: [] } });
+    responsesEvent(response, "response.output_item.added", 1, {
         output_index: 0,
         item: { ...item, ...(tool.kind === "custom" ? { input: "" } : { arguments: "" }) },
     });
     if (tool.kind === "custom") {
-        responsesEvent(response, "response.custom_tool_call_input.delta", {
+        responsesEvent(response, "response.custom_tool_call_input.delta", 2, {
             item_id: item.id,
             output_index: 0,
             delta: tool.input,
         });
-        responsesEvent(response, "response.custom_tool_call_input.done", {
+        responsesEvent(response, "response.custom_tool_call_input.done", 3, {
             item_id: item.id,
             output_index: 0,
             input: tool.input,
         });
     } else {
-        responsesEvent(response, "response.function_call_arguments.delta", {
+        responsesEvent(response, "response.function_call_arguments.delta", 2, {
             item_id: item.id,
             output_index: 0,
             delta: tool.input,
         });
-        responsesEvent(response, "response.function_call_arguments.done", {
+        responsesEvent(response, "response.function_call_arguments.done", 3, {
             item_id: item.id,
             output_index: 0,
             arguments: tool.input,
         });
     }
-    responsesEvent(response, "response.output_item.done", { output_index: 0, item });
-    responsesEvent(response, "response.completed", { response: completed });
+    responsesEvent(response, "response.output_item.done", 4, { output_index: 0, item });
+    responsesEvent(response, "response.completed", 5, { response: completed });
     response.end();
 }
 
