@@ -1,7 +1,6 @@
 {
     "$schema": "../../node_modules/wrangler/config-schema.json",
     "name": "mobius-relay-platform",
-    "placement": { "mode": "smart" },
     "main": "src/worker.ts",
     "compatibility_date": "2026-09-03",
     "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE" }],
@@ -56,7 +55,6 @@
     "env": {
         "staging": {
             "name": "mobius-platform-staging",
-            "placement": { "mode": "smart" },
             "services": [
                 { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-staging-apac" },
                 { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-staging-wnam" }
@@ -103,7 +101,6 @@
         },
         "production": {
             "name": "mobius-platform-production",
-            "placement": { "mode": "smart" },
             "services": [
                 { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-production-apac" },
                 { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-production-wnam" }
