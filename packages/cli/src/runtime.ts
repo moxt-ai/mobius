@@ -9,7 +9,7 @@ import { readStateDirectory } from "./storage/state-directory.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const RUNTIME_CREDENTIAL_PATTERN =
-    /^(?:[a-zA-Z0-9_-]{43}|prj_[a-zA-Z0-9_-]{24}_[a-zA-Z0-9_-]{43}|prj_(?:wn|en|sa|we|ee|ap|oc|af|me)_01_[a-zA-Z0-9_-]{24}_[a-zA-Z0-9_-]{43})$/;
+    /^(?:[a-zA-Z0-9_-]{43}|prj_[a-zA-Z0-9_-]{24}_[a-zA-Z0-9_-]{43}|prj_(?:wn|en|sa|we|ee|ap|an|as|oc|af|me)_01_[a-zA-Z0-9_-]{24}_[a-zA-Z0-9_-]{43})$/;
 
 export interface MobiusRuntimeConnection {
     readonly auditDatabasePath: string;

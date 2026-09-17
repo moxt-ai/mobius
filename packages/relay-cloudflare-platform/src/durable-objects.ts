@@ -1,10 +1,12 @@
 import {
     BotConnectionActor as BotConnectionImplementation,
+    CloudflareSessionTransport,
     createDurableObjectContext,
     type LiteSessionConfigurationEnvironment,
     RuntimeRelay as RuntimeRelayImplementation,
     SessionRelay as SessionRelayImplementation,
 } from "@moxt-ai/mobius-relay-core";
+import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
 import { PlatformBucketResolver } from "./storage/platform-bucket-resolver.ts";
 import {
@@ -27,6 +29,11 @@ function createContext(state: DurableObjectState, environment: PlatformDurableOb
         environment,
         connections: environment.BOT_CONNECTIONS,
         sessions: environment.SESSION_RELAY,
+        sessionTransport: new CloudflareSessionTransport(
+            environment.SESSION_RELAY,
+            "platform",
+            (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
+        ),
         namespacePrefix: "platform",
         databases,
         projects,

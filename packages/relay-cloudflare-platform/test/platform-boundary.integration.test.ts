@@ -167,7 +167,7 @@ async function projectRows(projectId: string, sql: string, ...values: readonly (
     return await runInDurableObject(stub, (_instance, state) => state.storage.sql.exec(sql, ...values).toArray());
 }
 
-it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"])(
+it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"])(
     "Given the %s Durable Object location, When an App provisions a Project, Then the Project is available at that location while its dashboard record remains available",
     async (locationHint) => {
         const fixture = await provisionPlatformProject(`durable-project-${locationHint}`, locationHint);
@@ -180,7 +180,13 @@ it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"])(
 
         expect(placement.status).toBe(200);
         await expect(placement.json()).resolves.toEqual({
-            location: locationHint === "apac" || locationHint === "oc" ? "apac" : "wnam",
+            location:
+                locationHint === "apac" ||
+                locationHint === "apac-ne" ||
+                locationHint === "apac-se" ||
+                locationHint === "oc"
+                    ? "apac"
+                    : "wnam",
         });
 
         const dashboard = await fixture.environment.PLATFORM_DIRECTORY_DATABASE.prepare(

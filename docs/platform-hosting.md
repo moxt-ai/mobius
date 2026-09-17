@@ -18,8 +18,8 @@ Create the directory database and R2 buckets before the first remote deployment:
 
 - `PROJECT_RELAY` is a SQLite Durable Object namespace. One object owns each
   Project's relational resources and initializes its schema when first used.
-- `R2_BUCKET_APAC` and `R2_BUCKET_WNAM` retain Project content. `apac` and `oc`
-  use APAC; every other supported location hint uses WNAM.
+- `R2_BUCKET_APAC` and `R2_BUCKET_WNAM` retain Project content. `apac`, `apac-ne`,
+  `apac-se`, and `oc` use APAC; every other supported location hint uses WNAM.
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
   and dashboard audit records and uses
   `packages/relay-cloudflare-platform/migrations/dashboard`.

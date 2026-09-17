@@ -73,16 +73,17 @@ construct SQL adapters, R2 content stores, channel peers, or alarm schedulers.
 
 Platform Project IDs use `prj_<location-code>_<r2-shard>_<local-id>`, for example
 `prj_ap_01_<24-character-base64url-token>`. Location codes represent `wnam`,
-`enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, and `me`; `01` selects the
-existing R2 shard. `apac` and `oc` use `R2_BUCKET_APAC`, while all other hints use
-`R2_BUCKET_WNAM`. The local ID has 144 bits of randomness. Each Project ID names
+`enam`, `sam`, `weur`, `eeur`, `apac`, `apac-ne`, `apac-se`, `oc`, `afr`, and
+`me`; `01` selects the existing R2 shard. `apac`, `apac-ne`, `apac-se`, and `oc`
+use `R2_BUCKET_APAC`, while all other hints use `R2_BUCKET_WNAM`. The local ID has
+144 bits of randomness. Each Project ID names
 one Project Durable Object, which owns the Project relational database. Routing
 does not grant access: credential, ownership, and lifecycle checks remain at
 their authorization boundaries.
 
 Other applications can resolve one ID with the public, database-free endpoint
-`GET /mobius/api/dashboard/v1/projects/:projectId/storage-placement`. For `ap`
-and `oc` IDs it returns `{ "location": "apac" }`; all other supported codes return
+`GET /mobius/api/dashboard/v1/projects/:projectId/storage-placement`. For `ap`,
+`an`, `as`, and `oc` IDs it returns `{ "location": "apac" }`; all other supported codes return
 `{ "location": "wnam" }`.
 This decodes placement only; it does not check Project existence or grant access.
 Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;

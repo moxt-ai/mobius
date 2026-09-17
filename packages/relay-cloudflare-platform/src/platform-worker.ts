@@ -20,6 +20,7 @@ import {
 } from "./composition/platform-authentication-environment.ts";
 import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
+import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
 import {
     type ProjectDurableObjectExecutionBindings,
     type ProjectWorkerRoutingBindings,
@@ -298,7 +299,11 @@ export function createPlatformWorker(authentication: PlatformAuthenticationConfi
 export function createPlatformGateways(environment: PlatformRelayBindings): WorkerRuntimeGateways {
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
-        sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, "platform"),
+        sessions: new CloudflareSessionTransport(
+            environment.SESSION_RELAY,
+            "platform",
+            (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
+        ),
         connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }

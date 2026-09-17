@@ -85,7 +85,19 @@ class ProjectDatabaseAdapter implements PlatformProjectDatabase {
     };
 }
 
-const locationHints: ReadonlySet<string> = new Set(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"]);
+const locationHints: ReadonlySet<string> = new Set([
+    "wnam",
+    "enam",
+    "sam",
+    "weur",
+    "eeur",
+    "apac",
+    "apac-ne",
+    "apac-se",
+    "oc",
+    "afr",
+    "me",
+]);
 
 function isPlatformProjectLocationHint(value: string): value is PlatformProjectLocationHint {
     return locationHints.has(value);

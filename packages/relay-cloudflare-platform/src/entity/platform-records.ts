@@ -103,7 +103,7 @@ export const ProjectRowSchema = v.object({
     display_name: v.string(),
     idempotency_key: v.string(),
     lifecycle,
-    location_hint: v.picklist(["wnam", "enam", "sam", "weur", "eeur", "apac", "oc", "afr", "me"]),
+    location_hint: v.picklist(["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"]),
     project_id: v.string(),
     request_digest: v.string(),
     suspended_at: v.nullable(nonNegativeInteger),

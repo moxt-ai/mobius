@@ -101,7 +101,18 @@ export interface PlatformProjectPlacement {
     readonly locationHint: PlatformProjectLocationHint;
 }
 
-export type PlatformProjectLocationHint = "wnam" | "enam" | "sam" | "weur" | "eeur" | "apac" | "oc" | "afr" | "me";
+export type PlatformProjectLocationHint =
+    | "wnam"
+    | "enam"
+    | "sam"
+    | "weur"
+    | "eeur"
+    | "apac"
+    | "apac-ne"
+    | "apac-se"
+    | "oc"
+    | "afr"
+    | "me";
 
 export interface PlatformProjectPlacementRegistry {
     readonly resolveLocationHint: (locationHint: string) => PlatformProjectPlacement | null;
