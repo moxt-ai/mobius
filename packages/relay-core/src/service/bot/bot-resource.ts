@@ -105,11 +105,11 @@ export function behaviorResource(row: Awaited<ReturnType<BotControlStorage["list
         requiredCapabilities: stringArray(row.required_capabilities_json, "The behavior requirements are invalid"),
         revisionNumber: row.revision_number,
     };
-    if (row.lifecycle === "proposed" || row.lifecycle === "awaiting_local_approval") {
+    if (row.lifecycle === "proposed") {
         return resource;
     }
-    if (row.lifecycle === "approved") {
-        return { ...resource, approvedAt: timestamp(row.approved_at) };
+    if (row.lifecycle === "active") {
+        return { ...resource, activatedAt: timestamp(row.activated_at) };
     }
     if (row.lifecycle === "retired") {
         return { ...resource, retiredAt: timestamp(row.retired_at) };
@@ -133,11 +133,8 @@ export function bindingResource(row: Awaited<ReturnType<BotControlStorage["listE
         runtimeId: row.runtime_id,
         workspaceRef: row.workspace_ref,
     };
-    if (row.lifecycle === "requested") {
-        return resource;
-    }
-    if (row.lifecycle === "approved") {
-        return { ...resource, approvedAt: timestamp(row.approved_at) };
+    if (row.lifecycle === "active") {
+        return { ...resource, activatedAt: timestamp(row.activated_at) };
     }
     if (
         row.lifecycle === "unavailable" &&

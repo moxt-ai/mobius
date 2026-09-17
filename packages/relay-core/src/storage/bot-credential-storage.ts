@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, or } from "drizzle-orm";
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import type { BotGrantCredential } from "../entity/bot/bot-grant.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
@@ -277,7 +277,6 @@ export class BotCredentialStorage implements BotCredentialRecords {
                 bot_lifecycle: bot.lifecycle,
                 channel_id: pairingChannel.channelId,
                 pairing_id: pairingChannel.pairingId,
-                local_grant_id: botExecutionBinding.localGrantId,
             })
             .from(botExecutionDirectory)
             .innerJoin(bot, eq(bot.botId, botExecutionDirectory.botId))
@@ -301,17 +300,10 @@ export class BotCredentialStorage implements BotCredentialRecords {
                     eq(botExecutionDirectory.executionId, executionId),
                     eq(pairingChannel.daemonTokenHash, digest),
                     eq(pairingChannel.status, "paired"),
-                    eq(botExecutionBinding.lifecycle, "approved"),
-                    isNotNull(botExecutionBinding.localGrantId),
+                    eq(botExecutionBinding.lifecycle, "active"),
                 ),
             )
             .limit(1);
-        if (row === undefined) {
-            return null;
-        }
-        if (row.local_grant_id === null) {
-            throw new Error("Approved Bot execution binding has no local grant");
-        }
-        return { ...row, local_grant_id: row.local_grant_id };
+        return row ?? null;
     };
 }

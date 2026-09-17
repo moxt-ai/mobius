@@ -1,8 +1,4 @@
 import {
-    BOT_BINDING_APPROVED_KIND,
-    BOT_BINDING_UNAVAILABLE_KIND,
-    decodeBotExecutionBindingApprovedEvent,
-    decodeBotExecutionBindingUnavailableEvent,
     decodeMessageKind,
     decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatEvent,
@@ -18,7 +14,6 @@ import {
     SESSION_EVENT_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { ProjectScope } from "../../entity/do/session.ts";
-import type { BotRuntimeService } from "../bot/bot-runtime-service.ts";
 import type { RemoteSessionRuntime } from "../do/remote-session-runtime.ts";
 import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.ts";
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
@@ -59,7 +54,6 @@ interface RuntimeContext {
     readonly services: {
         readonly connections: RuntimeConnectionService;
         readonly credentials: Pick<ChannelCredentialService, "isActive">;
-        readonly bots: Pick<BotRuntimeService, "approveBinding" | "rejectBinding">;
         readonly recovery: RuntimeRecoveryService;
         readonly channel: (runtimeId: string, scope: ProjectScope) => ChannelActor;
     };
@@ -287,7 +281,6 @@ export class RuntimeService {
         const channel = this.channel(runtimeId, scope);
         channel.configureDaemonDelivery(deliveryReceipts);
         await channel.dispatchPending(signal);
-        await this.#cx.services.recovery.dispatch(runtimeId, scope, signal);
         await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
 
@@ -301,7 +294,6 @@ export class RuntimeService {
         const channel = this.channel(runtimeId, scope);
         channel.configureDaemonDelivery(deliveryReceipts);
         await channel.attachDaemon(replaced, signal);
-        await this.#cx.services.recovery.dispatch(runtimeId, scope, signal);
         await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
 
@@ -370,31 +362,6 @@ export class RuntimeService {
                 if (!this.#cx.services.connections.isCurrent(identity)) {
                     socket.replaceDaemon();
                     return;
-                }
-                if (typeof message === "string") {
-                    const kind = decodeMessageKind(message);
-                    if (kind === BOT_BINDING_APPROVED_KIND) {
-                        await this.#cx.services.bots.approveBinding(
-                            scope,
-                            identity.runtimeId,
-                            decodeBotExecutionBindingApprovedEvent(message),
-                            Date.now(),
-                            signal,
-                        );
-                        socket.send(message);
-                        return;
-                    }
-                    if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
-                        await this.#cx.services.bots.rejectBinding(
-                            scope,
-                            identity.runtimeId,
-                            decodeBotExecutionBindingUnavailableEvent(message),
-                            Date.now(),
-                            signal,
-                        );
-                        socket.send(message);
-                        return;
-                    }
                 }
                 const channel = this.channel(identity.runtimeId, scope);
                 channel.configureDaemonDelivery(identity.deliveryReceipts);

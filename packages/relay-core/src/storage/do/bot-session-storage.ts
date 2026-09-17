@@ -166,11 +166,11 @@ export class BotSessionStorage {
                scope_key, session_id, conversation_id, bot_id,
                behavior_revision_id, binding_id, binding_revision,
                runtime_id, agent_ref, workspace_ref, agent_config_revision,
-               local_grant_id, creator_kind, creator_principal_id,
+               creator_kind, creator_principal_id,
                behavior_instructions, behavior_digest,
                allowed_delivery_targets_json, completion_policy_json,
                reply_route_json, created_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     input.scopeKey,
                     input.provisioning.sessionId,
@@ -183,7 +183,6 @@ export class BotSessionStorage {
                     input.provisioning.agentRef,
                     input.provisioning.workspaceRef,
                     input.provisioning.agentConfigRevision,
-                    input.provisioning.localGrantId,
                     input.provisioning.creatorKind,
                     input.provisioning.creatorPrincipalId,
                     input.provisioning.behaviorInstructions,

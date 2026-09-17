@@ -494,7 +494,7 @@ export class BotConnectionStorage {
                    FROM bot_execution_bindings AS bindings,
                         json_each(bindings.allowed_delivery_target_ids_json) AS target
                   WHERE bindings.binding_id = ? AND bindings.bot_id = ?
-                    AND bindings.lifecycle = 'approved' AND target.value = ?`,
+                    AND bindings.lifecycle = 'active' AND target.value = ?`,
             )
             .bind(bindingId, botId, deliveryTargetId)
             .first<{ readonly allowed: number }>(signal);

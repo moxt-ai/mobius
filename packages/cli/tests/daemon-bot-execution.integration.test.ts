@@ -3,44 +3,32 @@ import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promise
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
     AGENT_ACTIVITY_KIND,
     type AgentExecutionConfiguration,
-    BotExecutionBindingApprovalRequest,
     BotSessionPromptCommand,
-    decodeBotExecutionBindingApprovedEvent,
     decodeMessageKind,
     decodeRuntimeDeliveryReceived,
-    decodeSessionConfigUpdatedEvent,
     decodeSessionEventEnvelope,
     decodeSessionOperationFailedEvent,
-    decodeSessionReadyEvent,
-    encodeBotExecutionBindingApprovalRequest,
-    encodeBotExecutionBindingApprovedEvent,
     encodeBotSessionPromptCommand,
     encodeRuntimeDelivery,
     encodeRuntimeDeliveryCommitted,
-    encodeSessionConfigureCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPrepareCommand,
     MOBIUS_API_PREFIX,
-    NoBotCompletionDeliveryPolicy,
     OwnerBotReplyRoute,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_CONFIG_UPDATED_KIND,
-    SESSION_CONFIGURE_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
-    SESSION_FAILED_KIND,
     SESSION_PREPARE_KIND,
-    SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
@@ -221,7 +209,7 @@ describe("daemon Bot execution boundary", () => {
         vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
     });
     afterEach(() => vi.useRealTimers());
-    it("Given an approved Bot workspace changes contents and is later replaced, When the same conversation continues, Then the daemon refreshes the local target without user approval", async () => {
+    it("Given a paired Runtime root, When Bot commands select directories inside it, Then the daemon validates and executes them", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -340,109 +328,45 @@ describe("daemon Bot execution boundary", () => {
                     valueType: "select",
                 },
             };
-            const proposal = new BotExecutionBindingApprovalRequest(
-                "approval_alpha",
-                "bot_alpha",
-                "behavior_alpha",
-                "binding_alpha",
-                1,
-                "runtime_alpha",
-                "codex",
-                "default",
-                1,
-                "Follow the approved Bot behavior.",
-                "a".repeat(64),
-                ["embedded-context"],
-                [],
-                new NoBotCompletionDeliveryPolicy(),
-                selectedExecutionConfiguration,
-            );
-            const approvalFrame = frames.next();
-            writeServerTextFrame(socket, encodeBotExecutionBindingApprovalRequest(proposal));
-            const approvalPayload = await approvalFrame;
-            expect(JSON.parse(approvalPayload)).toHaveProperty("localGrantId");
-            const approved = decodeBotExecutionBindingApprovedEvent(approvalPayload);
-            writeServerTextFrame(socket, encodeBotExecutionBindingApprovedEvent(approved));
-            expect(approved).toMatchObject({
-                behaviorRevisionId: proposal.behaviorRevisionId,
-                bindingId: proposal.bindingId,
-                botId: proposal.botId,
-            });
+            const binding = {
+                behaviorDigest: "a".repeat(64),
+                behaviorInstructions: "Follow the Bot behavior.",
+                behaviorRevisionId: "behavior_alpha",
+                bindingId: "binding_alpha",
+                bindingRevision: 1,
+                botId: "bot_alpha",
+            };
 
             const overrideDirectoryId = `path-${Buffer.from(overrideWorkspace, "utf8").toString("base64url")}`;
             const unpreparedOverride = new BotSessionPromptCommand(
                 "session_override",
                 "message_unprepared_override",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 overrideDirectoryId,
                 [],
                 [],
                 [],
-                "Must require local preparation",
+                "Report Bot execution settings",
                 "execution_unprepared_override",
                 "capability_unprepared_override",
                 "b".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_override",
                 "turn_unprepared_override",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(unpreparedOverride));
-            const unpreparedFailure = decodeSessionEventEnvelope(await frames.next());
-            expect(decodeMessageKind(unpreparedFailure.payload)).toBe(SESSION_FAILED_KIND);
-            expect(JSON.parse(unpreparedFailure.payload)).toMatchObject({
-                code: "local_approval_required",
-                commandId: unpreparedOverride.commandId,
-                sessionId: unpreparedOverride.sessionId,
-            });
-
-            writeServerTextFrame(
-                socket,
-                encodeSessionPrepareCommand({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: config.bindingId,
-                    directoryId: overrideDirectoryId,
-                    kind: SESSION_PREPARE_KIND,
-                    requestId: "prepare_override",
-                    sessionId: unpreparedOverride.sessionId,
-                }),
+            expect(await readCompletedText(frames)).toBe(
+                `test-large|${await realpath(overrideWorkspace)}|bot-context|relay-cleared`,
             );
-            const announcedConfigEnvelope = decodeSessionEventEnvelope(await frames.next());
-            expect(decodeMessageKind(announcedConfigEnvelope.payload)).toBe(SESSION_CONFIG_UPDATED_KIND);
-            expect(announcedConfigEnvelope.source.kind).toBe("runtime");
-            const readyEnvelope = decodeSessionEventEnvelope(await frames.next());
-            expect(decodeMessageKind(readyEnvelope.payload)).toBe(SESSION_READY_KIND);
-            const ready = decodeSessionReadyEvent(readyEnvelope.payload);
-            expect(ready).toMatchObject({
-                agentId: "codex",
-                directoryId: overrideDirectoryId,
-                sessionId: unpreparedOverride.sessionId,
-            });
-            expect(decodeSessionReadyEvent(await frames.next())).toMatchObject({
-                requestId: "prepare_override",
-                runtimeTimings: expect.arrayContaining([
-                    expect.objectContaining({ name: "prepare-total" }),
-                    expect.objectContaining({ name: "workspace-resolve" }),
-                    expect.objectContaining({ name: "session-state-read" }),
-                    expect.objectContaining({ name: "executable-validation" }),
-                    expect.objectContaining({ name: "process-spawn" }),
-                    expect.objectContaining({ name: "agent-initialize" }),
-                    expect.objectContaining({ name: "session-new" }),
-                    expect.objectContaining({ name: "workspace-list" }),
-                    expect.objectContaining({ name: "readiness-commit" }),
-                ]),
-                sessionId: unpreparedOverride.sessionId,
-            });
 
             writeServerTextFrame(
                 socket,
@@ -465,64 +389,11 @@ describe("daemon Bot execution boundary", () => {
                 sessionId: "session_missing_agent",
             });
 
-            writeServerTextFrame(
-                socket,
-                encodeSessionConfigureCommand({
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    bindingId: config.bindingId,
-                    booleanValue: false,
-                    configId: "model",
-                    directoryId: overrideDirectoryId,
-                    kind: SESSION_CONFIGURE_KIND,
-                    requestId: "configure_override_model",
-                    sessionId: unpreparedOverride.sessionId,
-                    value: "test-large",
-                    valueType: "select",
-                }),
-            );
-            const configuredEnvelope = decodeSessionEventEnvelope(await frames.next());
-            expect(decodeMessageKind(configuredEnvelope.payload)).toBe(SESSION_CONFIG_UPDATED_KIND);
-            expect(decodeSessionConfigUpdatedEvent(configuredEnvelope.payload).configOptions).toEqual(
-                expect.arrayContaining([expect.objectContaining({ currentValue: "test-large", id: "model" })]),
-            );
-
-            const preparedOverride = new BotSessionPromptCommand(
-                unpreparedOverride.sessionId,
-                "message_prepared_override",
-                "codex",
-                proposal.bindingId,
-                overrideDirectoryId,
-                [],
-                [],
-                [],
-                "Report Bot execution settings",
-                "execution_prepared_override",
-                "capability_prepared_override",
-                "f".repeat(43),
-                new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
-                "conversation_override",
-                "turn_prepared_override",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
-                [],
-                new OwnerBotReplyRoute(),
-                selectedExecutionConfiguration,
-            );
-            writeServerTextFrame(socket, encodeBotSessionPromptCommand(preparedOverride));
-            expect(await readCompletedText(frames)).toBe(
-                `test-large|${await realpath(overrideWorkspace)}|bot-context|relay-cleared`,
-            );
-
             const configuredBotPrompt = new BotSessionPromptCommand(
                 "session_bot_configuration",
                 "message_bot_configuration",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -532,14 +403,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_bot_configuration",
                 "d".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_alpha",
                 "turn_bot_configuration",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -553,7 +423,7 @@ describe("daemon Bot execution boundary", () => {
                 "session_alpha",
                 "message_alpha",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -563,14 +433,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_alpha",
                 "c".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_alpha",
                 "turn_alpha",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -623,7 +492,7 @@ describe("daemon Bot execution boundary", () => {
                 "session_bot_steering",
                 "message_bot_active",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -633,14 +502,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_bot_active",
                 "g".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_bot_steering",
                 "turn_bot_active",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -656,7 +524,7 @@ describe("daemon Bot execution boundary", () => {
                 activeBotPrompt.sessionId,
                 "message_bot_steering",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -666,14 +534,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_bot_steering",
                 "h".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 activeBotPrompt.conversationId,
                 "turn_bot_steering",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -715,7 +582,7 @@ describe("daemon Bot execution boundary", () => {
                 activeBotPrompt.sessionId,
                 "message_bot_queued",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -725,14 +592,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_bot_queued",
                 "i".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 activeBotPrompt.conversationId,
                 "turn_bot_queued",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -743,30 +609,12 @@ describe("daemon Bot execution boundary", () => {
             await deliverBotCommand(socket, frames, "delivery_bot_queued", queuedBotPrompt);
             expect(await readCompletedText(frames)).toContain("run the queued Bot follow-up");
 
-            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    database
-                        .prepare(
-                            "SELECT bot_id, behavior_revision_id, binding_id, workspace_path FROM local_bot_grants",
-                        )
-                        .get(),
-                ).toMatchObject({
-                    behavior_revision_id: proposal.behaviorRevisionId,
-                    binding_id: proposal.bindingId,
-                    bot_id: proposal.botId,
-                    workspace_path: await realpath(workspace),
-                });
-            } finally {
-                database.close();
-            }
-
-            await mkdir(join(workspace, "changed-after-approval"));
+            await mkdir(join(workspace, "changed-after-selection"));
             const changedContentsPrompt = new BotSessionPromptCommand(
                 "session_alpha",
                 "message_changed_contents",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -776,14 +624,13 @@ describe("daemon Bot execution boundary", () => {
                 "capability_changed_contents",
                 "e".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_alpha",
                 "turn_changed_contents",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
@@ -797,7 +644,7 @@ describe("daemon Bot execution boundary", () => {
                 "session_alpha",
                 "message_replaced_target",
                 "codex",
-                proposal.bindingId,
+                binding.bindingId,
                 "default",
                 [],
                 [],
@@ -807,92 +654,19 @@ describe("daemon Bot execution boundary", () => {
                 "capability_replaced_target",
                 "g".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
+                binding.botId,
                 "conversation_alpha",
                 "turn_replaced_target",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
                 [],
                 new OwnerBotReplyRoute(),
                 selectedExecutionConfiguration,
             );
             writeServerTextFrame(socket, encodeBotSessionPromptCommand(replacedTargetPrompt));
             expect(await readCompletedText(frames)).toContain("Continue after workspace replacement");
-            const refreshedDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    refreshedDatabase
-                        .prepare("SELECT revocation_epoch, revoked_at FROM local_bot_grants WHERE local_grant_id = ?")
-                        .get(approved.localGrantId),
-                ).toEqual({ revocation_epoch: 0, revoked_at: null });
-                expect(
-                    refreshedDatabase
-                        .prepare("SELECT event FROM audit_events WHERE event = 'bot_binding_target_refreshed'")
-                        .get(),
-                ).toBeUndefined();
-            } finally {
-                refreshedDatabase.close();
-            }
-
-            const legacyDatabase = new DatabaseSync(auditDatabasePath);
-            try {
-                legacyDatabase
-                    .prepare(
-                        `UPDATE local_bot_grants
-                            SET workspace_identity_digest = ?, revoked_at = ?,
-                                revocation_epoch = revocation_epoch + 1
-                          WHERE local_grant_id = ?`,
-                    )
-                    .run("0".repeat(64), Date.now(), approved.localGrantId);
-            } finally {
-                legacyDatabase.close();
-            }
-            const legacyGrantPrompt = new BotSessionPromptCommand(
-                "session_alpha",
-                "message_legacy_grant",
-                "codex",
-                proposal.bindingId,
-                "default",
-                [],
-                [],
-                [],
-                "Continue after upgrading a revoked legacy grant",
-                "execution_legacy_grant",
-                "capability_legacy_grant",
-                "h".repeat(43),
-                new Date(Date.now() + 60_000).toISOString(),
-                proposal.botId,
-                "conversation_alpha",
-                "turn_legacy_grant",
-                proposal.behaviorRevisionId,
-                proposal.bindingRevision,
-                approved.localGrantId,
-                proposal.behaviorInstructions,
-                proposal.behaviorDigest,
-                [],
-                new OwnerBotReplyRoute(),
-                selectedExecutionConfiguration,
-            );
-            writeServerTextFrame(socket, encodeBotSessionPromptCommand(legacyGrantPrompt));
-            expect(await readCompletedText(frames)).toContain("Continue after upgrading a revoked legacy grant");
-            const migratedDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    migratedDatabase
-                        .prepare("SELECT revocation_epoch, revoked_at FROM local_bot_grants WHERE local_grant_id = ?")
-                        .get(approved.localGrantId),
-                ).toEqual({ revocation_epoch: 2, revoked_at: null });
-                expect(
-                    migratedDatabase
-                        .prepare("SELECT event FROM audit_events WHERE event = 'bot_binding_target_refreshed'")
-                        .get(),
-                ).toEqual({ event: "bot_binding_target_refreshed" });
-            } finally {
-                migratedDatabase.close();
-            }
         } finally {
             cancellation.abort();
             await daemon;

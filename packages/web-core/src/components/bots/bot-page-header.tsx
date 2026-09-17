@@ -41,6 +41,7 @@ function statusLabel(bot: MobiusBot): string {
 export function BotStatusBadge({ bot }: { readonly bot: MobiusBot }) {
     return (
         <span
+            aria-label={`Bot status: ${statusLabel(bot)}`}
             className={cn(
                 "inline-flex min-h-6 items-center rounded-full px-2.5 text-[11px] font-semibold",
                 bot.state.kind === "active" && "bg-[#e8f8ef] text-[#187747]",
@@ -48,6 +49,7 @@ export function BotStatusBadge({ bot }: { readonly bot: MobiusBot }) {
                 bot.state.kind === "suspended" && "bg-[#fff5e6] text-[#9a5b00]",
                 bot.state.kind === "archived" && "bg-[#fff0f0] text-[#9b2c32]",
             )}
+            role="status"
         >
             {statusLabel(bot)}
         </span>

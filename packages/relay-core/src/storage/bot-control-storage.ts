@@ -1,11 +1,6 @@
-import {
-    type BotExecutionBindingApprovalRequest,
-    type BotExecutionBindingApprovedEvent,
-    type BotExecutionBindingUnavailableEvent,
-    encodeBotExecutionBindingApprovalRequest,
-} from "@moxt-ai/mobius-protocol";
 import type { ProjectAccessContext } from "../entity/authentication/project-authentication.ts";
 import type { ProjectBotAccess } from "../entity/bot/bot-access.ts";
+import type { BotExecutionBindingActivation } from "../entity/bot/bot-binding.ts";
 import type { BotBehaviorRevision, BotProfileRevision } from "../entity/bot/bot-revisions.ts";
 import type { ProjectScope } from "../entity/do/session.ts";
 import { createRandomToken, validateIdentifier } from "../entity/pairing/pairing.ts";
@@ -28,7 +23,7 @@ interface BotRow {
 }
 
 interface BehaviorRow {
-    readonly approved_at: unknown;
+    readonly activated_at: unknown;
     readonly retired_at: unknown;
     readonly agent_configuration_json: string;
     readonly behavior_revision_id: string;
@@ -58,7 +53,7 @@ interface TargetRow {
 }
 
 interface BindingRow {
-    readonly approved_at: unknown;
+    readonly activated_at: unknown;
     readonly revoked_at: unknown;
     readonly unavailable_at: unknown;
     readonly unavailable_code: unknown;
@@ -74,7 +69,6 @@ interface BindingRow {
     readonly created_at: number;
     readonly execution_configuration_json: string;
     readonly lifecycle: string;
-    readonly local_grant_id: unknown;
     readonly runtime_id: string;
     readonly workspace_ref: string;
 }
@@ -91,14 +85,6 @@ interface BotProfileRow extends BotRow {
     readonly description: string;
     readonly display_name: string;
     readonly profile_revision_number: number;
-}
-
-interface BindingEventIdentity {
-    readonly behaviorRevisionId: string;
-    readonly bindingId: string;
-    readonly bindingRevision: number;
-    readonly botId: string;
-    readonly requestId: string;
 }
 
 export class BotControlStorage {
@@ -370,9 +356,8 @@ export class BotControlStorage {
 
     readonly writeBinding = async (
         access: ProjectBotAccess,
-        request: BotExecutionBindingApprovalRequest,
+        request: BotExecutionBindingActivation,
         allowedDeliveryTargetIds: readonly string[],
-        outboxId: string,
         now: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
@@ -391,12 +376,20 @@ export class BotControlStorage {
             [
                 this.#database
                     .prepare(
+                        `UPDATE bot_behavior_revisions
+                            SET lifecycle = 'retired', retired_at = ?
+                          WHERE bot_id = ? AND lifecycle = 'active'
+                            AND behavior_revision_id <> ?`,
+                    )
+                    .bind(now, access.botId, behaviorRevisionId),
+                this.#database
+                    .prepare(
                         `INSERT INTO bot_execution_bindings (
                        binding_id, bot_id, behavior_revision_id, binding_revision,
                        runtime_id, agent_ref, workspace_ref, agent_config_revision,
                        allowed_delivery_target_ids_json, completion_policy_json, execution_configuration_json,
-                       lifecycle, created_at
-                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?)`,
+                       lifecycle, created_at, activated_at
+                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
                     )
                     .bind(
                         bindingId,
@@ -411,35 +404,31 @@ export class BotControlStorage {
                         JSON.stringify(completionPolicy),
                         JSON.stringify(executionConfiguration),
                         now,
-                    ),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_behavior_revisions SET lifecycle = 'awaiting_local_approval'
-                      WHERE behavior_revision_id = ? AND bot_id = ?
-                        AND lifecycle IN ('proposed', 'awaiting_local_approval')`,
-                    )
-                    .bind(behaviorRevisionId, access.botId),
-                this.#database
-                    .prepare(
-                        `INSERT INTO bot_control_outbox (
-                       outbox_id, bot_id, subject_id, runtime_id,
-                       message_kind, payload, state, created_at
-                     ) VALUES (?, ?, ?, ?, 'binding_approval', ?, 'pending', ?)`,
-                    )
-                    .bind(
-                        outboxId,
-                        access.botId,
-                        bindingId,
-                        runtimeId,
-                        encodeBotExecutionBindingApprovalRequest(request),
                         now,
                     ),
+                this.#database
+                    .prepare(
+                        `UPDATE bot_behavior_revisions
+                            SET lifecycle = 'active', activated_at = ?
+                      WHERE behavior_revision_id = ? AND bot_id = ?
+                        AND lifecycle = 'proposed'`,
+                    )
+                    .bind(now, behaviorRevisionId, access.botId),
+                this.#database
+                    .prepare(
+                        `UPDATE bots SET
+                            active_behavior_revision_id = ?, active_binding_id = ?,
+                            lifecycle = CASE WHEN lifecycle = 'suspended' THEN 'suspended' ELSE 'active' END,
+                            lifecycle_revision = lifecycle_revision + 1, updated_at = ?
+                          WHERE bot_id = ? AND lifecycle <> 'archived'`,
+                    )
+                    .bind(behaviorRevisionId, bindingId, now, access.botId),
                 this.audit(
                     access.scope,
                     access.botId,
                     access.actor.kind.value,
                     access.actor.actorId,
-                    "bot.binding.requested",
+                    "bot.binding.activated",
                     bindingId,
                     { bindingRevision: bindingRevision.toString(), runtimeId },
                     now,
@@ -448,7 +437,7 @@ export class BotControlStorage {
             signal,
         );
         signal.throwIfAborted();
-        return results.every((result) => result.meta.changes === 1);
+        return results.slice(1).every((result) => result.meta.changes === 1);
     };
 
     readonly readDeliveryTarget = async (targetId: string, signal: AbortSignal) => {
@@ -462,160 +451,6 @@ export class BotControlStorage {
             .first<TargetRow>(signal);
         signal.throwIfAborted();
         return target;
-    };
-
-    readonly listPendingControl = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        limit: number,
-        signal: AbortSignal,
-    ): Promise<readonly string[]> => {
-        signal.throwIfAborted();
-        const rows = await this.#database
-            .prepare(
-                `SELECT payload FROM bot_control_outbox AS outbox
-                   INNER JOIN bots ON bots.bot_id = outbox.bot_id
-                  WHERE bots.project_id = ?
-                    AND outbox.runtime_id = ? AND outbox.state = 'pending'
-                    AND outbox.message_kind = 'binding_approval'
-                  ORDER BY outbox.created_at, outbox.outbox_id LIMIT ?`,
-            )
-            .bind(scope.projectId, runtimeId, limit)
-            .all<{ readonly payload: string }>(signal);
-        signal.throwIfAborted();
-        return rows.results.map((row) => row.payload);
-    };
-
-    readonly writeBindingApproval = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        event: BotExecutionBindingApprovedEvent,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<boolean> => {
-        signal.throwIfAborted();
-        const binding = {
-            bot_id: event.botId,
-            binding_id: event.bindingId,
-            behavior_revision_id: event.behaviorRevisionId,
-        };
-        const results = await this.#database.batch(
-            [
-                this.#database
-                    .prepare(
-                        `UPDATE bot_behavior_revisions
-                        SET lifecycle = 'retired', retired_at = ?
-                      WHERE bot_id = ? AND lifecycle = 'approved' AND behavior_revision_id <> ?`,
-                    )
-                    .bind(now, binding.bot_id, binding.behavior_revision_id),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_execution_bindings
-                        SET lifecycle = 'approved', local_grant_id = ?,
-                            agent_identity_digest = ?, workspace_identity_digest = ?,
-                            approved_at = ?
-                      WHERE binding_id = ? AND bot_id = ? AND lifecycle = 'requested'`,
-                    )
-                    .bind(
-                        event.localGrantId,
-                        event.agentIdentityDigest,
-                        event.workspaceIdentityDigest,
-                        now,
-                        binding.binding_id,
-                        binding.bot_id,
-                    ),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_behavior_revisions
-                        SET lifecycle = 'approved', approved_at = ?
-                      WHERE behavior_revision_id = ? AND bot_id = ?
-                        AND lifecycle = 'awaiting_local_approval'`,
-                    )
-                    .bind(now, binding.behavior_revision_id, binding.bot_id),
-                this.#database
-                    .prepare(
-                        `UPDATE bots SET
-                        active_behavior_revision_id = ?, active_binding_id = ?,
-                        lifecycle = CASE WHEN lifecycle = 'suspended' THEN 'suspended' ELSE 'active' END,
-                        lifecycle_revision = lifecycle_revision + 1, updated_at = ?
-                      WHERE bot_id = ? AND lifecycle <> 'archived'`,
-                    )
-                    .bind(binding.behavior_revision_id, binding.binding_id, now, binding.bot_id),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_control_outbox SET state = 'completed', completed_at = ?
-                      WHERE subject_id = ? AND message_kind = 'binding_approval' AND state = 'pending'`,
-                    )
-                    .bind(now, binding.binding_id),
-                this.audit(
-                    scope,
-                    binding.bot_id,
-                    "runtime",
-                    runtimeId,
-                    "bot.binding.approved",
-                    binding.binding_id,
-                    { localGrantId: event.localGrantId },
-                    now,
-                ),
-            ],
-            signal,
-        );
-        signal.throwIfAborted();
-        const critical = results.slice(1);
-        return critical.every((result) => result.meta.changes === 1);
-    };
-
-    readonly writeBindingRejection = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        event: BotExecutionBindingUnavailableEvent,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<boolean> => {
-        signal.throwIfAborted();
-        const binding = {
-            bot_id: event.botId,
-            binding_id: event.bindingId,
-            behavior_revision_id: event.behaviorRevisionId,
-        };
-        const results = await this.#database.batch(
-            [
-                this.#database
-                    .prepare(
-                        `UPDATE bot_execution_bindings
-                        SET lifecycle = 'unavailable', unavailable_at = ?,
-                            unavailable_code = ?, unavailable_message = ?
-                      WHERE binding_id = ? AND bot_id = ? AND lifecycle = 'requested'`,
-                    )
-                    .bind(now, event.code, event.message, binding.binding_id, binding.bot_id),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_behavior_revisions SET lifecycle = 'proposed'
-                      WHERE behavior_revision_id = ? AND bot_id = ?
-                        AND lifecycle = 'awaiting_local_approval'`,
-                    )
-                    .bind(binding.behavior_revision_id, binding.bot_id),
-                this.#database
-                    .prepare(
-                        `UPDATE bot_control_outbox SET state = 'failed', completed_at = ?
-                      WHERE subject_id = ? AND message_kind = 'binding_approval' AND state = 'pending'`,
-                    )
-                    .bind(now, binding.binding_id),
-                this.audit(
-                    scope,
-                    binding.bot_id,
-                    "runtime",
-                    runtimeId,
-                    "bot.binding.unavailable",
-                    binding.binding_id,
-                    { code: event.code },
-                    now,
-                ),
-            ],
-            signal,
-        );
-        signal.throwIfAborted();
-        return results.every((result) => result.meta.changes === 1);
     };
 
     readonly readBot = async (access: ProjectBotAccess, signal: AbortSignal) => {
@@ -663,7 +498,7 @@ export class BotControlStorage {
                    INNER JOIN bot_execution_bindings AS bindings
                      ON bindings.binding_id = bots.active_binding_id
                   WHERE bots.bot_id = ? AND bots.lifecycle = 'active'
-                    AND bindings.lifecycle = 'approved'`,
+                    AND bindings.lifecycle = 'active'`,
             )
             .bind(validateIdentifier(botId, "bot_id"))
             .first<BindingRow>(signal);
@@ -683,11 +518,11 @@ export class BotControlStorage {
                    FROM bots
                    INNER JOIN bot_execution_bindings AS bindings
                      ON bindings.binding_id = bots.active_binding_id
-                    AND bindings.lifecycle = 'approved'
+                    AND bindings.lifecycle = 'active'
                    INNER JOIN bot_behavior_revisions AS behaviors
                      ON behaviors.behavior_revision_id = bindings.behavior_revision_id
                     AND behaviors.bot_id = bindings.bot_id
-                    AND behaviors.lifecycle = 'approved'
+                    AND behaviors.lifecycle = 'active'
                    INNER JOIN pairing_channels AS runtimes
                      ON runtimes.runtime_id = bindings.runtime_id
                     AND runtimes.project_id = bots.project_id
@@ -795,124 +630,6 @@ export class BotControlStorage {
             .first<BotRow>(signal);
         signal.throwIfAborted();
         return row;
-    };
-
-    readonly readRequestedBinding = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        event: BindingEventIdentity,
-        signal: AbortSignal,
-    ): Promise<BindingRow | null> => {
-        const binding = await this.#database
-            .prepare(
-                `SELECT bindings.*
-                   FROM bot_execution_bindings AS bindings
-                   INNER JOIN bots ON bots.bot_id = bindings.bot_id
-                   INNER JOIN bot_control_outbox AS outbox
-                     ON outbox.subject_id = bindings.binding_id
-                  WHERE bindings.binding_id = ? AND bindings.bot_id = ?
-                    AND bindings.behavior_revision_id = ?
-                    AND bindings.binding_revision = ? AND bindings.runtime_id = ?
-                    AND bindings.lifecycle = 'requested'
-                    AND bots.project_id = ?
-                    AND outbox.state = 'pending'
-                    AND outbox.message_kind = 'binding_approval'
-                    AND json_extract(outbox.payload, '$.requestId') = ?`,
-            )
-            .bind(
-                event.bindingId,
-                event.botId,
-                event.behaviorRevisionId,
-                event.bindingRevision,
-                runtimeId,
-                scope.projectId,
-                event.requestId,
-            )
-            .first<BindingRow>(signal);
-        signal.throwIfAborted();
-        return binding;
-    };
-
-    readonly hasApprovedBindingResponse = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        event: BotExecutionBindingApprovedEvent,
-        signal: AbortSignal,
-    ): Promise<boolean> => {
-        const replay = await this.#database
-            .prepare(
-                `SELECT 1 AS replay
-                   FROM bot_execution_bindings AS bindings
-                   INNER JOIN bots ON bots.bot_id = bindings.bot_id
-                   INNER JOIN bot_control_outbox AS outbox
-                     ON outbox.subject_id = bindings.binding_id
-                  WHERE bindings.binding_id = ? AND bindings.bot_id = ?
-                    AND bindings.behavior_revision_id = ?
-                    AND bindings.binding_revision = ? AND bindings.runtime_id = ?
-                    AND bindings.lifecycle = 'approved'
-                    AND bindings.local_grant_id = ?
-                    AND bindings.agent_identity_digest = ?
-                    AND bindings.workspace_identity_digest = ?
-                    AND bots.project_id = ?
-                    AND outbox.state = 'completed'
-                    AND outbox.message_kind = 'binding_approval'
-                    AND json_extract(outbox.payload, '$.requestId') = ?`,
-            )
-            .bind(
-                event.bindingId,
-                event.botId,
-                event.behaviorRevisionId,
-                event.bindingRevision,
-                runtimeId,
-                event.localGrantId,
-                event.agentIdentityDigest,
-                event.workspaceIdentityDigest,
-                scope.projectId,
-                event.requestId,
-            )
-            .first<{ readonly replay: number }>(signal);
-        signal.throwIfAborted();
-        return replay?.replay === 1;
-    };
-
-    readonly hasUnavailableBindingResponse = async (
-        scope: ProjectScope,
-        runtimeId: string,
-        event: BotExecutionBindingUnavailableEvent,
-        signal: AbortSignal,
-    ): Promise<boolean> => {
-        const replay = await this.#database
-            .prepare(
-                `SELECT 1 AS replay
-                   FROM bot_execution_bindings AS bindings
-                   INNER JOIN bots ON bots.bot_id = bindings.bot_id
-                   INNER JOIN bot_control_outbox AS outbox
-                     ON outbox.subject_id = bindings.binding_id
-                  WHERE bindings.binding_id = ? AND bindings.bot_id = ?
-                    AND bindings.behavior_revision_id = ?
-                    AND bindings.binding_revision = ? AND bindings.runtime_id = ?
-                    AND bindings.lifecycle = 'unavailable'
-                    AND bindings.unavailable_code = ?
-                    AND bindings.unavailable_message = ?
-                    AND bots.project_id = ?
-                    AND outbox.state = 'failed'
-                    AND outbox.message_kind = 'binding_approval'
-                    AND json_extract(outbox.payload, '$.requestId') = ?`,
-            )
-            .bind(
-                event.bindingId,
-                event.botId,
-                event.behaviorRevisionId,
-                event.bindingRevision,
-                runtimeId,
-                event.code,
-                event.message,
-                scope.projectId,
-                event.requestId,
-            )
-            .first<{ readonly replay: number }>(signal);
-        signal.throwIfAborted();
-        return replay?.replay === 1;
     };
 
     private readonly audit = (

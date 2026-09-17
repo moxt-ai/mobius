@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-it("Given a Bot needing setup, When its owner configures a local Runtime, Then local approval makes the Bot ready", async () => {
+it("Given a Bot needing setup, When its owner selects a local Runtime target, Then the Bot is ready immediately", async () => {
     const signal = AbortSignal.timeout(10_000);
     await using bindings = await createTestMobiusBindings();
     await using gateways = createTestGateways({
@@ -54,7 +54,6 @@ it("Given a Bot needing setup, When its owner configures a local Runtime, Then l
         },
         signal,
     );
-    await runtime.waitForBinding(binding.bindingId, signal);
     expect(await owner.listBindings(bot.botId, signal)).toMatchObject({
         executionBindings: [
             expect.objectContaining({

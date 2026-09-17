@@ -3,15 +3,12 @@ import { env } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
-    BotExecutionBindingApprovedEvent,
-    decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     decodeNativeSessionCommand,
     decodeSessionConfigureCommand,
     decodeSessionEventAcknowledgement,
     decodeSessionPrepareCommand,
     decodeWorkspaceListCommand,
-    encodeBotExecutionBindingApprovedEvent,
     encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
     encodeSessionEventEnvelope,
@@ -630,7 +627,7 @@ async function createReadyConversation(label: string, workspaceRef = "default"):
                     body: JSON.stringify({
                         agentConfiguration: {},
                         expectedRevision: 0,
-                        instructions: "Answer from the approved local Runtime.",
+                        instructions: "Answer from the selected local Runtime.",
                         requiredCapabilities: ["embedded-context"],
                     }),
                     headers: credentialHeaders(project.appCredential),
@@ -676,22 +673,8 @@ async function createReadyConversation(label: string, workspaceRef = "default"):
             ),
             project.environment,
         ),
-        202,
+        201,
     );
-    const approval = decodeBotExecutionBindingApprovalRequest(await socketMessages.next());
-    expect(approval.executionConfiguration).toEqual(requiredExecutionConfiguration);
-    const approved = new BotExecutionBindingApprovedEvent(
-        approval.requestId,
-        approval.botId,
-        approval.behaviorRevisionId,
-        approval.bindingId,
-        approval.bindingRevision,
-        `grant_${botId}`,
-        "a".repeat(64),
-        "b".repeat(64),
-    );
-    socket.send(encodeBotExecutionBindingApprovedEvent(approved));
-    expect(await socketMessages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
     const conversation = await json(
         await project.worker.fetch(
             new Request(
@@ -1458,7 +1441,7 @@ describe.sequential("Platform hosting boundary", () => {
         await expect(denied.json()).resolves.toMatchObject({ error: { code: "project_credential_invalid" } });
     });
 
-    it("Given a Bot binding omits required execution settings or names an invalid Runtime directory, When the Platform receives it, Then it rejects the request before persisting an approval", async () => {
+    it("Given a Bot binding omits required execution settings or names an invalid Runtime directory, When the Platform receives it, Then it rejects the request before activating the binding", async () => {
         const project = await provisionPlatformProject("invalid-binding-directory");
         const bot = await json(
             await project.worker.fetch(
@@ -1483,7 +1466,7 @@ describe.sequential("Platform hosting boundary", () => {
                         body: JSON.stringify({
                             agentConfiguration: {},
                             expectedRevision: 0,
-                            instructions: "Run only in an approved Runtime directory.",
+                            instructions: "Run only in an selected Runtime directory.",
                             requiredCapabilities: [],
                         }),
                         headers: credentialHeaders(project.appCredential),
@@ -1541,7 +1524,7 @@ describe.sequential("Platform hosting boundary", () => {
         expect(persisted).toEqual([{ count: 0 }]);
     });
 
-    it("Given a Bot is approved for a deeply nested local directory, When the Platform creates its conversation, Then the Session preserves the opaque directory identifier", async () => {
+    it("Given a Bot has an active binding to a deeply nested local directory, When the Platform creates its conversation, Then the Session preserves the opaque directory identifier", async () => {
         const workspaceRef = `path-${"a".repeat(1_024)}`;
         const fixture = await createReadyConversation("deep-binding-directory", workspaceRef);
         try {
@@ -1799,7 +1782,7 @@ describe.sequential("Platform hosting boundary", () => {
         expect(await developer.listApps(tenant.tenantId, AbortSignal.timeout(5_000))).toEqual([]);
     });
 
-    it("Given an approved Project Bot with more than 200 response deltas, When the server SDK opens its conversation, Then configured readiness, internal timings, and the complete authoritative history are returned", async () => {
+    it("Given an active Project Bot with more than 200 response deltas, When the server SDK opens its conversation, Then configured readiness, internal timings, and the complete authoritative history are returned", async () => {
         const fixture = await createReadyConversation("server-sdk-conversation");
         try {
             let creationTiming: string | null = null;
@@ -2373,7 +2356,7 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
-    it("Given an approved Project Bot without a session setting, When the server SDK opens its conversation, Then Mobius preserves the local Agent native default", async () => {
+    it("Given an active Project Bot without a session setting, When the server SDK opens its conversation, Then Mobius preserves the local Agent native default", async () => {
         const fixture = await createReadyConversation("server-sdk-native-default");
         try {
             const owner = new MobiusBotOwnerClient({

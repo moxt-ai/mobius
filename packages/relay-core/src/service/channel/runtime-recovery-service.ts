@@ -9,7 +9,7 @@ export interface RuntimeRecoveryContext {
     readonly services: {
         readonly bots: Pick<
             BotRuntimeService,
-            "listPendingControl" | "listPendingProvisioning" | "activateConversation" | "failConversationProvisioning"
+            "listPendingProvisioning" | "activateConversation" | "failConversationProvisioning"
         >;
     };
     readonly gateways: {
@@ -25,18 +25,6 @@ export class RuntimeRecoveryService {
     constructor(cx: RuntimeRecoveryContext) {
         this.#cx = cx;
     }
-
-    readonly dispatch = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<void> => {
-        const messages = await this.#cx.services.bots.listPendingControl(scope, runtimeId, 100, signal);
-        const daemon = this.#cx.gateways.peers.daemons().find((socket) => socket.isOpen());
-        if (daemon === undefined) {
-            return;
-        }
-        for (const message of messages) {
-            signal.throwIfAborted();
-            daemon.send(message);
-        }
-    };
 
     readonly reconcile = async (runtimeId: string, scope: ProjectScope, signal: AbortSignal): Promise<void> => {
         const plans = await this.#cx.services.bots.listPendingProvisioning(scope, runtimeId, 100, signal);

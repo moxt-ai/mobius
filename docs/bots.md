@@ -40,10 +40,10 @@ Callers with `bot:read` can read
 `GET /mobius/api/v1/projects/:projectId/bots/:botId/setup` to inspect lifecycle and
 behavior revisions plus the latest execution-binding state and configuration.
 Consumers use those revisions with the existing behavior-revision and
-execution-binding endpoints. A requested binding becomes approved only after
-the runtime validates the local agent and working directory. Project bot lists
-include `setupStatus` so clients can distinguish initial setup from pending or
-failed Runtime validation.
+execution-binding endpoints. Creating a binding activates it immediately after
+the Relay verifies that the selected Runtime currently advertises the Agent and
+required capabilities. Project bot lists include `setupStatus` so clients can
+distinguish initial setup from an active or unavailable target.
 
 ### Bot operation trust planes
 
@@ -75,18 +75,17 @@ credentials never authenticate on Connector or execution-action routes.
 ## Lifecycle and revision pinning
 
 A Bot starts as a draft. Profile revisions change presentation without widening
-execution authority. Behavior revisions are immutable and wait for a compatible
-local binding approval. One Bot has one active behavior and one active binding,
+execution authority. Behavior revisions are immutable and become active with a
+compatible binding. One Bot has one active behavior and one active binding,
 while an already-created conversation remains pinned to the exact behavior and
 binding revisions selected at creation.
 
 The main lifecycle values are represented by concrete readonly classes:
 
 - Bot: `DraftBot`, `ActiveBot`, `SuspendedBot`, and `ArchivedBot`.
-- Behavior: `ProposedBotBehavior`, `AwaitingLocalApprovalBotBehavior`,
-  `ApprovedBotBehavior`, and `RetiredBotBehavior`.
-- Binding: `RequestedBotExecutionBinding`, `ApprovedBotExecutionBinding`,
-  `UnavailableBotExecutionBinding`, and `RevokedBotExecutionBinding`.
+- Behavior: `ProposedBotBehavior`, `ActiveBotBehavior`, and `RetiredBotBehavior`.
+- Binding: `ActiveBotExecutionBinding`, `UnavailableBotExecutionBinding`, and
+  `RevokedBotExecutionBinding`.
 - Conversation: `ProvisioningBotConversation`, `ActiveBotConversation`, and
   `ClosedBotConversation`.
 - Connection: `ActiveBotConnection` and `RevokedBotConnection`.
@@ -95,17 +94,18 @@ The main lifecycle values are represented by concrete readonly classes:
   `RetryableFailedOutboundMessage`, and `TerminalFailedOutboundMessage`.
 
 Suspending a Bot rejects new turns and new outbound actions. Archiving is
-terminal. A behavior proposal does not replace the current approved behavior
-until its binding has been validated by the Runtime.
+terminal. A behavior proposal does not replace the current active behavior
+until its binding is created.
 
 ## Local execution authority
 
 An execution-binding request is untrusted input even when it comes from an
-owner-facing service. The local daemon resolves the registered Agent, canonical
-executable identity, real workspace identity, required adapter capabilities,
-unattended policy, and approved outbound targets. It then stores a
-`LocalBotGrant` in daemon-local SQLite and returns only sanitized readiness to
-the Relay. The grant never leaves the local execution boundary.
+owner-facing service. Creating the binding does not send an approval request to
+the machine and does not create a daemon-local grant. For every command, the
+local daemon resolves the advertised Agent again, revalidates the adapter and
+Agent executables, resolves the selected directory inside the paired Runtime
+root, checks required capabilities, and only then starts the Agent. Remote state
+cannot bypass those execution-boundary checks.
 
 Every execution binding also freezes a required `executionConfiguration`:
 
@@ -135,25 +135,22 @@ one discovered reasoning-effort value, and the discovered permission mode in
 malformed configuration. Binding directory and setup responses return the
 frozen value so a tenant can render exactly what will execute.
 
-The daemon stores the same value in `LocalBotGrant`, checks every Bot prompt
-against it, applies permissions before process launch, and configures model then
-reasoning effort before optional behavior settings. A stale or unsupported
-selection fails locally with a typed configuration error. Behavior
+The daemon receives the same pinned value with every Bot prompt, applies
+permissions before process launch, and configures model then reasoning effort
+before optional behavior settings. A stale or unsupported selection fails
+locally with a typed configuration error. Behavior
 `agentConfiguration` remains available for additional Agent options, but it
 cannot override the required model or reasoning configuration IDs.
 
-Every turn revalidates the Bot, pinned behavior and binding, executable,
-workspace, expiration, and revocation epoch. When the same registered Agent and
-workspace selection resolve to a refreshed local identity, the daemon renews the
-grant in place and records `bot_binding_target_refreshed`; the user does not run
-a local approval command. A different Agent, workspace selection, execution configuration,
-behavior, binding, or delivery policy is rejected and must be changed through the
-owner-facing binding flow. Local side effects outside the approved unattended
-policy remain pending for an owner-authorized path; a connector can observe only
-sanitized action-required state and cannot approve the action.
+Changing the Agent, workspace selection, configuration, behavior, binding, or
+delivery policy is done through the owner-facing binding flow and becomes active
+immediately for future conversations. Existing conversations remain pinned to
+their recorded behavior and binding revisions. Agent-originated permission or
+elicitation requests can still be answered through the ordinary conversation
+interaction channel; there is no CLI or machine-local binding approval step.
 
 Several Bots can share one Runtime, Agent executable, or workspace while keeping
-separate Bot identities, grants, execution capabilities, conversations, and
+separate Bot identities, execution capabilities, conversations, and
 delivery targets. This identity isolation is not operating-system isolation.
 Use separate workspaces plus an enforced sandbox, container, virtual machine,
 or operating-system principal when process and filesystem isolation is needed.
@@ -161,16 +158,16 @@ or operating-system principal when process and filesystem isolation is needed.
 One Project may also have several independently paired Runtimes. Different Bots
 can bind to different Runtimes, but each Bot still has exactly one active
 execution binding and each conversation remains pinned to its recorded Runtime,
-behavior revision, binding revision, and daemon-local `LocalBotGrant`. Revoking
+behavior revision, and binding revision. Revoking
 one Runtime changes only bindings that name that Runtime to `unavailable`, closes
 that daemon connection, and rejects new turns on its existing conversations with
-`binding_incompatible`. It does not copy grants or route work to another Runtime;
+`binding_incompatible`. It does not route work to another Runtime;
 Bots bound to other Runtimes remain executable. See [Project Runtime
 pairing](runtime-pairing.md).
 
 ## Durable inbound and outbound work
 
-Creating a Bot conversation pins the current approved behavior and binding.
+Creating a Bot conversation pins the current active behavior and binding.
 Provisioning is an idempotent saga between D1 and the Session Durable Object: D1
 records a provisioning conversation, the Session runtime installs
 `bot_session_context`, and D1 activates that same conversation. Reconciliation
@@ -179,7 +176,7 @@ completes interrupted provisioning without creating another Session.
 Inbound messages are keyed by `connectionId` and `clientMessageId`. Exact
 replays return the original turn; a changed request under the same key returns
 `idempotency_conflict`. The Session runtime accepts the turn before dispatch, so
-a temporarily offline approved Runtime can execute the same pinned work once it
+a temporarily offline active Runtime can execute the same pinned work once it
 reconnects. Runtime lease fencing prevents two daemon owners from committing
 the same output.
 
@@ -414,14 +411,14 @@ credential, provider destination, Runtime, executable, or workspace override.
 ## Stable error codes
 
 Boundary failures use sanitized machine-readable codes, including
-`bot_not_found`, `bot_not_active`, `bot_suspended`, `behavior_not_approved`,
-`binding_not_approved`, `binding_incompatible`, `connection_not_found`,
+`bot_not_found`, `bot_not_active`, `bot_suspended`, `behavior_not_active`,
+`binding_not_active`, `binding_incompatible`, `connection_not_found`,
 `connection_revoked`, `credential_invalid`, `credential_revoked`,
 `scope_denied`, `conversation_access_denied`, `execution_context_required`,
 `execution_capability_invalid`, `execution_capability_expired`,
 `delivery_target_not_allowed`, `delivery_target_unavailable`,
 `revision_conflict`, `idempotency_conflict`, `queue_full`, `turn_expired`, and
-`local_approval_required`. Cancellation, timeout, retryable unavailability,
+`runtime_unavailable`. Cancellation, timeout, retryable unavailability,
 ambiguous provider delivery, and terminal delivery failure remain distinct.
 
 Existing direct-Agent Sessions keep their current path and are not assigned a

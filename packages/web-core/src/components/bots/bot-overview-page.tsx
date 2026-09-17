@@ -18,8 +18,6 @@ import { Button } from "@/components/ui/button";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import { cn } from "@/lib/utils";
 
-const BOT_ACTIVATION_REFRESH_MILLISECONDS = 250;
-
 abstract class BotConfigurationState {}
 
 class LoadingBotConfigurationState extends BotConfigurationState {}
@@ -74,11 +72,8 @@ function formattedDate(value: string): string {
 }
 
 function behaviorStatusLabel(behavior: MobiusBotBehaviorRevision): string {
-    if (behavior.state.kind === "awaiting_local_approval") {
-        return "Activating";
-    }
-    if (behavior.state.kind === "approved") {
-        return "Approved";
+    if (behavior.state.kind === "active") {
+        return "Active";
     }
     if (behavior.state.kind === "retired") {
         return "Retired";
@@ -87,11 +82,8 @@ function behaviorStatusLabel(behavior: MobiusBotBehaviorRevision): string {
 }
 
 function bindingStatusLabel(binding: MobiusBotExecutionBinding): string {
-    if (binding.state.kind === "requested") {
-        return "Activating";
-    }
-    if (binding.state.kind === "approved") {
-        return "Approved";
+    if (binding.state.kind === "active") {
+        return "Active";
     }
     if (binding.state.kind === "unavailable") {
         return "Unavailable";
@@ -121,7 +113,6 @@ export function BotOverviewPage() {
     );
     const [savingProfile, setSavingProfile] = useState(false);
     const [requestingActivation, setRequestingActivation] = useState(false);
-    const [activationBindingId, setActivationBindingId] = useState("");
     const [changingLifecycle, setChangingLifecycle] = useState(false);
     const [archiveConfirmationOpen, setArchiveConfirmationOpen] = useState(false);
     const [operationError, setOperationError] = useState("");
@@ -148,24 +139,24 @@ export function BotOverviewPage() {
                 (target) => target.state.kind === "active" && target.ownerApproved,
             );
             const targetIds = new Set(deliveryTargets.map((target) => target.deliveryTargetId));
-            const approvedBinding = bindings.executionBindings.find((binding) => binding.state.kind === "approved");
-            if (approvedBinding !== undefined && bindingDefaultsRef.current !== approvedBinding.bindingId) {
-                const allowedTargets = approvedBinding.allowedDeliveryTargetIds.filter((targetId) =>
+            const activeBinding = bindings.executionBindings.find((binding) => binding.state.kind === "active");
+            if (activeBinding !== undefined && bindingDefaultsRef.current !== activeBinding.bindingId) {
+                const allowedTargets = activeBinding.allowedDeliveryTargetIds.filter((targetId) =>
                     targetIds.has(targetId),
                 );
-                setAgentRef(approvedBinding.agentRef);
+                setAgentRef(activeBinding.agentRef);
                 setAllowedDeliveryTargetIds(allowedTargets);
                 setCompletionSelection(
-                    approvedBinding.completionPolicy instanceof MobiusRequiredBotCompletionPolicy &&
-                        allowedTargets.includes(approvedBinding.completionPolicy.deliveryTargetId)
+                    activeBinding.completionPolicy instanceof MobiusRequiredBotCompletionPolicy &&
+                        allowedTargets.includes(activeBinding.completionPolicy.deliveryTargetId)
                         ? new RequiredBotCompletionSelection(
-                              approvedBinding.completionPolicy.deliveryTargetId,
-                              approvedBinding.completionPolicy.messageTemplate,
+                              activeBinding.completionPolicy.deliveryTargetId,
+                              activeBinding.completionPolicy.messageTemplate,
                           )
                         : new NoBotCompletionSelection(),
                 );
-                setWorkspaceRef(approvedBinding.workspaceRef);
-                bindingDefaultsRef.current = approvedBinding.bindingId;
+                setWorkspaceRef(activeBinding.workspaceRef);
+                bindingDefaultsRef.current = activeBinding.bindingId;
             } else {
                 setAllowedDeliveryTargetIds((current) => current.filter((targetId) => targetIds.has(targetId)));
                 setCompletionSelection((current) =>
@@ -301,7 +292,7 @@ export function BotOverviewPage() {
                           },
                           signal,
                       );
-            const accepted = await client.createBinding(
+            await client.createBinding(
                 bot.botId,
                 {
                     agentConfigRevision: 1,
@@ -325,11 +316,8 @@ export function BotOverviewPage() {
                 },
                 signal,
             );
-            setActivationBindingId(accepted.bindingId);
-            setAnnouncement(
-                `Activation confirmed. ${connection.machineName} is validating the selected Agent and workspace.`,
-            );
-            await loadConfiguration();
+            setAnnouncement(`Bot activated on ${connection.machineName}.`);
+            await Promise.all([loadConfiguration(), refreshBot().catch(() => undefined)]);
         } catch (error) {
             if (!signal.aborted) {
                 await loadConfiguration();
@@ -369,50 +357,9 @@ export function BotOverviewPage() {
     };
 
     const ready = configuration instanceof ReadyBotConfigurationState ? configuration : undefined;
-    const pendingBinding = ready?.bindings.find((binding) => binding.state.kind === "requested");
-    const pendingBindingId = pendingBinding?.bindingId ?? "";
     const configurationLocked = bot.state.kind === "archived";
     const selectedAgent = connection.agents.find((agent) => agent.id === agentRef);
     const selectedAgentSupportsInstructions = selectedAgent?.capabilities.embeddedContextPrompt === true;
-    const pendingAgentLabel = connection.agents.find((agent) => agent.id === pendingBinding?.agentRef)?.label;
-
-    useEffect(() => {
-        if (pendingBindingId.length === 0) {
-            return;
-        }
-        let stopped = false;
-        let timeout = 0;
-        const refresh = async (): Promise<void> => {
-            await Promise.all([loadConfiguration(), refreshBot().catch(() => undefined)]);
-            if (!stopped && !signal.aborted) {
-                timeout = window.setTimeout(() => void refresh(), BOT_ACTIVATION_REFRESH_MILLISECONDS);
-            }
-        };
-        timeout = window.setTimeout(() => void refresh(), BOT_ACTIVATION_REFRESH_MILLISECONDS);
-        return () => {
-            stopped = true;
-            window.clearTimeout(timeout);
-        };
-    }, [loadConfiguration, pendingBindingId, refreshBot, signal]);
-
-    useEffect(() => {
-        if (activationBindingId.length === 0 || ready === undefined) {
-            return;
-        }
-        const binding = ready.bindings.find((candidate) => candidate.bindingId === activationBindingId);
-        if (binding?.state.kind === "approved") {
-            setActivationBindingId("");
-            setAnnouncement(`Bot activated on ${connection.machineName}.`);
-            void refreshBot().catch(() => undefined);
-            return;
-        }
-        if (binding?.state instanceof MobiusUnavailableBotBindingState) {
-            setActivationBindingId("");
-            setAnnouncement("");
-            setOperationError(`${binding.state.code}: ${binding.state.message}`);
-            queueMicrotask(() => errorSummaryRef.current?.focus());
-        }
-    }, [activationBindingId, connection.machineName, ready, refreshBot]);
 
     const selectIdentityOnly = (selected: boolean): void => {
         if (!selected && !selectedAgentSupportsInstructions) {
@@ -535,8 +482,8 @@ export function BotOverviewPage() {
                             Behavior and execution
                         </h2>
                         <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                            Selecting Activate Bot records your confirmation. The paired Runtime then validates the
-                            exact registered Agent and workspace before activation.
+                            Activate Bot applies the selected Runtime, Agent, and workspace immediately for new
+                            conversations. The Runtime revalidates them automatically before each execution.
                         </p>
                         <Button
                             aria-busy={refreshingConfiguration}
@@ -581,24 +528,7 @@ export function BotOverviewPage() {
                                     void activateBot(ready);
                                 }}
                             >
-                                {pendingBinding !== undefined && (
-                                    <div className="flex items-start gap-3 rounded-xl border border-[#f2d39b] bg-[#fffaf0] px-4 py-3 text-xs leading-5 text-[#7b4c00]">
-                                        <ShieldCheck aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-                                        <span>
-                                            <strong className="block">Activating Bot</strong>
-                                            Your Web confirmation is complete. {connection.machineName} is validating
-                                            {` `}
-                                            {pendingAgentLabel ?? pendingBinding.agentRef} in{" "}
-                                            {pendingBinding.workspaceRef}; no additional local action is required.
-                                        </span>
-                                    </div>
-                                )}
-                                <fieldset
-                                    className="grid gap-2"
-                                    disabled={
-                                        configurationLocked || requestingActivation || pendingBinding !== undefined
-                                    }
-                                >
+                                <fieldset className="grid gap-2" disabled={configurationLocked || requestingActivation}>
                                     <legend className="text-xs font-semibold">Behavior mode</legend>
                                     <div className="grid gap-2 sm:grid-cols-2">
                                         <label
@@ -650,11 +580,7 @@ export function BotOverviewPage() {
                                         Behavior instructions
                                         <textarea
                                             className={`${BOT_TEXTAREA_CLASS} min-h-40`}
-                                            disabled={
-                                                configurationLocked ||
-                                                requestingActivation ||
-                                                pendingBinding !== undefined
-                                            }
+                                            disabled={configurationLocked || requestingActivation}
                                             id="bot-behavior-instructions"
                                             maxLength={100000}
                                             onChange={(event) => setInstructions(event.target.value)}
@@ -668,11 +594,7 @@ export function BotOverviewPage() {
                                         Local Agent
                                         <select
                                             className={BOT_FIELD_CLASS}
-                                            disabled={
-                                                configurationLocked ||
-                                                requestingActivation ||
-                                                pendingBinding !== undefined
-                                            }
+                                            disabled={configurationLocked || requestingActivation}
                                             id="bot-local-agent"
                                             onChange={(event) => selectAgent(event.target.value)}
                                             value={agentRef}
@@ -692,11 +614,7 @@ export function BotOverviewPage() {
                                         Workspace
                                         <input
                                             className={BOT_FIELD_CLASS}
-                                            disabled={
-                                                configurationLocked ||
-                                                requestingActivation ||
-                                                pendingBinding !== undefined
-                                            }
+                                            disabled={configurationLocked || requestingActivation}
                                             id="bot-workspace-ref"
                                             onChange={(event) => setWorkspaceRef(event.target.value)}
                                             value={workspaceRef}
@@ -705,9 +623,7 @@ export function BotOverviewPage() {
                                 </div>
                                 <fieldset
                                     className="rounded-xl border-[0.5px] border-black/10 p-4"
-                                    disabled={
-                                        configurationLocked || requestingActivation || pendingBinding !== undefined
-                                    }
+                                    disabled={configurationLocked || requestingActivation}
                                 >
                                     <legend className="px-1 text-xs font-semibold">Approved outbound targets</legend>
                                     {ready.deliveryTargets.length === 0 ? (
@@ -768,7 +684,6 @@ export function BotOverviewPage() {
                                         disabled={
                                             configurationLocked ||
                                             requestingActivation ||
-                                            pendingBinding !== undefined ||
                                             allowedDeliveryTargetIds.length === 0
                                         }
                                         id="bot-completion-target"
@@ -812,11 +727,7 @@ export function BotOverviewPage() {
                                         <textarea
                                             aria-describedby="bot-completion-template-help"
                                             className={BOT_TEXTAREA_CLASS}
-                                            disabled={
-                                                configurationLocked ||
-                                                requestingActivation ||
-                                                pendingBinding !== undefined
-                                            }
+                                            disabled={configurationLocked || requestingActivation}
                                             id="bot-completion-template"
                                             maxLength={10000}
                                             onChange={(event) =>
@@ -851,7 +762,6 @@ export function BotOverviewPage() {
                                         disabled={
                                             configurationLocked ||
                                             requestingActivation ||
-                                            pendingBinding !== undefined ||
                                             connection.agents.length === 0
                                         }
                                         type="submit"
@@ -904,10 +814,8 @@ export function BotOverviewPage() {
                                                 <span
                                                     className={cn(
                                                         "rounded-full bg-black/5 px-2 py-1 text-[10px] font-semibold text-muted-foreground",
-                                                        behavior.state.kind === "approved" &&
+                                                        behavior.state.kind === "active" &&
                                                             "bg-[#e8f8ef] text-[#187747]",
-                                                        behavior.state.kind === "awaiting_local_approval" &&
-                                                            "bg-[#fff5e6] text-[#9a5b00]",
                                                     )}
                                                 >
                                                     {behaviorStatusLabel(behavior)}

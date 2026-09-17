@@ -42,7 +42,6 @@ import { SessionStateService } from "../service/do/session-state-service.ts";
 import { SessionTransferService } from "../service/do/session-transfer-service.ts";
 import { SqliteSessionRuntime } from "../service/do/sqlite-session-runtime.ts";
 import { BotConnectionStorage } from "../storage/bot-connection-storage.ts";
-import { BotControlStorage } from "../storage/bot-control-storage.ts";
 import { BotConversationStorage } from "../storage/bot-conversation-storage.ts";
 import { BotDeliveryStorage } from "../storage/bot-delivery-storage.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
@@ -184,9 +183,6 @@ function createRuntimeRelayDependencies(cx: {
                     targets: new BotTargetService(new BotConnectionStorage(project, cx.gateways.databaseResolver)),
                     conversations: new BotConversationService(conversations),
                 },
-                storages: {
-                    control: new BotControlStorage(project, cx.gateways.databaseResolver),
-                },
             }),
             credentials: new ChannelCredentialService(new ChannelCredentialStorage(database)),
         };
@@ -194,19 +190,8 @@ function createRuntimeRelayDependencies(cx: {
     };
     const bots: Pick<
         BotRuntimeService,
-        | "approveBinding"
-        | "rejectBinding"
-        | "listPendingControl"
-        | "listPendingProvisioning"
-        | "activateConversation"
-        | "failConversationProvisioning"
+        "listPendingProvisioning" | "activateConversation" | "failConversationProvisioning"
     > = {
-        approveBinding: async (scope, runtimeId, event, now, signal) =>
-            (await forProject(scope, signal)).bots.approveBinding(scope, runtimeId, event, now, signal),
-        rejectBinding: async (scope, runtimeId, event, now, signal) =>
-            (await forProject(scope, signal)).bots.rejectBinding(scope, runtimeId, event, now, signal),
-        listPendingControl: async (scope, runtimeId, limit, signal) =>
-            (await forProject(scope, signal)).bots.listPendingControl(scope, runtimeId, limit, signal),
         listPendingProvisioning: async (scope, runtimeId, limit, signal) =>
             (await forProject(scope, signal)).bots.listPendingProvisioning(scope, runtimeId, limit, signal),
         activateConversation: async (scope, conversationId, now, signal) =>

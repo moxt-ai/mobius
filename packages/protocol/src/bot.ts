@@ -11,9 +11,6 @@ import {
 } from "./control-messages.ts";
 import { SessionPromptDisposition } from "./messages.ts";
 
-export const BOT_BINDING_APPROVAL_REQUEST_KIND = "bot.binding.approval.request";
-export const BOT_BINDING_APPROVED_KIND = "bot.binding.approved";
-export const BOT_BINDING_UNAVAILABLE_KIND = "bot.binding.unavailable";
 export const BOT_SESSION_PROMPT_KIND = "bot.session.prompt";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
@@ -212,10 +209,11 @@ export class ProposedBotBehavior extends BotBehaviorRevision {
     }
 }
 
-export class AwaitingLocalApprovalBotBehavior extends BotBehaviorRevision {
-    readonly lifecycle = "awaiting_local_approval";
+export class ActiveBotBehavior extends BotBehaviorRevision {
+    readonly activatedAt: string;
+    readonly lifecycle = "active";
 
-    constructor(behavior: BotBehaviorRevision) {
+    constructor(behavior: BotBehaviorRevision, activatedAt: string) {
         super(
             behavior.behaviorRevisionId,
             behavior.botId,
@@ -226,25 +224,7 @@ export class AwaitingLocalApprovalBotBehavior extends BotBehaviorRevision {
             behavior.contentDigest,
             behavior.createdAt,
         );
-    }
-}
-
-export class ApprovedBotBehavior extends BotBehaviorRevision {
-    readonly approvedAt: string;
-    readonly lifecycle = "approved";
-
-    constructor(behavior: BotBehaviorRevision, approvedAt: string) {
-        super(
-            behavior.behaviorRevisionId,
-            behavior.botId,
-            behavior.revisionNumber,
-            behavior.instructions,
-            behavior.requiredCapabilities,
-            behavior.agentConfiguration,
-            behavior.contentDigest,
-            behavior.createdAt,
-        );
-        this.approvedAt = approvedAt;
+        this.activatedAt = activatedAt;
     }
 }
 
@@ -308,52 +288,11 @@ export abstract class BotExecutionBinding {
     }
 }
 
-export class RequestedBotExecutionBinding extends BotExecutionBinding {
-    readonly lifecycle = "requested";
+export class ActiveBotExecutionBinding extends BotExecutionBinding {
+    readonly activatedAt: string;
+    readonly lifecycle = "active";
 
-    constructor(
-        bindingId: string,
-        botId: string,
-        behaviorRevisionId: string,
-        bindingRevision: number,
-        runtimeId: string,
-        agentRef: string,
-        workspaceRef: string,
-        agentConfigRevision: number,
-        allowedDeliveryTargetIds: readonly string[],
-        completionPolicy: BotCompletionDeliveryPolicy,
-        createdAt: string,
-    ) {
-        super(
-            bindingId,
-            botId,
-            behaviorRevisionId,
-            bindingRevision,
-            runtimeId,
-            agentRef,
-            workspaceRef,
-            agentConfigRevision,
-            allowedDeliveryTargetIds,
-            completionPolicy,
-            createdAt,
-        );
-    }
-}
-
-export class ApprovedBotExecutionBinding extends BotExecutionBinding {
-    readonly agentIdentityDigest: string;
-    readonly approvedAt: string;
-    readonly lifecycle = "approved";
-    readonly localGrantId: string;
-    readonly workspaceIdentityDigest: string;
-
-    constructor(
-        binding: BotExecutionBinding,
-        localGrantId: string,
-        agentIdentityDigest: string,
-        workspaceIdentityDigest: string,
-        approvedAt: string,
-    ) {
+    constructor(binding: BotExecutionBinding, activatedAt: string) {
         super(
             binding.bindingId,
             binding.botId,
@@ -367,36 +306,7 @@ export class ApprovedBotExecutionBinding extends BotExecutionBinding {
             binding.completionPolicy,
             binding.createdAt,
         );
-        this.localGrantId = localGrantId;
-        this.agentIdentityDigest = agentIdentityDigest;
-        this.workspaceIdentityDigest = workspaceIdentityDigest;
-        this.approvedAt = approvedAt;
-    }
-}
-
-export class UnavailableBotExecutionBinding extends BotExecutionBinding {
-    readonly code: string;
-    readonly lifecycle = "unavailable";
-    readonly message: string;
-    readonly unavailableAt: string;
-
-    constructor(binding: BotExecutionBinding, code: string, message: string, unavailableAt: string) {
-        super(
-            binding.bindingId,
-            binding.botId,
-            binding.behaviorRevisionId,
-            binding.bindingRevision,
-            binding.runtimeId,
-            binding.agentRef,
-            binding.workspaceRef,
-            binding.agentConfigRevision,
-            binding.allowedDeliveryTargetIds,
-            binding.completionPolicy,
-            binding.createdAt,
-        );
-        this.code = code;
-        this.message = message;
-        this.unavailableAt = unavailableAt;
+        this.activatedAt = activatedAt;
     }
 }
 
@@ -987,135 +897,6 @@ export class TerminalFailedOutboundMessage extends SequencedOutboundMessage {
     }
 }
 
-export class BotExecutionBindingApprovalRequest {
-    readonly agentConfigRevision: number;
-    readonly agentRef: string;
-    readonly allowedDeliveryTargets: readonly BotDeliveryTargetReference[];
-    readonly behaviorDigest: string;
-    readonly behaviorInstructions: string;
-    readonly behaviorRevisionId: string;
-    readonly bindingId: string;
-    readonly bindingRevision: number;
-    readonly botId: string;
-    readonly completionPolicy: BotCompletionDeliveryPolicy;
-    readonly executionConfiguration: AgentExecutionConfiguration;
-    readonly kind = BOT_BINDING_APPROVAL_REQUEST_KIND;
-    readonly requestId: string;
-    readonly requiredCapabilities: readonly string[];
-    readonly runtimeId: string;
-    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
-    readonly workspaceRef: string;
-
-    constructor(
-        requestId: string,
-        botId: string,
-        behaviorRevisionId: string,
-        bindingId: string,
-        bindingRevision: number,
-        runtimeId: string,
-        agentRef: string,
-        workspaceRef: string,
-        agentConfigRevision: number,
-        behaviorInstructions: string,
-        behaviorDigest: string,
-        requiredCapabilities: readonly string[],
-        allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
-        completionPolicy: BotCompletionDeliveryPolicy,
-        executionConfiguration: AgentExecutionConfiguration,
-        sessionConfigurations: readonly SessionConfigurationSelection[] = [],
-    ) {
-        this.requestId = requestId;
-        this.botId = botId;
-        this.behaviorRevisionId = behaviorRevisionId;
-        this.bindingId = bindingId;
-        this.bindingRevision = bindingRevision;
-        this.runtimeId = runtimeId;
-        this.agentRef = agentRef;
-        this.workspaceRef = workspaceRef;
-        this.agentConfigRevision = agentConfigRevision;
-        this.behaviorInstructions = behaviorInstructions;
-        this.behaviorDigest = behaviorDigest;
-        this.requiredCapabilities = Object.freeze([...requiredCapabilities]);
-        this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
-        this.allowedDeliveryTargets = Object.freeze(
-            allowedDeliveryTargets.map(
-                (target) => new BotDeliveryTargetReference(target.alias, target.deliveryTargetId),
-            ),
-        );
-        this.completionPolicy = completionPolicy;
-        this.executionConfiguration = decodeAgentExecutionConfiguration(executionConfiguration);
-    }
-
-    toJSON(): object {
-        const { sessionConfigurations, ...request } = this;
-        return {
-            ...request,
-            ...(sessionConfigurations.length === 0 ? {} : { sessionConfigurations }),
-        };
-    }
-}
-
-export class BotExecutionBindingApprovedEvent {
-    readonly agentIdentityDigest: string;
-    readonly behaviorRevisionId: string;
-    readonly bindingId: string;
-    readonly bindingRevision: number;
-    readonly botId: string;
-    readonly kind = BOT_BINDING_APPROVED_KIND;
-    readonly localGrantId: string;
-    readonly requestId: string;
-    readonly workspaceIdentityDigest: string;
-
-    constructor(
-        requestId: string,
-        botId: string,
-        behaviorRevisionId: string,
-        bindingId: string,
-        bindingRevision: number,
-        localGrantId: string,
-        agentIdentityDigest: string,
-        workspaceIdentityDigest: string,
-    ) {
-        this.requestId = requestId;
-        this.botId = botId;
-        this.behaviorRevisionId = behaviorRevisionId;
-        this.bindingId = bindingId;
-        this.bindingRevision = bindingRevision;
-        this.localGrantId = localGrantId;
-        this.agentIdentityDigest = agentIdentityDigest;
-        this.workspaceIdentityDigest = workspaceIdentityDigest;
-    }
-}
-
-export class BotExecutionBindingUnavailableEvent {
-    readonly behaviorRevisionId: string;
-    readonly bindingId: string;
-    readonly bindingRevision: number;
-    readonly botId: string;
-    readonly code: string;
-    readonly kind = BOT_BINDING_UNAVAILABLE_KIND;
-    readonly message: string;
-    readonly requestId: string;
-
-    constructor(
-        requestId: string,
-        botId: string,
-        behaviorRevisionId: string,
-        bindingId: string,
-        bindingRevision: number,
-        code: string,
-        message: string,
-    ) {
-        this.requestId = requestId;
-        this.botId = botId;
-        this.behaviorRevisionId = behaviorRevisionId;
-        this.bindingId = bindingId;
-        this.bindingRevision = bindingRevision;
-        this.code = code;
-        this.message = message;
-    }
-}
-
 export class BotSessionPromptCommand {
     readonly additionalDirectoryIds: readonly string[];
     readonly agentId: string;
@@ -1137,7 +918,6 @@ export class BotSessionPromptCommand {
     readonly executionConfiguration: AgentExecutionConfiguration;
     readonly images: readonly PromptImage[];
     readonly kind = BOT_SESSION_PROMPT_KIND;
-    readonly localGrantId: string;
     readonly prompt: string;
     readonly replyRoute: BotReplyRoute;
     readonly resources: readonly PromptResource[];
@@ -1165,7 +945,6 @@ export class BotSessionPromptCommand {
         turnId: string,
         behaviorRevisionId: string,
         bindingRevision: number,
-        localGrantId: string,
         behaviorInstructions: string,
         behaviorDigest: string,
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
@@ -1194,7 +973,6 @@ export class BotSessionPromptCommand {
         this.turnId = turnId;
         this.behaviorRevisionId = behaviorRevisionId;
         this.bindingRevision = bindingRevision;
-        this.localGrantId = localGrantId;
         this.behaviorInstructions = behaviorInstructions;
         this.behaviorDigest = behaviorDigest;
         this.allowedDeliveryTargets = Object.freeze(
@@ -1372,25 +1150,6 @@ function readSessionConfigurations(value: Readonly<Record<string, unknown>>): re
     return decodeSessionConfigurationSelections(value["sessionConfigurations"]);
 }
 
-function readCompletionPolicy(value: unknown): BotCompletionDeliveryPolicy {
-    if (!isRecord(value)) {
-        throw new ProtocolMessageError("Invalid Bot completion policy");
-    }
-    const kind = readText(value, "kind", 32, false);
-    if (kind === "none") {
-        assertExactKeys(value, ["kind"]);
-        return new NoBotCompletionDeliveryPolicy();
-    }
-    if (kind === "required") {
-        assertExactKeys(value, ["deliveryTargetId", "kind", "messageTemplate"]);
-        return new RequiredBotCompletionDeliveryPolicy(
-            readIdentifier(value, "deliveryTargetId"),
-            readText(value, "messageTemplate", 10_000, false),
-        );
-    }
-    throw new ProtocolMessageError("Invalid Bot completion policy");
-}
-
 function readReplyRoute(value: unknown): BotReplyRoute {
     if (!isRecord(value)) {
         throw new ProtocolMessageError("Invalid Bot reply route");
@@ -1408,119 +1167,6 @@ function readReplyRoute(value: unknown): BotReplyRoute {
         );
     }
     throw new ProtocolMessageError("Invalid Bot reply route");
-}
-
-export function decodeBotExecutionBindingApprovalRequest(encoded: string): BotExecutionBindingApprovalRequest {
-    const value = parseJson(encoded);
-    assertKeysWithOptional(
-        value,
-        [
-            "agentConfigRevision",
-            "agentRef",
-            "allowedDeliveryTargets",
-            "behaviorDigest",
-            "behaviorInstructions",
-            "behaviorRevisionId",
-            "bindingId",
-            "bindingRevision",
-            "botId",
-            "completionPolicy",
-            "executionConfiguration",
-            "kind",
-            "requestId",
-            "requiredCapabilities",
-            "runtimeId",
-            "workspaceRef",
-        ],
-        ["sessionConfigurations"],
-    );
-    if (value["kind"] !== BOT_BINDING_APPROVAL_REQUEST_KIND) {
-        throw new ProtocolMessageError("Invalid Bot binding approval request kind");
-    }
-    return new BotExecutionBindingApprovalRequest(
-        readIdentifier(value, "requestId"),
-        readIdentifier(value, "botId"),
-        readIdentifier(value, "behaviorRevisionId"),
-        readIdentifier(value, "bindingId"),
-        readInteger(value, "bindingRevision"),
-        readIdentifier(value, "runtimeId"),
-        readIdentifier(value, "agentRef"),
-        readDirectoryIdentifier(value, "workspaceRef"),
-        readInteger(value, "agentConfigRevision"),
-        readText(value, "behaviorInstructions", MAX_INSTRUCTIONS_LENGTH, true),
-        readDigest(value, "behaviorDigest"),
-        readIdentifiers(value, "requiredCapabilities", 32),
-        readTargets(value, "allowedDeliveryTargets"),
-        readCompletionPolicy(value["completionPolicy"]),
-        decodeAgentExecutionConfiguration(value["executionConfiguration"]),
-        readSessionConfigurations(value),
-    );
-}
-
-export function encodeBotExecutionBindingApprovalRequest(request: BotExecutionBindingApprovalRequest): string {
-    return JSON.stringify(decodeBotExecutionBindingApprovalRequest(JSON.stringify(request)));
-}
-
-export function decodeBotExecutionBindingApprovedEvent(encoded: string): BotExecutionBindingApprovedEvent {
-    const value = parseJson(encoded);
-    assertExactKeys(value, [
-        "agentIdentityDigest",
-        "behaviorRevisionId",
-        "bindingId",
-        "bindingRevision",
-        "botId",
-        "kind",
-        "localGrantId",
-        "requestId",
-        "workspaceIdentityDigest",
-    ]);
-    if (value["kind"] !== BOT_BINDING_APPROVED_KIND) {
-        throw new ProtocolMessageError("Invalid Bot binding approval event kind");
-    }
-    return new BotExecutionBindingApprovedEvent(
-        readIdentifier(value, "requestId"),
-        readIdentifier(value, "botId"),
-        readIdentifier(value, "behaviorRevisionId"),
-        readIdentifier(value, "bindingId"),
-        readInteger(value, "bindingRevision"),
-        readIdentifier(value, "localGrantId"),
-        readDigest(value, "agentIdentityDigest"),
-        readDigest(value, "workspaceIdentityDigest"),
-    );
-}
-
-export function encodeBotExecutionBindingApprovedEvent(event: BotExecutionBindingApprovedEvent): string {
-    return JSON.stringify(decodeBotExecutionBindingApprovedEvent(JSON.stringify(event)));
-}
-
-export function decodeBotExecutionBindingUnavailableEvent(encoded: string): BotExecutionBindingUnavailableEvent {
-    const value = parseJson(encoded);
-    assertExactKeys(value, [
-        "behaviorRevisionId",
-        "bindingId",
-        "bindingRevision",
-        "botId",
-        "code",
-        "kind",
-        "message",
-        "requestId",
-    ]);
-    if (value["kind"] !== BOT_BINDING_UNAVAILABLE_KIND) {
-        throw new ProtocolMessageError("Invalid Bot binding unavailable event kind");
-    }
-    return new BotExecutionBindingUnavailableEvent(
-        readIdentifier(value, "requestId"),
-        readIdentifier(value, "botId"),
-        readIdentifier(value, "behaviorRevisionId"),
-        readIdentifier(value, "bindingId"),
-        readInteger(value, "bindingRevision"),
-        readIdentifier(value, "code"),
-        readText(value, "message", 500, false),
-    );
-}
-
-export function encodeBotExecutionBindingUnavailableEvent(event: BotExecutionBindingUnavailableEvent): string {
-    return JSON.stringify(decodeBotExecutionBindingUnavailableEvent(JSON.stringify(event)));
 }
 
 export function decodeBotSessionPromptCommand(encoded: string): BotSessionPromptCommand {
@@ -1547,7 +1193,6 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
             "executionConfiguration",
             "images",
             "kind",
-            "localGrantId",
             "prompt",
             "replyRoute",
             "resources",
@@ -1597,7 +1242,6 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
         readIdentifier(value, "turnId"),
         readIdentifier(value, "behaviorRevisionId"),
         readInteger(value, "bindingRevision"),
-        readIdentifier(value, "localGrantId"),
         readText(value, "behaviorInstructions", MAX_INSTRUCTIONS_LENGTH, true),
         readDigest(value, "behaviorDigest"),
         readTargets(value, "allowedDeliveryTargets"),

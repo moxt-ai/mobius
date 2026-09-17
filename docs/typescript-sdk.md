@@ -563,7 +563,7 @@ revocation. It never accepts local Runtime, Agent, executable, workspace,
 permission, provider credential, or provider destination fields.
 
 Bot is the stable project identity. A BotConversation pins immutable behavior
-and approved binding revisions in a one-to-one Session extension, while Session
+and active binding revisions in a one-to-one Session extension, while Session
 remains the execution-history aggregate. Existing direct-Agent Sessions keep
 their original model and receive no invented Bot identity.
 

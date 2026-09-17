@@ -222,17 +222,13 @@ export class MobiusProposedBotBehaviorState extends MobiusBotBehaviorState {
     readonly kind = "proposed";
 }
 
-export class MobiusAwaitingBotBehaviorState extends MobiusBotBehaviorState {
-    readonly kind = "awaiting_local_approval";
-}
+export class MobiusActiveBotBehaviorState extends MobiusBotBehaviorState {
+    readonly activatedAt: string;
+    readonly kind = "active";
 
-export class MobiusApprovedBotBehaviorState extends MobiusBotBehaviorState {
-    readonly approvedAt: string;
-    readonly kind = "approved";
-
-    constructor(approvedAt: string) {
+    constructor(activatedAt: string) {
         super();
-        this.approvedAt = approvedAt;
+        this.activatedAt = activatedAt;
     }
 }
 
@@ -290,15 +286,11 @@ export function decodeMobiusBotBehavior(value: unknown): MobiusBotBehaviorRevisi
         exact(resource, BEHAVIOR_FIELDS, name);
         return new MobiusBotBehaviorRevision(resource, new MobiusProposedBotBehaviorState());
     }
-    if (lifecycle === "awaiting_local_approval") {
-        exact(resource, BEHAVIOR_FIELDS, name);
-        return new MobiusBotBehaviorRevision(resource, new MobiusAwaitingBotBehaviorState());
-    }
-    if (lifecycle === "approved") {
-        exact(resource, [...BEHAVIOR_FIELDS, "approvedAt"], name);
+    if (lifecycle === "active") {
+        exact(resource, [...BEHAVIOR_FIELDS, "activatedAt"], name);
         return new MobiusBotBehaviorRevision(
             resource,
-            new MobiusApprovedBotBehaviorState(timestamp(resource, "approvedAt", name)),
+            new MobiusActiveBotBehaviorState(timestamp(resource, "activatedAt", name)),
         );
     }
     if (lifecycle === "retired") {
@@ -363,17 +355,13 @@ export abstract class MobiusBotBindingState {
     abstract readonly kind: string;
 }
 
-export class MobiusRequestedBotBindingState extends MobiusBotBindingState {
-    readonly kind = "requested";
-}
+export class MobiusActiveBotBindingState extends MobiusBotBindingState {
+    readonly activatedAt: string;
+    readonly kind = "active";
 
-export class MobiusApprovedBotBindingState extends MobiusBotBindingState {
-    readonly approvedAt: string;
-    readonly kind = "approved";
-
-    constructor(approvedAt: string) {
+    constructor(activatedAt: string) {
         super();
-        this.approvedAt = approvedAt;
+        this.activatedAt = activatedAt;
     }
 }
 
@@ -457,15 +445,11 @@ function decodeMobiusBotExecutionBinding(value: unknown): MobiusBotExecutionBind
     const name = "Bot execution binding";
     const resource = record(value, name);
     const lifecycle = resource["lifecycle"];
-    if (lifecycle === "requested") {
-        exact(resource, BINDING_FIELDS, name);
-        return new MobiusBotExecutionBinding(resource, new MobiusRequestedBotBindingState());
-    }
-    if (lifecycle === "approved") {
-        exact(resource, [...BINDING_FIELDS, "approvedAt"], name);
+    if (lifecycle === "active") {
+        exact(resource, [...BINDING_FIELDS, "activatedAt"], name);
         return new MobiusBotExecutionBinding(
             resource,
-            new MobiusApprovedBotBindingState(timestamp(resource, "approvedAt", name)),
+            new MobiusActiveBotBindingState(timestamp(resource, "activatedAt", name)),
         );
     }
     if (lifecycle === "unavailable") {
@@ -540,17 +524,19 @@ export class MobiusBotProfileRevision {
 }
 
 export class MobiusBotBindingRequestAcceptance {
+    readonly activatedAt: string;
     readonly bindingId: string;
     readonly bindingRevision: number;
-    readonly lifecycle = "requested";
+    readonly lifecycle = "active";
 
     constructor(value: unknown) {
-        const name = "Bot binding request acceptance";
+        const name = "Bot binding activation";
         const resource = record(value, name);
-        exact(resource, ["bindingId", "bindingRevision", "lifecycle"], name);
-        if (resource["lifecycle"] !== "requested") {
+        exact(resource, ["activatedAt", "bindingId", "bindingRevision", "lifecycle"], name);
+        if (resource["lifecycle"] !== "active") {
             throw invalid(name);
         }
+        this.activatedAt = timestamp(resource, "activatedAt", name);
         this.bindingId = identifier(resource, "bindingId", name);
         this.bindingRevision = integer(resource, "bindingRevision", name);
     }

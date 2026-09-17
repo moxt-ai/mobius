@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { check, integer, sqliteTable, text, unique, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { check, integer, sqliteTable, text, unique } from "drizzle-orm/sqlite-core";
 
 export const botExecutionBinding = sqliteTable(
     "bot_execution_bindings",
@@ -14,12 +14,10 @@ export const botExecutionBinding = sqliteTable(
         agentConfigRevision: integer("agent_config_revision").notNull(),
         allowedDeliveryTargetIdsJson: text("allowed_delivery_target_ids_json").notNull(),
         completionPolicyJson: text("completion_policy_json").notNull(),
-        lifecycle: text("lifecycle", { enum: ["requested", "approved", "unavailable", "revoked"] }).notNull(),
-        localGrantId: text("local_grant_id"),
-        agentIdentityDigest: text("agent_identity_digest"),
-        workspaceIdentityDigest: text("workspace_identity_digest"),
+        executionConfigurationJson: text("execution_configuration_json").notNull(),
+        lifecycle: text("lifecycle", { enum: ["active", "unavailable", "revoked"] }).notNull(),
         createdAt: integer("created_at").notNull(),
-        approvedAt: integer("approved_at"),
+        activatedAt: integer("activated_at"),
         unavailableAt: integer("unavailable_at"),
         revokedAt: integer("revoked_at"),
         unavailableCode: text("unavailable_code"),
@@ -30,10 +28,9 @@ export const botExecutionBinding = sqliteTable(
         check("bot_execution_bindings_agent_config_revision_check", sql`${table.agentConfigRevision} > 0`),
         check(
             "bot_execution_bindings_lifecycle_check",
-            sql`${table.lifecycle} in ('requested', 'approved', 'unavailable', 'revoked')`,
+            sql`${table.lifecycle} in ('active', 'unavailable', 'revoked')`,
         ),
         unique().on(table.botId, table.bindingRevision),
         unique().on(table.botId, table.bindingId),
-        uniqueIndex("bot_execution_bindings_requested").on(table.botId).where(sql`${table.lifecycle} = 'requested'`),
     ],
 );

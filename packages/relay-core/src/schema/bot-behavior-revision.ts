@@ -12,20 +12,17 @@ export const botBehaviorRevision = sqliteTable(
         agentConfigurationJson: text("agent_configuration_json").notNull(),
         contentDigest: text("content_digest").notNull(),
         lifecycle: text("lifecycle", {
-            enum: ["proposed", "awaiting_local_approval", "approved", "retired"],
+            enum: ["proposed", "active", "retired"],
         }).notNull(),
         createdAt: integer("created_at").notNull(),
-        approvedAt: integer("approved_at"),
+        activatedAt: integer("activated_at"),
         retiredAt: integer("retired_at"),
     },
     (table) => [
         check("bot_behavior_revisions_revision_number_check", sql`${table.revisionNumber} > 0`),
-        check(
-            "bot_behavior_revisions_lifecycle_check",
-            sql`${table.lifecycle} in ('proposed', 'awaiting_local_approval', 'approved', 'retired')`,
-        ),
+        check("bot_behavior_revisions_lifecycle_check", sql`${table.lifecycle} in ('proposed', 'active', 'retired')`),
         unique().on(table.botId, table.revisionNumber),
         unique().on(table.botId, table.behaviorRevisionId),
-        uniqueIndex("bot_behavior_revisions_approved").on(table.botId).where(sql`${table.lifecycle} = 'approved'`),
+        uniqueIndex("bot_behavior_revisions_active").on(table.botId).where(sql`${table.lifecycle} = 'active'`),
     ],
 );

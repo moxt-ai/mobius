@@ -1,6 +1,6 @@
 import { BotConnectionReplyRoute, type BotReplyRoute, OwnerBotReplyRoute } from "@moxt-ai/mobius-protocol";
 import type { BotConnectionAccess, ProjectBotAccess } from "../../entity/bot/bot-access.ts";
-import type { ApprovedBindingContext } from "../../entity/bot/bot-binding.ts";
+import type { ActiveBindingContext } from "../../entity/bot/bot-binding.ts";
 import {
     assertProvisioningMatches,
     type BotConversationPlan,
@@ -72,7 +72,7 @@ export class BotConversationService {
 
     readonly createProjectConversation = async (
         access: ProjectBotAccess,
-        binding: ApprovedBindingContext,
+        binding: ActiveBindingContext,
         key: string,
         now: number,
         signal: AbortSignal,
@@ -104,7 +104,7 @@ export class BotConversationService {
 
     readonly createCanonicalProjectConversation = async (
         access: ProjectBotAccess,
-        binding: ApprovedBindingContext,
+        binding: ActiveBindingContext,
         idempotencyKey: string,
         clientReference: string,
         title: string,
@@ -130,7 +130,7 @@ export class BotConversationService {
 
     readonly createConnectedConversation = (
         access: BotConnectionAccess,
-        binding: ApprovedBindingContext,
+        binding: ActiveBindingContext,
         key: string,
         title: string,
         targetId: string,
@@ -163,7 +163,7 @@ export class BotConversationService {
         clientReference: string,
         title: string,
         replyRoute: BotReplyRoute,
-        binding: ApprovedBindingContext,
+        binding: ActiveBindingContext,
         retainOwnerDraft: boolean,
         now: number,
         signal: AbortSignal,
@@ -183,7 +183,6 @@ export class BotConversationService {
             binding.agentRef,
             binding.workspaceRef,
             binding.agentConfigRevision,
-            binding.localGrantId,
             creatorKind,
             creatorPrincipalId,
             title,

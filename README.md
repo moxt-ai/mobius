@@ -98,7 +98,7 @@ without changing Mobius itself.
 ### First-class Bots and channel-neutral connectors
 
 Mobius also provides a provider-neutral Bot API for durable, project-scoped Bot
-identities. A Bot owns immutable profile and behavior revisions, an approved
+identities. A Bot owns immutable profile and behavior revisions, an active
 local execution binding, pinned conversations, and independently revocable
 external connections. External connectors can submit inbound messages and
 consume durable outbound deliveries without receiving authority over the local
@@ -106,17 +106,20 @@ Agent, Runtime, workspace, executable, or permission decisions.
 
 Provider installations, credentials, webhook verification, provider account
 and destination mappings, and physical delivery remain outside this repository.
-The local daemon remains the final authority for execution through a
-daemon-local `LocalBotGrant`; a short-lived `BotExecutionCapability` authorizes
-one running Bot to use only its approved outbound targets. See [Bots and
-external connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and
-security model.
+Runtime pairing is the only local trust-establishment step. After pairing, Bot
+bindings become active immediately when the owner selects an advertised Agent
+and directory; the daemon performs automatic executable, directory, and
+capability validation before every execution without a local approval or grant.
+A short-lived `BotExecutionCapability` authorizes one running Bot to use only
+its owner-approved outbound targets. See [Bots and external
+connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and security
+model.
 
 Standalone and Platform expose separate hosting trust planes. Standalone keeps
 accountless Project ownership; Platform adds OIDC developers, Tenant/App
 provisioning, AppCredentials, and exact-Session browser credentials. Both
 normalize authorized work into the shared Project services while Runtime,
-Connector, execution-capability, and local-grant authority remain independent.
+Connector, and execution-capability authority remain independent.
 See [Cloudflare Platform hosting](docs/platform-hosting.md) and [Project
 authentication and credential operations](docs/project-authentication.md).
 

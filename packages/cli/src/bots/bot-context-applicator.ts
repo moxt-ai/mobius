@@ -1,7 +1,7 @@
 import type { BotSessionPromptCommand, PromptResource } from "@moxt-ai/mobius-protocol";
 
-import type { LocalBotGrant } from "./local-bot-grant-store.ts";
-import { LocalBotAuthorizationError } from "./local-bot-grant-store.ts";
+import type { AuthorizedLocalBotExecution } from "./local-bot-execution-authorizer.ts";
+import { LocalBotAuthorizationError } from "./local-bot-execution-authorizer.ts";
 
 export class AppliedBotContext {
     readonly resources: readonly PromptResource[];
@@ -14,7 +14,7 @@ export class AppliedBotContext {
 interface BotContextApplicator {
     readonly apply: (
         command: BotSessionPromptCommand,
-        grant: LocalBotGrant,
+        execution: AuthorizedLocalBotExecution,
         resources: readonly PromptResource[],
         signal: AbortSignal,
     ) => Promise<AppliedBotContext>;
@@ -23,25 +23,25 @@ interface BotContextApplicator {
 export class EmbeddedBotContextApplicator implements BotContextApplicator {
     readonly apply = async (
         command: BotSessionPromptCommand,
-        grant: LocalBotGrant,
+        execution: AuthorizedLocalBotExecution,
         resources: readonly PromptResource[],
         signal: AbortSignal,
     ): Promise<AppliedBotContext> => {
         signal.throwIfAborted();
         if (
-            grant.botId !== command.botId ||
-            grant.behaviorRevisionId !== command.behaviorRevisionId ||
-            grant.behaviorDigest !== command.behaviorDigest
+            execution.botId !== command.botId ||
+            execution.behaviorRevisionId !== command.behaviorRevisionId ||
+            execution.behaviorDigest !== command.behaviorDigest
         ) {
             throw new LocalBotAuthorizationError(
-                "binding_not_approved",
-                "The Bot behavior does not match its local authorization",
+                "binding_incompatible",
+                "The Bot behavior does not match the execution target",
             );
         }
         if (command.behaviorInstructions.length === 0) {
             return new AppliedBotContext(resources);
         }
-        if (!grant.agent.capabilities.embeddedContextPrompt) {
+        if (!execution.agent.capabilities.embeddedContextPrompt) {
             throw new LocalBotAuthorizationError(
                 "binding_incompatible",
                 "The local Agent cannot enforce the Bot behavior context",

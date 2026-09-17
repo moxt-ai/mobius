@@ -14,7 +14,6 @@ export function initializeBotSessionSchema(database: DoSqlDatabase): void {
         agent_ref TEXT NOT NULL,
         workspace_ref TEXT NOT NULL,
         agent_config_revision INTEGER NOT NULL CHECK (agent_config_revision > 0),
-        local_grant_id TEXT NOT NULL,
         creator_kind TEXT NOT NULL CHECK (creator_kind IN ('owner', 'connection')),
         creator_principal_id TEXT NOT NULL,
         behavior_instructions TEXT NOT NULL,
@@ -108,4 +107,8 @@ export function initializeBotSessionSchema(database: DoSqlDatabase): void {
       CREATE INDEX IF NOT EXISTS bot_outbound_pending
         ON bot_outbound_requests(scope_key, session_id, state, accepted_at, outbound_message_id);
     `);
+    const contextColumns = database.query("PRAGMA table_info(bot_session_context)");
+    if (contextColumns.some((column) => column["name"] === "local_grant_id")) {
+        database.exec("ALTER TABLE bot_session_context DROP COLUMN local_grant_id");
+    }
 }

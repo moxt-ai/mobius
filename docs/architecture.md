@@ -195,7 +195,7 @@ send-compatible behavior during a rolling upgrade.
 Public Turn submission names a Session, content, and an idempotency key. Relay
 loads the server-owned Session binding, reauthorizes its exact Runtime, commits
 the Turn, and only then requests dispatch. BotConversation uses this boundary as
-a one-to-one Session extension: its immutable behavior and approved binding
+a one-to-one Session extension: its immutable behavior and active binding
 revisions are pinned before a turn is accepted, while Session remains the
 execution-history aggregate. Bot is the durable identity; Channel and
 BotConnection are access paths, and Agent remains a local execution capability.
@@ -249,7 +249,7 @@ hot rows, indexes, manifests, and archived objects before publishing a terminal
 deleted lifecycle.
 
 The daemon owns local path resolution, authorization, sandboxing, process
-lifecycle, long-lived ACP conversation sessions, approved agent selection,
+lifecycle, long-lived ACP conversation sessions, validated Agent selection,
 ACP integration installation, and audit records. Remote input is never an
 authorization decision at the local execution boundary. Agent identifiers map
 only to built-in local specifications; remote clients cannot provide commands,

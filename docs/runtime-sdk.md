@@ -64,9 +64,8 @@ propagates cancellation through Relay, ACP adapters, and Agent processes.
 Only a Runtime Credential is accepted for the long-lived Relay connection.
 The Runtime validates its issued 43-character base64url credential format
 before Agent discovery or network I/O, without interpreting hosting credentials.
-The local execution boundary still
-normalizes the executable and workspace and enforces local grants immediately
-before a side effect. The connector removes the credential from the WebSocket URL
+The local execution boundary still normalizes and authorizes the executable and
+workspace immediately before a side effect. The connector removes the credential from the WebSocket URL
 and presents it only as the `Authorization: Bearer` upgrade header. Finite Runtime
 requests, including Agent catalog publication, active-turn reconciliation, and
 prompt artifact downloads, use the same header and never copy the credential into

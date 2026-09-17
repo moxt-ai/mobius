@@ -106,9 +106,9 @@ vault-backed provisioning and backend client composition.
 
 An `ExecutionPermit` is the result of checking an authenticated Runtime against
 the opaque, server-backed `BotExecutionCapability`. It is not an identity.
-The daemon-local `LocalBotGrant` remains the final approval for the resolved
-Agent, executable, workspace, adapter capabilities, unattended policy, and
-outbound targets, and never leaves the local machine.
+The daemon independently resolves and validates the Agent executable, workspace,
+adapter capabilities, and outbound target scope for every command. It does not
+persist or request a separate local binding approval.
 
 Each route group selects its trust plane before verification. A Project
 credential cannot authorize Runtime, Connector, or Bot-execution endpoints.
@@ -188,7 +188,7 @@ an authorization claim.
 All external authentication and directory waits are cancellable and bounded.
 Cancellation is not translated into authentication failure or retried. Raw
 credentials are never audit or event data, and cloud authorization never
-replaces local execution approval.
+replaces authorization at the local execution boundary.
 
 ## Storage upgrade
 

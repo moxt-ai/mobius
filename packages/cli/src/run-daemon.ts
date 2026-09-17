@@ -19,18 +19,11 @@ import {
     type AgentContentEvent,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    BOT_BINDING_APPROVAL_REQUEST_KIND,
-    BOT_BINDING_APPROVED_KIND,
-    BOT_BINDING_UNAVAILABLE_KIND,
     BOT_SESSION_PROMPT_KIND,
-    BotExecutionBindingUnavailableEvent,
     type BotSessionPromptCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
-    decodeBotExecutionBindingApprovalRequest,
-    decodeBotExecutionBindingApprovedEvent,
-    decodeBotExecutionBindingUnavailableEvent,
     decodeBotSessionPromptCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
@@ -61,8 +54,6 @@ import {
     encodeAgentMessageDeltaEvent,
     encodeAgentSettingsDiscoveredEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
-    encodeBotExecutionBindingApprovedEvent,
-    encodeBotExecutionBindingUnavailableEvent,
     encodeNativeSessionResult,
     encodeRuntimeDeliveryReceived,
     encodeSessionCommandsUpdatedEvent,
@@ -82,7 +73,6 @@ import {
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
-    OwnerBotReplyRoute,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
@@ -152,7 +142,7 @@ import { WorkspaceDirectoryService } from "./authorization/workspace-directory.t
 import { EmbeddedBotContextApplicator } from "./bots/bot-context-applicator.ts";
 import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
 import { BotOutboundIpcServer } from "./bots/bot-outbound-ipc.ts";
-import { LocalBotAuthorizationError, LocalBotGrantStore } from "./bots/local-bot-grant-store.ts";
+import { LocalBotAuthorizationError, LocalBotExecutionAuthorizer } from "./bots/local-bot-execution-authorizer.ts";
 import type { DaemonConfig } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
@@ -1385,7 +1375,7 @@ async function executeBotPrompt(
     directories: WorkspaceDirectoryService,
     audit: AuditStore,
     sessions: AcpSessionManager,
-    grants: LocalBotGrantStore,
+    authorizer: LocalBotExecutionAuthorizer,
     contexts: BotExecutionContextRegistry,
     applicator: EmbeddedBotContextApplicator,
     ipc: BotOutboundIpcServer,
@@ -1403,22 +1393,7 @@ async function executeBotPrompt(
         if (!Number.isSafeInteger(deadline) || remaining <= 0) {
             throw new LocalBotAuthorizationError("turn_expired", "The Bot execution deadline has expired");
         }
-        const grant = await grants.resolveExecution(
-            command,
-            config.catalog,
-            directories,
-            config.bindingId,
-            Date.now(),
-            signal,
-        );
-        const requestedExecutionTargetOverridden =
-            command.directoryId !== grant.workspaceRef || command.additionalDirectoryIds.length > 0;
-        if (requestedExecutionTargetOverridden && !(command.replyRoute instanceof OwnerBotReplyRoute)) {
-            throw new LocalBotAuthorizationError(
-                "binding_not_approved",
-                "Only a paired owner conversation can override the approved Bot workspace",
-            );
-        }
+        const execution = await authorizer.authorize(command, config.catalog, directories, config.bindingId, signal);
         const resolved = await resolveSessionDirectories(
             directories,
             config.bindingId,
@@ -1426,24 +1401,8 @@ async function executeBotPrompt(
             command.additionalDirectoryIds,
             signal,
         );
-        const executionTargetOverridden =
-            resolved.cwd !== grant.workspacePath || resolved.additionalDirectories.length > 0;
-        if (
-            executionTargetOverridden &&
-            !sessions.hasPreparedSession(
-                command.sessionId,
-                grant.agent.id,
-                resolved.cwd,
-                resolved.additionalDirectories,
-            )
-        ) {
-            throw new LocalBotAuthorizationError(
-                "local_approval_required",
-                "Open this Bot conversation in the paired local Web app before using the selected workspace",
-            );
-        }
         const attachments = await resolvePromptArtifacts(config, command, signal);
-        const applied = await applicator.apply(command, grant, attachments.resources, signal);
+        const applied = await applicator.apply(command, execution, attachments.resources, signal);
         const deadlineSignal = AbortSignal.timeout(remaining);
         const executionSignal = AbortSignal.any([signal, deadlineSignal]);
         const startExecution = (): void => {
@@ -1454,7 +1413,6 @@ async function executeBotPrompt(
                     bindingId: command.bindingId,
                     botId: command.botId,
                     executionId: command.executionId,
-                    localGrantId: command.localGrantId,
                 },
                 event: "bot_session_authorized",
                 sessionId: command.sessionId,
@@ -1477,7 +1435,7 @@ async function executeBotPrompt(
             startExecution();
             await sessions.steerPrompt({
                 additionalDirectories: resolved.additionalDirectories,
-                agent: grant.agent,
+                agent: execution.agent,
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
@@ -1500,7 +1458,7 @@ async function executeBotPrompt(
             }
             const lease = contexts.activate(command);
             try {
-                const agent = botExecutionAgent(grant.agent, lease.context.contextHandle, ipc.socketPath);
+                const agent = botExecutionAgent(execution.agent, lease.context.contextHandle, ipc.socketPath);
                 const prepared = await sessions.prepareExecutionSession({
                     additionalDirectories: resolved.additionalDirectories,
                     agent,
@@ -1508,11 +1466,11 @@ async function executeBotPrompt(
                     sessionId: command.sessionId,
                     signal: executionSignal,
                 });
-                assertPreparedPermission(prepared.configOptions, grant.executionConfiguration.permissionMode);
+                assertPreparedPermission(prepared.configOptions, execution.executionConfiguration.permissionMode);
                 let configOptions = await applyRequiredExecutionSelection(
                     sessions,
                     prepared.configOptions,
-                    grant.executionConfiguration.model,
+                    execution.executionConfiguration.model,
                     "model",
                     agent,
                     resolved.cwd,
@@ -1523,7 +1481,7 @@ async function executeBotPrompt(
                 configOptions = await applyRequiredExecutionSelection(
                     sessions,
                     configOptions,
-                    grant.executionConfiguration.reasoningEffort,
+                    execution.executionConfiguration.reasoningEffort,
                     "thought_level",
                     agent,
                     resolved.cwd,
@@ -1708,7 +1666,7 @@ async function runRelayConnection(
     nativeSessions: NativeSessionService,
     outbox: SessionEventOutbox,
     publisher: DaemonSessionEventPublisher,
-    grants: LocalBotGrantStore,
+    authorizer: LocalBotExecutionAuthorizer,
     contexts: BotExecutionContextRegistry,
     applicator: EmbeddedBotContextApplicator,
     ipc: BotOutboundIpcServer,
@@ -1930,7 +1888,7 @@ async function runRelayConnection(
                                 directories,
                                 audit,
                                 sessions,
-                                grants,
+                                authorizer,
                                 contexts,
                                 applicator,
                                 ipc,
@@ -2118,79 +2076,6 @@ async function runRelayConnection(
                         } else {
                             console.warn("Mobius daemon ignored a rejection for an unknown session event");
                         }
-                        return;
-                    }
-                    // The relay echoes binding outcomes after persisting them. These
-                    // acknowledgements never grant or change local execution access.
-                    if (kind === BOT_BINDING_APPROVED_KIND) {
-                        decodeBotExecutionBindingApprovedEvent(encoded);
-                        return;
-                    }
-                    if (kind === BOT_BINDING_UNAVAILABLE_KIND) {
-                        decodeBotExecutionBindingUnavailableEvent(encoded);
-                        return;
-                    }
-                    if (kind === BOT_BINDING_APPROVAL_REQUEST_KIND) {
-                        const request = decodeBotExecutionBindingApprovalRequest(encoded);
-                        void grants
-                            .approve(
-                                request,
-                                config.catalog,
-                                directories,
-                                config.bindingId,
-                                Date.now(),
-                                connectionController.signal,
-                            )
-                            .then((approved) => {
-                                audit.record({
-                                    commandId: request.requestId,
-                                    details: {
-                                        behaviorRevisionId: request.behaviorRevisionId,
-                                        bindingId: request.bindingId,
-                                        botId: request.botId,
-                                        localGrantId: approved.localGrantId,
-                                    },
-                                    event: "bot_binding_approved",
-                                    sessionId: `bot-binding:${request.bindingId}`,
-                                });
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, encodeBotExecutionBindingApprovedEvent(approved));
-                                }
-                            })
-                            .catch((error: unknown) => {
-                                if (connectionController.signal.aborted) {
-                                    return;
-                                }
-                                const code =
-                                    error instanceof LocalBotAuthorizationError ? error.code : "binding_incompatible";
-                                const message =
-                                    error instanceof LocalBotAuthorizationError
-                                        ? error.message
-                                        : "The local execution target is incompatible";
-                                grants.recordUnavailable(request, code, message, Date.now());
-                                audit.record({
-                                    commandId: request.requestId,
-                                    details: { bindingId: request.bindingId, botId: request.botId, code },
-                                    event: "bot_binding_unavailable",
-                                    sessionId: `bot-binding:${request.bindingId}`,
-                                });
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    send(
-                                        socket,
-                                        encodeBotExecutionBindingUnavailableEvent(
-                                            new BotExecutionBindingUnavailableEvent(
-                                                request.requestId,
-                                                request.botId,
-                                                request.behaviorRevisionId,
-                                                request.bindingId,
-                                                request.bindingRevision,
-                                                code,
-                                                message,
-                                            ),
-                                        ),
-                                    );
-                                }
-                            });
                         return;
                     }
                     if (kind === NATIVE_SESSION_CANCEL_KIND) {
@@ -2614,7 +2499,7 @@ async function runRelayConnection(
                             directories,
                             audit,
                             sessions,
-                            grants,
+                            authorizer,
                             contexts,
                             applicator,
                             ipc,
@@ -2753,7 +2638,7 @@ export async function runDaemon(
     const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
     const outbox = new SessionEventOutbox(config.auditDatabasePath);
     const publisher = new DaemonSessionEventPublisher(outbox, timer);
-    const grants = new LocalBotGrantStore(config.auditDatabasePath);
+    const authorizer = new LocalBotExecutionAuthorizer();
     const contexts = new BotExecutionContextRegistry();
     const applicator = new EmbeddedBotContextApplicator();
     const ipc = new BotOutboundIpcServer(botIpcSocketPath(), config.relayUrl, contexts);
@@ -2842,7 +2727,7 @@ export async function runDaemon(
                     nativeSessions,
                     outbox,
                     publisher,
-                    grants,
+                    authorizer,
                     contexts,
                     applicator,
                     ipc,
@@ -2888,13 +2773,9 @@ export async function runDaemon(
                                 sessionStore.close();
                             } finally {
                                 try {
-                                    grants.close();
+                                    publisher.close();
                                 } finally {
-                                    try {
-                                        publisher.close();
-                                    } finally {
-                                        outbox.close();
-                                    }
+                                    outbox.close();
                                 }
                             }
                         }

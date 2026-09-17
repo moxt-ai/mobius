@@ -119,8 +119,8 @@ Online state comes from each Runtime's own Durable Object and is not shared.
 Session creation, Session rebinding, import, Turn dispatch, and Bot execution
 binding reauthorize the selected `runtimeId` against the authenticated Project.
 A Runtime from another Project fails with `runtime_access_denied` or
-`binding_incompatible` before work is accepted or a local approval request is
-sent.
+`binding_incompatible` before work is accepted. Binding creation never sends a
+local approval request.
 
 Revoke exactly one Runtime:
 
@@ -131,10 +131,10 @@ Authorization: Bearer <project-owner-credential>
 
 Revocation is idempotent. It invalidates that Runtime's daemon credential,
 closes its active daemon and Channel host sockets, expires Channel access
-grants, and makes its pending or approved Bot bindings unavailable. Other
-Runtimes, Sessions, Bot grants, and daemon connections are unchanged. Work
-remains pinned to its recorded Runtime and binding revision; Mobius does not
-fail over, migrate, or copy a local grant to another machine.
+grants, and makes its active Bot bindings unavailable. Other Runtimes,
+Sessions, Bot connections, and daemon connections are unchanged. Work remains
+pinned to its recorded Runtime and binding revision; Mobius does not fail over
+or migrate work to another machine.
 
 The first Runtime can be revoked without losing Project administration because
 the owner credential is persisted in `project_owner_credentials`, independently
@@ -164,8 +164,8 @@ D1 stores only hashes of pairing, polling, owner, host, and Runtime secrets.
 `runtime_pairing_audit_events` records `requested`, `claimed`, `expired`,
 `revoked`, and `rejected` outcomes with Project, pairing, Runtime, actor, and
 timestamp correlation. Public errors are sanitized; executable paths,
-workspace paths, provider credentials, daemon credentials, and local grants
-never enter the pairing request.
+workspace paths, provider credentials, and daemon credentials never enter the
+pairing request.
 
 Migration `0004_project_runtime_pairings.sql` preserves existing
 `pairing_channels` rows, backfills their Runtime slots and explicit owner

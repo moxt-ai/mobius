@@ -1529,7 +1529,7 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
-    it("Given a persisted catalog predates verified capabilities and Web-confirmed installation, When its Channel is read, Then capabilities are conservative and obsolete approval metadata is omitted", async () => {
+    it("Given a persisted catalog predates verified capabilities and Web-confirmed installation, When its Channel is read, Then capabilities are conservative", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, authorization } = createSessionRequests(app);
         const pairing = await pairChannel();
@@ -1540,13 +1540,7 @@ describe.sequential("Cloudflare session deployment", () => {
         )
             .bind(
                 JSON.stringify([{ id: "codex", label: "Codex" }]),
-                JSON.stringify([
-                    {
-                        id: "claude-code",
-                        label: "Claude Code",
-                        requiresLocalApproval: true,
-                    },
-                ]),
+                JSON.stringify([{ id: "claude-code", label: "Claude Code" }]),
                 pairing.created.channelId,
             )
             .run();
@@ -1581,7 +1575,6 @@ describe.sequential("Cloudflare session deployment", () => {
             ],
             installableAgents,
         });
-        expect(JSON.stringify(descriptor)).not.toContain("requiresLocalApproval");
     });
 
     it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {

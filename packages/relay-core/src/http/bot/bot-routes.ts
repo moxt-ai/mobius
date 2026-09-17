@@ -361,7 +361,7 @@ function createBotOwnerRoutes() {
                     Date.now(),
                     c.var.signal,
                 ),
-                202,
+                201,
             );
         })
         .post("/bots/:botId/connection-grants", botBodyParser<BotHttpEnvironment>(), async (c) => {

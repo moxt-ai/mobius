@@ -29,7 +29,6 @@ export interface BotRuntimeCredential {
     readonly channel_id: string;
     readonly conversation_id: string;
     readonly execution_id: string;
-    readonly local_grant_id: string;
     readonly pairing_id: string;
     readonly project_id: string;
     readonly runtime_id: string;
@@ -121,7 +120,6 @@ export class BotRuntimeExecutionAccess extends RuntimeAccessContext {
     readonly capabilityId: string;
     readonly conversationId: string;
     readonly executionId: string;
-    readonly localGrantId: string;
     readonly sessionId: string;
     readonly turnId: string;
 
@@ -142,6 +140,5 @@ export class BotRuntimeExecutionAccess extends RuntimeAccessContext {
         this.bindingId = row.binding_id;
         this.bindingRevision = row.binding_revision;
         this.capabilityId = row.capability_id;
-        this.localGrantId = row.local_grant_id;
     }
 }

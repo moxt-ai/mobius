@@ -345,7 +345,7 @@ function RuntimeList({
                         Project Runtimes
                     </h2>
                     <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                        Each machine keeps an independent credential, connection, Agent catalog, and local grants.
+                        Each machine keeps an independent credential, connection, Agent catalog, and execution boundary.
                     </p>
                 </div>
                 <span className="shrink-0 rounded-full bg-black/5 px-2.5 py-1 text-[11px] font-semibold text-muted-foreground">

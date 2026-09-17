@@ -10,7 +10,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { BotApiError } from "./bot-error.ts";
 
-export interface ApprovedBindingContext {
+export interface ActiveBindingContext {
     readonly agentConfigRevision: number;
     readonly agentRef: string;
     readonly allowedDeliveryTargets: readonly BotDeliveryTargetReference[];
@@ -22,7 +22,6 @@ export interface ApprovedBindingContext {
     readonly botId: string;
     readonly completionPolicy: BotCompletionDeliveryPolicy;
     readonly executionConfiguration: AgentExecutionConfiguration;
-    readonly localGrantId: string;
     readonly runtimeId: string;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly workspaceRef: string;
@@ -44,6 +43,18 @@ export function executionConfiguration(encoded: string): AgentExecutionConfigura
             cause,
         });
     }
+}
+
+export interface BotExecutionBindingActivation {
+    readonly agentConfigRevision: number;
+    readonly agentRef: string;
+    readonly behaviorRevisionId: string;
+    readonly bindingId: string;
+    readonly bindingRevision: number;
+    readonly completionPolicy: BotCompletionDeliveryPolicy;
+    readonly executionConfiguration: AgentExecutionConfiguration;
+    readonly runtimeId: string;
+    readonly workspaceRef: string;
 }
 
 export function sessionConfigurations(encodedConfiguration: string): readonly SessionConfigurationSelection[] {

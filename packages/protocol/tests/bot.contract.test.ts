@@ -9,18 +9,13 @@ import {
     BotConnectionGrant,
     BotConnectionReplyRoute,
     BotExecution,
-    BotExecutionBindingApprovalRequest,
     BotExecutionCapability,
     BotSessionPromptCommand,
     ConnectedBotConversation,
     DisabledBotDeliveryTarget,
     DraftBot,
-    decodeAgentExecutionConfiguration,
-    decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
-    encodeBotExecutionBindingApprovalRequest,
     encodeBotSessionPromptCommand,
-    NoBotCompletionDeliveryPolicy,
     OwnerBotConversation,
     ProtocolMessageError,
     ProvisioningBotConversation,
@@ -74,71 +69,6 @@ describe("Bot protocol", () => {
         });
     });
 
-    it("Given a remote binding proposal, When the daemon decodes it, Then only the bounded provider-neutral approval contract is accepted", () => {
-        const request = new BotExecutionBindingApprovalRequest(
-            "approval_alpha_1",
-            "bot_alpha",
-            "behavior_alpha_1",
-            "binding_alpha_1",
-            1,
-            "runtime_alpha",
-            "codex",
-            "default",
-            4,
-            "Follow the approved project policy.",
-            "a".repeat(64),
-            ["embedded-context"],
-            [
-                {
-                    alias: "team-notifications",
-                    deliveryTargetId: "target_alpha",
-                },
-            ],
-            new NoBotCompletionDeliveryPolicy(),
-            executionConfiguration,
-            [
-                {
-                    booleanValue: false,
-                    configId: "fast_mode",
-                    value: "balanced",
-                    valueType: "select",
-                },
-            ],
-        );
-
-        expect(decodeBotExecutionBindingApprovalRequest(encodeBotExecutionBindingApprovalRequest(request))).toEqual(
-            request,
-        );
-        expect(JSON.parse(encodeBotExecutionBindingApprovalRequest(request))).toMatchObject({
-            executionConfiguration,
-            sessionConfigurations: [
-                {
-                    booleanValue: false,
-                    configId: "fast_mode",
-                    value: "balanced",
-                    valueType: "select",
-                },
-            ],
-        });
-
-        expect(() =>
-            decodeBotExecutionBindingApprovalRequest(
-                JSON.stringify({
-                    ...request,
-                    command: "open /Applications/Calculator.app",
-                    provider: "slack",
-                    providerToken: "secret",
-                }),
-            ),
-        ).toThrow(ProtocolMessageError);
-        expect(() =>
-            decodeAgentExecutionConfiguration({
-                ...executionConfiguration,
-                model: { ...executionConfiguration.model, configId: "permission_mode" },
-            }),
-        ).toThrow(ProtocolMessageError);
-    });
-
     it("Given a Bot turn is accepted, When its daemon decodes the dispatch, Then the pinned Bot and capability cannot be replaced by prompt fields", () => {
         const command = new BotSessionPromptCommand(
             "session_alpha",
@@ -159,7 +89,6 @@ describe("Bot protocol", () => {
             "turn_alpha",
             "behavior_alpha_1",
             1,
-            "grant_alpha",
             "Follow the approved project policy.",
             "a".repeat(64),
             [

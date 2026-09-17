@@ -29,7 +29,7 @@ export class BotTargetService {
         if (!(await this.#storage.hasBindingTarget(botId, bindingId, target.delivery_target_id, signal))) {
             throw new BotApiError(
                 "delivery_target_not_allowed",
-                "The delivery target is outside the approved binding",
+                "The delivery target is outside the active binding",
                 "access-denied",
             );
         }

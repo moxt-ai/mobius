@@ -4,10 +4,6 @@ import { join } from "node:path";
 import { MobiusBotOwnerClient, MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import { createDaemonConfig, MobiusRuntimeEngine } from "../../packages/cli/src/runtime.ts";
-import {
-    BOT_BINDING_APPROVED_KIND,
-    decodeBotExecutionBindingApprovedEvent,
-} from "../../packages/protocol/src/index.ts";
 import type { createTestAgent } from "./agent.ts";
 import { serveTestApp, type TestServerApp } from "./server.ts";
 
@@ -38,8 +34,6 @@ export async function createTestRuntime(options: {
     const signal = AbortSignal.any([options.signal, cancellation.signal]);
     signal.throwIfAborted();
     const ready = Promise.withResolvers<void>();
-    const approvedBindings = new Set<string>();
-    const approvalListeners = new Set<() => void>();
     const onAbort = () => ready.reject(signal.reason);
     signal.addEventListener("abort", onAbort, { once: true });
     resources.defer(() => signal.removeEventListener("abort", onAbort));
@@ -55,12 +49,6 @@ export async function createTestRuntime(options: {
                     const kind = v.parse(v.object({ kind: v.string() }), value).kind;
                     if (kind === "runtime.liveness.ready") {
                         ready.resolve();
-                    }
-                    if (kind === BOT_BINDING_APPROVED_KIND) {
-                        approvedBindings.add(decodeBotExecutionBindingApprovedEvent(message).bindingId);
-                        for (const listener of approvalListeners) {
-                            listener();
-                        }
                     }
                 },
             }),
@@ -183,32 +171,6 @@ export async function createTestRuntime(options: {
             client,
             owner,
             runtimeId: pairing.runtimeId,
-            waitForBinding: async (bindingId: string, parent: AbortSignal): Promise<void> => {
-                const deadline = AbortSignal.any([parent, signal, AbortSignal.timeout(15_000)]);
-                deadline.throwIfAborted();
-                if (approvedBindings.has(bindingId)) {
-                    return;
-                }
-                await new Promise<void>((resolve, reject) => {
-                    const cleanup = () => {
-                        approvalListeners.delete(approved);
-                        deadline.removeEventListener("abort", aborted);
-                    };
-                    const approved = () => {
-                        if (!approvedBindings.has(bindingId)) {
-                            return;
-                        }
-                        cleanup();
-                        resolve();
-                    };
-                    const aborted = () => {
-                        cleanup();
-                        reject(deadline.reason);
-                    };
-                    approvalListeners.add(approved);
-                    deadline.addEventListener("abort", aborted, { once: true });
-                });
-            },
             [Symbol.asyncDispose]: () => owned.disposeAsync(),
         };
     } finally {

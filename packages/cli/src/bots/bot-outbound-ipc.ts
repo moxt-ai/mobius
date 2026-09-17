@@ -5,7 +5,7 @@ import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { fetch } from "undici";
 
 import type { ActiveBotExecutionContext, BotExecutionContextRegistry } from "./bot-execution-context.ts";
-import { LocalBotAuthorizationError } from "./local-bot-grant-store.ts";
+import { LocalBotAuthorizationError } from "./local-bot-execution-authorizer.ts";
 
 const BOT_IPC_REQUEST_LIMIT = 32 * 1024;
 const BOT_IPC_TIMEOUT_MILLISECONDS = 20_000;

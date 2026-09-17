@@ -1,9 +1,9 @@
 import type { HttpError } from "../http-error.ts";
 
 export type BotErrorCode =
-    | "behavior_not_approved"
+    | "behavior_not_active"
     | "binding_incompatible"
-    | "binding_not_approved"
+    | "binding_not_active"
     | "bot_not_active"
     | "bot_not_found"
     | "bot_service_unavailable"

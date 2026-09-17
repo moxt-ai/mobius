@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { BotConnectionReplyRoute, type BotSessionPromptCommand } from "@moxt-ai/mobius-protocol";
 
-import { LocalBotAuthorizationError } from "./local-bot-grant-store.ts";
+import { LocalBotAuthorizationError } from "./local-bot-execution-authorizer.ts";
 
 export class ActiveBotExecutionContext {
     readonly command: BotSessionPromptCommand;

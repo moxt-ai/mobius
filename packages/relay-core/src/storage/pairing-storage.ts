@@ -344,13 +344,6 @@ export class PairingStorage {
             WHERE channel_id = ?`)
                     .bind(value.revokedAt, value.channelId),
                 this.#database
-                    .prepare(`UPDATE bot_behavior_revisions SET lifecycle = 'proposed'
-            WHERE lifecycle = 'awaiting_local_approval' AND behavior_revision_id IN (
-                SELECT bindings.behavior_revision_id FROM bot_execution_bindings AS bindings
-                INNER JOIN bots ON bots.bot_id = bindings.bot_id WHERE bots.project_id = ?
-                AND bindings.runtime_id = ? AND bindings.lifecycle = 'requested')`)
-                    .bind(value.projectId, value.runtimeId),
-                this.#database
                     .prepare(`UPDATE bot_conversations SET lifecycle = 'closed', closed_at = COALESCE(closed_at, ?),
             failure_code = COALESCE(failure_code, 'runtime_revoked') WHERE lifecycle = 'provisioning' AND conversation_id IN (
                 SELECT outbox.subject_id FROM bot_control_outbox AS outbox INNER JOIN bots ON bots.bot_id = outbox.bot_id
@@ -361,7 +354,7 @@ export class PairingStorage {
                     .prepare(`UPDATE bot_execution_bindings SET lifecycle = 'unavailable',
             unavailable_at = COALESCE(unavailable_at, ?), unavailable_code = COALESCE(unavailable_code, 'runtime_revoked'),
             unavailable_message = COALESCE(unavailable_message, 'The bound Runtime was revoked')
-            WHERE runtime_id = ? AND lifecycle IN ('requested', 'approved') AND EXISTS (
+            WHERE runtime_id = ? AND lifecycle = 'active' AND EXISTS (
                 SELECT 1 FROM bots WHERE bots.bot_id = bot_execution_bindings.bot_id AND bots.project_id = ?)`)
                     .bind(value.revokedAt, value.runtimeId, value.projectId),
                 this.#database

@@ -35,7 +35,6 @@ export class BotSessionProvisioning {
     readonly creatorKind: string;
     readonly creatorPrincipalId: string;
     readonly executionConfiguration: AgentExecutionConfiguration;
-    readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
@@ -54,7 +53,6 @@ export class BotSessionProvisioning {
         agentRef: string,
         workspaceRef: string,
         agentConfigRevision: number,
-        localGrantId: string,
         creatorKind: string,
         creatorPrincipalId: string,
         title: string,
@@ -76,7 +74,6 @@ export class BotSessionProvisioning {
         this.agentRef = agentRef;
         this.workspaceRef = workspaceRef;
         this.agentConfigRevision = agentConfigRevision;
-        this.localGrantId = localGrantId;
         this.creatorKind = creatorKind;
         this.creatorPrincipalId = creatorPrincipalId;
         this.title = title;

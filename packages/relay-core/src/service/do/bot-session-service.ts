@@ -98,7 +98,6 @@ interface BotSessionContext {
     readonly completionPolicy: BotCompletionDeliveryPolicy;
     readonly conversationId: string;
     readonly executionConfiguration: AgentExecutionConfiguration;
-    readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute;
     readonly runtimeId: string;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
@@ -118,7 +117,6 @@ class BotSessionContextRecord implements BotSessionContext {
     readonly completionPolicy: BotCompletionDeliveryPolicy = new NoBotCompletionDeliveryPolicy();
     readonly conversationId: string;
     readonly executionConfiguration: AgentExecutionConfiguration;
-    readonly localGrantId: string;
     readonly replyRoute: BotReplyRoute = new OwnerBotReplyRoute();
     readonly runtimeId: string;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
@@ -136,7 +134,6 @@ class BotSessionContextRecord implements BotSessionContext {
         this.botId = rowText(row, "bot_id");
         this.conversationId = rowText(row, "conversation_id");
         this.executionConfiguration = decodeExecutionConfiguration(rowText(row, "execution_configuration_json"));
-        this.localGrantId = rowText(row, "local_grant_id");
         this.runtimeId = rowText(row, "runtime_id");
         this.sessionConfigurations = decodeSessionConfigurations(rowText(row, "session_configurations_json"));
         this.workspaceRef = rowText(row, "workspace_ref");
@@ -595,7 +592,7 @@ export class BotSessionService {
             ) {
                 throw new BotSessionRuntimeError(
                     "conversation_access_denied",
-                    "The owner conversation execution identity no longer matches its approved Bot binding",
+                    "The owner conversation execution identity no longer matches its active Bot binding",
                 );
             }
             sessionBindingId = session.defaultBinding.bindingId;
@@ -648,7 +645,6 @@ export class BotSessionService {
                     turnId,
                     context.behaviorRevisionId,
                     context.bindingRevision,
-                    context.localGrantId,
                     context.behaviorInstructions,
                     context.behaviorDigest,
                     context.allowedDeliveryTargets,
@@ -825,7 +821,6 @@ export class BotSessionService {
             botCommand.turnId,
             botCommand.behaviorRevisionId,
             botCommand.bindingRevision,
-            botCommand.localGrantId,
             botCommand.behaviorInstructions,
             botCommand.behaviorDigest,
             botCommand.allowedDeliveryTargets,

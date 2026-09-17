@@ -4,7 +4,6 @@ import {
     type BotCompletionDeliveryPolicy,
     BotConnectionReplyRoute,
     BotDeliveryTargetReference,
-    BotExecutionBindingApprovalRequest,
     conversationTitleFromText,
     DraftBot,
     decodeSessionConfigureCommand,
@@ -31,7 +30,7 @@ import {
     ProjectBotAccess,
 } from "../../entity/bot/bot-access.ts";
 import {
-    type ApprovedBindingContext,
+    type ActiveBindingContext,
     completionPolicy,
     executionConfiguration,
     sessionConfigurations,
@@ -277,10 +276,10 @@ export class BotService {
             signal,
         );
         const cx = await this.projectContext(access.scope, signal);
-        const binding = await this.readApprovedBinding(cx, access.botId, signal);
+        const binding = await this.readActiveBinding(cx, access.botId, signal);
         const runtime = await cx.storages.control.readBindingRuntime(access.scope, binding.runtimeId, signal);
         if (runtime === null) {
-            throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+            throw new BotApiError("binding_incompatible", "The selected Runtime is unavailable", "conflict");
         }
         const agent = parseAgents(runtime.agents_json).find((candidate) => candidate.id === binding.agentRef);
         if (agent?.botSessionConfiguration !== true) {
@@ -296,7 +295,7 @@ export class BotService {
             control = await this.cx.services.controls.open(access.scope, runtime.runtime_id, deadline);
         } catch (cause) {
             signal.throwIfAborted();
-            throw new BotApiError("bot_service_unavailable", "The approved Runtime is unavailable", "unavailable", {
+            throw new BotApiError("bot_service_unavailable", "The selected Runtime is unavailable", "unavailable", {
                 cause,
             });
         }
@@ -310,7 +309,7 @@ export class BotService {
                 if (response.webSocket === null) {
                     throw new BotApiError(
                         "bot_service_unavailable",
-                        "The approved Runtime is unavailable",
+                        "The selected Runtime is unavailable",
                         "unavailable",
                     );
                 }
@@ -419,12 +418,12 @@ export class BotService {
         );
         const execution = await timing.measure(
             "create-binding",
-            "Read approved Bot execution context",
-            async () => await this.readApprovedConversationExecution(cx, access.scope, request.botId, signal),
+            "Read active Bot execution context",
+            async () => await this.readActiveConversationExecution(cx, access.scope, request.botId, signal),
         );
         await timing.measure("create-runtime", "Verify Runtime access", async () => {
             if (execution.runtimeId !== execution.binding.runtimeId) {
-                throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+                throw new BotApiError("binding_incompatible", "The selected Runtime is unavailable", "conflict");
             }
         });
         const { binding } = execution;
@@ -519,7 +518,7 @@ export class BotService {
 
     private readonly prepareProjectConversation = async (
         scope: ProjectScope,
-        binding: ApprovedBindingContext,
+        binding: ActiveBindingContext,
         sessionId: string,
         requestId: string,
         preparation: PrepareProjectConversationRequest,
@@ -545,7 +544,7 @@ export class BotService {
             );
             const socket = response.webSocket;
             if (socket === null) {
-                throw new BotApiError("bot_service_unavailable", "The approved Runtime is unavailable", "unavailable");
+                throw new BotApiError("bot_service_unavailable", "The selected Runtime is unavailable", "unavailable");
             }
             const command = decodeSessionPrepareCommand(
                 JSON.stringify({
@@ -871,7 +870,7 @@ export class BotService {
     ) => {
         const row = await cx.storages.control.readRuntime(scope, runtimeId, signal);
         if (row === null) {
-            throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+            throw new BotApiError("binding_incompatible", "The selected Runtime is unavailable", "conflict");
         }
         return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id);
     };
@@ -941,22 +940,22 @@ export class BotService {
         return targets;
     };
 
-    private readonly readApprovedBinding = async (
+    private readonly readActiveBinding = async (
         cx: BotProjectStorageContext,
         botId: string,
         signal: AbortSignal,
-    ): Promise<ApprovedBindingContext> => {
+    ): Promise<ActiveBindingContext> => {
         const binding = await cx.storages.control.readActiveBinding(botId, signal);
         if (binding === null) {
             const bot = await this.readLifecycle(cx, botId, signal);
             if (bot.lifecycle === "suspended") {
                 throw new BotApiError("bot_suspended", "The Bot is suspended", "conflict");
             }
-            throw new BotApiError("binding_not_approved", "The Bot has no approved binding", "conflict");
+            throw new BotApiError("binding_not_active", "The Bot has no active binding", "conflict");
         }
         const behavior = await cx.storages.control.readBehavior(binding.bot_id, binding.behavior_revision_id, signal);
-        if (behavior === null || behavior.lifecycle !== "approved") {
-            throw new BotApiError("behavior_not_approved", "The Bot behavior is not approved", "conflict");
+        if (behavior === null || behavior.lifecycle !== "active") {
+            throw new BotApiError("behavior_not_active", "The Bot behavior is not active", "conflict");
         }
         const targets = await this.approvedTargets(
             cx,
@@ -966,9 +965,6 @@ export class BotService {
         );
         const policy = completionPolicy(binding.completion_policy_json);
         const configuration = sessionConfigurations(behavior.agent_configuration_json);
-        if (typeof binding.local_grant_id !== "string") {
-            throw new BotApiError("binding_not_approved", "The Bot binding is not approved", "conflict");
-        }
         return {
             bindingId: binding.binding_id,
             bindingRevision: binding.binding_revision,
@@ -978,7 +974,6 @@ export class BotService {
             agentRef: binding.agent_ref,
             workspaceRef: binding.workspace_ref,
             agentConfigRevision: binding.agent_config_revision,
-            localGrantId: binding.local_grant_id,
             behaviorInstructions: behavior.instructions,
             behaviorDigest: behavior.content_digest,
             allowedDeliveryTargets: Object.freeze(targets),
@@ -988,20 +983,17 @@ export class BotService {
         };
     };
 
-    private readonly readApprovedConversationExecution = async (
+    private readonly readActiveConversationExecution = async (
         cx: BotProjectStorageContext,
         scope: ProjectScope,
         botId: string,
         signal: AbortSignal,
-    ): Promise<{ readonly binding: ApprovedBindingContext; readonly runtimeId: string }> => {
+    ): Promise<{ readonly binding: ActiveBindingContext; readonly runtimeId: string }> => {
         const execution = await cx.storages.control.readActiveConversationExecution(scope, botId, signal);
         if (execution === null) {
-            const binding = await this.readApprovedBinding(cx, botId, signal);
+            const binding = await this.readActiveBinding(cx, botId, signal);
             const runtime = await this.readRuntimeAccess(cx, scope, binding.runtimeId, signal);
             return { binding, runtimeId: runtime.runtimeId };
-        }
-        if (typeof execution.local_grant_id !== "string") {
-            throw new BotApiError("binding_not_approved", "The Bot binding is not approved", "conflict");
         }
         const targets = await this.approvedTargets(
             cx,
@@ -1019,7 +1011,6 @@ export class BotService {
                 agentRef: execution.agent_ref,
                 workspaceRef: execution.workspace_ref,
                 agentConfigRevision: execution.agent_config_revision,
-                localGrantId: execution.local_grant_id,
                 behaviorInstructions: execution.behavior_instructions,
                 behaviorDigest: execution.behavior_content_digest,
                 allowedDeliveryTargets: Object.freeze(targets),
@@ -1258,11 +1249,8 @@ export class BotService {
             validateIdentifier(behaviorRevisionId, "behavior_revision_id"),
             signal,
         );
-        if (
-            behavior === null ||
-            (behavior.lifecycle !== "proposed" && behavior.lifecycle !== "awaiting_local_approval")
-        ) {
-            throw new BotApiError("behavior_not_approved", "The Bot behavior cannot be bound", "conflict");
+        if (behavior === null || behavior.lifecycle !== "proposed") {
+            throw new BotApiError("behavior_not_active", "The Bot behavior cannot be bound", "conflict");
         }
         const runtime = await cx.storages.control.readBindingRuntime(
             access.scope,
@@ -1304,7 +1292,7 @@ export class BotService {
                 "conflict",
             );
         }
-        const approvedTargets = await this.approvedTargets(cx, access.botId, targets, signal);
+        await this.approvedTargets(cx, access.botId, targets, signal);
         if (policy instanceof RequiredBotCompletionDeliveryPolicy && !targets.includes(policy.deliveryTargetId)) {
             throw new BotApiError(
                 "delivery_target_not_allowed",
@@ -1314,41 +1302,35 @@ export class BotService {
         }
         const bindingRevision = (await cx.storages.control.readLatestBindingRevision(access.botId, signal)) + 1;
         const bindingId = `beb_${createRandomToken(18)}`;
-        const requestId = `apr_${createRandomToken(18)}`;
-        const outboxId = `bco_${createRandomToken(18)}`;
-        const request = new BotExecutionBindingApprovalRequest(
-            requestId,
-            access.botId,
-            behavior.behavior_revision_id,
+        const binding = {
+            agentConfigRevision,
+            agentRef,
+            behaviorRevisionId: behavior.behavior_revision_id,
             bindingId,
             bindingRevision,
-            runtime.runtime_id,
-            agentRef,
+            completionPolicy: policy,
+            executionConfiguration: requestedExecutionConfiguration,
+            runtimeId: runtime.runtime_id,
             workspaceRef,
-            agentConfigRevision,
-            behavior.instructions,
-            behavior.content_digest,
-            requirements,
-            approvedTargets,
-            policy,
-            requestedExecutionConfiguration,
-            configuration,
-        );
+        };
         let written: boolean;
         try {
-            written = await cx.storages.control.writeBinding(access, request, targets, outboxId, now, signal);
+            written = await cx.storages.control.writeBinding(access, binding, targets, now, signal);
         } catch (cause) {
             signal.throwIfAborted();
-            throw new BotApiError("revision_conflict", "The Bot binding could not be requested", "conflict", { cause });
+            throw new BotApiError("revision_conflict", "The Bot binding could not be activated", "conflict", {
+                cause,
+            });
         }
         if (!written) {
-            throw new BotApiError("revision_conflict", "The Bot binding could not be requested", "conflict");
+            throw new BotApiError("revision_conflict", "The Bot binding could not be activated", "conflict");
         }
-        await this.cx.gateways.channels.dispatchPending(
-            new VerifiedChannelAccess(runtime.channel_id, runtime.runtime_id, runtime.project_id),
-            signal,
-        );
-        return { bindingId, bindingRevision, lifecycle: "requested" };
+        return {
+            activatedAt: new Date(now).toISOString(),
+            bindingId,
+            bindingRevision,
+            lifecycle: "active",
+        };
     };
     readonly transitionBot = async (
         botId: string,
@@ -1621,7 +1603,7 @@ export class BotService {
             signal,
         );
         const cx = await this.projectContext(access.scope, signal);
-        const binding = await this.readApprovedBinding(cx, botId, signal);
+        const binding = await this.readActiveBinding(cx, botId, signal);
         await this.readRuntimeAccess(cx, access.scope, binding.runtimeId, signal);
         const createPlan = async () => {
             if (access instanceof ProjectBotAccess && request.kind === "owner") {
@@ -1827,7 +1809,7 @@ export class BotService {
         );
         if (
             executionState === null ||
-            executionState.binding_lifecycle !== "approved" ||
+            executionState.binding_lifecycle !== "active" ||
             executionState.runtime_status !== "paired"
         ) {
             throw new BotApiError("binding_incompatible", "The conversation Runtime is unavailable", "conflict");

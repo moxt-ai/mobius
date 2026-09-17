@@ -51,7 +51,7 @@ import {
 } from "@/services/bot-api";
 import { configureConversationSession, listWorkspace, prepareConversationSession } from "@/services/mobius-transport";
 
-const BOT_WORKING_ANNOUNCEMENT = "Message accepted. The approved local runtime is working.";
+const BOT_WORKING_ANNOUNCEMENT = "Message accepted. The local Runtime is working.";
 const BOT_COMPOSER_MAX_HEIGHT = 180;
 
 abstract class ConversationDirectoryState {}
@@ -426,7 +426,7 @@ export function BotConversationsPage() {
                         <MessageSquare aria-hidden="true" className="mx-auto size-6 text-[#218854]" />
                         <p className="mt-3 text-sm font-semibold">No conversations yet</p>
                         <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                            Start one after the Bot has an approved execution binding.
+                            Start one after the Bot has an active execution binding.
                         </p>
                     </div>
                 )}
@@ -980,7 +980,7 @@ export function BotConversationPage() {
         (composerSession instanceof PreparingBotComposerSessionState ||
         composerSession instanceof FailedPreparedBotComposerSessionState
             ? composerSession.directoryLabel
-            : "Approved workspace");
+            : "Selected workspace");
     const hasOptimisticPrompt = optimisticPrompt instanceof PendingOptimisticBotPromptState;
     const ownerConversation = ready.conversation.origin.kind === "owner";
     const hasDraftContent =
@@ -1060,7 +1060,7 @@ export function BotConversationPage() {
                         </span>
                         <h3 className="mt-4 text-lg font-semibold">Message {bot.displayName}</h3>
                         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                            This conversation is pinned to its approved local behavior and execution target.
+                            This conversation is pinned to its active local behavior and execution target.
                         </p>
                     </section>
                 ) : (

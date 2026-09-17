@@ -111,8 +111,8 @@ function BotDirectoryContent({
                             Your Bots
                         </h2>
                         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                            Give each Bot its own identity and behavior, then approve exactly which local Agent and
-                            workspace may execute it.
+                            Give each Bot its own identity and behavior, then select the paired Runtime, local Agent,
+                            and workspace that execute it.
                         </p>
                     </div>
                     {!createOpen && (

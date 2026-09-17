@@ -59,7 +59,6 @@ function command(deadline: string): BotSessionPromptCommand {
         "turn_alpha",
         "behavior_alpha",
         1,
-        "grant_alpha",
         "",
         "a".repeat(64),
         [{ alias: "team-notifications", deliveryTargetId: "target_team" }],

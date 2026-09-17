@@ -1,15 +1,10 @@
 import {
-    BOT_BINDING_APPROVAL_REQUEST_KIND,
-    BOT_BINDING_APPROVED_KIND,
     BOT_SESSION_PROMPT_KIND,
-    BotExecutionBindingApprovedEvent,
-    decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
     decodeWorkspaceListCommand,
     encodeAgentMessageDeltaEvent,
-    encodeBotExecutionBindingApprovedEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionStartedEvent,
@@ -94,12 +89,22 @@ function modelConfigOptions(model: string, fastMode = false): readonly SessionCo
 }
 
 async function waitForActiveBot(signal: AbortSignal): Promise<void> {
-    await waitForDocumentState(() => screen.queryByText("Active") !== null, signal);
-    expect(screen.getByText("Active")).toBeTruthy();
+    await waitForDocumentState(() => screen.queryByLabelText("Bot status: Active") !== null, signal);
+    expect(screen.getByLabelText("Bot status: Active")).toBeTruthy();
+}
+
+function currentBotId(): string {
+    const parts = window.location.pathname.split("/").filter((part) => part.length > 0);
+    const botsIndex = parts.indexOf("bots");
+    const botId = botsIndex < 0 ? undefined : parts[botsIndex + 1];
+    if (botId === undefined) {
+        throw new Error("Expected the current Bot route");
+    }
+    return decodeURIComponent(botId);
 }
 
 describe.sequential("Bot management and conversations", () => {
-    it("Given every ready local Agent, When the owner confirms Bot activation in Web, Then every Agent is selectable and no second local approval is requested", async ({
+    it("Given every ready local Agent, When the owner activates a Bot in Web, Then every Agent is selectable and the binding is immediately active", async ({
         signal,
     }) => {
         const paired = await pairDaemon({
@@ -160,31 +165,7 @@ describe.sequential("Bot management and conversations", () => {
             expect(screen.getByRole("radio", { name: /Custom instructions/ })).toHaveProperty("disabled", true);
 
             fireEvent.click(screen.getByRole("button", { name: "Activate Bot" }));
-            const approvalRequest = decodeBotExecutionBindingApprovalRequest(
-                await paired.daemon.receive(BOT_BINDING_APPROVAL_REQUEST_KIND),
-            );
-            expect(approvalRequest).toMatchObject({
-                agentRef: "cursor",
-                behaviorInstructions: "",
-                requiredCapabilities: [],
-            });
-            expect(await screen.findByText("Activating Bot")).toBeTruthy();
             expect(screen.queryByText("Awaiting local approval")).toBeNull();
-
-            const approvedEvent = encodeBotExecutionBindingApprovedEvent(
-                new BotExecutionBindingApprovedEvent(
-                    approvalRequest.requestId,
-                    approvalRequest.botId,
-                    approvalRequest.behaviorRevisionId,
-                    approvalRequest.bindingId,
-                    approvalRequest.bindingRevision,
-                    `grant_${approvalRequest.botId}`,
-                    "a".repeat(64),
-                    "b".repeat(64),
-                ),
-            );
-            paired.daemon.send(approvedEvent);
-            expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
             await waitForActiveBot(signal);
             await screen.findByText("Bot activated on Integration machine.");
         } finally {
@@ -194,7 +175,7 @@ describe.sequential("Bot management and conversations", () => {
         }
     });
 
-    it("Given an Agent without Bot instructions, When the owner activates an identity-only Bot, Then the local boundary approves an empty behavior contract", async ({
+    it("Given an Agent without Bot instructions, When the owner activates an identity-only Bot, Then the Bot becomes active without a local approval", async ({
         signal,
     }) => {
         const paired = await pairDaemon({ botSessionConfiguration: true });
@@ -214,27 +195,6 @@ describe.sequential("Bot management and conversations", () => {
             await screen.findByRole("heading", { level: 1, name: "Identity Bot" });
             fireEvent.click(await screen.findByRole("radio", { name: /Identity only/ }));
             fireEvent.click(screen.getByRole("button", { name: "Activate Bot" }));
-
-            const approvalRequest = decodeBotExecutionBindingApprovalRequest(
-                await paired.daemon.receive(BOT_BINDING_APPROVAL_REQUEST_KIND),
-            );
-            expect(approvalRequest.behaviorInstructions).toBe("");
-            expect(approvalRequest.requiredCapabilities).toEqual([]);
-            const approvedEvent = encodeBotExecutionBindingApprovedEvent(
-                new BotExecutionBindingApprovedEvent(
-                    approvalRequest.requestId,
-                    approvalRequest.botId,
-                    approvalRequest.behaviorRevisionId,
-                    approvalRequest.bindingId,
-                    approvalRequest.bindingRevision,
-                    `grant_${approvalRequest.botId}`,
-                    "a".repeat(64),
-                    "b".repeat(64),
-                ),
-            );
-            paired.daemon.send(approvedEvent);
-            expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
-            fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
             await waitForActiveBot(signal);
         } finally {
             cleanup();
@@ -263,25 +223,8 @@ describe.sequential("Bot management and conversations", () => {
             await screen.findByRole("heading", { level: 1, name: "New chat Bot" });
             await screen.findByRole("combobox", { name: "Local Agent" });
             fireEvent.click(screen.getByRole("radio", { name: /Identity only/ }));
+            const botId = currentBotId();
             fireEvent.click(await screen.findByRole("button", { name: "Activate Bot" }));
-            const approvalRequest = decodeBotExecutionBindingApprovalRequest(
-                await paired.daemon.receive(BOT_BINDING_APPROVAL_REQUEST_KIND),
-            );
-            const approvedEvent = encodeBotExecutionBindingApprovedEvent(
-                new BotExecutionBindingApprovedEvent(
-                    approvalRequest.requestId,
-                    approvalRequest.botId,
-                    approvalRequest.behaviorRevisionId,
-                    approvalRequest.bindingId,
-                    approvalRequest.bindingRevision,
-                    `grant_${approvalRequest.botId}`,
-                    "a".repeat(64),
-                    "b".repeat(64),
-                ),
-            );
-            paired.daemon.send(approvedEvent);
-            expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
-            fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
             await waitForActiveBot(signal);
 
             fireEvent.click(
@@ -316,7 +259,7 @@ describe.sequential("Bot management and conversations", () => {
             );
             expect(screen.getByRole("heading", { level: 2, name: "New chat" })).toBeTruthy();
             expect(window.location.pathname).toBe(
-                `/channels/${encodeURIComponent(paired.channelId)}/bots/${encodeURIComponent(approvalRequest.botId)}/conversations/${window.location.pathname.split("/").at(-1) ?? ""}`,
+                `/channels/${encodeURIComponent(paired.channelId)}/bots/${encodeURIComponent(botId)}/conversations/${window.location.pathname.split("/").at(-1) ?? ""}`,
             );
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation, modelConfigOptions("test-small"));
@@ -329,7 +272,7 @@ describe.sequential("Bot management and conversations", () => {
 
             const prompt = decodeBotSessionPromptCommand(await paired.daemon.receive(BOT_SESSION_PROMPT_KIND));
             expect(prompt).toMatchObject({
-                botId: approvalRequest.botId,
+                botId,
                 prompt: "Answer through the selected Bot.",
             });
         } finally {
@@ -359,24 +302,6 @@ describe.sequential("Bot management and conversations", () => {
             await screen.findByRole("heading", { level: 1, name: "Configured Bot" });
             fireEvent.click(await screen.findByRole("radio", { name: /Identity only/ }));
             fireEvent.click(screen.getByRole("button", { name: "Activate Bot" }));
-            const approvalRequest = decodeBotExecutionBindingApprovalRequest(
-                await paired.daemon.receive(BOT_BINDING_APPROVAL_REQUEST_KIND),
-            );
-            const approvedEvent = encodeBotExecutionBindingApprovedEvent(
-                new BotExecutionBindingApprovedEvent(
-                    approvalRequest.requestId,
-                    approvalRequest.botId,
-                    approvalRequest.behaviorRevisionId,
-                    approvalRequest.bindingId,
-                    approvalRequest.bindingRevision,
-                    `grant_${approvalRequest.botId}`,
-                    "a".repeat(64),
-                    "b".repeat(64),
-                ),
-            );
-            paired.daemon.send(approvedEvent);
-            expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
-            fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
             await waitForActiveBot(signal);
 
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
@@ -391,9 +316,9 @@ describe.sequential("Bot management and conversations", () => {
 
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(initialPreparation).toMatchObject({
-                agentId: approvalRequest.agentRef,
-                bindingId: approvalRequest.bindingId,
-                directoryId: approvalRequest.workspaceRef,
+                agentId: "codex",
+                bindingId: expect.any(String),
+                directoryId: "default",
             });
             await sendReadySession(paired.daemon, initialPreparation, modelConfigOptions("test-small"));
 
@@ -442,7 +367,7 @@ describe.sequential("Bot management and conversations", () => {
             fireEvent.click(await within(workspacePicker).findByRole("button", { name: "Use this folder" }));
             const selectedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(selectedPreparation).toMatchObject({
-                agentId: approvalRequest.agentRef,
+                agentId: "codex",
                 directoryId: "selected-bot-project",
                 sessionId: initialPreparation.sessionId,
             });
@@ -519,7 +444,7 @@ describe.sequential("Bot management and conversations", () => {
                 type: "link",
             });
             expect(prompt.resources[0]?.uri.startsWith("mobius-artifact:")).toBe(true);
-            await screen.findByText("Message accepted. The approved local runtime is working.");
+            await screen.findByText("Message accepted. The local Runtime is working.");
             expect(
                 screen.getByRole("heading", {
                     level: 2,
@@ -570,26 +495,8 @@ describe.sequential("Bot management and conversations", () => {
             fireEvent.change(screen.getByRole("textbox", { name: "Behavior instructions" }), {
                 target: { value: "Answer precisely and cite the evidence you used." },
             });
+            const botId = currentBotId();
             fireEvent.click(screen.getByRole("button", { name: "Activate Bot" }));
-
-            const approvalRequest = decodeBotExecutionBindingApprovalRequest(
-                await paired.daemon.receive(BOT_BINDING_APPROVAL_REQUEST_KIND),
-            );
-            const approved = new BotExecutionBindingApprovedEvent(
-                approvalRequest.requestId,
-                approvalRequest.botId,
-                approvalRequest.behaviorRevisionId,
-                approvalRequest.bindingId,
-                approvalRequest.bindingRevision,
-                `grant_${approvalRequest.botId}`,
-                "a".repeat(64),
-                "b".repeat(64),
-            );
-            const approvedEvent = encodeBotExecutionBindingApprovedEvent(approved);
-            paired.daemon.send(approvedEvent);
-            expect(await paired.daemon.receive(BOT_BINDING_APPROVED_KIND)).toBe(approvedEvent);
-
-            fireEvent.click(await screen.findByRole("button", { name: "Refresh Bot" }));
             await waitForActiveBot(signal);
 
             fireEvent.click(screen.getByRole("link", { name: "Conversations" }));
@@ -611,7 +518,7 @@ describe.sequential("Bot management and conversations", () => {
 
             const prompt = decodeBotSessionPromptCommand(await paired.daemon.receive(BOT_SESSION_PROMPT_KIND));
             expect(prompt).toMatchObject({
-                botId: approvalRequest.botId,
+                botId,
                 prompt: "Summarize the launch evidence.",
             });
             fireEvent.click(screen.getByRole("button", { name: "Refresh conversation" }));
@@ -655,7 +562,7 @@ describe.sequential("Bot management and conversations", () => {
                     screen.queryByText("Response completed.") !== null,
                 signal,
             );
-            expect(screen.queryByText("Message accepted. The approved local runtime is working.")).toBeNull();
+            expect(screen.queryByText("Message accepted. The local Runtime is working.")).toBeNull();
             expect(screen.getByRole("heading", { level: 2, name: "Summarize the launch evidence." })).toBeTruthy();
             await waitFor(() => {
                 expect(screen.getAllByLabelText("Message from you").map((message) => message.textContent)).toEqual([

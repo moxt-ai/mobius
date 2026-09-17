@@ -498,20 +498,6 @@ function normalizePersistedInstallableAgents(value: unknown): unknown {
                 status: "agent_not_installed",
             };
         }
-        if (
-            isRecord(candidate) &&
-            Object.keys(candidate).length === 3 &&
-            Object.hasOwn(candidate, "id") &&
-            Object.hasOwn(candidate, "label") &&
-            Object.hasOwn(candidate, "requiresLocalApproval") &&
-            typeof candidate["requiresLocalApproval"] === "boolean"
-        ) {
-            return {
-                id: candidate["id"],
-                label: candidate["label"],
-                status: "agent_not_installed",
-            };
-        }
         return candidate;
     });
 }

@@ -1,14 +1,11 @@
 import { env, runInDurableObject } from "cloudflare:test";
 import {
     AGENT_ACTIVITY_KIND,
-    BotExecutionBindingApprovedEvent,
     DEFAULT_AGENT_EXECUTION_CONFIGURATION,
-    decodeBotExecutionBindingApprovalRequest,
     decodeBotSessionPromptCommand,
     decodeSessionEventAcknowledgement,
     decodeSessionEventRejection,
     decodeSessionPrepareCommand,
-    encodeBotExecutionBindingApprovedEvent,
     encodeSessionEventEnvelope,
     encodeSessionReadyEvent,
     MOBIUS_API_PREFIX,
@@ -399,9 +396,8 @@ async function createTarget(
     return { deliveryTargetId };
 }
 
-async function approveBinding(
+async function activateBinding(
     pairing: CreatedPairing,
-    daemon: OpenSocket,
     bot: CreatedBot,
     behavior: CreatedBehavior,
     target: CreatedTarget,
@@ -429,28 +425,9 @@ async function approveBinding(
                 method: "POST",
             },
         ),
-        202,
+        201,
     );
-    const request = decodeBotExecutionBindingApprovalRequest(await daemon.messages.next());
-    expect(request).toMatchObject({
-        agentRef: "codex",
-        behaviorRevisionId: behavior.behaviorRevisionId,
-        botId: bot.botId,
-        runtimeId: pairing.runtimeId,
-        workspaceRef,
-    });
-    const approved = new BotExecutionBindingApprovedEvent(
-        request.requestId,
-        request.botId,
-        request.behaviorRevisionId,
-        request.bindingId,
-        request.bindingRevision,
-        `grant_${bot.botId}`,
-        "a".repeat(64),
-        "b".repeat(64),
-    );
-    daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
-    expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
+    expect(response).toMatchObject({ lifecycle: "active" });
     const active = await json(
         await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}`, {
             headers: ownerHeaders(pairing),
@@ -459,19 +436,9 @@ async function approveBinding(
     );
     expect(active).toMatchObject({
         activeBehaviorRevisionId: behavior.behaviorRevisionId,
-        activeBindingId: request.bindingId,
+        activeBindingId: stringField(response, "bindingId"),
         lifecycle: "active",
     });
-    const approvedLifecycleRevision = integerField(active, "lifecycleRevision");
-    daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
-    expect(await daemon.messages.next()).toBe(encodeBotExecutionBindingApprovedEvent(approved));
-    const replayed = await json(
-        await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}`, {
-            headers: ownerHeaders(pairing),
-        }),
-        200,
-    );
-    expect(integerField(replayed, "lifecycleRevision")).toBe(approvedLifecycleRevision);
     return {
         bindingId: stringField(response, "bindingId"),
         bindingRevision: integerField(response, "bindingRevision"),
@@ -654,7 +621,7 @@ afterEach(() => {
 });
 
 describe.sequential("Provider-neutral Bot API", () => {
-    it("Given a bot needing setup, When its owner configures an execution target and the runtime approves it, Then setup progresses from unconfigured to awaiting approval to ready", async () => {
+    it("Given a bot needing setup, When its owner configures an execution target, Then setup becomes ready immediately", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const bot = await pairing.client.createBot(
@@ -699,27 +666,11 @@ describe.sequential("Provider-neutral Bot API", () => {
                         }),
                     },
                 ),
-                202,
+                201,
             );
-            expect(await json(await app.request(setupUrl, { headers: ownerHeaders(pairing) }), 200)).toMatchObject({
-                configuration: { kind: "requested", agentRef: "codex", workspaceRef: "default" },
-            });
-            const request = decodeBotExecutionBindingApprovalRequest(await daemon.messages.next());
-            const approved = new BotExecutionBindingApprovedEvent(
-                request.requestId,
-                request.botId,
-                request.behaviorRevisionId,
-                request.bindingId,
-                request.bindingRevision,
-                `grant_${bot.botId}`,
-                "a".repeat(64),
-                "b".repeat(64),
-            );
-            daemon.socket.send(encodeBotExecutionBindingApprovedEvent(approved));
-            await daemon.messages.next();
             expect(await json(await app.request(setupUrl, { headers: ownerHeaders(pairing) }), 200)).toMatchObject({
                 lifecycle: "active",
-                configuration: { kind: "approved", runtimeId: pairing.runtimeId, agentRef: "codex" },
+                configuration: { kind: "active", runtimeId: pairing.runtimeId, agentRef: "codex" },
             });
         } finally {
             daemon.socket.close();
@@ -776,7 +727,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         ).rejects.toMatchObject({ code: "invalid_request" });
     });
 
-    it("Given an approved Bot binding, When its legacy owner endpoint loads Agent settings, Then Mobius preserves the legacy transient configuration snapshot", async () => {
+    it("Given an active Bot binding, When its legacy owner endpoint loads Agent settings, Then Mobius preserves the legacy transient configuration snapshot", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -801,7 +752,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
 
             let deprecation = "";
             const legacyClient = new MobiusBotOwnerClient({
@@ -911,7 +862,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
             const conversation = await pairing.client.createConversation(
                 bot.botId,
                 { clientConversationKey: "managed-conversation" },
@@ -926,7 +877,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 200,
             );
             expect(recordArrayField(behaviors, "behaviorRevisions")).toMatchObject([
-                { behaviorRevisionId: behavior.behaviorRevisionId, lifecycle: "approved", revisionNumber: 1 },
+                { behaviorRevisionId: behavior.behaviorRevisionId, lifecycle: "active", revisionNumber: 1 },
             ]);
 
             const bindings = await json(
@@ -940,7 +891,7 @@ describe.sequential("Provider-neutral Bot API", () => {
             expect(binding).toMatchObject({
                 agentRef: "codex",
                 executionConfiguration: DEFAULT_AGENT_EXECUTION_CONFIGURATION,
-                lifecycle: "approved",
+                lifecycle: "active",
                 workspaceRef: "default",
             });
             expect(binding).not.toHaveProperty("localGrantId");
@@ -1064,7 +1015,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given a Bot is approved for a deeply nested local directory, When its owner creates a conversation, Then the Session is provisioned in that directory", async () => {
+    it("Given a Bot has an active binding to a deeply nested local directory, When its owner creates a conversation, Then the Session is provisioned in that directory", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -1080,15 +1031,14 @@ describe.sequential("Provider-neutral Bot API", () => {
                 {
                     agentConfiguration: {},
                     expectedRevision: 0,
-                    instructions: "Work in the approved local directory.",
+                    instructions: "Work in the selected local directory.",
                     requiredCapabilities: [],
                 },
                 pairing.signal,
             );
             const workspaceRef = `path-${"a".repeat(1024)}`;
-            await approveBinding(
+            await activateBinding(
                 pairing,
-                daemon,
                 bot,
                 behavior,
                 target,
@@ -1130,7 +1080,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
 
             const first = await json(
                 await app.request(
@@ -1254,7 +1204,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
             ),
             409,
-            "binding_not_approved",
+            "binding_not_active",
         );
 
         const forbiddenFields = [
@@ -1288,23 +1238,23 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given one binding approval is pending for a Bot, When another request races for the same Bot, Then only one local approval can remain outstanding", async () => {
+    it("Given an online paired Runtime, When a Bot owner selects an advertised Agent and directory, Then the binding is active without a separate local approval", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
         try {
             const bot = await pairing.client.createBot(
-                { displayName: "Pending binding", avatarRef: "", description: "Pending binding description" },
+                { displayName: "Direct binding", avatarRef: "", description: "Direct binding description" },
                 pairing.signal,
             );
-            const connection = await connectBot(pairing, bot, "pending-binding");
-            const target = await createTarget(pairing, bot, connection, "pending-binding-target");
+            const connection = await connectBot(pairing, bot, "direct-binding");
+            const target = await createTarget(pairing, bot, connection, "direct-binding-target");
             const behavior = await pairing.client.createBehavior(
                 bot.botId,
                 {
                     agentConfiguration: {},
                     expectedRevision: 0,
-                    instructions: "You are Pending binding.",
+                    instructions: "You are Direct binding.",
                     requiredCapabilities: ["embedded-context"],
                 },
                 pairing.signal,
@@ -1320,7 +1270,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 runtimeId: pairing.runtimeId,
                 workspaceRef: "default",
             };
-            await json(
+            const binding = await json(
                 await app.request(
                     `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
                     {
@@ -1329,27 +1279,49 @@ describe.sequential("Provider-neutral Bot API", () => {
                         method: "POST",
                     },
                 ),
-                202,
+                201,
             );
-            await expectApiError(
-                await app.request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${pairing.projectId}/bots/${bot.botId}/execution-bindings`,
-                    {
-                        body: JSON.stringify(requestBodyValue),
-                        headers: ownerHeaders(pairing),
-                        method: "POST",
-                    },
-                ),
-                409,
-                "revision_conflict",
+            expect(binding).toMatchObject({ lifecycle: "active" });
+            const directory = await pairing.client.listBindings(bot.botId, pairing.signal);
+            expect(directory.executionBindings).toHaveLength(1);
+            expect(directory.executionBindings[0]?.state.kind).toBe("active");
+            const behaviorColumns = await env.DIRECTORY_DATABASE.prepare(
+                "PRAGMA table_info(bot_behavior_revisions)",
+            ).all<{ readonly name: string }>();
+            expect(behaviorColumns.results.map(({ name }) => name)).toContain("activated_at");
+            expect(behaviorColumns.results.map(({ name }) => name)).not.toContain("approved_at");
+            const bindingColumns = await env.DIRECTORY_DATABASE.prepare(
+                "PRAGMA table_info(bot_execution_bindings)",
+            ).all<{ readonly name: string }>();
+            expect(bindingColumns.results.map(({ name }) => name)).toContain("activated_at");
+            expect(bindingColumns.results.map(({ name }) => name)).not.toEqual(
+                expect.arrayContaining([
+                    "agent_identity_digest",
+                    "approved_at",
+                    "local_grant_id",
+                    "workspace_identity_digest",
+                ]),
             );
-            const pending = await env.DIRECTORY_DATABASE.prepare(
-                `SELECT COUNT(*) AS count FROM bot_execution_bindings
-                  WHERE bot_id = ? AND lifecycle = 'requested'`,
-            )
-                .bind(bot.botId)
-                .first<{ readonly count: number }>();
-            expect(pending?.count).toBe(1);
+            const approvalFreeSchema = await env.DIRECTORY_DATABASE.prepare(
+                `SELECT GROUP_CONCAT(sql, ' ') AS sql
+                   FROM sqlite_schema
+                  WHERE name IN ('bot_behavior_revisions', 'bot_execution_bindings', 'bot_control_outbox')`,
+            ).first<{ readonly sql: string }>();
+            expect(approvalFreeSchema?.sql).not.toMatch(/awaiting_local_approval|binding_approval|local_grant_id/);
+
+            const conversation = await pairing.client.createConversation(
+                bot.botId,
+                { clientConversationKey: "direct-binding-conversation" },
+                pairing.signal,
+            );
+            expect(conversation).toMatchObject({ botId: bot.botId });
+            const session = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${pairing.projectId}:${conversation.sessionId}`),
+            );
+            const contextColumns = await runInDurableObject(session, (_instance, state) =>
+                state.storage.sql.exec("PRAGMA table_info(bot_session_context)").toArray(),
+            );
+            expect(contextColumns.map(({ name }) => name)).not.toContain("local_grant_id");
         } finally {
             daemon.socket.close(1000, "Test complete");
         }
@@ -1561,8 +1533,8 @@ describe.sequential("Provider-neutral Bot API", () => {
             const connectionB = await connectBot(runtimeA, botB, "runtime-b");
             const targetA = await createTarget(runtimeA, botA, connectionA, "runtime-a-target");
             const targetB = await createTarget(runtimeA, botB, connectionB, "runtime-b-target");
-            const bindingA = await approveBinding(runtimeA, daemonA, botA, behaviorA, targetA);
-            const bindingB = await approveBinding(runtimeB, daemonB, botB, behaviorB, targetB);
+            const bindingA = await activateBinding(runtimeA, botA, behaviorA, targetA);
+            const bindingB = await activateBinding(runtimeB, botB, behaviorB, targetB);
             const conversationA = await runtimeA.client.createConversation(
                 botA.botId,
                 { clientConversationKey: "runtime-a-conversation" },
@@ -1606,7 +1578,6 @@ describe.sequential("Provider-neutral Bot API", () => {
                 botId: botA.botId,
                 conversationId: conversationA.conversationId,
                 executionId: acceptedA.executionId,
-                localGrantId: `grant_${botA.botId}`,
             });
             expect(commandB).toMatchObject({
                 bindingId: bindingB.bindingId,
@@ -1614,10 +1585,8 @@ describe.sequential("Provider-neutral Bot API", () => {
                 botId: botB.botId,
                 conversationId: conversationB.conversationId,
                 executionId: acceptedB.executionId,
-                localGrantId: `grant_${botB.botId}`,
             });
             expect(commandA.executionCapabilitySecret).not.toBe(commandB.executionCapabilitySecret);
-            expect(commandA.localGrantId).not.toBe(commandB.localGrantId);
 
             for (const execution of [
                 { accepted: acceptedA, command: commandA, daemon: daemonA },
@@ -1704,7 +1673,6 @@ describe.sequential("Provider-neutral Bot API", () => {
             expect(decodeBotSessionPromptCommand(await daemonB.messages.next())).toMatchObject({
                 botId: botB.botId,
                 executionId: surviving.executionId,
-                localGrantId: commandB.localGrantId,
             });
             expect(daemonB.socket.readyState).toBe(WebSocket.OPEN);
         } finally {
@@ -1713,7 +1681,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given a Runtime belongs to another Project, When a Bot owner requests a binding to it, Then the request is rejected before a binding or local approval is created", async () => {
+    it("Given a Runtime belongs to another Project, When a Bot owner requests a binding to it, Then the request is rejected before a binding is created", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const owner = await pairRuntime(app);
         const foreign = await pairRuntime(app);
@@ -1795,8 +1763,8 @@ describe.sequential("Provider-neutral Bot API", () => {
             const connectionBeta = await connectBot(pairing, botBeta, "beta");
             const targetAlpha = await createTarget(pairing, botAlpha, connectionAlpha, "alpha-notifications");
             const targetBeta = await createTarget(pairing, botBeta, connectionBeta, "beta-notifications");
-            const bindingAlpha = await approveBinding(pairing, daemon, botAlpha, behaviorAlpha, targetAlpha);
-            const bindingBeta = await approveBinding(pairing, daemon, botBeta, behaviorBeta, targetBeta);
+            const bindingAlpha = await activateBinding(pairing, botAlpha, behaviorAlpha, targetAlpha);
+            const bindingBeta = await activateBinding(pairing, botBeta, behaviorBeta, targetBeta);
             const conversationAlpha = await pairing.client.createConversation(
                 botAlpha.botId,
                 { clientConversationKey: "alpha-thread" },
@@ -2103,7 +2071,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target, bot.lifecycleRevision);
+            await activateBinding(pairing, bot, behavior, target, bot.lifecycleRevision);
             const conversation = await pairing.client.createConversation(
                 bot.botId,
                 { clientConversationKey: "invalid-quota" },
@@ -2183,7 +2151,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            const binding = await approveBinding(pairing, daemon, bot, behavior, target, bot.lifecycleRevision, {
+            const binding = await activateBinding(pairing, bot, behavior, target, bot.lifecycleRevision, {
                 deliveryTargetId: target.deliveryTargetId,
                 kind: "required",
                 messageTemplate: "Turn {status}",
@@ -2409,7 +2377,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
             const conversation = await createConnectedConversation(pairing, bot, connection, target, "external-thread");
 
             await expectApiError(
@@ -2496,7 +2464,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given an approved Runtime is temporarily offline, When an inbound Bot message is accepted, Then reconnect dispatches the same durable turn once", async () => {
+    it("Given an active Runtime is temporarily offline, When an inbound Bot message is accepted, Then reconnect dispatches the same durable turn once", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -2518,7 +2486,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
             const conversation = await pairing.client.createConversation(
                 bot.botId,
                 { clientConversationKey: "offline-runtime" },
@@ -2578,7 +2546,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given an existing conversation predates a newly approved behavior, When its creation key is replayed, Then the original session and revisions remain pinned", async () => {
+    it("Given an existing conversation predates a newly active behavior, When its creation key is replayed, Then the original session and revisions remain pinned", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -2599,7 +2567,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            const firstBinding = await approveBinding(pairing, daemon, bot, firstBehavior, target);
+            const firstBinding = await activateBinding(pairing, bot, firstBehavior, target);
             const original = await pairing.client.createConversation(
                 bot.botId,
                 { clientConversationKey: "stable-conversation" },
@@ -2616,7 +2584,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, secondBehavior, target, 2);
+            await activateBinding(pairing, bot, secondBehavior, target, 2);
 
             const replayed = await json(
                 await app.request(
@@ -2663,7 +2631,7 @@ describe.sequential("Provider-neutral Bot API", () => {
                 },
                 pairing.signal,
             );
-            await approveBinding(pairing, daemon, bot, behavior, target);
+            await activateBinding(pairing, bot, behavior, target);
             const conversation = await pairing.client.createConversation(
                 bot.botId,
                 { clientConversationKey: "recoverable-conversation" },
