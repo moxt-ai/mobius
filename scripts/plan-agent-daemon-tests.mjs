@@ -5,6 +5,7 @@ export const agentDaemonConfigurations = [
     { agent: "opencode", packages: "opencode-ai@1.18.29" },
     { agent: "codex", packages: "@openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0" },
     { agent: "copilot", packages: "@github/copilot@1.0.83" },
+    { agent: "cursor", packages: "" },
     { agent: "pi", packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33" },
     { agent: "gemini", packages: "@google/gemini-cli@0.59.0" },
     { agent: "claude", packages: "@anthropic-ai/claude-code@2.1.273 @agentclientprotocol/claude-agent-acp@0.73.0" },
@@ -21,6 +22,7 @@ const agentFiles = new Map(
         ["claude", "claude-code-agent"],
         ["codex", "codex-agent"],
         ["copilot", "copilot-cli-agent"],
+        ["cursor", "cursor-cli-agent"],
         ["deepseek", "deepseek-harness-agent"],
         ["gemini", "gemini-cli-agent"],
         ["hermes", "hermes-agent"],
@@ -31,6 +33,7 @@ const agentFiles = new Map(
     ].flatMap(([agent, specification]) => [
         [`tests/agent-daemon/cases/${agent}.integration.test.ts`, agent],
         [`tests/agent-daemon/infra/${agent}.ts`, agent],
+        [`tests/agent-daemon/providers/${agent}.ts`, agent],
         [`packages/cli/src/agent-catalog/agents/${specification}.ts`, agent],
     ]),
 );

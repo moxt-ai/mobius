@@ -14,6 +14,7 @@ describe("agent and daemon test planning", () => {
 
     it("selects one Agent for its case, fixture, or production specification", () => {
         assert.deepEqual(selected(["tests/agent-daemon/cases/copilot.integration.test.ts"]), ["copilot"]);
+        assert.deepEqual(selected(["tests/agent-daemon/providers/cursor.ts"]), ["cursor"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/copilot-cli-agent.ts"]), ["copilot"]);
         assert.deepEqual(selected(["tests/agent-daemon/cases/hermes.integration.test.ts"]), ["hermes"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/gemini-cli-agent.ts"]), ["gemini"]);
@@ -38,6 +39,7 @@ describe("agent and daemon test planning", () => {
             "opencode",
             "codex",
             "copilot",
+            "cursor",
             "pi",
             "gemini",
             "claude",

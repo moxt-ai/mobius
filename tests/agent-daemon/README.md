@@ -59,6 +59,7 @@ tests/agent-daemon/
     claude.integration.test.ts
     codex.integration.test.ts
     copilot.integration.test.ts
+    cursor.integration.test.ts
     deepseek.integration.test.ts
     gemini.integration.test.ts
     grok.integration.test.ts
@@ -70,6 +71,7 @@ tests/agent-daemon/
     claude.ts
     codex.ts
     copilot.ts
+    cursor.ts
     deepseek.ts
     executable.ts
     gemini.ts
@@ -80,6 +82,7 @@ tests/agent-daemon/
     workbuddy.ts
   providers/
     anthropic.ts
+    cursor.ts
     gemini.ts
     openai.ts
 ```
@@ -91,7 +94,13 @@ protocol it actually needs.
 
 Each Agent receives an isolated home and XDG directories. Configure it through
 the same mechanism available to users, with an inert credential and a loopback
-base URL. Never redirect DNS, patch the Agent, or reuse developer credentials.
+endpoint. Cursor exercises its native Cursor control and AgentService protocols;
+the other providers exercise their corresponding LLM protocol. Never redirect
+DNS, patch the Agent, or reuse developer credentials.
+
+The Cursor provider records its native request and response messages in an
+NDJSON trace and reports its path on failure. Raw capture stays inside each
+protocol implementation so diagnostics preserve the actual wire format.
 
 ## Run
 
@@ -102,10 +111,11 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Claude, Codex, GitHub Copilot CLI, DeepSeek Harness, Gemini, Grok Build, Hermes, Pi, and WorkBuddy cases likewise accept
+The Claude, Codex, GitHub Copilot CLI, Cursor CLI, DeepSeek Harness, Gemini, Grok Build, Hermes, Pi, and WorkBuddy cases likewise accept
 `MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
 `MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
 `MOBIUS_TEST_COPILOT_PATH`,
+`MOBIUS_TEST_CURSOR_LOCAL_PATH`,
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
 `MOBIUS_TEST_GROK_BUILD_PATH`,
 `MOBIUS_TEST_HERMES_PATH`,
