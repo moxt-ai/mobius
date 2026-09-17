@@ -8,7 +8,12 @@ import type {
 } from "@moxt-ai/mobius-protocol";
 import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { ExecutionPermit } from "../authentication/project-authentication.ts";
-import { type ProjectScope, type SessionMessage, SessionRuntimeError, type SessionSummary } from "../do/session.ts";
+import {
+    type ProjectScope,
+    type SessionMessageContent,
+    SessionRuntimeError,
+    type SessionSummary,
+} from "../do/session.ts";
 
 export const BOT_EXECUTION_LIFETIME_MILLISECONDS = 30 * 60 * 1_000;
 export const BOT_EXECUTION_OUTBOUND_USAGE_LIMIT = 16;
@@ -93,9 +98,11 @@ export class BotTurnSubmission {
     readonly actorRef: string;
     readonly additionalDirectoryIds: readonly string[];
     readonly clientMessageId: string;
+    readonly disposition: string;
     readonly images: readonly PromptImage[];
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
+    readonly targetTurnId: string;
 
     constructor(
         clientMessageId: string,
@@ -104,13 +111,17 @@ export class BotTurnSubmission {
         additionalDirectoryIds: readonly string[],
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
+        disposition = "reject",
+        targetTurnId = "",
     ) {
         this.clientMessageId = clientMessageId;
         this.actorRef = actorRef;
         this.prompt = prompt;
         this.additionalDirectoryIds = Object.freeze([...additionalDirectoryIds]);
+        this.disposition = disposition;
         this.images = Object.freeze([...images]);
         this.resources = Object.freeze([...resources]);
+        this.targetTurnId = targetTurnId;
     }
 }
 
@@ -207,46 +218,12 @@ export class BotConversationEventPage {
     }
 }
 
-export const BOT_CONVERSATION_RESPONSE_LIMIT = 8 * 1024 * 1024;
-
-export class BotConversationMessage {
-    readonly activities: SessionMessage["activities"];
-    readonly attempt: SessionMessage["attempt"];
+export interface BotConversationMessage extends SessionMessageContent {
     readonly behaviorRevisionId: string;
     readonly clientMessageId: string;
-    readonly createdAt: string;
     readonly executionId: string;
-    readonly messageId: string;
-    readonly prompt: string;
-    readonly response: string;
-    readonly responseTruncated: boolean;
+    readonly targetClientMessageId: string;
     readonly turnId: string;
-
-    constructor(
-        turnId: string,
-        executionId: string,
-        behaviorRevisionId: string,
-        clientMessageId: string,
-        messageId: string,
-        prompt: string,
-        response: string,
-        responseTruncated: boolean,
-        activities: SessionMessage["activities"],
-        attempt: SessionMessage["attempt"],
-        createdAt: string,
-    ) {
-        this.activities = Object.freeze([...activities]);
-        this.attempt = attempt;
-        this.behaviorRevisionId = behaviorRevisionId;
-        this.clientMessageId = clientMessageId;
-        this.createdAt = createdAt;
-        this.executionId = executionId;
-        this.messageId = messageId;
-        this.prompt = prompt;
-        this.response = response;
-        this.responseTruncated = responseTruncated;
-        this.turnId = turnId;
-    }
 }
 
 export class BotConversationMessagePage {
@@ -417,11 +394,19 @@ export interface BotSessionRuntime {
         now: number,
         signal: AbortSignal,
     ) => Promise<readonly PendingBotOutbound[]>;
+    readonly promoteQueuedTurnToSteering: (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => Promise<BotExecutionRecord>;
     readonly readConversationEvents: (
         scope: ProjectScope,
         sessionId: string,
         cursor: string,
         limit: number,
+        waitMilliseconds: number,
         signal: AbortSignal,
     ) => Promise<BotConversationEventPage>;
     readonly readConversationMessages: (

@@ -184,6 +184,9 @@ export class SqliteSessionRuntime
     readonly openEventStream: SessionEventStreamGateway["openEventStream"] = (...parameters) =>
         this.#eventStreams.open(...parameters);
 
+    readonly waitForEvents: SessionEventStreamGateway["waitForEvents"] = (...parameters) =>
+        this.#eventStreams.wait(...parameters);
+
     readonly closeEventStreams = (): void => {
         this.#eventStreams.close();
     };

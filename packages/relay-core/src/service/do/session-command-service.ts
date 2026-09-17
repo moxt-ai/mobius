@@ -26,6 +26,7 @@ import {
     type CommittedEventResult,
     type CreateSessionBindingRequest,
     CreateSessionRequest,
+    isSessionDirectoryIdentifier,
     type ProjectScope,
     SessionConfigurationAcceptance,
     SessionRuntimeError,
@@ -695,7 +696,9 @@ export class SessionCommandService {
         validateDomainIdentifier(binding.bindingId, "binding");
         validateDomainIdentifier(binding.runtimeId, "runtime");
         validateDomainIdentifier(binding.agentRef, "agent");
-        validateDomainIdentifier(binding.workspaceRef, "workspace");
+        if (!isSessionDirectoryIdentifier(binding.workspaceRef)) {
+            throw new SessionRuntimeError("session_access_denied", "The workspace identifier is invalid");
+        }
         if (!Number.isSafeInteger(binding.configRevision) || binding.configRevision < 0) {
             throw new SessionRuntimeError("session_conflict", "The binding configuration revision is invalid");
         }

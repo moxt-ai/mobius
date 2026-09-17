@@ -9,11 +9,10 @@ import {
     RequiredBotCompletionDeliveryPolicy,
     type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
-
+import { isSessionDirectoryIdentifier } from "../do/session.ts";
 import { BotSessionProvisioning, BotSessionRuntimeError } from "./bot-session.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
-const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 
 function invalid(message: string, options: ErrorOptions = {}): BotSessionRuntimeError {
@@ -175,7 +174,7 @@ export function decodeBotSessionProvisioning(value: unknown): BotSessionProvisio
         throw invalid("The Bot conversation provisioning creator kind is invalid");
     }
     const workspaceRef = text(value, "workspaceRef", 2_048);
-    if (!DIRECTORY_IDENTIFIER_PATTERN.test(workspaceRef)) {
+    if (!isSessionDirectoryIdentifier(workspaceRef)) {
         throw invalid("The Bot conversation provisioning workspace is invalid");
     }
     const behaviorDigest = text(value, "behaviorDigest", 64);

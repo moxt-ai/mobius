@@ -28,6 +28,13 @@ export class SessionQuotaPolicy {
 
 export const DEFAULT_SESSION_QUOTA_POLICY = new SessionQuotaPolicy(1_000);
 
+export const SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH = 2_048;
+const SESSION_DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
+
+export function isSessionDirectoryIdentifier(value: unknown): boolean {
+    return typeof value === "string" && SESSION_DIRECTORY_IDENTIFIER_PATTERN.test(value);
+}
+
 export class ProjectScope {
     readonly projectId: string;
 
@@ -356,7 +363,7 @@ export type AttemptSummary =
           readonly startedAt: string;
       };
 
-export interface SessionMessage {
+export interface SessionMessageContent {
     readonly activities: readonly {
         readonly activityId: string;
         readonly attemptId: string;
@@ -373,9 +380,7 @@ export interface SessionMessage {
         readonly toolKind: string;
     }[];
     readonly additionalDirectoryIds: readonly string[];
-    readonly agentId: string;
     readonly attempt: AttemptSummary | null;
-    readonly commandId: string;
     readonly createdAt: string;
     readonly disposition: string;
     readonly images: SessionPromptCommand["images"];
@@ -383,6 +388,11 @@ export interface SessionMessage {
     readonly prompt: string;
     readonly resources: SessionPromptCommand["resources"];
     readonly response: string;
+}
+
+export interface SessionMessage extends SessionMessageContent {
+    readonly agentId: string;
+    readonly commandId: string;
     readonly sessionId: string;
     readonly targetCommandId: string;
 }

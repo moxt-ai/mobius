@@ -7,6 +7,7 @@ import {
     type PromptResource,
     type SessionConfigurationSelection,
 } from "./control-messages.ts";
+import { SessionPromptDisposition } from "./messages.ts";
 
 export const BOT_BINDING_APPROVAL_REQUEST_KIND = "bot.binding.approval.request";
 export const BOT_BINDING_APPROVED_KIND = "bot.binding.approved";
@@ -1123,6 +1124,7 @@ export class BotSessionPromptCommand {
     readonly commandId: string;
     readonly conversationId: string;
     readonly directoryId: string;
+    readonly disposition: string;
     readonly executionCapabilityId: string;
     readonly executionCapabilitySecret: string;
     readonly executionDeadlineAt: string;
@@ -1135,6 +1137,7 @@ export class BotSessionPromptCommand {
     readonly resources: readonly PromptResource[];
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly sessionId: string;
+    readonly targetCommandId: string;
     readonly turnId: string;
 
     constructor(
@@ -1162,12 +1165,15 @@ export class BotSessionPromptCommand {
         allowedDeliveryTargets: readonly BotDeliveryTargetReference[],
         replyRoute: BotReplyRoute,
         sessionConfigurations: readonly SessionConfigurationSelection[] = [],
+        disposition: string = SessionPromptDisposition.Reject,
+        targetCommandId = "",
     ) {
         this.sessionId = sessionId;
         this.commandId = commandId;
         this.agentId = agentId;
         this.bindingId = bindingId;
         this.directoryId = directoryId;
+        this.disposition = disposition;
         this.additionalDirectoryIds = Object.freeze([...additionalDirectoryIds]);
         this.images = Object.freeze([...images]);
         this.resources = Object.freeze([...resources]);
@@ -1191,13 +1197,15 @@ export class BotSessionPromptCommand {
         );
         this.replyRoute = replyRoute;
         this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
+        this.targetCommandId = targetCommandId;
     }
 
     toJSON(): object {
-        const { sessionConfigurations, ...command } = this;
+        const { disposition, sessionConfigurations, targetCommandId, ...command } = this;
         return {
             ...command,
             ...(sessionConfigurations.length === 0 ? {} : { sessionConfigurations }),
+            ...(disposition === SessionPromptDisposition.Reject ? {} : { disposition, targetCommandId }),
         };
     }
 }
@@ -1535,10 +1543,29 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
             "sessionId",
             "turnId",
         ],
-        ["sessionConfigurations"],
+        ["disposition", "sessionConfigurations", "targetCommandId"],
     );
     if (value["kind"] !== BOT_SESSION_PROMPT_KIND) {
         throw new ProtocolMessageError("Invalid Bot Session prompt kind");
+    }
+    const rawDisposition = value["disposition"];
+    let disposition: string;
+    if (rawDisposition === undefined || rawDisposition === SessionPromptDisposition.Reject) {
+        disposition = SessionPromptDisposition.Reject;
+    } else if (rawDisposition === SessionPromptDisposition.Queue) {
+        disposition = SessionPromptDisposition.Queue;
+    } else if (rawDisposition === SessionPromptDisposition.Steer) {
+        disposition = SessionPromptDisposition.Steer;
+    } else {
+        throw new ProtocolMessageError("Invalid Bot Session prompt disposition");
+    }
+    const targetCommandId =
+        value["targetCommandId"] === undefined ? "" : readText(value, "targetCommandId", 128, false);
+    if (
+        (disposition === SessionPromptDisposition.Reject && targetCommandId.length > 0) ||
+        (disposition !== SessionPromptDisposition.Reject && !IDENTIFIER_PATTERN.test(targetCommandId))
+    ) {
+        throw new ProtocolMessageError("Bot Session prompt disposition has an invalid target command");
     }
     return new BotSessionPromptCommand(
         readIdentifier(value, "sessionId"),
@@ -1565,6 +1592,8 @@ export function decodeBotSessionPromptCommand(encoded: string): BotSessionPrompt
         readTargets(value, "allowedDeliveryTargets"),
         readReplyRoute(value["replyRoute"]),
         readSessionConfigurations(value),
+        disposition,
+        targetCommandId,
     );
 }
 

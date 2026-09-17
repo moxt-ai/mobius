@@ -37,6 +37,7 @@ import {
     MobiusBotOutboundEventPage,
     MobiusBotTurnAcceptance,
     MobiusBotTurnCancellationAcceptance,
+    MobiusBotTurnSteeringAcceptance,
     MobiusConnectedBotConversation,
     MobiusDisabledBotDeliveryTarget,
     MobiusRevokedBotConnection,
@@ -50,7 +51,13 @@ import {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
-import { decodeMobiusTurn, type MobiusPageRequest, type MobiusTurn } from "./resources.ts";
+import {
+    decodeMobiusToolCallDetail,
+    decodeMobiusTurn,
+    type MobiusPageRequest,
+    type MobiusToolCallDetail,
+    type MobiusTurn,
+} from "./resources.ts";
 import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
 
 export const MOBIUS_BOT_API_VERSION = "v1";
@@ -155,6 +162,10 @@ export interface SubmitMobiusProjectConversationTurnRequest {
     readonly idempotencyKey: string;
     readonly images: readonly PromptImage[];
     readonly resources: readonly PromptResource[];
+}
+
+export interface SubmitMobiusProjectConversationFollowUpRequest extends SubmitMobiusProjectConversationTurnRequest {
+    readonly targetTurnId: string;
 }
 
 export class MobiusProjectConversationTurnAcceptance {
@@ -460,6 +471,14 @@ class BotRequestExecutor {
             throw new MobiusValidationError("The Mobius Bot API request is invalid");
         }
         return await this.request(path, "POST", encoded, true, signal);
+    };
+
+    readonly put = async (path: string, body: unknown, signal: AbortSignal): Promise<unknown> => {
+        const encoded = JSON.stringify(body);
+        if (typeof encoded !== "string") {
+            throw new MobiusValidationError("The Mobius Bot API request is invalid");
+        }
+        return await this.request(path, "PUT", encoded, true, signal);
     };
 
     private readonly request = async (
@@ -852,6 +871,37 @@ export class MobiusBotOwnerClient {
         );
     };
 
+    readonly queueProjectConversationTurn = async (
+        conversationId: string,
+        request: SubmitMobiusProjectConversationFollowUpRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversationTurnAcceptance> =>
+        await this.submitProjectConversationFollowUp(conversationId, request, "queue", signal);
+
+    readonly steerProjectConversationTurn = async (
+        conversationId: string,
+        request: SubmitMobiusProjectConversationFollowUpRequest,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversationTurnAcceptance> =>
+        await this.submitProjectConversationFollowUp(conversationId, request, "steer", signal);
+
+    readonly promoteProjectConversationTurnToSteering = async (
+        conversationId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusBotTurnSteeringAcceptance> =>
+        new MobiusBotTurnSteeringAcceptance(
+            await this.#executor.put(
+                conversationPath(
+                    this.#projectId,
+                    conversationId,
+                    `turns/${encodeURIComponent(identifier(turnId, "turn"))}/disposition`,
+                ),
+                { disposition: "steer" },
+                signal,
+            ),
+        );
+
     readonly createConversationConfigurationRevision = async (
         conversationId: string,
         request: MobiusConversationConfigurationRequest,
@@ -864,6 +914,43 @@ export class MobiusBotOwnerClient {
                 signal,
             ),
         );
+
+    private readonly submitProjectConversationFollowUp = async (
+        conversationId: string,
+        request: SubmitMobiusProjectConversationFollowUpRequest,
+        disposition: string,
+        signal: AbortSignal,
+    ): Promise<MobiusProjectConversationTurnAcceptance> => {
+        const value = requestRecord(
+            request,
+            [
+                "additionalDirectoryIds",
+                "artifactIds",
+                "content",
+                "idempotencyKey",
+                "images",
+                "resources",
+                "targetTurnId",
+            ],
+            "Project Conversation follow-up request",
+        );
+        return new MobiusProjectConversationTurnAcceptance(
+            await this.#executor.post(
+                conversationPath(this.#projectId, conversationId, "turns"),
+                {
+                    additionalDirectoryIds: identifiers(value["additionalDirectoryIds"], "additional directory", 16),
+                    artifactIds: identifiers(value["artifactIds"], "artifact", 16),
+                    content: boundedText(value["content"], "Conversation Turn content", 100_000, true),
+                    disposition,
+                    idempotencyKey: identifier(value["idempotencyKey"], "Turn idempotency key"),
+                    images: decodePromptImagesValue(value["images"]),
+                    resources: decodePromptResourcesValue(value["resources"]),
+                    targetTurnId: identifier(value["targetTurnId"], "target Turn"),
+                },
+                signal,
+            ),
+        );
+    };
 
     readonly submitMessage = async (
         botId: string,
@@ -916,6 +1003,30 @@ export class MobiusBotOwnerClient {
         );
     };
 
+    readonly waitForConversationEvents = async (
+        botId: string,
+        conversationId: string,
+        after: string,
+        waitMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<MobiusBotConversationEventPage> => {
+        const path = new URL(
+            projectBotPath(
+                this.#projectId,
+                botId,
+                `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/events`,
+            ),
+            "https://mobius.invalid/",
+        );
+        if (after.length > 0) {
+            path.searchParams.set("after", boundedText(after, "Bot event cursor", 512));
+        }
+        path.searchParams.set("wait", boundedInteger(waitMilliseconds, "Bot event wait", 1, 10_000).toString());
+        return new MobiusBotConversationEventPage(
+            await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
+        );
+    };
+
     readonly readConversationMessages = async (
         botId: string,
         conversationId: string,
@@ -938,6 +1049,24 @@ export class MobiusBotOwnerClient {
             await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
         );
     };
+
+    readonly readConversationToolCallDetail = async (
+        botId: string,
+        conversationId: string,
+        attemptId: string,
+        toolCallId: string,
+        signal: AbortSignal,
+    ): Promise<MobiusToolCallDetail> =>
+        decodeMobiusToolCallDetail(
+            await this.#executor.get(
+                projectBotPath(
+                    this.#projectId,
+                    botId,
+                    `conversations/${encodeURIComponent(identifier(conversationId, "conversation"))}/attempts/${encodeURIComponent(identifier(attemptId, "attempt"))}/tool-calls/${encodeURIComponent(identifier(toolCallId, "tool call"))}`,
+                ),
+                signal,
+            ),
+        );
 
     readonly cancelTurn = async (
         botId: string,

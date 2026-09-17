@@ -2,6 +2,7 @@ import {
     type BotCompletionDeliveryPolicy,
     NoBotCompletionDeliveryPolicy,
     RequiredBotCompletionDeliveryPolicy,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { BotApiError } from "../../entity/bot/bot-error.ts";
 import type { NewBotConversation, NewBotMessage } from "../../service/bot/bot-service.ts";
@@ -255,6 +256,30 @@ export function messagePageLimit(url: URL): number {
     const value = url.searchParams.get("limit") ?? "50";
     if (!/^[1-9][0-9]{0,2}$/.test(value) || Number(value) > 100) {
         throw new BotApiError("invalid_request", "The message page limit is invalid", "invalid-input");
+    }
+    return Number(value);
+}
+
+export function turnDisposition(value: Readonly<Record<string, unknown>>): string {
+    const disposition = string(value, "disposition", 16);
+    if (disposition !== SessionPromptDisposition.Queue && disposition !== SessionPromptDisposition.Steer) {
+        throw new BotApiError("invalid_request", "The Turn disposition is invalid", "invalid-input");
+    }
+    return disposition;
+}
+
+export function steeringDisposition(value: Readonly<Record<string, unknown>>): string {
+    const disposition = turnDisposition(value);
+    if (disposition !== SessionPromptDisposition.Steer) {
+        throw new BotApiError("invalid_request", "Only steering promotion is supported", "invalid-input");
+    }
+    return disposition;
+}
+
+export function eventWaitMilliseconds(url: URL): number {
+    const value = url.searchParams.get("wait") ?? "0";
+    if (!/^(?:0|[1-9][0-9]{0,4})$/.test(value) || Number(value) > 10_000) {
+        throw new BotApiError("invalid_request", "The event wait is invalid", "invalid-input");
     }
     return Number(value);
 }

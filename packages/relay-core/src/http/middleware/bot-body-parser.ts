@@ -35,5 +35,8 @@ async function parseBotBody(request: Request): Promise<Readonly<Record<string, u
 }
 
 export function botBodyParser<TEnvironment extends BodyParserEnvironment>(): MiddlewareHandler<TEnvironment> {
-    return contextBodyParser<TEnvironment>(parseBotBody, (request) => request.method === "POST");
+    return contextBodyParser<TEnvironment>(
+        parseBotBody,
+        (request) => request.method === "POST" || request.method === "PUT",
+    );
 }

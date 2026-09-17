@@ -1,12 +1,5 @@
 import { MobiusProtocolError } from "./errors.ts";
-import {
-    decodeMobiusActivitySummary,
-    decodeMobiusAttemptSummary,
-    type MobiusActivitySummary,
-    type MobiusAttemptSummary,
-} from "./resources.ts";
-
-const BOT_CONVERSATION_RESPONSE_LIMIT = 8 * 1024 * 1024;
+import { decodeMobiusMessageContent, MobiusMessageContent } from "./resources.ts";
 
 function invalid(name: string): MobiusProtocolError {
     return new MobiusProtocolError(`The service returned an invalid ${name}`);
@@ -323,6 +316,20 @@ export class MobiusBotTurnCancellationAcceptance {
     }
 }
 
+export class MobiusBotTurnSteeringAcceptance {
+    readonly disposition = "steer";
+    readonly turnId: string;
+
+    constructor(value: unknown) {
+        const resource = record(value, "Bot turn steering acceptance");
+        exact(resource, ["disposition", "turnId"], "Bot turn steering acceptance");
+        if (resource["disposition"] !== this.disposition) {
+            throw invalid("Bot turn steering acceptance");
+        }
+        this.turnId = nonemptyText(resource, "turnId", "Bot turn steering acceptance");
+    }
+}
+
 export class MobiusBotConversationEvent {
     readonly behaviorRevisionId: string;
     readonly conversationId: string;
@@ -369,17 +376,11 @@ export class MobiusBotConversationEventPage {
     }
 }
 
-export class MobiusBotConversationMessage {
-    readonly activities: readonly MobiusActivitySummary[];
-    readonly attempt: MobiusAttemptSummary;
+export class MobiusBotConversationMessage extends MobiusMessageContent {
     readonly behaviorRevisionId: string;
     readonly clientMessageId: string;
-    readonly createdAt: string;
     readonly executionId: string;
-    readonly messageId: string;
-    readonly prompt: string;
-    readonly response: string;
-    readonly responseTruncated: boolean;
+    readonly targetClientMessageId: string;
     readonly turnId: string;
 
     constructor(value: unknown) {
@@ -388,37 +389,40 @@ export class MobiusBotConversationMessage {
             resource,
             [
                 "activities",
+                "additionalDirectoryIds",
                 "attempt",
                 "behaviorRevisionId",
                 "clientMessageId",
                 "createdAt",
+                "disposition",
                 "executionId",
+                "images",
                 "messageId",
                 "prompt",
+                "resources",
                 "response",
-                "responseTruncated",
+                "targetClientMessageId",
                 "turnId",
             ],
             "Bot conversation message",
         );
-        const activities = resource["activities"];
-        if (!Array.isArray(activities) || activities.length > 10_000) {
-            throw invalid("Bot conversation message");
-        }
-        const response = text(resource, "response", "Bot conversation message");
-        if (response.length > BOT_CONVERSATION_RESPONSE_LIMIT) {
-            throw invalid("Bot conversation message");
-        }
-        this.activities = Object.freeze(activities.map(decodeMobiusActivitySummary));
-        this.attempt = decodeMobiusAttemptSummary(resource["attempt"]);
+        const content = decodeMobiusMessageContent(resource);
+        super(
+            content.activities,
+            content.additionalDirectoryIds,
+            content.attempt,
+            content.createdAt,
+            content.disposition,
+            content.images,
+            content.messageId,
+            content.prompt,
+            content.resources,
+            content.response,
+        );
         this.behaviorRevisionId = nonemptyText(resource, "behaviorRevisionId", "Bot conversation message");
         this.clientMessageId = nonemptyText(resource, "clientMessageId", "Bot conversation message");
-        this.createdAt = timestamp(resource, "createdAt", "Bot conversation message");
         this.executionId = nonemptyText(resource, "executionId", "Bot conversation message");
-        this.messageId = text(resource, "messageId", "Bot conversation message");
-        this.prompt = text(resource, "prompt", "Bot conversation message");
-        this.response = response;
-        this.responseTruncated = boolean(resource, "responseTruncated", "Bot conversation message");
+        this.targetClientMessageId = text(resource, "targetClientMessageId", "Bot conversation message");
         this.turnId = nonemptyText(resource, "turnId", "Bot conversation message");
     }
 }

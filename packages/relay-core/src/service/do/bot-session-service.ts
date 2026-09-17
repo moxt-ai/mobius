@@ -9,6 +9,7 @@ import {
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeSessionConfigurationSelections,
+    decodeSessionPromptCommand,
     encodeBotSessionPromptCommand,
     encodeSessionPromptCommand,
     NoBotCompletionDeliveryPolicy,
@@ -21,13 +22,12 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
-    BOT_CONVERSATION_RESPONSE_LIMIT,
     BOT_EXECUTION_LIFETIME_MILLISECONDS,
     BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
     BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS,
     BotConversationEvent,
     BotConversationEventPage,
-    BotConversationMessage,
+    type BotConversationMessage,
     BotConversationMessagePage,
     BotExecutionRecord,
     BotOutboundAcceptance,
@@ -46,6 +46,7 @@ import {
 } from "../../entity/do/session.ts";
 import { createRandomToken, hashSecret } from "../../entity/pairing/pairing.ts";
 import type { SessionCommandGateway } from "../../gateway/session-command-gateway.ts";
+import type { SessionEventStreamGateway } from "../../gateway/session-event-stream-gateway.ts";
 import type { SessionQueryGateway } from "../../gateway/session-query-gateway.ts";
 import type { DoSqlRow } from "../../infra/do-sql-database.ts";
 import type { OperationTiming } from "../../infra/operation-timing.ts";
@@ -79,6 +80,7 @@ interface BotBackingSessionRuntime {
     readonly readEvents: SessionQueryGateway["readEvents"];
     readonly readMessages: SessionQueryGateway["readMessages"];
     readonly readSession: SessionQueryGateway["readSession"];
+    readonly waitForEvents: SessionEventStreamGateway["waitForEvents"];
 }
 
 interface BotSessionContext {
@@ -519,12 +521,38 @@ export class BotSessionService {
         if (submission.actorRef.length === 0 || submission.actorRef.length > MAX_ACTOR_REFERENCE_LENGTH) {
             throw new BotSessionRuntimeError("invalid_request", "The actor reference is invalid");
         }
+        if (
+            (submission.disposition !== SessionPromptDisposition.Reject &&
+                submission.disposition !== SessionPromptDisposition.Queue &&
+                submission.disposition !== SessionPromptDisposition.Steer) ||
+            (submission.disposition === SessionPromptDisposition.Reject && submission.targetTurnId.length > 0) ||
+            (submission.disposition !== SessionPromptDisposition.Reject && submission.targetTurnId.length === 0)
+        ) {
+            throw new BotSessionRuntimeError("invalid_request", "The Bot Turn disposition is invalid");
+        }
         const key = scopeKey(scope);
         const contextRow = this.#storage.readContext({ scopeKey: key, sessionId })[0];
         if (contextRow === undefined) {
             throw new BotSessionRuntimeError("conversation_access_denied", "The Bot conversation does not exist");
         }
         const context = contextFromRow(contextRow);
+        let targetCommandId = "";
+        if (submission.disposition !== SessionPromptDisposition.Reject) {
+            validateDomainIdentifier(submission.targetTurnId, "target Turn");
+            const target = this.#storage.readTurnExecution({
+                scopeKey: key,
+                sessionId,
+                turnId: submission.targetTurnId,
+            })[0];
+            if (
+                target === undefined ||
+                rowText(target, "bot_id") !== context.botId ||
+                rowText(target, "conversation_id") !== context.conversationId
+            ) {
+                throw new BotSessionRuntimeError("conversation_access_denied", "The target Bot Turn is not accessible");
+            }
+            targetCommandId = rowText(target, "command_id");
+        }
         let sessionBindingId = context.bindingId;
         let workspaceRef = context.workspaceRef;
         if (context.replyRoute instanceof OwnerBotReplyRoute) {
@@ -548,13 +576,13 @@ export class BotSessionService {
             bindingId: sessionBindingId,
             commandId: submission.clientMessageId,
             directoryId: workspaceRef,
-            disposition: SessionPromptDisposition.Reject,
+            disposition: submission.disposition,
             images: decodePromptImagesValue(submission.images),
             kind: SESSION_PROMPT_KIND,
             prompt: submission.prompt,
             resources: decodePromptResourcesValue(submission.resources),
             sessionId,
-            targetCommandId: "",
+            targetCommandId,
         };
         const encodedOrdinaryCommand = encodeSessionPromptCommand(ordinaryCommand);
         const requestDigest = await sha256(
@@ -594,10 +622,14 @@ export class BotSessionService {
                     context.allowedDeliveryTargets,
                     context.replyRoute,
                     context.sessionConfigurations,
+                    submission.disposition,
+                    targetCommandId,
                 ),
             ),
         );
         const result = this.#storage.insertTurnExecution({
+            disposition: submission.disposition,
+            targetCommandId,
             turn: {
                 scopeKey: key,
                 sessionId,
@@ -663,7 +695,12 @@ export class BotSessionService {
                 }
                 return new BotTurnAcceptance(executionFromRow(result.receipt), true);
             case "busy":
-                throw new BotSessionRuntimeError("session_busy", "The Bot conversation already has an active turn");
+                throw new BotSessionRuntimeError(
+                    "session_busy",
+                    submission.disposition === SessionPromptDisposition.Reject
+                        ? "The Bot conversation already has an active turn"
+                        : "The targeted active Bot Turn is no longer available",
+                );
             case "inserted":
                 break;
             default: {
@@ -686,6 +723,96 @@ export class BotSessionService {
                 new Date(deadlineAt).toISOString(),
             ),
             false,
+        );
+    };
+
+    readonly promoteQueuedTurnToSteering = async (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<BotExecutionRecord> => {
+        signal.throwIfAborted();
+        validateTimestamp(now);
+        validateDomainIdentifier(sessionId, "session");
+        validateDomainIdentifier(turnId, "turn");
+        const key = scopeKey(scope);
+        const contextRow = this.#storage.readContext({ scopeKey: key, sessionId })[0];
+        const executionRow = this.#storage.readTurnExecution({ scopeKey: key, sessionId, turnId })[0];
+        if (contextRow === undefined || executionRow === undefined) {
+            throw new BotSessionRuntimeError("conversation_access_denied", "The Bot Turn is not accessible");
+        }
+        const context = contextFromRow(contextRow);
+        if (
+            rowText(executionRow, "bot_id") !== context.botId ||
+            rowText(executionRow, "conversation_id") !== context.conversationId
+        ) {
+            throw new BotSessionRuntimeError("conversation_access_denied", "The Bot Turn is not accessible");
+        }
+        let command: SessionPromptCommand;
+        let botCommand: BotSessionPromptCommand;
+        try {
+            command = decodeSessionPromptCommand(rowText(executionRow, "command_json"));
+            botCommand = decodeBotSessionPromptCommand(rowText(executionRow, "delivery_payload"));
+        } catch (cause) {
+            throw new BotSessionRuntimeError("session_storage_unavailable", "The queued Bot Turn is invalid", {
+                cause,
+            });
+        }
+        if (
+            rowText(executionRow, "turn_state") !== "queued" ||
+            command.disposition !== SessionPromptDisposition.Queue ||
+            botCommand.disposition !== SessionPromptDisposition.Queue ||
+            command.targetCommandId !== botCommand.targetCommandId
+        ) {
+            throw new BotSessionRuntimeError("session_conflict", "Only a queued Bot Turn can be steered");
+        }
+        const active = this.#storage.readActiveTurn({ scopeKey: key, sessionId })[0];
+        if (active === undefined || rowText(active, "command_id") !== command.targetCommandId) {
+            throw new BotSessionRuntimeError("session_conflict", "The targeted active Bot Turn is no longer available");
+        }
+        signal.throwIfAborted();
+        const promotedBotCommand = new BotSessionPromptCommand(
+            botCommand.sessionId,
+            botCommand.commandId,
+            botCommand.agentId,
+            botCommand.bindingId,
+            botCommand.directoryId,
+            botCommand.additionalDirectoryIds,
+            botCommand.images,
+            botCommand.resources,
+            botCommand.prompt,
+            botCommand.executionId,
+            botCommand.executionCapabilityId,
+            botCommand.executionCapabilitySecret,
+            botCommand.executionDeadlineAt,
+            botCommand.botId,
+            botCommand.conversationId,
+            botCommand.turnId,
+            botCommand.behaviorRevisionId,
+            botCommand.bindingRevision,
+            botCommand.localGrantId,
+            botCommand.behaviorInstructions,
+            botCommand.behaviorDigest,
+            botCommand.allowedDeliveryTargets,
+            botCommand.replyRoute,
+            botCommand.sessionConfigurations,
+            SessionPromptDisposition.Steer,
+            botCommand.targetCommandId,
+        );
+        return executionFromRow(
+            this.#storage.promoteQueuedTurnToSteering({
+                botCommandJson: encodeBotSessionPromptCommand(promotedBotCommand),
+                commandJson: encodeSessionPromptCommand({
+                    ...command,
+                    disposition: SessionPromptDisposition.Steer,
+                }),
+                scopeKey: key,
+                sessionId,
+                turnId,
+                updatedAt: now,
+            }),
         );
     };
 
@@ -815,6 +942,7 @@ export class BotSessionService {
         sessionId: string,
         cursor: string,
         limit: number,
+        waitMilliseconds: number,
         signal: AbortSignal,
     ): Promise<BotConversationEventPage> => {
         signal.throwIfAborted();
@@ -825,13 +953,16 @@ export class BotSessionService {
         }
         const context = contextFromRow(contextRow);
         const internalCursor = this.resolveClientCursor(key, sessionId, "event", cursor);
-        const page = await this.#sessions.readEvents(
-            scope,
-            sessionId,
-            internalCursor.length === 0 ? null : internalCursor,
-            limit,
-            signal,
-        );
+        const page =
+            waitMilliseconds === 0
+                ? await this.#sessions.readEvents(
+                      scope,
+                      sessionId,
+                      internalCursor.length === 0 ? null : internalCursor,
+                      limit,
+                      signal,
+                  )
+                : await this.#sessions.waitForEvents(scope, sessionId, internalCursor, limit, waitMilliseconds, signal);
         const events: BotConversationEvent[] = [];
         for (const event of page.events) {
             const turnId = this.eventTurnId(key, sessionId, event.source, event.payload);
@@ -913,20 +1044,23 @@ export class BotSessionService {
                     "The Bot message execution scope is invalid",
                 );
             }
-            const responseTruncated = message.response.length > BOT_CONVERSATION_RESPONSE_LIMIT;
-            return new BotConversationMessage(
-                rowText(executionRow, "turn_id"),
-                rowText(executionRow, "execution_id"),
-                rowText(executionRow, "behavior_revision_id"),
-                message.commandId,
-                message.messageId,
-                message.prompt,
-                responseTruncated ? message.response.slice(0, BOT_CONVERSATION_RESPONSE_LIMIT) : message.response,
-                responseTruncated,
-                message.activities,
-                message.attempt,
-                message.createdAt,
-            );
+            return {
+                activities: Object.freeze([...message.activities]),
+                additionalDirectoryIds: Object.freeze([...message.additionalDirectoryIds]),
+                attempt: message.attempt,
+                behaviorRevisionId: rowText(executionRow, "behavior_revision_id"),
+                clientMessageId: message.commandId,
+                createdAt: message.createdAt,
+                disposition: message.disposition,
+                executionId: rowText(executionRow, "execution_id"),
+                images: Object.freeze([...message.images]),
+                messageId: message.messageId,
+                prompt: message.prompt,
+                resources: Object.freeze([...message.resources]),
+                response: message.response,
+                targetClientMessageId: message.targetCommandId,
+                turnId: rowText(executionRow, "turn_id"),
+            } satisfies BotConversationMessage;
         });
         return new BotConversationMessagePage(
             context.conversationId,

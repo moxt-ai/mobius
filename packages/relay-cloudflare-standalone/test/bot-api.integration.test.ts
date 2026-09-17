@@ -402,6 +402,7 @@ async function approveBinding(
     target: CreatedTarget,
     expectedRevision = bot.lifecycleRevision,
     policy: Readonly<Record<string, unknown>> = { kind: "none" },
+    workspaceRef = "default",
 ): Promise<CreatedBinding> {
     const app = pairing.app;
     const response = await json(
@@ -416,7 +417,7 @@ async function approveBinding(
                     completionPolicy: policy,
                     expectedRevision,
                     runtimeId: pairing.runtimeId,
-                    workspaceRef: "default",
+                    workspaceRef,
                 }),
                 headers: ownerHeaders(pairing),
                 method: "POST",
@@ -430,7 +431,7 @@ async function approveBinding(
         behaviorRevisionId: behavior.behaviorRevisionId,
         botId: bot.botId,
         runtimeId: pairing.runtimeId,
-        workspaceRef: "default",
+        workspaceRef,
     });
     const approved = new BotExecutionBindingApprovedEvent(
         request.requestId,
@@ -998,6 +999,51 @@ describe.sequential("Provider-neutral Bot API", () => {
             ]);
         } finally {
             daemon.socket.close(1000, "Owner management contract complete");
+        }
+    });
+
+    it("Given a Bot is approved for a deeply nested local directory, When its owner creates a conversation, Then the Session is provisioned in that directory", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const pairing = await pairRuntime(app);
+        const daemon = await openDaemon(pairing);
+        try {
+            const bot = await pairing.client.createBot(
+                { displayName: "Deep workspace", avatarRef: "", description: "Deep workspace description" },
+                pairing.signal,
+            );
+            const connection = await connectBot(pairing, bot, "deep-workspace");
+            const target = await createTarget(pairing, bot, connection, "deep-workspace-target");
+            const behavior = await pairing.client.createBehavior(
+                bot.botId,
+                {
+                    agentConfiguration: {},
+                    expectedRevision: 0,
+                    instructions: "Work in the approved local directory.",
+                    requiredCapabilities: [],
+                },
+                pairing.signal,
+            );
+            const workspaceRef = `path-${"a".repeat(1024)}`;
+            await approveBinding(
+                pairing,
+                daemon,
+                bot,
+                behavior,
+                target,
+                bot.lifecycleRevision,
+                { kind: "none" },
+                workspaceRef,
+            );
+
+            const conversation = await pairing.client.createConversation(
+                bot.botId,
+                { clientConversationKey: "deep-workspace-conversation" },
+                pairing.signal,
+            );
+
+            expect(conversation).toMatchObject({ state: { kind: "active" } });
+        } finally {
+            daemon.socket.close(1000, "Deep workspace test complete");
         }
     });
 

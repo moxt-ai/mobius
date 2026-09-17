@@ -51,6 +51,8 @@ export class BotSessionStorage {
         });
 
     readonly insertTurnExecution = (input: {
+        readonly disposition: string;
+        readonly targetCommandId: string;
         readonly turn: Parameters<BotSessionStorage["insertTurn"]>[0];
         readonly receipt: Parameters<BotSessionStorage["insertReceipt"]>[0];
         readonly dispatch: Parameters<BotSessionStorage["insertPendingDispatch"]>[0];
@@ -65,7 +67,16 @@ export class BotSessionStorage {
             if (duplicate !== undefined) {
                 return { kind: "existing", receipt: duplicate };
             }
-            if (this.readActiveTurn(input.turn)[0] !== undefined) {
+            const active = this.readActiveTurn(input.turn)[0];
+            const acceptsSteering = input.disposition === "steer" && active?.["command_id"] === input.targetCommandId;
+            const acceptsQueue =
+                input.disposition === "queue" &&
+                this.acceptsQueueTarget(input.turn.scopeKey, input.turn.sessionId, input.targetCommandId);
+            if (
+                (input.disposition === "reject" && active !== undefined) ||
+                (input.disposition === "steer" && !acceptsSteering) ||
+                (input.disposition === "queue" && !acceptsQueue)
+            ) {
                 return { kind: "busy" };
             }
             this.insertTurn(input.turn);
@@ -261,13 +272,35 @@ export class BotSessionStorage {
             [input.scopeKey, input.sessionId, input.commandKind, input.idempotencyKey],
         );
 
-    private readonly readActiveTurn = (input: { readonly scopeKey: string; readonly sessionId: string }) =>
+    readonly readActiveTurn = (input: { readonly scopeKey: string; readonly sessionId: string }) =>
         this.#database.query(
-            `SELECT 1 AS active FROM turns
+            `SELECT command_id FROM turns
                   WHERE scope_key = ? AND session_id = ?
-                    AND state IN ('queued', 'running', 'indeterminate') LIMIT 1`,
+                    AND state IN ('queued', 'running', 'indeterminate')
+                    AND COALESCE(json_extract(command_json, '$.disposition'), 'reject') <> 'steer'
+                  ORDER BY rowid
+                  LIMIT 1`,
             [input.scopeKey, input.sessionId],
         );
+
+    private readonly acceptsQueueTarget = (scopeKey: string, sessionId: string, targetCommandId: string): boolean =>
+        this.#database.query(
+            `SELECT 1 FROM turns target
+                  WHERE target.scope_key = ? AND target.session_id = ? AND target.command_id = ?
+                    AND COALESCE(json_extract(target.command_json, '$.disposition'), 'reject') <> 'steer'
+                    AND NOT EXISTS (
+                      SELECT 1 FROM turns later
+                       WHERE later.scope_key = target.scope_key AND later.session_id = target.session_id
+                         AND later.rowid > target.rowid
+                         AND COALESCE(json_extract(later.command_json, '$.disposition'), 'reject') <> 'steer'
+                         AND NOT (
+                           COALESCE(json_extract(later.command_json, '$.disposition'), 'reject') = 'queue'
+                           AND json_extract(later.command_json, '$.targetCommandId') = target.command_id
+                         )
+                    )
+                  LIMIT 1`,
+            [scopeKey, sessionId, targetCommandId],
+        ).length === 1;
 
     private readonly insertTurn = (input: {
         readonly scopeKey: string;
@@ -592,6 +625,71 @@ export class BotSessionStorage {
                   WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
             [input.scopeKey, input.sessionId, input.commandId],
         );
+
+    readonly readTurnExecution = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly turnId: string;
+    }) =>
+        this.#database.query(
+            `SELECT executions.*, capabilities.capability_id, turns.command_json,
+                    turns.state AS turn_state,
+                    pending.delivery_payload
+               FROM bot_executions executions
+               INNER JOIN bot_execution_capabilities capabilities
+                 ON capabilities.scope_key = executions.scope_key
+                AND capabilities.session_id = executions.session_id
+                AND capabilities.execution_id = executions.execution_id
+               INNER JOIN turns
+                 ON turns.scope_key = executions.scope_key
+                AND turns.session_id = executions.session_id
+                AND turns.turn_id = executions.turn_id
+               LEFT JOIN pending_work pending
+                 ON pending.scope_key = turns.scope_key
+                AND pending.session_id = turns.session_id
+                AND pending.work_id = 'dispatch_' || turns.turn_id
+              WHERE executions.scope_key = ? AND executions.session_id = ?
+                AND executions.turn_id = ?`,
+            [input.scopeKey, input.sessionId, input.turnId],
+        );
+
+    readonly promoteQueuedTurnToSteering = (input: {
+        readonly botCommandJson: string;
+        readonly commandJson: string;
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly turnId: string;
+        readonly updatedAt: number;
+    }): DoSqlRow =>
+        this.#database.transaction(() => {
+            const turn = this.#database.run(
+                `UPDATE turns
+                    SET command_json = ?, updated_at = ?
+                  WHERE scope_key = ? AND session_id = ? AND turn_id = ?
+                    AND state = 'queued'
+                    AND COALESCE(json_extract(command_json, '$.disposition'), 'reject') = 'queue'`,
+                [input.commandJson, input.updatedAt, input.scopeKey, input.sessionId, input.turnId],
+            );
+            if (turn.changes !== 1) {
+                throw new DatabaseError("database_unavailable", "The queued Bot Turn could not be promoted atomically");
+            }
+            const pending = this.#database.run(
+                `UPDATE pending_work
+                    SET delivery_payload = ?
+                  WHERE scope_key = ? AND session_id = ? AND work_id = ?
+                    AND work_kind = 'dispatch' AND state = 'pending'`,
+                [input.botCommandJson, input.scopeKey, input.sessionId, `dispatch_${input.turnId}`],
+            );
+            if (pending.changes !== 1) {
+                throw new DatabaseError("database_unavailable", "The promoted Bot Turn dispatch is unavailable");
+            }
+            this.touchSession(input);
+            const promoted = this.readTurnExecution(input)[0];
+            if (promoted === undefined) {
+                throw new DatabaseError("database_unavailable", "The promoted Bot Turn disappeared");
+            }
+            return promoted;
+        });
 
     private readonly settleExecution = (input: {
         readonly state: "completed" | "cancelled" | "failed";

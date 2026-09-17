@@ -6,6 +6,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import { BotOutboundSubmission, BotTurnSubmission } from "../../entity/bot/bot-session.ts";
@@ -17,6 +18,7 @@ import {
     CreateSessionBindingRequest,
     CreateSessionRequest,
     ProjectScope,
+    SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH,
     SessionRecordingPolicy,
     UploadingArtifactDescriptor,
 } from "../../entity/do/session.ts";
@@ -100,10 +102,23 @@ function readBotTurnSubmission(value: Readonly<Record<string, unknown>>): BotTur
         "actorRef",
         "additionalDirectoryIds",
         "clientMessageId",
+        "disposition",
         "images",
         "prompt",
         "resources",
+        "targetTurnId",
     ]);
+    const disposition = readString(submission, "disposition", 16);
+    const targetTurnId = readString(submission, "targetTurnId", 128, true);
+    if (
+        (disposition !== SessionPromptDisposition.Reject &&
+            disposition !== SessionPromptDisposition.Queue &&
+            disposition !== SessionPromptDisposition.Steer) ||
+        (disposition === SessionPromptDisposition.Reject && targetTurnId.length > 0) ||
+        (disposition !== SessionPromptDisposition.Reject && targetTurnId.length === 0)
+    ) {
+        throw new InternalRequestError("invalid_session_operation", "The Bot Turn disposition is invalid");
+    }
     return new BotTurnSubmission(
         readString(submission, "clientMessageId"),
         readString(submission, "actorRef", 500),
@@ -111,6 +126,8 @@ function readBotTurnSubmission(value: Readonly<Record<string, unknown>>): BotTur
         readStringList(submission["additionalDirectoryIds"], 16),
         decodePromptImagesValue(submission["images"]),
         decodePromptResourcesValue(submission["resources"]),
+        disposition,
+        targetTurnId,
     );
 }
 
@@ -232,7 +249,7 @@ function readCreateRequest(value: Readonly<Record<string, unknown>>): CreateSess
         readString(request, "runtimeId"),
         readString(request, "agentId"),
         readString(request, "bindingId"),
-        readString(request, "directoryId"),
+        readString(request, "directoryId", SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH),
         new SessionRecordingPolicy(
             level,
             readInteger(policy, "retentionMilliseconds"),
@@ -255,7 +272,7 @@ function readBinding(value: Readonly<Record<string, unknown>>): CreateSessionBin
         readString(binding, "bindingId"),
         readString(binding, "runtimeId"),
         readString(binding, "agentRef"),
-        readString(binding, "workspaceRef"),
+        readString(binding, "workspaceRef", SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH),
         readInteger(binding, "configRevision"),
     );
 }
@@ -439,14 +456,27 @@ class DoRoutes {
                     ),
                 );
             }
+            if (operation === "bot-turn-promote") {
+                assertExactKeys(body, ["now", "scope", "sessionId", "turnId"]);
+                return Response.json(
+                    await this.#bots.promoteQueuedTurnToSteering(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "turnId"),
+                        readInteger(body, "now"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "bot-conversation-events") {
-                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId", "waitMilliseconds"]);
                 return Response.json(
                     await this.#bots.readConversationEvents(
                         scope,
                         readString(body, "sessionId"),
                         readString(body, "cursor", 512, true),
                         readInteger(body, "limit"),
+                        readInteger(body, "waitMilliseconds"),
                         request.signal,
                     ),
                 );
@@ -855,6 +885,19 @@ class DoRoutes {
                         readString(body, "sessionId"),
                         readNullableString(body, "cursor"),
                         readInteger(body, "limit"),
+                        request.signal,
+                    ),
+                );
+            }
+            if (operation === "wait-events") {
+                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId", "waitMilliseconds"]);
+                return Response.json(
+                    await this.#runtime.waitForEvents(
+                        scope,
+                        readString(body, "sessionId"),
+                        readString(body, "cursor", 512, true),
+                        readInteger(body, "limit"),
+                        readInteger(body, "waitMilliseconds"),
                         request.signal,
                     ),
                 );

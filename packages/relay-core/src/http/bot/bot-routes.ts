@@ -16,6 +16,7 @@ import {
     conversationRequest,
     cursor,
     directoryIdentifier,
+    eventWaitMilliseconds,
     exactBody,
     executionCapability,
     identifier,
@@ -28,7 +29,9 @@ import {
     pageLimit,
     pathIdentifier,
     positiveInteger,
+    steeringDisposition,
     string,
+    turnDisposition,
 } from "./bot-input.ts";
 
 interface BotHttpEnvironment {
@@ -143,14 +146,22 @@ function createBotOwnerRoutes() {
             ),
         )
         .post("/conversations/:conversationId/turns", botBodyParser<BotHttpEnvironment>(), async (c) => {
-            const value = exactBody(c.var.body, [
-                "additionalDirectoryIds",
-                "artifactIds",
-                "content",
-                "idempotencyKey",
-                "images",
-                "resources",
-            ]);
+            const hasDisposition = Object.hasOwn(c.var.body, "disposition");
+            const value = exactBody(
+                c.var.body,
+                hasDisposition
+                    ? [
+                          "additionalDirectoryIds",
+                          "artifactIds",
+                          "content",
+                          "disposition",
+                          "idempotencyKey",
+                          "images",
+                          "resources",
+                          "targetTurnId",
+                      ]
+                    : ["additionalDirectoryIds", "artifactIds", "content", "idempotencyKey", "images", "resources"],
+            );
             return c.json(
                 await c.var.bots.submitProjectConversationTurn(
                     pathIdentifier(c.req.param("conversationId")),
@@ -162,12 +173,32 @@ function createBotOwnerRoutes() {
                     decodePromptImagesValue(value["images"]),
                     decodePromptResourcesValue(value["resources"]),
                     identifiers(value, "artifactIds", 16),
+                    hasDisposition ? turnDisposition(value) : "reject",
+                    hasDisposition ? identifier(value, "targetTurnId") : "",
                     Date.now(),
                     c.var.signal,
                 ),
                 202,
             );
         })
+        .put(
+            "/conversations/:conversationId/turns/:turnId/disposition",
+            botBodyParser<BotHttpEnvironment>(),
+            async (c) => {
+                const value = exactBody(c.var.body, ["disposition"]);
+                steeringDisposition(value);
+                return c.json(
+                    await c.var.bots.promoteProjectConversationTurnToSteering(
+                        pathIdentifier(c.req.param("conversationId")),
+                        bearer(c.req.raw),
+                        actorReference(c.req.raw),
+                        pathIdentifier(c.req.param("turnId")),
+                        Date.now(),
+                        c.var.signal,
+                    ),
+                );
+            },
+        )
         .post(
             "/conversations/:conversationId/configuration-revisions",
             botBodyParser<BotHttpEnvironment>(),
@@ -448,6 +479,19 @@ function createBotConversationRoutes() {
                 ),
             );
         })
+        .get("/bots/:botId/conversations/:conversationId/attempts/:attemptId/tool-calls/:toolCallId", async (c) =>
+            c.json(
+                await c.var.bots.readConversationToolCallDetail(
+                    pathIdentifier(c.req.param("botId")),
+                    bearer(c.req.raw),
+                    actorReference(c.req.raw),
+                    pathIdentifier(c.req.param("conversationId")),
+                    pathIdentifier(c.req.param("attemptId")),
+                    pathIdentifier(c.req.param("toolCallId")),
+                    c.var.signal,
+                ),
+            ),
+        )
         .post("/bots/:botId/conversations/:conversationId/messages", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const submission = messageRequest(c.var.body);
             return c.json(
@@ -463,18 +507,20 @@ function createBotConversationRoutes() {
                 202,
             );
         })
-        .get("/bots/:botId/conversations/:conversationId/events", async (c) =>
-            c.json(
+        .get("/bots/:botId/conversations/:conversationId/events", async (c) => {
+            const url = new URL(c.req.url);
+            return c.json(
                 await c.var.bots.readConversationEvents(
                     pathIdentifier(c.req.param("botId")),
                     bearer(c.req.raw),
                     actorReference(c.req.raw),
                     pathIdentifier(c.req.param("conversationId")),
                     c.req.query("after") ?? "",
+                    eventWaitMilliseconds(url),
                     c.var.signal,
                 ),
-            ),
-        )
+            );
+        })
         .post("/bots/:botId/turns/:turnId/cancel", botBodyParser<BotHttpEnvironment>(), async (c) => {
             const value = exactBody(c.var.body, ["idempotencyKey"]);
             return c.json(

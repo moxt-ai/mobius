@@ -22,6 +22,7 @@ import {
 import {
     type AttemptSummary,
     type CreateSessionRequest,
+    isSessionDirectoryIdentifier,
     type ProjectScope,
     type SessionLifecycle,
     SessionRuntimeError,
@@ -77,7 +78,9 @@ export function validateCreateSessionRequest(request: CreateSessionRequest): voi
     validateDomainIdentifier(request.runtimeId, "runtime");
     validateDomainIdentifier(request.agentId, "agent");
     validateDomainIdentifier(request.bindingId, "binding");
-    validateDomainIdentifier(request.directoryId, "directory");
+    if (!isSessionDirectoryIdentifier(request.directoryId)) {
+        throw new SessionRuntimeError("session_access_denied", "The directory identifier is invalid");
+    }
     validateDomainIdentifier(request.createdBy, "creator");
     if (
         typeof request.title !== "string" ||

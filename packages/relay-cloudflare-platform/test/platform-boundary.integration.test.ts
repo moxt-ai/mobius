@@ -1,6 +1,7 @@
 import { runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
+    AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     BotExecutionBindingApprovedEvent,
     decodeBotExecutionBindingApprovalRequest,
@@ -18,6 +19,7 @@ import {
     encodeSessionReadyEvent,
     encodeWorkspaceEntriesEvent,
     MOBIUS_API_PREFIX,
+    type PromptResource,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_KIND,
     SESSION_STARTED_KIND,
@@ -762,7 +764,7 @@ it("Given an App-wide server credential, When its backend provisions a user Proj
     }
 });
 
-async function createReadyConversation(label: string): Promise<PlatformConversationFixture> {
+async function createReadyConversation(label: string, workspaceRef = "default"): Promise<PlatformConversationFixture> {
     const project = await provisionPlatformProject(label);
     const bot = await json(
         await project.worker.fetch(
@@ -821,7 +823,7 @@ async function createReadyConversation(label: string): Promise<PlatformConversat
                         completionPolicy: { kind: "none" },
                         expectedRevision: integerField(bot, "lifecycleRevision"),
                         runtimeId: project.runtimeId,
-                        workspaceRef: "default",
+                        workspaceRef,
                     }),
                     headers: credentialHeaders(project.appCredential),
                     method: "POST",
@@ -1679,6 +1681,27 @@ describe.sequential("Platform hosting boundary", () => {
         expect(persisted?.count).toBe(0);
     });
 
+    it("Given a Bot is approved for a deeply nested local directory, When the Platform creates its conversation, Then the Session preserves the opaque directory identifier", async () => {
+        const workspaceRef = `path-${"a".repeat(1_024)}`;
+        const fixture = await createReadyConversation("deep-binding-directory", workspaceRef);
+        try {
+            expect(fixture.conversationId).toMatch(/^bcv_/);
+            const session = await json(
+                await fixture.worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/sessions/${fixture.sessionId}`,
+                        { headers: credentialHeaders(fixture.appCredential) },
+                    ),
+                    fixture.environment,
+                ),
+                200,
+            );
+            expect(record(session["defaultBinding"])).toMatchObject({ workspaceRef });
+        } finally {
+            fixture.socket.close(1000, "Deep binding directory test complete");
+        }
+    });
+
     it("Given invalid or oversized JSON, When a client posts to a Platform route, Then the request is rejected with a bounded body error", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
@@ -2046,15 +2069,27 @@ describe.sequential("Platform hosting boundary", () => {
                 sessionId: created.sessionId,
             });
 
+            const submittedImage = {
+                data: "iVBORw0KGgo=",
+                mimeType: "image/png",
+                name: "architecture.png",
+            };
+            const submittedResource: PromptResource = {
+                mimeType: "text/plain",
+                name: "requirements.txt",
+                text: "Preserve the canonical Session message.",
+                type: "embedded",
+                uri: "file:///workspace/requirements.txt",
+            };
             const accepted = await owner.submitProjectConversationTurn(
                 created.conversationId,
                 {
-                    additionalDirectoryIds: [],
+                    additionalDirectoryIds: ["approved-reference-directory"],
                     artifactIds: [],
                     content: "Answer through the shared server SDK contract.",
                     idempotencyKey: "server-sdk-turn",
-                    images: [],
-                    resources: [],
+                    images: [submittedImage],
+                    resources: [submittedResource],
                 },
                 AbortSignal.timeout(5_000),
             );
@@ -2065,6 +2100,9 @@ describe.sequential("Platform hosting boundary", () => {
                 commandId: "server-sdk-turn",
                 conversationId: created.conversationId,
                 executionId: accepted.executionId,
+                additionalDirectoryIds: ["approved-reference-directory"],
+                images: [submittedImage],
+                resources: [submittedResource],
                 sessionId: created.sessionId,
                 turnId: accepted.turnId,
             });
@@ -2111,6 +2149,38 @@ describe.sequential("Platform hosting boundary", () => {
                     },
                 });
             }
+            await commitRuntimeEvent(fixture, {
+                eventId: "server-sdk-tool-detail",
+                kind: SESSION_EVENT_KIND,
+                payload: JSON.stringify({
+                    activityId: "tool-call-server-sdk",
+                    activityType: "tool",
+                    commandId: command.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "Full authoritative tool input",
+                        kind: "recorded",
+                        output: "Full authoritative tool output",
+                    },
+                    input: "Tool input summary",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "Read",
+                    output: "Tool output summary",
+                    sequence: 1,
+                    sessionId: command.sessionId,
+                    status: "completed",
+                    title: "Read canonical history",
+                    toolKind: "read",
+                }),
+                sessionId: command.sessionId,
+                source: {
+                    attemptId: "attempt-server-sdk",
+                    kind: "attempt",
+                    sourceSeq: (responseChunks.length + 2).toString(),
+                },
+            });
             const staleEventPage = await owner.readConversationEvents(
                 fixture.botId,
                 created.conversationId,
@@ -2125,13 +2195,13 @@ describe.sequential("Platform hosting boundary", () => {
                     "server-sdk-completed",
                     SESSION_COMPLETED_KIND,
                     "attempt-server-sdk",
-                    responseChunks.length + 2,
+                    responseChunks.length + 3,
                 ),
             );
             const archived = await fixture.environment.R2_BUCKET_APAC.list({
                 prefix: `${fixture.projectId}/${command.sessionId}/`,
             });
-            expect(archived.objects).toHaveLength(0);
+            expect(archived.objects).toHaveLength(1);
 
             const messages = await owner.readConversationMessages(
                 fixture.botId,
@@ -2139,22 +2209,57 @@ describe.sequential("Platform hosting boundary", () => {
                 new MobiusPageRequest(50, ""),
                 AbortSignal.timeout(5_000),
             );
+            const sessionClient = new MobiusClient({
+                credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+                endpoint: relayOrigin,
+                projectId: fixture.projectId,
+                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+            });
+            const sessionMessages = await sessionClient.sessions.readMessages(
+                created.sessionId,
+                new MobiusPageRequest(50, ""),
+                AbortSignal.timeout(5_000),
+            );
+            const sessionMessage = sessionMessages.messages[0];
+            if (sessionMessage === undefined) {
+                throw new Error("The canonical Session message is unavailable");
+            }
             expect(messages).toMatchObject({
                 conversationId: created.conversationId,
                 messages: [
                     {
-                        activities: [],
+                        activities: sessionMessage.activities,
+                        additionalDirectoryIds: sessionMessage.additionalDirectoryIds,
+                        attempt: sessionMessage.attempt,
                         behaviorRevisionId: created.behaviorRevisionId,
                         clientMessageId: "server-sdk-turn",
+                        createdAt: sessionMessage.createdAt,
+                        disposition: sessionMessage.disposition,
                         executionId: accepted.executionId,
-                        messageId: "server-sdk-message",
-                        prompt: "Answer through the shared server SDK contract.",
-                        response: responseChunks.join(""),
-                        responseTruncated: false,
+                        images: sessionMessage.images,
+                        messageId: sessionMessage.messageId,
+                        prompt: sessionMessage.prompt,
+                        resources: sessionMessage.resources,
+                        response: sessionMessage.response,
+                        targetClientMessageId: sessionMessage.targetCommandId,
                         turnId: accepted.turnId,
                     },
                 ],
                 nextCursor: "",
+            });
+            expect(messages.messages[0]).not.toHaveProperty("responseTruncated");
+            await expect(
+                owner.readConversationToolCallDetail(
+                    fixture.botId,
+                    created.conversationId,
+                    "attempt-server-sdk",
+                    "tool-call-server-sdk",
+                    AbortSignal.timeout(5_000),
+                ),
+            ).resolves.toMatchObject({
+                input: "Full authoritative tool input",
+                kind: "available",
+                output: "Full authoritative tool output",
             });
             expect(BigInt(messages.lastCommittedSequence)).toBeGreaterThan(200n);
             expect(messages.tailEventCursor).toMatch(/^bcu_[A-Za-z0-9_-]{32}$/);
@@ -2192,6 +2297,13 @@ describe.sequential("Platform hosting boundary", () => {
                 AbortSignal.timeout(5_000),
             );
             const secondCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            const pendingEvents = owner.waitForConversationEvents(
+                fixture.botId,
+                created.conversationId,
+                messages.tailEventCursor,
+                10_000,
+                AbortSignal.timeout(5_000),
+            );
             await commitRuntimeEvent(
                 fixture,
                 attemptEvent(
@@ -2203,6 +2315,15 @@ describe.sequential("Platform hosting boundary", () => {
                     1,
                 ),
             );
+            await expect(pendingEvents).resolves.toMatchObject({
+                events: [
+                    {
+                        kind: SESSION_STARTED_KIND,
+                        turnId: secondAccepted.turnId,
+                    },
+                ],
+                hasMore: false,
+            });
             await commitRuntimeEvent(fixture, {
                 eventId: "server-sdk-second-delta",
                 kind: SESSION_EVENT_KIND,
@@ -2251,6 +2372,89 @@ describe.sequential("Platform hosting boundary", () => {
             expect(olderPage.messages).toMatchObject([{ clientMessageId: "server-sdk-turn" }]);
             expect(olderPage.nextCursor).toBe("");
 
+            const activeFollowUp = await owner.submitProjectConversationTurn(
+                created.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Keep this turn active while a follow-up is queued.",
+                    idempotencyKey: "server-sdk-active-follow-up",
+                    images: [],
+                    resources: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            const activeFollowUpCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    activeFollowUpCommand.sessionId,
+                    activeFollowUpCommand.commandId,
+                    "server-sdk-active-follow-up-started",
+                    SESSION_STARTED_KIND,
+                    "attempt-server-sdk-active-follow-up",
+                    1,
+                ),
+            );
+            const queuedFollowUp = await owner.queueProjectConversationTurn(
+                created.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Queue this, then promote it to steering.",
+                    idempotencyKey: "server-sdk-queued-follow-up",
+                    images: [],
+                    resources: [],
+                    targetTurnId: activeFollowUp.turnId,
+                },
+                AbortSignal.timeout(5_000),
+            );
+            expect(queuedFollowUp.turn.state.kind).toBe("queued");
+            const promoted = owner.promoteProjectConversationTurnToSteering(
+                created.conversationId,
+                queuedFollowUp.turnId,
+                AbortSignal.timeout(5_000),
+            );
+            const steeringCommand = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            await expect(promoted).resolves.toMatchObject({ disposition: "steer", turnId: queuedFollowUp.turnId });
+            expect(steeringCommand).toMatchObject({
+                disposition: "steer",
+                targetCommandId: activeFollowUpCommand.commandId,
+            });
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    steeringCommand.sessionId,
+                    steeringCommand.commandId,
+                    "server-sdk-steering-started",
+                    SESSION_STARTED_KIND,
+                    "attempt-server-sdk-steering",
+                    1,
+                ),
+            );
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    steeringCommand.sessionId,
+                    steeringCommand.commandId,
+                    "server-sdk-steering-completed",
+                    SESSION_COMPLETED_KIND,
+                    "attempt-server-sdk-steering",
+                    2,
+                ),
+            );
+            await commitRuntimeEvent(
+                fixture,
+                attemptEvent(
+                    activeFollowUpCommand.sessionId,
+                    activeFollowUpCommand.commandId,
+                    "server-sdk-active-follow-up-completed",
+                    SESSION_COMPLETED_KIND,
+                    "attempt-server-sdk-active-follow-up",
+                    2,
+                ),
+            );
+
             const unrelatedBot = await owner.createBot(
                 { avatarRef: "", description: "Must not inherit another Bot history", displayName: "Unrelated Bot" },
                 AbortSignal.timeout(5_000),
@@ -2260,6 +2464,15 @@ describe.sequential("Platform hosting boundary", () => {
                     unrelatedBot.botId,
                     created.conversationId,
                     new MobiusPageRequest(50, ""),
+                    AbortSignal.timeout(5_000),
+                ),
+            ).rejects.toMatchObject({ code: "conversation_access_denied" });
+            await expect(
+                owner.readConversationToolCallDetail(
+                    unrelatedBot.botId,
+                    created.conversationId,
+                    "attempt-server-sdk",
+                    "tool-call-server-sdk",
                     AbortSignal.timeout(5_000),
                 ),
             ).rejects.toMatchObject({ code: "conversation_access_denied" });

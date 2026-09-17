@@ -1,8 +1,9 @@
+import { decodePromptImagesValue, decodePromptResourcesValue } from "@moxt-ai/mobius-protocol";
 import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
     BotConversationEvent,
     BotConversationEventPage,
-    BotConversationMessage,
+    type BotConversationMessage,
     BotConversationMessagePage,
     BotExecutionRecord,
     BotOutboundAcceptance,
@@ -188,19 +189,23 @@ function decodeConversationMessage(value: unknown): BotConversationMessage {
     if (!isRecord(value)) {
         throw new BotSessionRuntimeError("session_storage_unavailable", "The Bot conversation message is invalid");
     }
-    return new BotConversationMessage(
-        text(value, "turnId"),
-        text(value, "executionId"),
-        text(value, "behaviorRevisionId"),
-        text(value, "clientMessageId"),
-        text(value, "messageId", true),
-        text(value, "prompt", true),
-        text(value, "response", true),
-        boolean(value, "responseTruncated"),
-        decodeRemoteActivitySummaries(value["activities"]),
-        decodeRemoteAttemptSummary(value["attempt"]),
-        text(value, "createdAt"),
-    );
+    return {
+        activities: decodeRemoteActivitySummaries(value["activities"]),
+        additionalDirectoryIds: stringList(value, "additionalDirectoryIds"),
+        attempt: decodeRemoteAttemptSummary(value["attempt"]),
+        behaviorRevisionId: text(value, "behaviorRevisionId"),
+        clientMessageId: text(value, "clientMessageId"),
+        createdAt: text(value, "createdAt"),
+        disposition: text(value, "disposition"),
+        executionId: text(value, "executionId"),
+        images: decodePromptImagesValue(value["images"]),
+        messageId: text(value, "messageId", true),
+        prompt: text(value, "prompt", true),
+        resources: decodePromptResourcesValue(value["resources"]),
+        response: text(value, "response", true),
+        targetClientMessageId: text(value, "targetClientMessageId", true),
+        turnId: text(value, "turnId"),
+    };
 }
 
 function decodeExecution(value: unknown): BotExecutionRecord {
@@ -277,6 +282,7 @@ function runtimeErrorCode(value: string): string {
         "invalid_request",
         "queue_full",
         "session_busy",
+        "session_conflict",
         "session_storage_unavailable",
     ]);
     return allowed.has(value) ? value : "session_storage_unavailable";
@@ -396,18 +402,28 @@ export class RemoteBotSessionRuntime implements BotSessionRuntime {
         return value.map(decodePendingOutbound);
     };
 
+    readonly promoteQueuedTurnToSteering = async (
+        scope: ProjectScope,
+        sessionId: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<BotExecutionRecord> =>
+        decodeExecution(await this.request(scope, sessionId, "bot-turn-promote", { now, sessionId, turnId }, signal));
+
     readonly readConversationEvents = async (
         scope: ProjectScope,
         sessionId: string,
         cursor: string,
         limit: number,
+        waitMilliseconds: number,
         signal: AbortSignal,
     ): Promise<BotConversationEventPage> => {
         const value = await this.request(
             scope,
             sessionId,
             "bot-conversation-events",
-            { cursor, limit, sessionId },
+            { cursor, limit, sessionId, waitMilliseconds },
             signal,
         );
         if (!isRecord(value) || !Array.isArray(value["events"])) {

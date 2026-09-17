@@ -5,7 +5,9 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import {
     type ConversationPermission,
+    isSessionDirectoryIdentifier,
     ConversationPermission as Permission,
+    SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH,
     SessionRuntimeError,
     validateIdentifier,
 } from "@moxt-ai/mobius-relay-core";
@@ -26,7 +28,8 @@ const idempotencyKeySchema = v.pipe(
 const directoryIdsSchema = v.pipe(
     v.array(v.string()),
     v.maxLength(16),
-    v.transform((value) => value.map((entry) => validateIdentifier(entry, "directory_id"))),
+    v.check((value) => value.every((entry) => entry.length <= SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH)),
+    v.check((value) => value.every((entry) => isSessionDirectoryIdentifier(entry))),
     v.check((value) => new Set(value).size === value.length),
     v.transform((value) => Object.freeze(value)),
 );

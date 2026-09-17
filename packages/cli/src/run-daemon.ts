@@ -1373,32 +1373,9 @@ async function executeBotPrompt(
         }
         const attachments = await resolvePromptArtifacts(config, command, signal);
         const applied = await applicator.apply(command, grant, attachments.resources, signal);
-        const lease = contexts.activate(command);
-        try {
-            const deadlineSignal = AbortSignal.timeout(remaining);
-            const executionSignal = AbortSignal.any([signal, deadlineSignal]);
-            const agent = botExecutionAgent(grant.agent, lease.context.contextHandle, ipc.socketPath);
-            await sessions.prepareExecutionSession({
-                additionalDirectories: resolved.additionalDirectories,
-                agent,
-                cwd: resolved.cwd,
-                sessionId: command.sessionId,
-                signal: executionSignal,
-            });
-            for (const selection of command.sessionConfigurations) {
-                await sessions.configureSession({
-                    additionalDirectories: resolved.additionalDirectories,
-                    agent,
-                    booleanValue: selection.booleanValue,
-                    configId: selection.configId,
-                    cwd: resolved.cwd,
-                    requestId: `cfg_${randomUUID()}`,
-                    sessionId: command.sessionId,
-                    signal: executionSignal,
-                    value: selection.value,
-                    valueType: selection.valueType,
-                });
-            }
+        const deadlineSignal = AbortSignal.timeout(remaining);
+        const executionSignal = AbortSignal.any([signal, deadlineSignal]);
+        const startExecution = (): void => {
             audit.record({
                 commandId: command.commandId,
                 details: {
@@ -1423,56 +1400,109 @@ async function executeBotPrompt(
                 attemptId,
             );
             activateAttempt();
-            const result = await sessions.runPrompt({
+        };
+        let stopReason = "steered";
+        if (command.disposition === SessionPromptDisposition.Steer) {
+            startExecution();
+            await sessions.steerPrompt({
                 additionalDirectories: resolved.additionalDirectories,
-                agent,
+                agent: grant.agent,
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
-                onActivity: activities.record,
-                onText: (text, messageId) => {
-                    publisher.recordAttempt(
-                        command.sessionId,
-                        encodeAgentMessageDeltaEvent({
-                            commandId: command.commandId,
-                            kind: AGENT_MESSAGE_DELTA_KIND,
-                            messageId,
-                            sessionId: command.sessionId,
-                            text,
-                        }),
-                        attemptId,
-                    );
-                    return Promise.resolve();
-                },
                 prompt: command.prompt,
                 resources: applied.resources,
                 sessionId: command.sessionId,
                 signal: executionSignal,
+                targetCommandId: command.targetCommandId,
             });
-            activities.flush();
-            publisher.recordAttempt(
-                command.sessionId,
-                encodeSessionCompletedEvent({
-                    commandId: command.commandId,
-                    kind: SESSION_COMPLETED_KIND,
+        } else {
+            if (
+                command.disposition === SessionPromptDisposition.Queue &&
+                !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
+            ) {
+                throw new AcpExecutionError(
+                    "The queued Bot prompt target is unavailable",
+                    {},
+                    "prompt_queue_target_unavailable",
+                );
+            }
+            const lease = contexts.activate(command);
+            try {
+                const agent = botExecutionAgent(grant.agent, lease.context.contextHandle, ipc.socketPath);
+                await sessions.prepareExecutionSession({
+                    additionalDirectories: resolved.additionalDirectories,
+                    agent,
+                    cwd: resolved.cwd,
                     sessionId: command.sessionId,
-                    stopReason: result.stopReason,
-                }),
-                attemptId,
-            );
-            outbox.transitionExecution(
-                command.commandId,
-                result.stopReason === "cancelled" ? "cancelled" : "succeeded",
-            );
-            audit.record({
-                commandId: command.commandId,
-                details: { botId: command.botId, executionId: command.executionId },
-                event: result.stopReason === "cancelled" ? "bot_session_cancelled" : "bot_session_completed",
-                sessionId: command.sessionId,
-            });
-        } finally {
-            lease.release();
+                    signal: executionSignal,
+                });
+                for (const selection of command.sessionConfigurations) {
+                    await sessions.configureSession({
+                        additionalDirectories: resolved.additionalDirectories,
+                        agent,
+                        booleanValue: selection.booleanValue,
+                        configId: selection.configId,
+                        cwd: resolved.cwd,
+                        requestId: `cfg_${randomUUID()}`,
+                        sessionId: command.sessionId,
+                        signal: executionSignal,
+                        value: selection.value,
+                        valueType: selection.valueType,
+                    });
+                }
+                startExecution();
+                const result = await sessions.runPrompt({
+                    additionalDirectories: resolved.additionalDirectories,
+                    agent,
+                    commandId: command.commandId,
+                    cwd: resolved.cwd,
+                    disposition: command.disposition,
+                    images: attachments.images,
+                    onActivity: activities.record,
+                    onText: (text, messageId) => {
+                        publisher.recordAttempt(
+                            command.sessionId,
+                            encodeAgentMessageDeltaEvent({
+                                commandId: command.commandId,
+                                kind: AGENT_MESSAGE_DELTA_KIND,
+                                messageId,
+                                sessionId: command.sessionId,
+                                text,
+                            }),
+                            attemptId,
+                        );
+                        return Promise.resolve();
+                    },
+                    prompt: command.prompt,
+                    resources: applied.resources,
+                    sessionId: command.sessionId,
+                    signal: executionSignal,
+                    targetCommandId: command.targetCommandId,
+                });
+                stopReason = result.stopReason;
+            } finally {
+                lease.release();
+            }
         }
+        activities.flush();
+        publisher.recordAttempt(
+            command.sessionId,
+            encodeSessionCompletedEvent({
+                commandId: command.commandId,
+                kind: SESSION_COMPLETED_KIND,
+                sessionId: command.sessionId,
+                stopReason,
+            }),
+            attemptId,
+        );
+        outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
+        audit.record({
+            commandId: command.commandId,
+            details: { botId: command.botId, executionId: command.executionId },
+            event: stopReason === "cancelled" ? "bot_session_cancelled" : "bot_session_completed",
+            sessionId: command.sessionId,
+        });
     } catch (error) {
         activities.flush();
         const failure =
@@ -1796,7 +1826,7 @@ async function runRelayConnection(
                     await processDeliveredPrompt(
                         delivery,
                         command,
-                        true,
+                        command.disposition !== SessionPromptDisposition.Steer,
                         (attemptId, activateAttempt, executionSignal) =>
                             executeBotPrompt(
                                 outbox,
@@ -2495,7 +2525,11 @@ async function runRelayConnection(
                             applicator,
                             ipc,
                             receipt.attemptId,
-                            () => activeAttemptIds.set(command.sessionId, receipt.attemptId),
+                            () => {
+                                if (command.disposition !== SessionPromptDisposition.Steer) {
+                                    activeAttemptIds.set(command.sessionId, receipt.attemptId);
+                                }
+                            },
                             timer,
                             turn.signal,
                         )

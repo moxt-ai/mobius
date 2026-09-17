@@ -505,6 +505,17 @@ and approved binding revisions in a one-to-one Session extension, while Session
 remains the execution-history aggregate. Existing direct-Agent Sessions keep
 their original model and receive no invented Bot identity.
 
+Server-side owner applications use `MobiusBotOwnerClient` for canonical Bot
+Conversation history. `readConversationMessages` returns the same message
+content as Session `readMessages`, augmented with Bot-facing identifiers;
+`readConversationToolCallDetail` resolves complete activity detail without
+exposing Session or archive identities. `waitForConversationEvents` performs a
+bounded durable-cursor long poll, so callers resume after Relay restarts by
+retrying the same opaque cursor. Targeted follow-ups are submitted with
+`queueProjectConversationTurn` or `steerProjectConversationTurn`, and an
+accepted queued Turn can be changed atomically with
+`promoteProjectConversationTurnToSteering` while its target remains active.
+
 See [Bots and external connectors](bots.md) for the full authorization model,
 HTTP route contract, credential lifecycle, offline guarantees, SDK example, and
 local outbound CLI.

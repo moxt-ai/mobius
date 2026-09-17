@@ -209,20 +209,49 @@ POST /v1/bot-connections/{connectionId}/delivery-targets
 POST /v1/bot-connections/{connectionId}/delivery-targets/{deliveryTargetId}/disable
 ```
 
+Owner Conversation data plane:
+
+```text
+POST /v1/projects/{projectId}/conversations
+GET  /v1/projects/{projectId}/conversations/{conversationId}
+POST /v1/projects/{projectId}/conversations/{conversationId}/turns
+PUT  /v1/projects/{projectId}/conversations/{conversationId}/turns/{turnId}/disposition
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages?cursor={cursor}&limit={limit}
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/events?after={cursor}&wait={milliseconds}
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/attempts/{attemptId}/tool-calls/{toolCallId}
+```
+
+The default Turn disposition is `reject`. An owner can submit `queue` or
+`steer` with a `targetTurnId`, or atomically promote a queued Turn to `steer`
+while its target is still active. The Runtime receives the corresponding
+targeted command and the local Agent remains the authority for whether native
+steering is supported.
+
+`messages` serializes the canonical Session `readMessages` snapshot and adds
+only Bot-facing Turn, execution, and behavior identifiers. Mobius does not keep
+a second Bot message projection. `nextCursor` pages older messages, while the
+opaque `tailEventCursor` identifies the event position represented by the
+snapshot. Complete Tool detail is resolved through Mobius, including archived
+detail, without exposing Session identifiers or archive storage keys.
+
+`events` accepts an optional 1-10,000 millisecond `wait`. This is a bounded
+long-poll over the same durable opaque cursor, not a second streaming source of
+truth. If a Relay request or deployment is interrupted, the caller retries the
+same cursor and receives every subsequently committed event.
+
 Inbound connector data plane:
 
 ```text
 POST /v1/projects/{projectId}/bots/{botId}/conversations
-GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages
 POST /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/messages
-GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/events?after={cursor}
+GET  /v1/projects/{projectId}/bots/{botId}/conversations/{conversationId}/events?after={cursor}&wait={milliseconds}
 POST /v1/projects/{projectId}/bots/{botId}/turns/{turnId}/cancel
 ```
 
-`events` is the live transport for the active Turn. Once that Turn completes,
-connectors restore durable conversation history from `messages`; an event cursor
-that predates the retained active range returns `cursor_expired` rather than
-replaying raw message deltas.
+`events` is the sanitized live transport for a connector's active Turn. An event
+cursor that predates the retained active range returns `cursor_expired` rather
+than replaying raw message deltas. Authoritative `messages` and Tool detail are
+restricted to owner credentials even though the shared route remains present.
 
 The initial connector scopes are `inbound-conversation:create`,
 `inbound-message:create`, `conversation-events:read`, `turn:cancel`,

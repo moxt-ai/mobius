@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import {
+    AGENT_ACTIVITY_KIND,
     BotExecutionBindingApprovalRequest,
     BotSessionPromptCommand,
     decodeBotExecutionBindingApprovedEvent,
@@ -43,6 +44,7 @@ import {
     SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     type SessionConfigurationSelection,
+    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -180,6 +182,39 @@ async function readCompletedText(frames: ClientFrames): Promise<string> {
         }
     }
     return observedText;
+}
+
+async function deliverBotCommand(
+    socket: Duplex,
+    frames: ClientFrames,
+    deliveryId: string,
+    command: BotSessionPromptCommand,
+): Promise<void> {
+    writeServerTextFrame(
+        socket,
+        encodeRuntimeDelivery({
+            deliveryId,
+            kind: RUNTIME_DELIVERY_KIND,
+            payload: encodeBotSessionPromptCommand(command),
+            sessionId: command.sessionId,
+        }),
+    );
+    let received = false;
+    while (!received) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== RUNTIME_DELIVERY_RECEIVED_KIND) {
+            continue;
+        }
+        received = decodeRuntimeDeliveryReceived(message).deliveryId === deliveryId;
+    }
+    writeServerTextFrame(
+        socket,
+        encodeRuntimeDeliveryCommitted({
+            deliveryId,
+            kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+            sessionId: command.sessionId,
+        }),
+    );
 }
 
 describe("daemon Bot execution boundary", () => {
@@ -578,6 +613,128 @@ describe("daemon Bot execution boundary", () => {
             expect(observedKinds.slice(0, 2)).toEqual([SESSION_CONFIG_UPDATED_KIND, SESSION_STARTED_KIND]);
             expect(observedSourceKinds.slice(0, 2)).toEqual(["runtime", "attempt"]);
             expect(observedText).toBe("0 image, 1 resource");
+
+            const activeBotPrompt = new BotSessionPromptCommand(
+                "session_bot_steering",
+                "message_bot_active",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "wait for steering",
+                "execution_bot_active",
+                "capability_bot_active",
+                "g".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_bot_steering",
+                "turn_bot_active",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedConfigurations,
+            );
+            await deliverBotCommand(socket, frames, "delivery_bot_active", activeBotPrompt);
+            let activeBotIsRunning = false;
+            while (!activeBotIsRunning) {
+                const envelope = decodeSessionEventEnvelope(await frames.next());
+                activeBotIsRunning = decodeMessageKind(envelope.payload) === AGENT_ACTIVITY_KIND;
+            }
+
+            const steeringBotPrompt = new BotSessionPromptCommand(
+                activeBotPrompt.sessionId,
+                "message_bot_steering",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "focus on verified behavior",
+                "execution_bot_steering",
+                "capability_bot_steering",
+                "h".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                activeBotPrompt.conversationId,
+                "turn_bot_steering",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedConfigurations,
+                SessionPromptDisposition.Steer,
+                activeBotPrompt.commandId,
+            );
+            await deliverBotCommand(socket, frames, "delivery_bot_steering", steeringBotPrompt);
+            const completedBotCommands = new Set<string>();
+            let steeredBotText = "";
+            let steeringStopReason = "";
+            while (completedBotCommands.size < 2) {
+                const envelope = decodeSessionEventEnvelope(await frames.next());
+                const payload: unknown = JSON.parse(envelope.payload);
+                if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+                    continue;
+                }
+                const text = Reflect.get(payload, "text");
+                if (typeof text === "string") {
+                    steeredBotText += text;
+                }
+                if (decodeMessageKind(envelope.payload) !== SESSION_COMPLETED_KIND) {
+                    continue;
+                }
+                const commandId = Reflect.get(payload, "commandId");
+                if (typeof commandId === "string") {
+                    completedBotCommands.add(commandId);
+                    if (commandId === steeringBotPrompt.commandId) {
+                        const stopReason = Reflect.get(payload, "stopReason");
+                        steeringStopReason = typeof stopReason === "string" ? stopReason : "";
+                    }
+                }
+            }
+            expect(completedBotCommands).toEqual(new Set([activeBotPrompt.commandId, steeringBotPrompt.commandId]));
+            expect(steeringStopReason).toBe("steered");
+            expect(steeredBotText).toContain("Steered: focus on verified behavior");
+
+            const queuedBotPrompt = new BotSessionPromptCommand(
+                activeBotPrompt.sessionId,
+                "message_bot_queued",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "run the queued Bot follow-up",
+                "execution_bot_queued",
+                "capability_bot_queued",
+                "i".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                activeBotPrompt.conversationId,
+                "turn_bot_queued",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedConfigurations,
+                SessionPromptDisposition.Queue,
+                activeBotPrompt.commandId,
+            );
+            await deliverBotCommand(socket, frames, "delivery_bot_queued", queuedBotPrompt);
+            expect(await readCompletedText(frames)).toContain("run the queued Bot follow-up");
 
             const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
             try {

@@ -1689,12 +1689,10 @@ export function decodeMobiusActivitySummary(value: unknown): MobiusActivitySumma
     );
 }
 
-export class MobiusMessage {
+export class MobiusMessageContent {
     readonly activities: readonly MobiusActivitySummary[];
     readonly additionalDirectoryIds: readonly string[];
-    readonly agentId: string;
     readonly attempt: MobiusAttemptSummary;
-    readonly commandId: string;
     readonly createdAt: string;
     readonly disposition: string;
     readonly images: readonly PromptImage[];
@@ -1702,15 +1700,11 @@ export class MobiusMessage {
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
     readonly response: string;
-    readonly sessionId: string;
-    readonly targetCommandId: string;
 
     constructor(
         activities: readonly MobiusActivitySummary[],
         additionalDirectoryIds: readonly string[],
-        agentId: string,
         attempt: MobiusAttemptSummary,
-        commandId: string,
         createdAt: string,
         disposition: string,
         images: readonly PromptImage[],
@@ -1718,14 +1712,10 @@ export class MobiusMessage {
         prompt: string,
         resources: readonly PromptResource[],
         response: string,
-        sessionId: string,
-        targetCommandId: string,
     ) {
         this.activities = activities;
         this.additionalDirectoryIds = additionalDirectoryIds;
-        this.agentId = agentId;
         this.attempt = attempt;
-        this.commandId = commandId;
         this.createdAt = createdAt;
         this.disposition = disposition;
         this.images = images;
@@ -1733,14 +1723,43 @@ export class MobiusMessage {
         this.prompt = prompt;
         this.resources = resources;
         this.response = response;
+    }
+}
+
+export class MobiusMessage extends MobiusMessageContent {
+    readonly agentId: string;
+    readonly commandId: string;
+    readonly sessionId: string;
+    readonly targetCommandId: string;
+
+    constructor(
+        content: MobiusMessageContent,
+        agentId: string,
+        commandId: string,
+        sessionId: string,
+        targetCommandId: string,
+    ) {
+        super(
+            content.activities,
+            content.additionalDirectoryIds,
+            content.attempt,
+            content.createdAt,
+            content.disposition,
+            content.images,
+            content.messageId,
+            content.prompt,
+            content.resources,
+            content.response,
+        );
+        this.agentId = agentId;
+        this.commandId = commandId;
         this.sessionId = sessionId;
         this.targetCommandId = targetCommandId;
     }
 }
 
-function decodeMobiusMessage(value: unknown): MobiusMessage {
-    const message = record(value, "Session message");
-    return new MobiusMessage(
+export function decodeMobiusMessageContent(message: Readonly<Record<string, unknown>>): MobiusMessageContent {
+    return new MobiusMessageContent(
         arrayField(message, "activities", 10_000).map(decodeMobiusActivitySummary),
         arrayField(message, "additionalDirectoryIds", 100).map((directoryId) => {
             if (typeof directoryId !== "string") {
@@ -1748,9 +1767,7 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
             }
             return identifierField({ directoryId }, "directoryId");
         }),
-        identifierField(message, "agentId"),
         decodeMobiusAttemptSummary(message["attempt"]),
-        identifierField(message, "commandId"),
         validateTimestamp(stringField(message, "createdAt", 128), "createdAt"),
         stringField(message, "disposition", 16),
         decodePromptImagesValue(message["images"]),
@@ -1758,6 +1775,15 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
         stringField(message, "prompt", 100_000),
         decodePromptResourcesValue(message["resources"]),
         stringField(message, "response", 8_500_000),
+    );
+}
+
+function decodeMobiusMessage(value: unknown): MobiusMessage {
+    const message = record(value, "Session message");
+    return new MobiusMessage(
+        decodeMobiusMessageContent(message),
+        identifierField(message, "agentId"),
+        identifierField(message, "commandId"),
         identifierField(message, "sessionId"),
         stringField(message, "targetCommandId", 128),
     );

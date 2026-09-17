@@ -695,6 +695,8 @@ export class BotService {
         images: readonly PromptImage[],
         resources: readonly PromptResource[],
         artifactIds: readonly string[],
+        disposition: string,
+        targetTurnId: string,
         now: number,
         signal: AbortSignal,
     ) => {
@@ -733,6 +735,8 @@ export class BotService {
                 additionalDirectoryIds,
                 images,
                 [...resources, ...artifactResources],
+                disposition,
+                targetTurnId,
             ),
             now,
             signal,
@@ -824,6 +828,35 @@ export class BotService {
             );
         }
         return acceptance;
+    };
+
+    readonly promoteProjectConversationTurnToSteering = async (
+        conversationId: string,
+        token: string,
+        actorReference: string,
+        turnId: string,
+        now: number,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeProjectConversation(
+            conversationId,
+            token,
+            ProjectPermission.ConversationTurnCreate,
+            actorReference,
+            signal,
+        );
+        const cx = await this.projectContext(access.scope, signal);
+        const conversation = await this.authorizeConversation(cx, access, access.conversationId, signal);
+        const execution = await this.cx.gateways.botSessions.promoteQueuedTurnToSteering(
+            access.scope,
+            conversation.sessionId,
+            turnId,
+            now,
+            signal,
+        );
+        const runtimeAccess = await this.readRuntimeAccess(cx, access.scope, execution.runtimeId, signal);
+        await this.cx.gateways.channels.dispatchPending(runtimeAccess, signal);
+        return { disposition: "steer", turnId: execution.turnId };
     };
 
     private readonly readRuntimeAccess = async (
@@ -1776,6 +1809,7 @@ export class BotService {
         actorReference: string,
         conversationId: string,
         after: string,
+        waitMilliseconds: number,
         signal: AbortSignal,
     ) => {
         const access = await this.cx.services.authorization.authorizeInbound(
@@ -1793,6 +1827,7 @@ export class BotService {
             conversation.sessionId,
             after,
             BOT_CONVERSATION_EVENT_PAGE_LIMIT,
+            waitMilliseconds,
             signal,
         );
         return access instanceof BotConnectionAccess ? connectorEventPage(page) : page;
@@ -1828,6 +1863,40 @@ export class BotService {
             conversation.sessionId,
             cursor,
             limit,
+            signal,
+        );
+    };
+    readonly readConversationToolCallDetail = async (
+        botId: string,
+        token: string,
+        actorReference: string,
+        conversationId: string,
+        attemptId: string,
+        toolCallId: string,
+        signal: AbortSignal,
+    ) => {
+        const access = await this.cx.services.authorization.authorizeInbound(
+            botId,
+            token,
+            ProjectPermission.ConversationRead,
+            "conversation-messages:read",
+            actorReference,
+            signal,
+        );
+        if (access instanceof BotConnectionAccess) {
+            throw new BotApiError(
+                "conversation_access_denied",
+                "Bot connection credentials cannot read authoritative conversation history",
+                "access-denied",
+            );
+        }
+        const cx = await this.projectContext(access.scope, signal);
+        const conversation = await this.authorizeConversation(cx, access, conversationId, signal);
+        return await this.cx.gateways.sessions.readToolCallDetail(
+            access.scope,
+            conversation.sessionId,
+            attemptId,
+            toolCallId,
             signal,
         );
     };

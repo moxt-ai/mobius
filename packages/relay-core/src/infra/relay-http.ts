@@ -1,6 +1,8 @@
 import {
     type AttemptReconciliationOutcome,
     CreateSessionRequest,
+    isSessionDirectoryIdentifier,
+    SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH,
     SessionRecordingPolicy,
     SessionRuntimeError,
 } from "../entity/do/session.ts";
@@ -76,6 +78,14 @@ export function readInteger(value: Readonly<Record<string, unknown>>, key: strin
     return field;
 }
 
+export function readSessionDirectoryIdentifier(value: Readonly<Record<string, unknown>>, key: string): string {
+    const field = readString(value, key, SESSION_DIRECTORY_IDENTIFIER_MAX_LENGTH);
+    if (!isSessionDirectoryIdentifier(field)) {
+        throw new PairingDirectoryError("invalid_request", `The ${key} field is invalid`);
+    }
+    return field;
+}
+
 export function bearerToken(request: Request): string {
     const authorization = request.headers.get("authorization") ?? "";
     if (!authorization.startsWith("Bearer ")) {
@@ -127,7 +137,7 @@ export function createRequest(body: Readonly<Record<string, unknown>>): CreateSe
         validateIdentifier(readString(body, "runtimeId"), "runtime_id"),
         validateIdentifier(readString(body, "agentId"), "agent_id"),
         validateIdentifier(readString(body, "bindingId"), "binding_id"),
-        validateIdentifier(readString(body, "directoryId"), "directory_id"),
+        readSessionDirectoryIdentifier(body, "directoryId"),
         new SessionRecordingPolicy(
             level,
             readInteger(policy, "retentionMilliseconds"),

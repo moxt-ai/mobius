@@ -5,12 +5,13 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
 } from "@moxt-ai/mobius-protocol";
-import type { ProjectScope, SessionEventPage } from "../../entity/do/session.ts";
+import { type ProjectScope, type SessionEventPage, SessionRuntimeError } from "../../entity/do/session.ts";
 import type { SessionQueryGateway } from "../../gateway/index.ts";
 
 const CATCH_UP_PAGE_SIZE = 100;
 const EVENT_BUFFER_CAPACITY = 256;
 const HEARTBEAT_INTERVAL_MILLISECONDS = 15_000;
+const MAX_EVENT_WAIT_MILLISECONDS = 10_000;
 
 function streamKey(scope: ProjectScope, sessionId: string): string {
     return `${scope.projectId}\u0000${sessionId}`;
@@ -186,9 +187,55 @@ class SessionEventSubscriber {
     };
 }
 
+class SessionEventWaiter {
+    readonly #completion = Promise.withResolvers<void>();
+    readonly #requestSignal: AbortSignal;
+    readonly #timeoutId: ReturnType<typeof globalThis.setTimeout>;
+    #active = true;
+
+    constructor(requestSignal: AbortSignal, waitMilliseconds: number) {
+        requestSignal.throwIfAborted();
+        this.#requestSignal = requestSignal;
+        this.#requestSignal.addEventListener("abort", this.abort, { once: true });
+        this.#timeoutId = globalThis.setTimeout(this.notify, waitMilliseconds);
+    }
+
+    get completed(): Promise<void> {
+        return this.#completion.promise;
+    }
+
+    readonly notify = (): void => {
+        if (!this.#active) {
+            return;
+        }
+        this.dispose();
+        this.#completion.resolve();
+    };
+
+    readonly fail = (error: unknown): void => {
+        if (!this.#active) {
+            return;
+        }
+        this.dispose();
+        this.#completion.reject(error);
+    };
+
+    readonly dispose = (): void => {
+        if (!this.#active) {
+            return;
+        }
+        this.#active = false;
+        globalThis.clearTimeout(this.#timeoutId);
+        this.#requestSignal.removeEventListener("abort", this.abort);
+    };
+
+    private readonly abort = (): void => this.fail(this.#requestSignal.reason);
+}
+
 export class SessionEventStreams {
     readonly #queries: SessionQueryGateway;
     readonly #subscribers = new Map<string, Set<SessionEventSubscriber>>();
+    readonly #waiters = new Map<string, Set<SessionEventWaiter>>();
 
     constructor(cx: { readonly gateways: { readonly queries: SessionQueryGateway } }) {
         const { queries } = cx.gateways;
@@ -254,12 +301,52 @@ export class SessionEventStreams {
     };
 
     readonly publish = (scope: ProjectScope, event: CommittedSessionEvent): void => {
-        const subscribers = this.#subscribers.get(streamKey(scope, event.sessionId));
-        if (subscribers === undefined) {
-            return;
+        const key = streamKey(scope, event.sessionId);
+        const subscribers = this.#subscribers.get(key);
+        if (subscribers !== undefined) {
+            for (const subscriber of subscribers) {
+                subscriber.publish(event);
+            }
         }
-        for (const subscriber of subscribers) {
-            subscriber.publish(event);
+        const waiters = this.#waiters.get(key);
+        if (waiters !== undefined) {
+            for (const waiter of [...waiters]) {
+                waiter.notify();
+            }
+        }
+    };
+
+    readonly wait = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        waitMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<SessionEventPage> => {
+        signal.throwIfAborted();
+        if (
+            !Number.isSafeInteger(waitMilliseconds) ||
+            waitMilliseconds < 1 ||
+            waitMilliseconds > MAX_EVENT_WAIT_MILLISECONDS
+        ) {
+            throw new SessionRuntimeError("invalid_request", "The Session event wait is invalid");
+        }
+        const key = streamKey(scope, sessionId);
+        const waiter = new SessionEventWaiter(signal, waitMilliseconds);
+        this.addWaiter(key, waiter);
+        try {
+            const internalCursor = cursor.length === 0 ? null : cursor;
+            const initial = await this.#queries.readEvents(scope, sessionId, internalCursor, limit, signal);
+            if (initial.events.length > 0 || initial.hasMore) {
+                return initial;
+            }
+            await waiter.completed;
+            signal.throwIfAborted();
+            return await this.#queries.readEvents(scope, sessionId, internalCursor, limit, signal);
+        } finally {
+            this.removeWaiter(key, waiter);
+            waiter.dispose();
         }
     };
 
@@ -270,6 +357,12 @@ export class SessionEventStreams {
             }
         }
         this.#subscribers.clear();
+        for (const waiters of this.#waiters.values()) {
+            for (const waiter of waiters) {
+                waiter.fail(new SessionRuntimeError("session_storage_unavailable", "The Session event wait closed"));
+            }
+        }
+        this.#waiters.clear();
     };
 
     private readonly catchUp = async (
@@ -308,6 +401,26 @@ export class SessionEventStreams {
         existing.delete(subscriber);
         if (existing.size === 0) {
             this.#subscribers.delete(key);
+        }
+    };
+
+    private readonly addWaiter = (key: string, waiter: SessionEventWaiter): void => {
+        const existing = this.#waiters.get(key);
+        if (existing === undefined) {
+            this.#waiters.set(key, new Set([waiter]));
+            return;
+        }
+        existing.add(waiter);
+    };
+
+    private readonly removeWaiter = (key: string, waiter: SessionEventWaiter): void => {
+        const existing = this.#waiters.get(key);
+        if (existing === undefined) {
+            return;
+        }
+        existing.delete(waiter);
+        if (existing.size === 0) {
+            this.#waiters.delete(key);
         }
     };
 }

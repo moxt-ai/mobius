@@ -40,6 +40,7 @@ import {
     type CreateSessionRequest,
     ExpiredArtifactDescriptor,
     type InteractionResponseAcceptance,
+    isSessionDirectoryIdentifier,
     type PendingDaemonDelivery,
     type ProjectScope,
     SessionConfigurationAcceptance,
@@ -74,7 +75,6 @@ const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 
 const MAX_INTERNAL_RESPONSE_LENGTH = 96 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
-const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
 
 type SessionReservation = { readonly kind: "existing" } | { readonly kind: "reserved" };
@@ -121,11 +121,7 @@ function readDirectoryIdentifiers(value: Readonly<Record<string, unknown>>, key:
     const identifiers: string[] = [];
     const unique = new Set<string>();
     for (const identifier of field) {
-        if (
-            typeof identifier !== "string" ||
-            !DIRECTORY_IDENTIFIER_PATTERN.test(identifier) ||
-            unique.has(identifier)
-        ) {
+        if (typeof identifier !== "string" || !isSessionDirectoryIdentifier(identifier) || unique.has(identifier)) {
             throw new SessionRuntimeError(
                 "session_storage_unavailable",
                 "The session storage returned an invalid record",
@@ -1362,6 +1358,18 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<SessionEventPage> =>
         decodeEvents(await this.request(scope, sessionId, "events", { cursor, limit, sessionId }, signal));
+
+    readonly waitForEvents = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        waitMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<SessionEventPage> =>
+        decodeEvents(
+            await this.request(scope, sessionId, "wait-events", { cursor, limit, sessionId, waitMilliseconds }, signal),
+        );
 
     readonly readToolCallDetail = async (
         scope: ProjectScope,
