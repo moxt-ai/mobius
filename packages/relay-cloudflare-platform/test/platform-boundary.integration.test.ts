@@ -1118,6 +1118,7 @@ it("Given an App-owned Session, When its backend issues browser access, Then the
             transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
         });
         try {
+            expect(await browser.interactions.listPending(fixture.sessionId, new AbortController().signal)).toEqual([]);
             const turn = await browser.turns.submit(
                 fixture.sessionId,
                 {

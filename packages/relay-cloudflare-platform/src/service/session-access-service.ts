@@ -21,6 +21,7 @@ const permissions = new Set([
     ProjectPermission.SessionWrite,
     ProjectPermission.ConversationTurnCreate,
     ProjectPermission.ConversationTurnCancel,
+    ProjectPermission.InteractionRespond,
     ProjectPermission.ProjectEventsRead,
 ]);
 
@@ -105,11 +106,13 @@ export class SessionAccessService {
             const allowed =
                 suffix !== null &&
                 ((request.method === "GET" &&
-                    /^(?:|\/(?:messages|native-history|events)|\/turns\/[A-Za-z0-9._:-]+|\/artifacts\/[A-Za-z0-9._:-]+(?:\/content)?)$/u.test(
+                    /^(?:|\/(?:messages|native-history|events|interactions)|\/interactions\/[A-Za-z0-9._:-]+|\/turns\/[A-Za-z0-9._:-]+|\/artifacts\/[A-Za-z0-9._:-]+(?:\/content)?)$/u.test(
                         suffix,
                     )) ||
                     (request.method === "POST" &&
-                        /^\/(?:turns|prepare|configuration|turns\/[A-Za-z0-9._:-]+\/cancel)$/u.test(suffix)));
+                        /^\/(?:turns|prepare|configuration|turns\/[A-Za-z0-9._:-]+\/cancel|interactions\/[A-Za-z0-9._:-]+\/responses)$/u.test(
+                            suffix,
+                        )));
             if (!allowed || row.project_id !== projectId || !permissions.has(permission)) {
                 throw new ProjectAuthenticationError(
                     "project_permission_denied",
