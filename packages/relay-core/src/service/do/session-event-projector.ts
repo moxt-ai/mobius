@@ -1,5 +1,6 @@
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_CONTENT_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
     encodeAgentActivityEvent,
@@ -138,6 +139,10 @@ export class SessionEventProjector {
                 throw new SessionRuntimeError("session_conflict", "The ToolCall has no owning Attempt");
             }
             return { kind: "activity", attemptId, event, hotDetail: prepared.activityDetail?.payload ?? null };
+        }
+        if (event.kind === AGENT_CONTENT_KIND) {
+            this.requireCommandState(key, sessionId, event.commandId, ["running", "indeterminate"]);
+            return { kind: "content", event };
         }
         if (event.kind === SESSION_PERMISSION_REQUESTED_KIND || event.kind === SESSION_ELICITATION_REQUESTED_KIND) {
             const command = this.requireCommandState(key, sessionId, event.commandId, ["running", "indeterminate"]);

@@ -1,4 +1,4 @@
-import { encodeAgentActivityEvent } from "@moxt-ai/mobius-protocol";
+import { encodeAgentActivityEvent, encodeAgentContentEvent } from "@moxt-ai/mobius-protocol";
 import type { SessionEventProjection } from "../../entity/do/session-event-projection.ts";
 import {
     type AttemptRecord,
@@ -73,6 +73,15 @@ export class SessionEventProjectorStorage {
                 });
                 return;
             }
+            case "content":
+                this.upsertContent({
+                    ...scope,
+                    commandId: plan.event.commandId,
+                    contentId: plan.event.contentId,
+                    contentJson: encodeAgentContentEvent(plan.event),
+                    eventSequence: input.sequence,
+                });
+                return;
             case "request-interaction":
                 this.insertPendingInteraction({ ...scope, ...plan, requestJson: JSON.stringify(plan.request) });
                 switch (plan.disposition.kind) {
@@ -283,6 +292,24 @@ export class SessionEventProjectorStorage {
                 input.originalBytes,
                 input.eventSequence,
             ],
+        );
+
+    private readonly upsertContent = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+        readonly contentId: string;
+        readonly contentJson: string;
+        readonly eventSequence: number;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `INSERT INTO turn_content_views (
+               scope_key, session_id, command_id, content_id, content_json, event_sequence
+             ) VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(scope_key, session_id, command_id, content_id) DO UPDATE SET
+               content_json = excluded.content_json,
+               event_sequence = excluded.event_sequence`,
+            [input.scopeKey, input.sessionId, input.commandId, input.contentId, input.contentJson, input.eventSequence],
         );
 
     readonly findAttempt = (scopeKey: string, sessionId: string, attemptId: string): AttemptRecord | undefined =>

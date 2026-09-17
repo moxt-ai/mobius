@@ -18,6 +18,7 @@ export class SessionDeletionStorage {
         this.deleteContentChunks(input);
         this.deleteArtifacts(input);
         this.deleteToolCallViews(input);
+        this.deleteTurnContentViews(input);
         this.deletePendingWork(input);
         this.deleteInteractions(input);
         this.deleteBotClientCursors(input);
@@ -127,6 +128,11 @@ export class SessionDeletionStorage {
         ]);
     private readonly deleteToolCallViews = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM tool_call_views WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    private readonly deleteTurnContentViews = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM turn_content_views WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
             input.sessionId,
         ]);

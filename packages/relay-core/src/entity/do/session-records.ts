@@ -99,6 +99,14 @@ export const TurnRecordSchema = v.object({
 });
 export type TurnRecord = Readonly<v.InferOutput<typeof TurnRecordSchema>>;
 
+export const TurnContentRecordSchema = v.object({
+    command_id: v.string(),
+    content_id: v.string(),
+    content_json: v.string(),
+    event_sequence: v.pipe(v.number(), v.safeInteger()),
+});
+export type TurnContentRecord = Readonly<v.InferOutput<typeof TurnContentRecordSchema>>;
+
 export const TurnMessageAnchorRecordSchema = v.object({
     message_id: v.string(),
 });

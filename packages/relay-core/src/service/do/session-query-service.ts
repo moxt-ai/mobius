@@ -1,7 +1,9 @@
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_CONTENT_KIND,
     type Attempt,
     type CommittedSessionEvent,
+    decodeAgentContentEvent,
     decodeNativeSessionHistory,
     decodeRecordedSessionEvent,
     decodeSessionConfigUpdatedEvent,
@@ -479,12 +481,22 @@ export class SessionQueryService {
                   })
                 : "";
         const anchoredMessageId = this.#storage.readTurnMessageId(scopeKey(scope), sessionId, command.commandId);
+        const contents = this.#storage
+            .listTurnContents({ scopeKey: scopeKey(scope), sessionId, commandId: command.commandId })
+            .map((contentRow) => {
+                const event = decodeAgentContentEvent(rowString(contentRow, "content_json"));
+                if (event.kind !== AGENT_CONTENT_KIND || event.commandId !== command.commandId) {
+                    throw new SessionRuntimeError("session_storage_unavailable", "The stored agent content is invalid");
+                }
+                return event.content;
+            });
         return {
             activities,
             additionalDirectoryIds: command.additionalDirectoryIds,
             agentId: command.agentId,
             attempt: attemptSummaryFromRow(row),
             commandId: command.commandId,
+            contents,
             createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
             disposition: command.disposition,
             images: command.images,

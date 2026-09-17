@@ -1,6 +1,7 @@
 import {
     type Attempt,
     decodeAgentActivityEvent,
+    decodeAgentDisplayContentValue,
     decodeAttempt as decodeAttemptResource,
     decodeCommandReceipt,
     decodeCommittedSessionEvent,
@@ -343,7 +344,7 @@ export function decodeRemoteActivitySummaries(value: unknown): SessionMessage["a
 }
 
 function decodeMessage(value: unknown): SessionMessage {
-    if (!isRecord(value) || !Array.isArray(value["activities"])) {
+    if (!isRecord(value) || !Array.isArray(value["activities"]) || !Array.isArray(value["contents"])) {
         throw new SessionRuntimeError("session_storage_unavailable", "The session message is invalid");
     }
     const activities = decodeRemoteActivitySummaries(value["activities"]);
@@ -353,6 +354,7 @@ function decodeMessage(value: unknown): SessionMessage {
         agentId: readString(value, "agentId"),
         attempt: decodeRemoteAttemptSummary(value["attempt"]),
         commandId: readString(value, "commandId"),
+        contents: value["contents"].map(decodeAgentDisplayContentValue),
         createdAt: readString(value, "createdAt"),
         disposition: readString(value, "disposition"),
         images: decodePromptImagesValue(value["images"]),

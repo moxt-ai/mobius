@@ -6,6 +6,7 @@ import {
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
+    type AgentDisplayContent,
     decodeAgentInstallProgressEvent,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
@@ -621,6 +622,7 @@ async function completeTurn(
     daemon: OpenSocket,
     command: SessionPromptCommand,
     response: string,
+    contents: readonly RecordedSessionEvent[] = [],
 ): Promise<void> {
     await submitPrompt(host, daemon, command);
     await commit(
@@ -633,6 +635,13 @@ async function completeTurn(
             sessionId: command.sessionId,
         }),
     );
+    for (const [index, content] of contents.entries()) {
+        await commit(
+            host,
+            daemon,
+            envelope(command.sessionId, `${command.commandId}-content-${index.toString()}`, content),
+        );
+    }
     await commit(
         host,
         daemon,
@@ -2583,6 +2592,100 @@ describe.sequential("Cloudflare session deployment", () => {
         } finally {
             host.socket.close(1000, "Worker integration complete");
             daemon.socket.close(1000, "Worker integration complete");
+        }
+    });
+
+    it("Given an Agent uploads and publishes media, When its completed Session message is read after event compaction, Then the stored media remains downloadable", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+
+        try {
+            expect((await createSession(pairing.created, "media-session")).status).toBe(201);
+            const command = prompt("media-session", "media-command", "Create media");
+            const bytes = new TextEncoder().encode("durable media bytes");
+            const leaseResponse = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/uploads?token=${pairing.claimed.daemonToken}`,
+                {
+                    body: JSON.stringify({
+                        byteLength: bytes.byteLength,
+                        mediaType: "video/mp4",
+                        name: "demo.mp4",
+                        sha256: await sha256Hex(bytes),
+                    }),
+                    headers: { "content-type": "application/json" },
+                    method: "POST",
+                },
+            );
+            expect(leaseResponse.status).toBe(201);
+            const lease = await leaseResponse.json();
+            if (
+                !isRecord(lease) ||
+                typeof lease["artifactId"] !== "string" ||
+                typeof lease["uploadToken"] !== "string"
+            ) {
+                throw new Error("Expected a media artifact upload lease");
+            }
+            const uploadResponse = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/${lease["artifactId"]}/content?token=${pairing.claimed.daemonToken}`,
+                {
+                    body: bytes,
+                    headers: {
+                        "content-type": "video/mp4",
+                        "x-mobius-upload-token": lease["uploadToken"],
+                    },
+                    method: "PUT",
+                },
+            );
+            expect(uploadResponse.status).toBe(200);
+            const media: AgentDisplayContent = {
+                artifactId: lease["artifactId"],
+                data: "",
+                mimeType: "video/mp4",
+                name: "demo.mp4",
+                newText: "",
+                oldText: "",
+                path: "",
+                terminalId: "",
+                text: "",
+                type: "video",
+                uri: "file:///demo.mp4",
+            };
+            await completeTurn(host, daemon, command, "Media ready", [
+                {
+                    commandId: command.commandId,
+                    content: media,
+                    contentId: "media-preview",
+                    kind: "agent.content",
+                    messageId: "assistant-media",
+                    sessionId: command.sessionId,
+                },
+            ]);
+
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/media-session/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            await expect(response.json()).resolves.toMatchObject({
+                messages: [{ commandId: command.commandId, contents: [media], response: "Media ready" }],
+            });
+            const download = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${command.sessionId}/artifacts/${lease["artifactId"]}/content`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(download.status).toBe(200);
+            expect(new Uint8Array(await download.arrayBuffer())).toEqual(bytes);
+        } finally {
+            daemon.socket.close(1000, "Media projection test complete");
+            host.socket.close(1000, "Media projection test complete");
         }
     });
 

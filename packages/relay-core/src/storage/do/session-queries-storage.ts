@@ -14,6 +14,8 @@ import {
     SessionRecordSchema,
     type TurnActivityRecord,
     TurnActivityRecordSchema,
+    type TurnContentRecord,
+    TurnContentRecordSchema,
     TurnMessageAnchorRecordSchema,
     type TurnRecord,
     TurnRecordSchema,
@@ -63,6 +65,22 @@ export class SessionQueriesStorage {
         )[0];
         return anchor === undefined ? "" : rowString(anchor, "message_id");
     };
+
+    readonly listTurnContents = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+    }): readonly TurnContentRecord[] =>
+        decodeStorageRows(
+            TurnContentRecordSchema,
+            this.#database.query(
+                `SELECT command_id, content_id, content_json, event_sequence
+                   FROM turn_content_views
+                  WHERE scope_key = ? AND session_id = ? AND command_id = ?
+                  ORDER BY event_sequence`,
+                [input.scopeKey, input.sessionId, input.commandId],
+            ),
+        );
 
     readonly readCanonicalAssistantMessage = (input: {
         readonly scopeKey: string;

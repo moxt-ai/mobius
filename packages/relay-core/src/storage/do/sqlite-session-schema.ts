@@ -267,6 +267,17 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
       ) STRICT;
       CREATE INDEX IF NOT EXISTS tool_call_views_command_event
         ON tool_call_views(scope_key, session_id, command_id, event_sequence);
+      CREATE TABLE IF NOT EXISTS turn_content_views (
+        scope_key TEXT NOT NULL,
+        session_id TEXT NOT NULL,
+        command_id TEXT NOT NULL,
+        content_id TEXT NOT NULL,
+        content_json TEXT NOT NULL,
+        event_sequence INTEGER NOT NULL,
+        PRIMARY KEY (scope_key, session_id, command_id, content_id)
+      ) STRICT;
+      CREATE INDEX IF NOT EXISTS turn_content_views_command_event
+        ON turn_content_views(scope_key, session_id, command_id, event_sequence);
       CREATE INDEX IF NOT EXISTS tool_call_views_detail_artifact
         ON tool_call_views(scope_key, session_id, detail_artifact_id)
         WHERE detail_artifact_id IS NOT NULL;

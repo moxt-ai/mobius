@@ -1,4 +1,4 @@
-import type { AgentActivityEvent, Interaction, SessionConfigOption } from "@moxt-ai/mobius-protocol";
+import type { AgentActivityEvent, AgentContentEvent, Interaction, SessionConfigOption } from "@moxt-ai/mobius-protocol";
 
 export interface SessionEventCommit {
     readonly scopeKey: string;
@@ -31,6 +31,7 @@ export type SessionEventProjection =
           readonly attemptId: string;
       }
     | { readonly kind: "response"; readonly commandId: string; readonly text: string }
+    | { readonly kind: "content"; readonly event: AgentContentEvent }
     | {
           readonly kind: "activity";
           readonly attemptId: string;

@@ -1,5 +1,6 @@
 import type {
     AgentActivityEvent,
+    AgentDisplayContent,
     CommandReceipt,
     CommittedSessionEvent,
     DomainError,
@@ -393,6 +394,7 @@ export interface SessionMessageContent {
 export interface SessionMessage extends SessionMessageContent {
     readonly agentId: string;
     readonly commandId: string;
+    readonly contents: readonly AgentDisplayContent[];
     readonly sessionId: string;
     readonly targetCommandId: string;
 }

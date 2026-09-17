@@ -2,7 +2,9 @@ import {
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentDisplayContent,
     type Attempt,
+    decodeAgentDisplayContentValue,
     decodeAttempt,
     decodeCommittedSessionEvent,
     decodeInteraction,
@@ -1729,6 +1731,7 @@ export class MobiusMessageContent {
 export class MobiusMessage extends MobiusMessageContent {
     readonly agentId: string;
     readonly commandId: string;
+    readonly contents: readonly AgentDisplayContent[];
     readonly sessionId: string;
     readonly targetCommandId: string;
 
@@ -1736,6 +1739,7 @@ export class MobiusMessage extends MobiusMessageContent {
         content: MobiusMessageContent,
         agentId: string,
         commandId: string,
+        contents: readonly AgentDisplayContent[],
         sessionId: string,
         targetCommandId: string,
     ) {
@@ -1753,6 +1757,7 @@ export class MobiusMessage extends MobiusMessageContent {
         );
         this.agentId = agentId;
         this.commandId = commandId;
+        this.contents = contents;
         this.sessionId = sessionId;
         this.targetCommandId = targetCommandId;
     }
@@ -1784,6 +1789,7 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
         decodeMobiusMessageContent(message),
         identifierField(message, "agentId"),
         identifierField(message, "commandId"),
+        arrayField(message, "contents", 100).map(decodeAgentDisplayContentValue),
         identifierField(message, "sessionId"),
         stringField(message, "targetCommandId", 128),
     );
@@ -1793,11 +1799,18 @@ export class MobiusMessagePage {
     readonly lastCommittedSequence: string;
     readonly messages: readonly MobiusMessage[];
     readonly nextCursor: string;
+    readonly tailEventCursor: string;
 
-    constructor(lastCommittedSequence: string, messages: readonly MobiusMessage[], nextCursor: string) {
+    constructor(
+        lastCommittedSequence: string,
+        messages: readonly MobiusMessage[],
+        nextCursor: string,
+        tailEventCursor: string,
+    ) {
         this.lastCommittedSequence = lastCommittedSequence;
         this.messages = messages;
         this.nextCursor = nextCursor;
+        this.tailEventCursor = tailEventCursor;
     }
 }
 
@@ -1807,10 +1820,15 @@ export function decodeMobiusMessagePage(value: unknown): MobiusMessagePage {
     if (!/^(?:0|[1-9][0-9]*)$/.test(sequence)) {
         throw invalidResponse("The service returned an invalid event sequence");
     }
+    const tailEventCursor = page["tailEventCursor"];
+    if (tailEventCursor !== undefined && (typeof tailEventCursor !== "string" || tailEventCursor.length > 512)) {
+        throw invalidResponse("The service returned an invalid tailEventCursor");
+    }
     return new MobiusMessagePage(
         sequence,
         arrayField(page, "messages", 100).map(decodeMobiusMessage),
         nullableCursor(page, "nextCursor"),
+        tailEventCursor ?? "",
     );
 }
 
