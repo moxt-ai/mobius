@@ -563,6 +563,7 @@ export class BotService {
                     kind: SESSION_PREPARE_KIND,
                     requestId,
                     sessionId,
+                    sessionState: "provisioned",
                 }),
             );
             const daemonStartedAt = performance.now();

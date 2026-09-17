@@ -48,6 +48,7 @@ import {
     encodeSessionEventRejection,
     encodeSessionFailedEvent,
     encodeSessionOperationFailedEvent,
+    encodeSessionPrepareCommand,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
@@ -75,6 +76,7 @@ import {
     SESSION_READY_KIND,
     type SessionEventEnvelope,
     SessionEventRejectionCode,
+    type SessionPrepareCommand,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -595,6 +597,18 @@ export class ChannelActor {
                     return;
                 }
                 const now = this.#clock.now();
+                if (command.sessionState === "provisioned") {
+                    await this.reconcilePreparedSession(command, now, signal);
+                    const { sessionState, ...daemonCommand } = command;
+                    void sessionState;
+                    this.forwardControl(
+                        socket,
+                        encodeSessionPrepareCommand(daemonCommand),
+                        command.requestId,
+                        command.sessionId,
+                    );
+                    return;
+                }
                 try {
                     await this.#commands.createSession(
                         this.#scope,
@@ -613,26 +627,7 @@ export class ChannelActor {
                     if (!(error instanceof SessionRuntimeError) || error.code !== "session_conflict") {
                         throw error;
                     }
-                    const existing = await this.#queries.readSession(this.#scope, command.sessionId, signal);
-                    if (
-                        existing.defaultBinding.bindingId !== command.bindingId ||
-                        existing.defaultBinding.runtimeId !== this.#runtimeId ||
-                        existing.defaultBinding.agentRef !== command.agentId ||
-                        existing.defaultBinding.workspaceRef !== command.directoryId
-                    ) {
-                        await this.#commands.setDefaultBinding(
-                            this.#scope,
-                            command.sessionId,
-                            new CreateSessionBindingRequest(
-                                command.bindingId,
-                                this.#runtimeId,
-                                command.agentId,
-                                command.directoryId,
-                            ),
-                            now,
-                            signal,
-                        );
-                    }
+                    await this.reconcilePreparedSession(command, now, signal);
                 }
                 this.forwardControl(socket, message, command.requestId, command.sessionId);
                 return;
@@ -954,6 +949,33 @@ export class ChannelActor {
             }
             default:
                 throw new ProtocolMessageError("Unsupported host message");
+        }
+    };
+
+    private readonly reconcilePreparedSession = async (
+        command: SessionPrepareCommand,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const existing = await this.#queries.readSession(this.#scope, command.sessionId, signal);
+        if (
+            existing.defaultBinding.bindingId !== command.bindingId ||
+            existing.defaultBinding.runtimeId !== this.#runtimeId ||
+            existing.defaultBinding.agentRef !== command.agentId ||
+            existing.defaultBinding.workspaceRef !== command.directoryId
+        ) {
+            await this.#commands.setDefaultBinding(
+                this.#scope,
+                command.sessionId,
+                new CreateSessionBindingRequest(
+                    command.bindingId,
+                    this.#runtimeId,
+                    command.agentId,
+                    command.directoryId,
+                ),
+                now,
+                signal,
+            );
         }
     };
 

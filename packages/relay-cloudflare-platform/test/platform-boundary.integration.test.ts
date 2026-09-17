@@ -1977,6 +1977,7 @@ describe.sequential("Platform hosting boundary", () => {
                 },
                 requestId: "server-sdk-create-conversation",
             });
+            expect(preparation).not.toHaveProperty("sessionState");
             const agent = readyAgents[0];
             if (agent === undefined) {
                 throw new Error("The Runtime agent is unavailable");

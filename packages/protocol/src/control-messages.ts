@@ -317,8 +317,18 @@ const sessionPrepareCommandSchema = z
             .optional(),
         kind: z.literal(SESSION_PREPARE_KIND),
         requestId: IDENTIFIER,
+        sessionState: z.literal("provisioned").optional(),
         /** @deprecated Reserved for the legacy Bot Agent-configuration endpoint. */
         transient: z.boolean().optional(),
+    })
+    .superRefine((command, context) => {
+        if (command.transient === true && command.sessionState === "provisioned") {
+            context.addIssue({
+                code: "custom",
+                message: "A transient Session cannot already be provisioned",
+                path: ["sessionState"],
+            });
+        }
     })
     .readonly();
 
