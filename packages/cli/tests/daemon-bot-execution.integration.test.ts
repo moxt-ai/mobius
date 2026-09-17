@@ -1,13 +1,11 @@
-import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import {
     AGENT_ACTIVITY_KIND,
@@ -223,7 +221,7 @@ describe("daemon Bot execution boundary", () => {
         vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
     });
     afterEach(() => vi.useRealTimers());
-    it("Given a Bot conversation loses local approval after its workspace changes, When its owner runs bot approve and sends another turn, Then the same Bot and conversation execute again", async () => {
+    it("Given an approved Bot workspace changes contents and is later replaced, When the same conversation continues, Then the daemon refreshes the local target without user approval", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -755,23 +753,23 @@ describe("daemon Bot execution boundary", () => {
             }
 
             await mkdir(join(workspace, "changed-after-approval"));
-            const changedTargetPrompt = new BotSessionPromptCommand(
+            const changedContentsPrompt = new BotSessionPromptCommand(
                 "session_alpha",
-                "message_changed_target",
+                "message_changed_contents",
                 "codex",
                 proposal.bindingId,
                 "default",
                 [],
                 [],
                 [],
-                "Must require reapproval",
-                "execution_changed_target",
-                "capability_changed_target",
+                "Continue after workspace contents change",
+                "execution_changed_contents",
+                "capability_changed_contents",
                 "e".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
                 proposal.botId,
                 "conversation_alpha",
-                "turn_changed_target",
+                "turn_changed_contents",
                 proposal.behaviorRevisionId,
                 proposal.bindingRevision,
                 approved.localGrantId,
@@ -781,63 +779,28 @@ describe("daemon Bot execution boundary", () => {
                 new OwnerBotReplyRoute(),
                 selectedConfigurations,
             );
-            writeServerTextFrame(socket, encodeBotSessionPromptCommand(changedTargetPrompt));
-            const failure = decodeSessionEventEnvelope(await frames.next());
-            expect(decodeMessageKind(failure.payload)).toBe(SESSION_FAILED_KIND);
-            const failurePayload: unknown = JSON.parse(failure.payload);
-            expect(failurePayload).toMatchObject({
-                code: "binding_not_approved",
-                commandId: changedTargetPrompt.commandId,
-                sessionId: changedTargetPrompt.sessionId,
-            });
-            const revokedDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
-            try {
-                expect(
-                    revokedDatabase
-                        .prepare("SELECT revocation_epoch, revoked_at FROM local_bot_grants WHERE local_grant_id = ?")
-                        .get(approved.localGrantId),
-                ).toMatchObject({ revocation_epoch: 1 });
-            } finally {
-                revokedDatabase.close();
-            }
-            await expect(
-                promisify(execFile)(
-                    process.execPath,
-                    [
-                        fileURLToPath(new URL("../src/cli.ts", import.meta.url)),
-                        "bot",
-                        "approve",
-                        "--bot",
-                        "bot_unknown",
-                    ],
-                    { env: environment, signal: AbortSignal.timeout(20_000) },
-                ),
-            ).rejects.toMatchObject({
-                stderr: expect.stringContaining("bot_not_found"),
-            });
-            const result = await promisify(execFile)(
-                process.execPath,
-                [fileURLToPath(new URL("../src/cli.ts", import.meta.url)), "bot", "approve", "--bot", proposal.botId],
-                { env: environment, signal: AbortSignal.timeout(20_000) },
-            );
-            expect(result.stdout).toContain("Approved Bot bot_alpha");
-            const retry = new BotSessionPromptCommand(
-                changedTargetPrompt.sessionId,
-                "message_after_approval",
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(changedContentsPrompt));
+            expect(await readCompletedText(frames)).toContain("Continue after workspace contents change");
+
+            await rename(workspace, join(stateDirectory, "workspace-before-replacement"));
+            await mkdir(workspace);
+            const replacedTargetPrompt = new BotSessionPromptCommand(
+                "session_alpha",
+                "message_replaced_target",
                 "codex",
                 proposal.bindingId,
                 "default",
                 [],
                 [],
                 [],
-                "Recovered",
-                "execution_after_approval",
-                "capability_after_approval",
-                "f".repeat(43),
+                "Continue after workspace replacement",
+                "execution_replaced_target",
+                "capability_replaced_target",
+                "g".repeat(43),
                 new Date(Date.now() + 60_000).toISOString(),
                 proposal.botId,
                 "conversation_alpha",
-                "turn_after_approval",
+                "turn_replaced_target",
                 proposal.behaviorRevisionId,
                 proposal.bindingRevision,
                 approved.localGrantId,
@@ -847,8 +810,80 @@ describe("daemon Bot execution boundary", () => {
                 new OwnerBotReplyRoute(),
                 selectedConfigurations,
             );
-            writeServerTextFrame(socket, encodeBotSessionPromptCommand(retry));
-            expect(await readCompletedText(frames)).toContain("Recovered");
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(replacedTargetPrompt));
+            expect(await readCompletedText(frames)).toContain("Continue after workspace replacement");
+            const refreshedDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                expect(
+                    refreshedDatabase
+                        .prepare("SELECT revocation_epoch, revoked_at FROM local_bot_grants WHERE local_grant_id = ?")
+                        .get(approved.localGrantId),
+                ).toEqual({ revocation_epoch: 0, revoked_at: null });
+                expect(
+                    refreshedDatabase
+                        .prepare("SELECT event FROM audit_events WHERE event = 'bot_binding_target_refreshed'")
+                        .get(),
+                ).toBeUndefined();
+            } finally {
+                refreshedDatabase.close();
+            }
+
+            const legacyDatabase = new DatabaseSync(auditDatabasePath);
+            try {
+                legacyDatabase
+                    .prepare(
+                        `UPDATE local_bot_grants
+                            SET workspace_identity_digest = ?, revoked_at = ?,
+                                revocation_epoch = revocation_epoch + 1
+                          WHERE local_grant_id = ?`,
+                    )
+                    .run("0".repeat(64), Date.now(), approved.localGrantId);
+            } finally {
+                legacyDatabase.close();
+            }
+            const legacyGrantPrompt = new BotSessionPromptCommand(
+                "session_alpha",
+                "message_legacy_grant",
+                "codex",
+                proposal.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "Continue after upgrading a revoked legacy grant",
+                "execution_legacy_grant",
+                "capability_legacy_grant",
+                "h".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                proposal.botId,
+                "conversation_alpha",
+                "turn_legacy_grant",
+                proposal.behaviorRevisionId,
+                proposal.bindingRevision,
+                approved.localGrantId,
+                proposal.behaviorInstructions,
+                proposal.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedConfigurations,
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(legacyGrantPrompt));
+            expect(await readCompletedText(frames)).toContain("Continue after upgrading a revoked legacy grant");
+            const migratedDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                expect(
+                    migratedDatabase
+                        .prepare("SELECT revocation_epoch, revoked_at FROM local_bot_grants WHERE local_grant_id = ?")
+                        .get(approved.localGrantId),
+                ).toEqual({ revocation_epoch: 2, revoked_at: null });
+                expect(
+                    migratedDatabase
+                        .prepare("SELECT event FROM audit_events WHERE event = 'bot_binding_target_refreshed'")
+                        .get(),
+                ).toEqual({ event: "bot_binding_target_refreshed" });
+            } finally {
+                migratedDatabase.close();
+            }
         } finally {
             cancellation.abort();
             await daemon;

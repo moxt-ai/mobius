@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import {
     type BotExecutionBindingApprovalRequest,
@@ -8,27 +7,12 @@ import {
     decodeSessionConfigurationSelections,
     type SessionConfigurationSelection,
 } from "@moxt-ai/mobius-protocol";
-import { z } from "zod";
 
 import type { LocalAgentCatalog, LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
 import type { WorkspaceDirectoryService } from "../authorization/workspace-directory.ts";
 import { revalidateExecutable } from "../process/executable.ts";
 
 const LOCAL_BOT_GRANT_LIFETIME_MILLISECONDS = 90 * 24 * 60 * 60 * 1_000;
-const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/);
-const savedApprovalSchema = z
-    .object({
-        local_grant_id: identifier,
-        bot_id: identifier,
-        binding_id: identifier,
-        binding_revision: z.number().int().positive(),
-        agent_ref: identifier,
-        workspace_ref: z.string().min(1).max(2048),
-        revocation_epoch: z.number().int().nonnegative(),
-        agent_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
-        workspace_identity_digest: z.string().regex(/^[a-f0-9]{64}$/),
-    })
-    .readonly();
 
 export class LocalBotAuthorizationError extends Error {
     readonly code: string;
@@ -96,6 +80,11 @@ interface GrantResolution {
     readonly workspacePath: string;
 }
 
+interface RefreshedGrantTarget {
+    readonly expiresAt: number;
+    readonly revocationEpoch: number;
+}
+
 function digest(value: string): string {
     return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -112,19 +101,8 @@ function agentDigest(agent: LocalAgentDefinition): string {
     );
 }
 
-async function workspaceDigest(path: string): Promise<string> {
-    const metadata = await stat(path);
-    if (!metadata.isDirectory()) {
-        throw new LocalBotAuthorizationError("binding_incompatible", "The Bot workspace is not a directory");
-    }
-    return digest(
-        JSON.stringify({
-            changedAtMilliseconds: metadata.ctimeMs,
-            device: metadata.dev,
-            inode: metadata.ino,
-            path,
-        }),
-    );
+function workspaceDigest(path: string): string {
+    return digest(path);
 }
 
 function exactTargets(left: readonly string[], right: readonly string[]): boolean {
@@ -171,6 +149,17 @@ function rowInteger(row: object, key: string): number {
     return value;
 }
 
+function rowHasInteger(row: object, key: string): boolean {
+    const value = Reflect.get(row, key);
+    if (value === null) {
+        return false;
+    }
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+        throw new LocalBotAuthorizationError("local_grant_invalid", "The local Bot grant is invalid");
+    }
+    return true;
+}
+
 function parseTargets(encoded: string): readonly string[] {
     let value: unknown;
     try {
@@ -196,25 +185,6 @@ function parseSessionConfigurations(encoded: string): readonly SessionConfigurat
 
 export class LocalBotGrantStore {
     readonly #database: DatabaseSync;
-
-    static readonly containsBot = (path: string, botId: string): boolean => {
-        const database = new DatabaseSync(path, { readOnly: true });
-        try {
-            if (
-                database
-                    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'local_bot_grants'")
-                    .get() === undefined
-            ) {
-                return false;
-            }
-            return (
-                database.prepare("SELECT local_grant_id FROM local_bot_grants WHERE bot_id = ? LIMIT 1").get(botId) !==
-                undefined
-            );
-        } finally {
-            database.close();
-        }
-    };
 
     constructor(path: string) {
         this.#database = new DatabaseSync(path);
@@ -253,92 +223,6 @@ export class LocalBotGrantStore {
           ) STRICT;
         `);
     }
-
-    /** Only the local CLI may invoke this explicit approval transition. */
-    readonly reapprove = async (
-        botId: string,
-        catalog: LocalAgentCatalog,
-        directories: WorkspaceDirectoryService,
-        bindingAuthorityId: string,
-        now: number,
-        signal: AbortSignal,
-    ): Promise<{ readonly bindingId: string; readonly workspacePath: string; readonly agentRef: string }> => {
-        signal.throwIfAborted();
-        if (!identifier.safeParse(botId).success) {
-            throw new LocalBotAuthorizationError("invalid_request", "The Bot ID is invalid");
-        }
-        const row = this.#database
-            .prepare("SELECT * FROM local_bot_grants WHERE bot_id = ? ORDER BY binding_revision DESC LIMIT 1")
-            .get(botId);
-        if (row === undefined) {
-            throw new LocalBotAuthorizationError("bot_not_found", "This machine has no saved approval for that Bot");
-        }
-        const parsed = savedApprovalSchema.safeParse(row);
-        if (!parsed.success) {
-            throw new LocalBotAuthorizationError("local_grant_invalid", "The saved Bot approval is invalid", {
-                cause: parsed.error,
-            });
-        }
-        const saved = parsed.data;
-        const agent = catalog.find(saved.agent_ref);
-        if (!agent.capabilities.embeddedContextPrompt) {
-            throw new LocalBotAuthorizationError("binding_incompatible", "The local Agent cannot apply Bot context");
-        }
-        const [adapterUnchanged, agentUnchanged] = await Promise.all([
-            revalidateExecutable(agent.adapterIdentity),
-            revalidateExecutable(agent.agentIdentity),
-        ]);
-        signal.throwIfAborted();
-        if (!adapterUnchanged || !agentUnchanged) {
-            throw new LocalBotAuthorizationError(
-                "binding_incompatible",
-                "The local Agent executable changed before approval",
-            );
-        }
-        const workspacePath = await directories.resolve(bindingAuthorityId, saved.workspace_ref, signal);
-        const workspaceIdentityDigest = await workspaceDigest(workspacePath);
-        signal.throwIfAborted();
-        this.#database.exec("BEGIN IMMEDIATE");
-        try {
-            const result = this.#database
-                .prepare(`UPDATE local_bot_grants
-                SET agent_identity_digest = ?, workspace_identity_digest = ?, workspace_path = ?,
-                    revoked_at = NULL, expires_at = ?, revocation_epoch = revocation_epoch + 1
-                WHERE local_grant_id = ? AND revocation_epoch = ?
-                    AND agent_identity_digest = ? AND workspace_identity_digest = ?
-                    AND binding_revision = (SELECT MAX(binding_revision) FROM local_bot_grants WHERE bot_id = ?)`)
-                .run(
-                    agentDigest(agent),
-                    workspaceIdentityDigest,
-                    workspacePath,
-                    now + LOCAL_BOT_GRANT_LIFETIME_MILLISECONDS,
-                    saved.local_grant_id,
-                    saved.revocation_epoch,
-                    saved.agent_identity_digest,
-                    saved.workspace_identity_digest,
-                    botId,
-                );
-            if (result.changes !== 1) {
-                throw new LocalBotAuthorizationError(
-                    "binding_not_approved",
-                    "The Bot binding changed during approval; run the command again",
-                );
-            }
-            this.#database
-                .prepare(`INSERT INTO audit_events (recorded_at, event, command_id, session_id, details_json)
-                VALUES (?, 'bot_binding_locally_reapproved', ?, '', ?)`)
-                .run(
-                    new Date(now).toISOString(),
-                    saved.binding_id,
-                    JSON.stringify({ botId, bindingId: saved.binding_id, agentRef: saved.agent_ref }),
-                );
-            this.#database.exec("COMMIT");
-        } catch (cause) {
-            this.#database.exec("ROLLBACK");
-            throw cause;
-        }
-        return { bindingId: saved.binding_id, workspacePath, agentRef: saved.agent_ref };
-    };
 
     readonly approve = async (
         request: BotExecutionBindingApprovalRequest,
@@ -453,8 +337,7 @@ export class LocalBotGrantStore {
                   WHERE grants.local_grant_id = ? AND grants.bot_id = ?
                     AND behavior_revision_id = ? AND behavior_digest = ?
                     AND binding_id = ? AND binding_revision = ?
-                    AND agent_ref = ?
-                    AND revoked_at IS NULL AND expires_at > ?`,
+                    AND agent_ref = ?`,
             )
             .get(
                 command.localGrantId,
@@ -464,7 +347,6 @@ export class LocalBotGrantStore {
                 command.bindingId,
                 command.bindingRevision,
                 command.agentId,
-                now,
             );
         if (row === undefined) {
             throw new LocalBotAuthorizationError(
@@ -477,14 +359,14 @@ export class LocalBotGrantStore {
         if (!exactTargets(approvedTargets, requestedTargets)) {
             throw new LocalBotAuthorizationError(
                 "binding_not_approved",
-                "The Bot execution target policy changed after local approval",
+                "The Bot execution target policy differs from its binding",
             );
         }
         const approvedConfigurations = parseSessionConfigurations(rowString(row, "session_configurations_json"));
         if (!exactSessionConfigurations(approvedConfigurations, command.sessionConfigurations)) {
             throw new LocalBotAuthorizationError(
                 "binding_not_approved",
-                "The Bot Agent configuration changed after local approval",
+                "The Bot Agent configuration differs from its binding",
             );
         }
         const agent = catalog.find(command.agentId);
@@ -493,23 +375,35 @@ export class LocalBotGrantStore {
             revalidateExecutable(agent.agentIdentity),
         ]);
         signal.throwIfAborted();
+        if (!adapterUnchanged || !agentUnchanged) {
+            throw new LocalBotAuthorizationError(
+                "binding_incompatible",
+                "The local Agent executable changed while the Runtime is active; restart the Runtime",
+            );
+        }
         const workspaceRef = rowString(row, "workspace_ref");
         const workspacePath = await directories.resolve(bindingAuthorityId, workspaceRef, signal);
         const currentAgentDigest = agentDigest(agent);
-        const currentWorkspaceDigest = await workspaceDigest(workspacePath);
+        const currentWorkspaceDigest = workspaceDigest(workspacePath);
         signal.throwIfAborted();
+        let expiresAt = rowInteger(row, "expires_at");
+        let revocationEpoch = rowInteger(row, "revocation_epoch");
         if (
-            !adapterUnchanged ||
-            !agentUnchanged ||
             currentAgentDigest !== rowString(row, "agent_identity_digest") ||
             currentWorkspaceDigest !== rowString(row, "workspace_identity_digest") ||
-            workspacePath !== rowString(row, "workspace_path")
+            workspacePath !== rowString(row, "workspace_path") ||
+            expiresAt <= now ||
+            rowHasInteger(row, "revoked_at")
         ) {
-            this.revoke(rowString(row, "local_grant_id"), now);
-            throw new LocalBotAuthorizationError(
-                "binding_not_approved",
-                "The Bot execution target changed and requires local approval",
+            const refreshed = this.refreshTarget(
+                rowString(row, "local_grant_id"),
+                currentAgentDigest,
+                currentWorkspaceDigest,
+                workspacePath,
+                now,
             );
+            expiresAt = refreshed.expiresAt;
+            revocationEpoch = refreshed.revocationEpoch;
         }
         if (command.behaviorInstructions.length > 0 && !agent.capabilities.embeddedContextPrompt) {
             throw new LocalBotAuthorizationError(
@@ -530,8 +424,8 @@ export class LocalBotGrantStore {
             workspacePath,
             currentWorkspaceDigest,
             approvedTargets,
-            rowInteger(row, "expires_at"),
-            rowInteger(row, "revocation_epoch"),
+            expiresAt,
+            revocationEpoch,
         );
     };
 
@@ -590,18 +484,84 @@ export class LocalBotGrantStore {
         return {
             agent,
             agentIdentityDigest: agentDigest(agent),
-            workspaceIdentityDigest: await workspaceDigest(workspacePath),
+            workspaceIdentityDigest: workspaceDigest(workspacePath),
             workspacePath,
         };
     };
 
-    private readonly revoke = (localGrantId: string, now: number): void => {
-        this.#database
-            .prepare(
-                `UPDATE local_bot_grants
-                    SET revoked_at = COALESCE(revoked_at, ?), revocation_epoch = revocation_epoch + 1
-                  WHERE local_grant_id = ? AND revoked_at IS NULL`,
-            )
-            .run(now, localGrantId);
+    private readonly refreshTarget = (
+        localGrantId: string,
+        agentIdentityDigest: string,
+        workspaceIdentityDigest: string,
+        workspacePath: string,
+        now: number,
+    ): RefreshedGrantTarget => {
+        const expiresAt = now + LOCAL_BOT_GRANT_LIFETIME_MILLISECONDS;
+        this.#database.exec("BEGIN IMMEDIATE");
+        try {
+            const current = this.#database
+                .prepare("SELECT * FROM local_bot_grants WHERE local_grant_id = ?")
+                .get(localGrantId);
+            if (current === undefined) {
+                throw new LocalBotAuthorizationError("local_grant_invalid", "The local Bot grant is missing");
+            }
+            const currentExpiresAt = rowInteger(current, "expires_at");
+            const currentRevocationEpoch = rowInteger(current, "revocation_epoch");
+            if (
+                agentIdentityDigest === rowString(current, "agent_identity_digest") &&
+                workspaceIdentityDigest === rowString(current, "workspace_identity_digest") &&
+                workspacePath === rowString(current, "workspace_path") &&
+                currentExpiresAt > now &&
+                !rowHasInteger(current, "revoked_at")
+            ) {
+                this.#database.exec("COMMIT");
+                return { expiresAt: currentExpiresAt, revocationEpoch: currentRevocationEpoch };
+            }
+            const result = this.#database
+                .prepare(
+                    `UPDATE local_bot_grants
+                        SET agent_identity_digest = ?, workspace_identity_digest = ?, workspace_path = ?,
+                            expires_at = ?, revoked_at = NULL, revocation_epoch = revocation_epoch + 1
+                      WHERE local_grant_id = ? AND revocation_epoch = ?`,
+                )
+                .run(
+                    agentIdentityDigest,
+                    workspaceIdentityDigest,
+                    workspacePath,
+                    expiresAt,
+                    localGrantId,
+                    currentRevocationEpoch,
+                );
+            if (result.changes !== 1) {
+                throw new LocalBotAuthorizationError(
+                    "local_grant_invalid",
+                    "The local Bot grant target could not be refreshed",
+                );
+            }
+            this.#database
+                .prepare(
+                    `INSERT INTO audit_events (recorded_at, event, command_id, session_id, details_json)
+                     VALUES (?, 'bot_binding_target_refreshed', ?, '', ?)`,
+                )
+                .run(
+                    new Date(now).toISOString(),
+                    rowString(current, "binding_id"),
+                    JSON.stringify({
+                        agentIdentityChanged: agentIdentityDigest !== rowString(current, "agent_identity_digest"),
+                        bindingId: rowString(current, "binding_id"),
+                        botId: rowString(current, "bot_id"),
+                        expired: currentExpiresAt <= now,
+                        revived: rowHasInteger(current, "revoked_at"),
+                        workspaceIdentityChanged:
+                            workspaceIdentityDigest !== rowString(current, "workspace_identity_digest"),
+                        workspacePathChanged: workspacePath !== rowString(current, "workspace_path"),
+                    }),
+                );
+            this.#database.exec("COMMIT");
+            return { expiresAt, revocationEpoch: currentRevocationEpoch + 1 };
+        } catch (cause) {
+            this.#database.exec("ROLLBACK");
+            throw cause;
+        }
     };
 }

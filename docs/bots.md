@@ -43,7 +43,7 @@ Consumers use those revisions with the existing behavior-revision and
 execution-binding endpoints. A requested binding becomes approved only after
 the runtime validates the local agent and working directory. Project bot lists
 include `setupStatus` so clients can distinguish initial setup from pending or
-failed local approval.
+failed Runtime validation.
 
 ### Bot operation trust planes
 
@@ -96,24 +96,9 @@ The main lifecycle values are represented by concrete readonly classes:
 
 Suspending a Bot rejects new turns and new outbound actions. Archiving is
 terminal. A behavior proposal does not replace the current approved behavior
-until its binding has been locally approved.
+until its binding has been validated by the Runtime.
 
 ## Local execution authority
-
-If Chat reports `binding_not_approved` for a previously approved Bot, run this on
-the machine hosting its Runtime:
-
-```sh
-npx --yes @moxt-ai/mobius@latest bot approve --bot <bot-id>
-```
-
-The local command resolves the saved Runtime connection, validates its current
-Agent and workspace, and renews the latest saved binding's local grant in place.
-It preserves the Bot, binding, grant, and conversation IDs and records a local
-audit event. Keep the daemon running and resend the message in the same Chat page.
-The command does not pair a Runtime or create a Bot or conversation. If several
-saved local channels contain this Bot, append `--channel <channel-id>` to select
-the intended Runtime. A Bot with no saved local grant must complete initial setup.
 
 An execution-binding request is untrusted input even when it comes from an
 owner-facing service. The local daemon resolves the registered Agent, canonical
@@ -123,11 +108,14 @@ unattended policy, and approved outbound targets. It then stores a
 the Relay. The grant never leaves the local execution boundary.
 
 Every turn revalidates the Bot, pinned behavior and binding, executable,
-workspace, expiration, and revocation epoch. A changed executable or workspace
-identity revokes the grant and requires local approval again. Local side effects
-outside the approved unattended policy remain pending for an owner-authorized
-path; a connector can observe only sanitized action-required state and cannot
-approve the action.
+workspace, expiration, and revocation epoch. When the same registered Agent and
+workspace selection resolve to a refreshed local identity, the daemon renews the
+grant in place and records `bot_binding_target_refreshed`; the user does not run
+a local approval command. A different Agent, workspace selection, configuration,
+behavior, binding, or delivery policy is rejected and must be changed through the
+owner-facing binding flow. Local side effects outside the approved unattended
+policy remain pending for an owner-authorized path; a connector can observe only
+sanitized action-required state and cannot approve the action.
 
 Several Bots can share one Runtime, Agent executable, or workspace while keeping
 separate Bot identities, grants, execution capabilities, conversations, and
