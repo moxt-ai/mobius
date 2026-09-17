@@ -1,8 +1,12 @@
+import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
+import { platformProjectAuthorization } from "@moxt-ai/mobius-relay-core/schema";
+import { and, eq, gt, isNull } from "drizzle-orm";
 import * as v from "valibot";
 import { type SessionAccessRecord, sessionAccessRecordSchema } from "../entity/session-access-record.ts";
+import { platformAuditEvent, sessionAccessCredential } from "../schema/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
-import { type PlatformDatabaseResolver, projectDatabase } from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectSqlDatabase } from "./platform-database-resolver.ts";
 import { PlatformProjectAuthorizationStorage } from "./platform-project-authorization-storage.ts";
 
 export class SessionAccessStorage {
@@ -17,36 +21,48 @@ export class SessionAccessStorage {
 
     readonly insert = async (row: SessionAccessRecord, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
-        const database = projectDatabase(this.databases, row.project_id);
+        const database = relayDrizzle(projectSqlDatabase(this.databases, row.project_id), signal);
+        const [project] = await waitForD1(
+            () =>
+                database
+                    .select({
+                        tenantId: platformProjectAuthorization.tenantId,
+                        appId: platformProjectAuthorization.appId,
+                    })
+                    .from(platformProjectAuthorization)
+                    .where(eq(platformProjectAuthorization.projectId, row.project_id))
+                    .limit(1),
+            signal,
+        );
+        if (project === undefined) {
+            return;
+        }
         await waitForD1(
             () =>
                 database.batch([
-                    database
-                        .prepare(`INSERT INTO session_access_credentials
-            (credential_id, secret_digest, project_id, session_id, parent_credential_id, parent_revision, expires_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)`)
-                        .bind(
-                            row.credential_id,
-                            row.secret_digest,
-                            row.project_id,
-                            row.session_id,
-                            row.parent_credential_id,
-                            row.parent_revision,
-                            row.expires_at,
-                        ),
-                    database
-                        .prepare(`INSERT INTO platform_audit_events
-                (audit_id, tenant_id, app_id, project_id, actor_kind, actor_id, actor_ref, action, subject_id, outcome, details_json, recorded_at)
-                SELECT ?, p.tenant_id, p.app_id, p.project_id, 'application', ?, '', 'session_access.issued', ?, 'succeeded', ?, ?
-                FROM platform_project_authorizations p WHERE p.project_id = ?`)
-                        .bind(
-                            `saa_${row.credential_id}`,
-                            row.parent_credential_id,
-                            row.session_id,
-                            JSON.stringify({ credentialId: row.credential_id, expiresAt: row.expires_at }),
-                            Date.now(),
-                            row.project_id,
-                        ),
+                    database.insert(sessionAccessCredential).values({
+                        credentialId: row.credential_id,
+                        secretDigest: row.secret_digest,
+                        projectId: row.project_id,
+                        sessionId: row.session_id,
+                        parentCredentialId: row.parent_credential_id,
+                        parentRevision: row.parent_revision,
+                        expiresAt: row.expires_at,
+                    }),
+                    database.insert(platformAuditEvent).values({
+                        auditId: `saa_${row.credential_id}`,
+                        tenantId: project.tenantId,
+                        appId: project.appId,
+                        projectId: row.project_id,
+                        actorKind: "application",
+                        actorId: row.parent_credential_id,
+                        actorRef: "",
+                        action: "session_access.issued",
+                        subjectId: row.session_id,
+                        outcome: "succeeded",
+                        detailsJson: JSON.stringify({ credentialId: row.credential_id, expiresAt: row.expires_at }),
+                        recordedAt: Date.now(),
+                    }),
                 ]),
             signal,
         );
@@ -62,13 +78,28 @@ export class SessionAccessStorage {
         signal.throwIfAborted();
         const value: unknown = await waitForD1(
             () =>
-                projectDatabase(this.databases, projectId)
-                    .prepare(`SELECT s.* FROM session_access_credentials s
-            WHERE s.credential_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
-              AND s.project_id = ?
-            `)
-                    .bind(id, now, projectId)
-                    .first(),
+                relayDrizzle(projectSqlDatabase(this.databases, projectId), signal)
+                    .select({
+                        credential_id: sessionAccessCredential.credentialId,
+                        secret_digest: sessionAccessCredential.secretDigest,
+                        project_id: sessionAccessCredential.projectId,
+                        session_id: sessionAccessCredential.sessionId,
+                        parent_credential_id: sessionAccessCredential.parentCredentialId,
+                        parent_revision: sessionAccessCredential.parentRevision,
+                        expires_at: sessionAccessCredential.expiresAt,
+                        revoked_at: sessionAccessCredential.revokedAt,
+                    })
+                    .from(sessionAccessCredential)
+                    .where(
+                        and(
+                            eq(sessionAccessCredential.credentialId, id),
+                            isNull(sessionAccessCredential.revokedAt),
+                            gt(sessionAccessCredential.expiresAt, now),
+                            eq(sessionAccessCredential.projectId, projectId),
+                        ),
+                    )
+                    .limit(1)
+                    .then((rows) => rows[0] ?? null),
             signal,
         );
         signal.throwIfAborted();

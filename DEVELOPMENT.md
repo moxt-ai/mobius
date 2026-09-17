@@ -112,6 +112,15 @@ shard. The SDK requires `projectId` and includes it directly in resource request
 paths, including SSE reconnects and artifacts. Session lookup uses the Project ID
 in its URL path. Neither credential type discovers its Project by scanning shards.
 
+Current SQLite table definitions are mirrored as Drizzle schemas under each owning
+package's `src/schema` directory. Keep one table per module and preserve deployed
+column names, indexes, defaults, enum typing, and checks. Migrations remain the
+deployment source; schemas must not declare foreign keys because Project storage
+is distributed across independently owned database boundaries. Storage adapters
+use Drizzle's schema-backed query builder rather than tagged or raw SQL wrappers;
+retain a direct SQL operation only when the query builder cannot preserve an
+existing atomic database invariant.
+
 All Project-scoped endpoints share that prefix, including
 `conversations/:conversationId/access-credentials`,
 `conversation-access-credentials/:credentialId/rotate` and `/revoke`, and

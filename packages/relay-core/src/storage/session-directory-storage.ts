@@ -1,6 +1,9 @@
+import { and, desc, eq, lt, ne, or } from "drizzle-orm";
 import type { ProjectScope, SessionQuotaPolicy, SessionSummary } from "../entity/do/session.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
+import { sessionDirectory, sessionQuotaReservation } from "../schema/index.ts";
 
 interface DirectoryRow {
     readonly session_id: string;
@@ -16,15 +19,12 @@ export class SessionDirectoryStorage {
     }
 
     readonly listReady = async (project: ProjectStorageContext, scope: ProjectScope, signal: AbortSignal) => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        return (
-            await database
-                .prepare(`SELECT session_id FROM session_directory
-            WHERE project_id = ? AND lifecycle = 'ready'
-            ORDER BY updated_at DESC, session_id DESC LIMIT 500`)
-                .bind(scope.projectId)
-                .all<{ readonly session_id: string }>(signal)
-        ).results;
+        return relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .select({ session_id: sessionDirectory.sessionId })
+            .from(sessionDirectory)
+            .where(and(eq(sessionDirectory.projectId, scope.projectId), eq(sessionDirectory.lifecycle, "ready")))
+            .orderBy(desc(sessionDirectory.updatedAt), desc(sessionDirectory.sessionId))
+            .limit(500);
     };
 
     readonly listRuntime = async (
@@ -33,14 +33,17 @@ export class SessionDirectoryStorage {
         runtimeId: string,
         signal: AbortSignal,
     ) => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        return (
-            await database
-                .prepare(`SELECT session_id FROM session_directory
-            WHERE project_id = ? AND runtime_id = ? AND lifecycle = 'ready' LIMIT 500`)
-                .bind(scope.projectId, runtimeId)
-                .all<{ readonly session_id: string }>(signal)
-        ).results;
+        return relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .select({ session_id: sessionDirectory.sessionId })
+            .from(sessionDirectory)
+            .where(
+                and(
+                    eq(sessionDirectory.projectId, scope.projectId),
+                    eq(sessionDirectory.runtimeId, runtimeId),
+                    eq(sessionDirectory.lifecycle, "ready"),
+                ),
+            )
+            .limit(500);
     };
 
     readonly list = async (
@@ -50,21 +53,31 @@ export class SessionDirectoryStorage {
         limit: number,
         signal: AbortSignal,
     ) => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        const statement =
+        const database = relayDrizzle(this.#databases.resolve(project.storagePlacement), signal);
+        const condition =
             cursor === null
-                ? database
-                      .prepare(`SELECT session_id, summary_json, updated_at FROM session_directory
-                WHERE project_id = ? AND lifecycle <> 'deleted'
-                ORDER BY updated_at DESC, session_id DESC LIMIT ?`)
-                      .bind(scope.projectId, limit)
-                : database
-                      .prepare(`SELECT session_id, summary_json, updated_at FROM session_directory
-                WHERE project_id = ? AND lifecycle <> 'deleted'
-                AND (updated_at < ? OR (updated_at = ? AND session_id < ?))
-                ORDER BY updated_at DESC, session_id DESC LIMIT ?`)
-                      .bind(scope.projectId, cursor.updatedAt, cursor.updatedAt, cursor.sessionId, limit);
-        return (await statement.all<DirectoryRow>(signal)).results;
+                ? and(eq(sessionDirectory.projectId, scope.projectId), ne(sessionDirectory.lifecycle, "deleted"))
+                : and(
+                      eq(sessionDirectory.projectId, scope.projectId),
+                      ne(sessionDirectory.lifecycle, "deleted"),
+                      or(
+                          lt(sessionDirectory.updatedAt, cursor.updatedAt),
+                          and(
+                              eq(sessionDirectory.updatedAt, cursor.updatedAt),
+                              lt(sessionDirectory.sessionId, cursor.sessionId),
+                          ),
+                      ),
+                  );
+        return database
+            .select({
+                session_id: sessionDirectory.sessionId,
+                summary_json: sessionDirectory.summaryJson,
+                updated_at: sessionDirectory.updatedAt,
+            })
+            .from(sessionDirectory)
+            .where(condition)
+            .orderBy(desc(sessionDirectory.updatedAt), desc(sessionDirectory.sessionId))
+            .limit(limit) satisfies Promise<readonly DirectoryRow[]>;
     };
 
     readonly reserve = async (
@@ -84,12 +97,17 @@ export class SessionDirectoryStorage {
         ON CONFLICT(project_id, session_id) DO NOTHING`)
             .bind(scope.projectId, sessionId, now, scope.projectId, quota.activeSessionsPerProject)
             .run(signal);
-        const reservation = await database
-            .prepare(`SELECT session_id FROM session_quota_reservations
-            WHERE project_id = ? AND session_id = ?`)
-            .bind(scope.projectId, sessionId)
-            .first<{ readonly session_id: string }>(signal);
-        return { changes: result.meta.changes, reservation };
+        const [reservation] = await relayDrizzle(database, signal)
+            .select({ session_id: sessionQuotaReservation.sessionId })
+            .from(sessionQuotaReservation)
+            .where(
+                and(
+                    eq(sessionQuotaReservation.projectId, scope.projectId),
+                    eq(sessionQuotaReservation.sessionId, sessionId),
+                ),
+            )
+            .limit(1);
+        return { changes: result.meta.changes, reservation: reservation ?? null };
     };
 
     readonly release = async (
@@ -98,12 +116,14 @@ export class SessionDirectoryStorage {
         sessionId: string,
         signal: AbortSignal,
     ) => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        await database
-            .prepare(`DELETE FROM session_quota_reservations
-            WHERE project_id = ? AND session_id = ?`)
-            .bind(scope.projectId, sessionId)
-            .run(signal);
+        await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .delete(sessionQuotaReservation)
+            .where(
+                and(
+                    eq(sessionQuotaReservation.projectId, scope.projectId),
+                    eq(sessionQuotaReservation.sessionId, sessionId),
+                ),
+            );
     };
 
     readonly read = async (
@@ -112,12 +132,12 @@ export class SessionDirectoryStorage {
         sessionId: string,
         signal: AbortSignal,
     ) => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        return database
-            .prepare(`SELECT summary_json FROM session_directory
-            WHERE project_id = ? AND session_id = ?`)
-            .bind(scope.projectId, sessionId)
-            .first<{ readonly summary_json: string }>(signal);
+        const [row] = await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .select({ summary_json: sessionDirectory.summaryJson })
+            .from(sessionDirectory)
+            .where(and(eq(sessionDirectory.projectId, scope.projectId), eq(sessionDirectory.sessionId, sessionId)))
+            .limit(1);
+        return row ?? null;
     };
 
     readonly update = async (
@@ -125,22 +145,24 @@ export class SessionDirectoryStorage {
         summary: SessionSummary,
         signal: AbortSignal,
     ): Promise<void> => {
-        const database = this.#databases.resolve(project.storagePlacement);
-        await database
-            .prepare(`INSERT INTO session_directory (
-            project_id, session_id, runtime_id, lifecycle, updated_at, summary_json
-        ) VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project_id, session_id) DO UPDATE SET
-            runtime_id = excluded.runtime_id, lifecycle = excluded.lifecycle,
-            updated_at = excluded.updated_at, summary_json = excluded.summary_json`)
-            .bind(
-                summary.projectId,
-                summary.sessionId,
-                summary.runtimeId,
-                summary.lifecycle.kind,
-                Date.parse(summary.updatedAt),
-                JSON.stringify(summary),
-            )
-            .run(signal);
+        await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
+            .insert(sessionDirectory)
+            .values({
+                projectId: summary.projectId,
+                sessionId: summary.sessionId,
+                runtimeId: summary.runtimeId,
+                lifecycle: summary.lifecycle.kind,
+                updatedAt: Date.parse(summary.updatedAt),
+                summaryJson: JSON.stringify(summary),
+            })
+            .onConflictDoUpdate({
+                target: [sessionDirectory.projectId, sessionDirectory.sessionId],
+                set: {
+                    runtimeId: summary.runtimeId,
+                    lifecycle: summary.lifecycle.kind,
+                    updatedAt: Date.parse(summary.updatedAt),
+                    summaryJson: JSON.stringify(summary),
+                },
+            });
     };
 }

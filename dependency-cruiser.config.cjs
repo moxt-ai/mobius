@@ -3,7 +3,7 @@ module.exports = {
         {
             name: "storage-does-not-depend-on-upper-layers",
             severity: "error",
-            from: { path: "^packages/[^/]+/src/(storage|entity|infra)/" },
+            from: { path: "^packages/[^/]+/src/(schema|storage|entity|infra)/" },
             to: { path: "^packages/[^/]+/src/(service|http|di|composition|gateway|durable-objects)/", reachable: true },
         },
         {

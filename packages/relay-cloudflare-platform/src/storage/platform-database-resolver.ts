@@ -20,7 +20,7 @@ interface PlatformProjectDatabaseResult<Row = unknown> {
     readonly meta: { readonly changes: number };
 }
 
-export interface PlatformProjectPreparedStatement {
+interface PlatformProjectPreparedStatement {
     readonly bind: (...values: readonly unknown[]) => PlatformProjectPreparedStatement;
     readonly first: <Row = Record<string, unknown>>() => Promise<Row | null>;
     readonly all: <Row = Record<string, unknown>>() => Promise<PlatformProjectDatabaseResult<Row>>;
@@ -167,4 +167,15 @@ export class PlatformDatabaseResolver implements ProjectDatabaseBindings {
 
 export function projectDatabase(databases: PlatformDatabaseResolver, projectId: string): PlatformProjectDatabase {
     return databases.project(projectId);
+}
+
+export function projectSqlDatabase(databases: PlatformDatabaseResolver, projectId: string): SqlDatabase {
+    const placement = decodePlatformProjectPlacement(projectId);
+    if (placement === null) {
+        throw new PairingDirectoryError("directory_unavailable", "Project storage is unavailable");
+    }
+    return databases.resolve({
+        hasShard: true,
+        shard: { d1ShardId: projectId, r2BucketId: projectBucketLocation(placement.locationHint), revision: 1 },
+    });
 }

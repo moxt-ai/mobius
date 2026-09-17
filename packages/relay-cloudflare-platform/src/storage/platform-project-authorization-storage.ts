@@ -1,11 +1,9 @@
-import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
+import { DatabaseError, relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
+import { platformProjectAppRevocation, platformProjectAuthorization } from "@moxt-ai/mobius-relay-core/schema";
+import { eq } from "drizzle-orm";
 import { type PlatformProjectScopeRow, PlatformProjectScopeRowSchema } from "../entity/platform-records.ts";
 import { decodeOptionalStorageRecord } from "./decode-storage-record.ts";
-import {
-    type PlatformDatabaseResolver,
-    type PlatformProjectDatabase,
-    projectDatabase,
-} from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectSqlDatabase } from "./platform-database-resolver.ts";
 
 export class PlatformProjectAuthorizationStorage {
     readonly #databases: PlatformDatabaseResolver;
@@ -15,36 +13,54 @@ export class PlatformProjectAuthorizationStorage {
     }
 
     readonly read = async (projectId: string, signal: AbortSignal): Promise<PlatformProjectScopeRow | null> => {
-        const database = this.database(projectId);
-        const row = await this.operation(
+        const database = relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal);
+        const projects = await this.operation(
             () =>
                 database
-                    .prepare(
-                        `SELECT project_id, app_id, tenant_id,
-                                CASE WHEN EXISTS (
-                                    SELECT 1 FROM platform_project_app_revocations
-                                     WHERE app_id = projects.app_id
-                                ) THEN 'deleted' ELSE lifecycle END AS lifecycle
-                           FROM platform_project_authorizations AS projects WHERE project_id = ?`,
-                    )
-                    .bind(projectId)
-                    .first(),
+                    .select({
+                        project_id: platformProjectAuthorization.projectId,
+                        app_id: platformProjectAuthorization.appId,
+                        tenant_id: platformProjectAuthorization.tenantId,
+                        lifecycle: platformProjectAuthorization.lifecycle,
+                    })
+                    .from(platformProjectAuthorization)
+                    .where(eq(platformProjectAuthorization.projectId, projectId))
+                    .limit(1),
             signal,
         );
-        return decodeOptionalStorageRecord(PlatformProjectScopeRowSchema, row);
+        const project = projects[0];
+        if (project === undefined) {
+            return null;
+        }
+        const revocations = await this.operation(
+            () =>
+                database
+                    .select({ app_id: platformProjectAppRevocation.appId })
+                    .from(platformProjectAppRevocation)
+                    .where(eq(platformProjectAppRevocation.appId, project.app_id))
+                    .limit(1),
+            signal,
+        );
+        const revoked = revocations.length > 0;
+        return decodeOptionalStorageRecord(PlatformProjectScopeRowSchema, {
+            ...project,
+            lifecycle: revoked ? "deleted" : project.lifecycle,
+        });
     };
 
     readonly create = async (project: PlatformProjectScopeRow, signal: AbortSignal): Promise<void> => {
-        const database = this.database(project.project_id);
+        const database = relayDrizzle(projectSqlDatabase(this.#databases, project.project_id), signal);
         await this.operation(
             () =>
                 database
-                    .prepare(
-                        `INSERT INTO platform_project_authorizations (project_id, app_id, tenant_id, lifecycle)
-                         VALUES (?, ?, ?, ?) ON CONFLICT(project_id) DO NOTHING`,
-                    )
-                    .bind(project.project_id, project.app_id, project.tenant_id, project.lifecycle)
-                    .run(),
+                    .insert(platformProjectAuthorization)
+                    .values({
+                        projectId: project.project_id,
+                        appId: project.app_id,
+                        tenantId: project.tenant_id,
+                        lifecycle: project.lifecycle,
+                    })
+                    .onConflictDoNothing({ target: platformProjectAuthorization.projectId }),
             signal,
         );
         const stored = await this.read(project.project_id, signal);
@@ -55,23 +71,17 @@ export class PlatformProjectAuthorizationStorage {
 
     readonly revokeApp = async (appId: string, projectIds: readonly string[], signal: AbortSignal): Promise<void> => {
         for (const projectId of projectIds) {
-            const database = this.database(projectId);
+            const database = relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal);
             await this.operation(
                 () =>
                     database
-                        .prepare(
-                            `INSERT INTO platform_project_app_revocations (app_id)
-                             VALUES (?) ON CONFLICT(app_id) DO NOTHING`,
-                        )
-                        .bind(appId)
-                        .run(),
+                        .insert(platformProjectAppRevocation)
+                        .values({ appId })
+                        .onConflictDoNothing({ target: platformProjectAppRevocation.appId }),
                 signal,
             );
         }
     };
-
-    private readonly database = (projectId: string): PlatformProjectDatabase =>
-        projectDatabase(this.#databases, projectId);
 
     private readonly operation = async <Value>(
         operation: () => Promise<Value>,

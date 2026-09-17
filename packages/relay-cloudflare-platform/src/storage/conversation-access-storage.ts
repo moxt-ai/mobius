@@ -1,3 +1,6 @@
+import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
+import { bot, botConversation } from "@moxt-ai/mobius-relay-core/schema";
+import { and, desc, eq, gt, isNull, lt, or } from "drizzle-orm";
 import * as v from "valibot";
 import type {
     ConversationCredentialInsert,
@@ -11,15 +14,12 @@ import {
     ConversationDirectoryRowSchema,
     ConversationMessageRowSchema,
 } from "../entity/conversation-records.ts";
+import { conversationAccessCredential, platformConversationMessage } from "../schema/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
-import {
-    type PlatformDatabaseResolver,
-    type PlatformProjectDatabase,
-    type PlatformProjectPreparedStatement,
-    projectDatabase,
-} from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectSqlDatabase } from "./platform-database-resolver.ts";
+import { platformDrizzle } from "./platform-drizzle-database.ts";
 import { PlatformProjectAuthorizationStorage } from "./platform-project-authorization-storage.ts";
 
 const storedCredentialSchema = v.omit(ConversationCredentialRowSchema, [
@@ -31,6 +31,41 @@ const storedCredentialSchema = v.omit(ConversationCredentialRowSchema, [
     "project_lifecycle",
     "tenant_lifecycle",
 ]);
+
+const credentialSelection = {
+    credential_id: conversationAccessCredential.credentialId,
+    public_credential_id: conversationAccessCredential.publicCredentialId,
+    parent_credential_id: conversationAccessCredential.parentCredentialId,
+    parent_credential_revision: conversationAccessCredential.parentCredentialRevision,
+    tenant_id: conversationAccessCredential.tenantId,
+    app_id: conversationAccessCredential.appId,
+    project_id: conversationAccessCredential.projectId,
+    conversation_id: conversationAccessCredential.conversationId,
+    session_id: conversationAccessCredential.sessionId,
+    actor_ref: conversationAccessCredential.actorRef,
+    permissions_json: conversationAccessCredential.permissionsJson,
+    secret_digest: conversationAccessCredential.secretDigest,
+    issued_at: conversationAccessCredential.issuedAt,
+    expires_at: conversationAccessCredential.expiresAt,
+    last_used_at: conversationAccessCredential.lastUsedAt,
+    revoked_at: conversationAccessCredential.revokedAt,
+};
+
+const messageSelection = {
+    message_id: platformConversationMessage.messageId,
+    credential_id: platformConversationMessage.credentialId,
+    project_id: platformConversationMessage.projectId,
+    conversation_id: platformConversationMessage.conversationId,
+    session_id: platformConversationMessage.sessionId,
+    actor_ref: platformConversationMessage.actorRef,
+    idempotency_key: platformConversationMessage.idempotencyKey,
+    request_digest: platformConversationMessage.requestDigest,
+    content: platformConversationMessage.content,
+    images_json: platformConversationMessage.imagesJson,
+    resources_json: platformConversationMessage.resourcesJson,
+    artifact_ids_json: platformConversationMessage.artifactIdsJson,
+    created_at: platformConversationMessage.createdAt,
+};
 
 export class ConversationAccessStorage {
     readonly #platformDatabase: D1Database;
@@ -52,21 +87,29 @@ export class ConversationAccessStorage {
     ): Promise<ConversationDirectoryRow | null> => {
         return decodeOptionalStorageRecord(
             ConversationDirectoryRowSchema,
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(
-                            `SELECT conversations.conversation_id, conversations.session_id,
-                                 bots.project_id
-                           FROM bot_conversations AS conversations
-                            JOIN bots ON bots.bot_id = conversations.bot_id
-                          WHERE conversations.conversation_id = ? AND conversations.lifecycle = 'active'
-                             AND bots.lifecycle = 'active' AND bots.project_id = ?`,
-                        )
-                        .bind(conversationId, projectId)
-                        .first(),
-                signal,
-            ),
+            (
+                await waitForD1(
+                    () =>
+                        relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
+                            .select({
+                                conversation_id: botConversation.conversationId,
+                                session_id: botConversation.sessionId,
+                                project_id: bot.projectId,
+                            })
+                            .from(botConversation)
+                            .innerJoin(bot, eq(bot.botId, botConversation.botId))
+                            .where(
+                                and(
+                                    eq(botConversation.conversationId, conversationId),
+                                    eq(botConversation.lifecycle, "active"),
+                                    eq(bot.lifecycle, "active"),
+                                    eq(bot.projectId, projectId),
+                                ),
+                            )
+                            .limit(1),
+                    signal,
+                )
+            )[0] ?? null,
         );
     };
 
@@ -74,9 +117,15 @@ export class ConversationAccessStorage {
         credential: ConversationCredentialInsert,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        const database = projectDatabase(this.#databases, credential.projectId);
-        const result = await waitForD1(() => this.credentialInsertStatement(database, credential).run(), signal);
-        return result.meta.changes === 1;
+        const result = await waitForD1(
+            () =>
+                relayDrizzle(projectSqlDatabase(this.#databases, credential.projectId), signal)
+                    .insert(conversationAccessCredential)
+                    .values(this.credentialValues(credential))
+                    .returning({ credentialId: conversationAccessCredential.credentialId }),
+            signal,
+        );
+        return result.length === 1;
     };
 
     readonly rotateCredential = async (
@@ -85,20 +134,43 @@ export class ConversationAccessStorage {
         revokedAt: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        const database = projectDatabase(this.#databases, credential.projectId);
+        const database = relayDrizzle(projectSqlDatabase(this.#databases, credential.projectId), signal);
+        const source = await waitForD1(
+            () =>
+                database
+                    .select({ credentialId: conversationAccessCredential.credentialId })
+                    .from(conversationAccessCredential)
+                    .where(
+                        and(
+                            eq(conversationAccessCredential.credentialId, sourceCredentialId),
+                            eq(conversationAccessCredential.projectId, credential.projectId),
+                            isNull(conversationAccessCredential.revokedAt),
+                        ),
+                    )
+                    .limit(1),
+            signal,
+        );
+        if (source.length !== 1) {
+            return false;
+        }
         const results = await waitForD1(
             () =>
                 database.batch([
-                    this.credentialInsertStatement(database, credential),
+                    database.insert(conversationAccessCredential).values(this.credentialValues(credential)),
                     database
-                        .prepare(
-                            "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
-                        )
-                        .bind(revokedAt, sourceCredentialId, credential.projectId),
+                        .update(conversationAccessCredential)
+                        .set({ revokedAt })
+                        .where(
+                            and(
+                                eq(conversationAccessCredential.credentialId, sourceCredentialId),
+                                eq(conversationAccessCredential.projectId, credential.projectId),
+                                isNull(conversationAccessCredential.revokedAt),
+                            ),
+                        ),
                 ]),
             signal,
         );
-        return results.every((result) => result.meta.changes === 1);
+        return results.length === 2;
     };
 
     readonly revokeCredential = async (
@@ -109,15 +181,20 @@ export class ConversationAccessStorage {
     ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                projectDatabase(this.#databases, projectId)
-                    .prepare(
-                        "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
+                relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
+                    .update(conversationAccessCredential)
+                    .set({ revokedAt })
+                    .where(
+                        and(
+                            eq(conversationAccessCredential.credentialId, credentialId),
+                            eq(conversationAccessCredential.projectId, projectId),
+                            isNull(conversationAccessCredential.revokedAt),
+                        ),
                     )
-                    .bind(revokedAt, credentialId, projectId)
-                    .run(),
+                    .returning({ credentialId: conversationAccessCredential.credentialId }),
             signal,
         );
-        return result.meta.changes === 1;
+        return result.length === 1;
     };
 
     readonly readCredentialByPublicId = async (
@@ -142,14 +219,27 @@ export class ConversationAccessStorage {
     ): Promise<ConversationCredentialRow | null> => {
         const row = decodeOptionalStorageRecord(
             storedCredentialSchema,
-            await waitForD1(
-                () =>
-                    projectDatabase(this.#databases, projectId)
-                        .prepare(`SELECT * FROM conversation_access_credentials WHERE project_id = ? AND ${column} = ?`)
-                        .bind(projectId, id)
-                        .first(),
-                signal,
-            ),
+            (
+                await waitForD1(
+                    () =>
+                        relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
+                            .select(credentialSelection)
+                            .from(conversationAccessCredential)
+                            .where(
+                                and(
+                                    eq(conversationAccessCredential.projectId, projectId),
+                                    eq(
+                                        column === "credential_id"
+                                            ? conversationAccessCredential.credentialId
+                                            : conversationAccessCredential.publicCredentialId,
+                                        id,
+                                    ),
+                                ),
+                            )
+                            .limit(1),
+                    signal,
+                )
+            )[0] ?? null,
         );
         if (row === null) {
             return null;
@@ -188,48 +278,48 @@ export class ConversationAccessStorage {
     ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                projectDatabase(this.#databases, projectId)
-                    .prepare(
-                        `UPDATE conversation_access_credentials SET last_used_at = ?
-                          WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL AND expires_at > ?`,
+                relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
+                    .update(conversationAccessCredential)
+                    .set({ lastUsedAt: now })
+                    .where(
+                        and(
+                            eq(conversationAccessCredential.credentialId, credentialId),
+                            eq(conversationAccessCredential.projectId, projectId),
+                            isNull(conversationAccessCredential.revokedAt),
+                            gt(conversationAccessCredential.expiresAt, now),
+                        ),
                     )
-                    .bind(now, credentialId, projectId, now)
-                    .run(),
+                    .returning({ credentialId: conversationAccessCredential.credentialId }),
             signal,
         );
-        return result.meta.changes === 1;
+        return result.length === 1;
     };
 
     readonly insertMessage = async (message: ConversationMessageInsert, signal: AbortSignal): Promise<number> => {
         const result = await waitForD1(
             () =>
-                this.#platformDatabase
-                    .prepare(
-                        `INSERT OR IGNORE INTO platform_conversation_messages (
-                           message_id, credential_id, project_id, conversation_id, session_id,
-                           actor_ref, idempotency_key, request_digest, content, images_json,
-                           resources_json, artifact_ids_json, created_at
-                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                    )
-                    .bind(
-                        message.messageId,
-                        message.credentialId,
-                        message.projectId,
-                        message.conversationId,
-                        message.sessionId,
-                        message.actorRef,
-                        message.idempotencyKey,
-                        message.requestDigest,
-                        message.content,
-                        message.imagesJson,
-                        message.resourcesJson,
-                        message.artifactIdsJson,
-                        message.createdAt,
-                    )
-                    .run(),
+                platformDrizzle(this.#platformDatabase)
+                    .insert(platformConversationMessage)
+                    .values({
+                        messageId: message.messageId,
+                        credentialId: message.credentialId,
+                        projectId: message.projectId,
+                        conversationId: message.conversationId,
+                        sessionId: message.sessionId,
+                        actorRef: message.actorRef,
+                        idempotencyKey: message.idempotencyKey,
+                        requestDigest: message.requestDigest,
+                        content: message.content,
+                        imagesJson: message.imagesJson,
+                        resourcesJson: message.resourcesJson,
+                        artifactIdsJson: message.artifactIdsJson,
+                        createdAt: message.createdAt,
+                    })
+                    .onConflictDoNothing()
+                    .returning({ messageId: platformConversationMessage.messageId }),
             signal,
         );
-        return result.meta.changes;
+        return result.length;
     };
 
     readonly readMessageByIdempotencyKey = async (
@@ -242,13 +332,18 @@ export class ConversationAccessStorage {
             ConversationMessageRowSchema,
             await waitForD1(
                 () =>
-                    this.#platformDatabase
-                        .prepare(
-                            `SELECT * FROM platform_conversation_messages
-                          WHERE project_id = ? AND session_id = ? AND idempotency_key = ?`,
+                    platformDrizzle(this.#platformDatabase)
+                        .select(messageSelection)
+                        .from(platformConversationMessage)
+                        .where(
+                            and(
+                                eq(platformConversationMessage.projectId, projectId),
+                                eq(platformConversationMessage.sessionId, sessionId),
+                                eq(platformConversationMessage.idempotencyKey, idempotencyKey),
+                            ),
                         )
-                        .bind(projectId, sessionId, idempotencyKey)
-                        .first(),
+                        .limit(1)
+                        .then((rows) => rows[0] ?? null),
                 signal,
             ),
         );
@@ -265,14 +360,20 @@ export class ConversationAccessStorage {
             ConversationMessageRowSchema,
             await waitForD1(
                 () =>
-                    this.#platformDatabase
-                        .prepare(
-                            `SELECT * FROM platform_conversation_messages
-                          WHERE message_id = ? AND project_id = ? AND conversation_id = ? AND session_id = ?
-                            AND actor_ref = ?`,
+                    platformDrizzle(this.#platformDatabase)
+                        .select(messageSelection)
+                        .from(platformConversationMessage)
+                        .where(
+                            and(
+                                eq(platformConversationMessage.messageId, messageId),
+                                eq(platformConversationMessage.projectId, projectId),
+                                eq(platformConversationMessage.conversationId, conversationId),
+                                eq(platformConversationMessage.sessionId, sessionId),
+                                eq(platformConversationMessage.actorRef, actorRef),
+                            ),
                         )
-                        .bind(messageId, projectId, conversationId, sessionId, actorRef)
-                        .first(),
+                        .limit(1)
+                        .then((rows) => rows[0] ?? null),
                 signal,
             ),
         );
@@ -288,58 +389,47 @@ export class ConversationAccessStorage {
     ): Promise<readonly ConversationMessageRow[]> => {
         const rows = await waitForD1(
             () =>
-                this.#platformDatabase
-                    .prepare(
-                        `SELECT * FROM platform_conversation_messages
-                          WHERE project_id = ? AND conversation_id = ? AND session_id = ?
-                            AND (? IS NULL OR created_at < ? OR (created_at = ? AND message_id < ?))
-                          ORDER BY created_at DESC, message_id DESC
-                          LIMIT ?`,
+                platformDrizzle(this.#platformDatabase)
+                    .select(messageSelection)
+                    .from(platformConversationMessage)
+                    .where(
+                        and(
+                            eq(platformConversationMessage.projectId, projectId),
+                            eq(platformConversationMessage.conversationId, conversationId),
+                            eq(platformConversationMessage.sessionId, sessionId),
+                            cursorCreatedAt === null || cursorMessageId === null
+                                ? undefined
+                                : or(
+                                      lt(platformConversationMessage.createdAt, cursorCreatedAt),
+                                      and(
+                                          eq(platformConversationMessage.createdAt, cursorCreatedAt),
+                                          lt(platformConversationMessage.messageId, cursorMessageId),
+                                      ),
+                                  ),
+                        ),
                     )
-                    .bind(
-                        projectId,
-                        conversationId,
-                        sessionId,
-                        cursorCreatedAt,
-                        cursorCreatedAt,
-                        cursorCreatedAt,
-                        cursorMessageId,
-                        limit,
-                    )
-                    .all(),
+                    .orderBy(desc(platformConversationMessage.createdAt), desc(platformConversationMessage.messageId))
+                    .limit(limit),
             signal,
         );
-        return decodeStorageRecords(ConversationMessageRowSchema, rows.results);
+        return decodeStorageRecords(ConversationMessageRowSchema, rows);
     };
 
-    private readonly credentialInsertStatement = (
-        database: PlatformProjectDatabase,
-        credential: ConversationCredentialInsert,
-    ): PlatformProjectPreparedStatement =>
-        database
-            .prepare(
-                `INSERT INTO conversation_access_credentials (
-                   credential_id, public_credential_id, parent_credential_id,
-                   parent_credential_revision, tenant_id, app_id, project_id,
-                   conversation_id, session_id, actor_ref, permissions_json,
-                   secret_digest, issued_at, expires_at, last_used_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .bind(
-                credential.credentialId,
-                credential.publicCredentialId,
-                credential.parentCredentialId,
-                credential.parentCredentialRevision,
-                credential.tenantId,
-                credential.appId,
-                credential.projectId,
-                credential.conversationId,
-                credential.sessionId,
-                credential.actorRef,
-                credential.permissionsJson,
-                credential.secretDigest,
-                credential.issuedAt,
-                credential.expiresAt,
-                credential.issuedAt,
-            );
+    private readonly credentialValues = (credential: ConversationCredentialInsert) => ({
+        credentialId: credential.credentialId,
+        publicCredentialId: credential.publicCredentialId,
+        parentCredentialId: credential.parentCredentialId,
+        parentCredentialRevision: credential.parentCredentialRevision,
+        tenantId: credential.tenantId,
+        appId: credential.appId,
+        projectId: credential.projectId,
+        conversationId: credential.conversationId,
+        sessionId: credential.sessionId,
+        actorRef: credential.actorRef,
+        permissionsJson: credential.permissionsJson,
+        secretDigest: credential.secretDigest,
+        issuedAt: credential.issuedAt,
+        expiresAt: credential.expiresAt,
+        lastUsedAt: credential.issuedAt,
+    });
 }

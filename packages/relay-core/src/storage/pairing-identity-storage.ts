@@ -1,63 +1,131 @@
+import { and, eq, gt, isNull, or } from "drizzle-orm";
 import { validateIdentifier } from "../entity/pairing/pairing.ts";
 import type { PairingIdentityCredential } from "../entity/pairing/pairing-identity.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
+import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
-import type { SqlDatabase, SqlStatement } from "../infra/sql-database.ts";
+import type { SqlDatabase } from "../infra/sql-database.ts";
+import {
+    channelAccessGrant,
+    channelHostCredential,
+    pairingChannel,
+    projectBrowserCredential,
+    projectOwnerCredential,
+} from "../schema/index.ts";
 
 export interface IdentityDatabaseSource {
     readonly sourceId: string;
     readonly database: SqlDatabase;
 }
 
-function identityStatement(database: SqlDatabase, credential: PairingIdentityCredential): SqlStatement {
+async function identityRows(
+    database: SqlDatabase,
+    credential: PairingIdentityCredential,
+    signal: AbortSignal,
+): Promise<readonly Readonly<Record<string, unknown>>[]> {
+    const orm = relayDrizzle(database, signal);
     switch (credential.kind) {
         case "host":
-            return database
-                .prepare(`SELECT DISTINCT channels.project_id FROM pairing_channels AS channels
-                INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
-                WHERE channels.channel_id = ? AND credentials.token_hash = ?
-                AND credentials.revoked_at IS NULL AND channels.status = 'paired'
-                AND (credentials.replaced_by_credential_id IS NULL OR credentials.overlap_ends_at > ?)`)
-                .bind(validateIdentifier(credential.channelId, "channel_id"), credential.tokenHash, Date.now());
-        case "daemon":
-            return database
-                .prepare(`SELECT project_id FROM pairing_channels
-                WHERE channel_id = ? AND daemon_token_hash = ? AND status = 'paired'`)
-                .bind(validateIdentifier(credential.channelId, "channel_id"), credential.tokenHash);
-        case "project":
-            return database
-                .prepare(`SELECT project_id, NULL AS expires_at, revoked_at FROM project_owner_credentials
-                WHERE project_id = ? AND token_hash = ?
-                 UNION SELECT DISTINCT channels.project_id, NULL AS expires_at, NULL AS revoked_at FROM pairing_channels AS channels
-                INNER JOIN channel_host_credentials AS credentials ON credentials.channel_id = channels.channel_id
-                WHERE channels.project_id = ? AND credentials.token_hash = ?
-                AND credentials.revoked_at IS NULL AND channels.status = 'paired'
-                 UNION SELECT project_id, expires_at, revoked_at FROM project_browser_credentials WHERE project_id = ? AND token_hash = ?`)
-                .bind(
-                    validateIdentifier(credential.projectId, "project_id"),
-                    credential.tokenHash,
-                    credential.projectId,
-                    credential.tokenHash,
-                    credential.projectId,
-                    credential.tokenHash,
+            return orm
+                .selectDistinct({ project_id: pairingChannel.projectId })
+                .from(pairingChannel)
+                .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, pairingChannel.channelId))
+                .where(
+                    and(
+                        eq(pairingChannel.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(channelHostCredential.tokenHash, credential.tokenHash),
+                        isNull(channelHostCredential.revokedAt),
+                        eq(pairingChannel.status, "paired"),
+                        or(
+                            isNull(channelHostCredential.replacedByCredentialId),
+                            gt(channelHostCredential.overlapEndsAt, Date.now()),
+                        ),
+                    ),
                 );
+        case "daemon":
+            return orm
+                .select({ project_id: pairingChannel.projectId })
+                .from(pairingChannel)
+                .where(
+                    and(
+                        eq(pairingChannel.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(pairingChannel.daemonTokenHash, credential.tokenHash),
+                        eq(pairingChannel.status, "paired"),
+                    ),
+                );
+        case "project": {
+            const projectId = validateIdentifier(credential.projectId, "project_id");
+            const [owners, hosts, browsers] = await Promise.all([
+                orm
+                    .select({
+                        project_id: projectOwnerCredential.projectId,
+                        revoked_at: projectOwnerCredential.revokedAt,
+                    })
+                    .from(projectOwnerCredential)
+                    .where(
+                        and(
+                            eq(projectOwnerCredential.projectId, projectId),
+                            eq(projectOwnerCredential.tokenHash, credential.tokenHash),
+                        ),
+                    ),
+                orm
+                    .selectDistinct({ project_id: pairingChannel.projectId })
+                    .from(pairingChannel)
+                    .innerJoin(channelHostCredential, eq(channelHostCredential.channelId, pairingChannel.channelId))
+                    .where(
+                        and(
+                            eq(pairingChannel.projectId, projectId),
+                            eq(channelHostCredential.tokenHash, credential.tokenHash),
+                            isNull(channelHostCredential.revokedAt),
+                            eq(pairingChannel.status, "paired"),
+                        ),
+                    ),
+                orm
+                    .select({
+                        project_id: projectBrowserCredential.projectId,
+                        expires_at: projectBrowserCredential.expiresAt,
+                        revoked_at: projectBrowserCredential.revokedAt,
+                    })
+                    .from(projectBrowserCredential)
+                    .where(
+                        and(
+                            eq(projectBrowserCredential.projectId, projectId),
+                            eq(projectBrowserCredential.tokenHash, credential.tokenHash),
+                        ),
+                    ),
+            ]);
+            return [
+                ...owners.map((row) => ({ ...row, expires_at: null })),
+                ...hosts.map((row) => ({ ...row, expires_at: null, revoked_at: null })),
+                ...browsers,
+            ];
+        }
         case "pairing":
-            return database
-                .prepare("SELECT project_id FROM pairing_channels WHERE pairing_id = ? AND poll_token_hash = ?")
-                .bind(validateIdentifier(credential.pairingId, "pairing_id"), credential.tokenHash);
+            return orm
+                .select({ project_id: pairingChannel.projectId })
+                .from(pairingChannel)
+                .where(
+                    and(
+                        eq(pairingChannel.pairingId, validateIdentifier(credential.pairingId, "pairing_id")),
+                        eq(pairingChannel.pollTokenHash, credential.tokenHash),
+                    ),
+                );
         case "pairing-code":
-            return database
-                .prepare("SELECT project_id FROM pairing_channels WHERE pairing_code_hash = ?")
-                .bind(credential.codeHash);
+            return orm
+                .select({ project_id: pairingChannel.projectId })
+                .from(pairingChannel)
+                .where(eq(pairingChannel.pairingCodeHash, credential.codeHash));
         case "grant":
-            return database
-                .prepare(`SELECT channels.project_id FROM channel_access_grants AS grants
-                INNER JOIN pairing_channels AS channels ON channels.channel_id = grants.channel_id
-                WHERE grants.channel_id = ? AND grants.grant_id = ? AND grants.secret_hash = ?`)
-                .bind(
-                    validateIdentifier(credential.channelId, "channel_id"),
-                    validateIdentifier(credential.grantId, "grant_id"),
-                    credential.secretHash,
+            return orm
+                .select({ project_id: pairingChannel.projectId })
+                .from(channelAccessGrant)
+                .innerJoin(pairingChannel, eq(pairingChannel.channelId, channelAccessGrant.channelId))
+                .where(
+                    and(
+                        eq(channelAccessGrant.channelId, validateIdentifier(credential.channelId, "channel_id")),
+                        eq(channelAccessGrant.grantId, validateIdentifier(credential.grantId, "grant_id")),
+                        eq(channelAccessGrant.secretHash, credential.secretHash),
+                    ),
                 );
     }
 }
@@ -78,10 +146,8 @@ export class PairingIdentityStorage {
     readonly find = async (credential: PairingIdentityCredential, signal: AbortSignal) => {
         const matches: { readonly sourceId: string; readonly row: Readonly<Record<string, unknown>> }[] = [];
         for (const source of this.#sources) {
-            const rows = await identityStatement(source.database, credential).all<Readonly<Record<string, unknown>>>(
-                signal,
-            );
-            for (const row of rows.results) {
+            const rows = await identityRows(source.database, credential, signal);
+            for (const row of rows) {
                 matches.push({ sourceId: source.sourceId, row });
             }
         }
@@ -91,13 +157,16 @@ export class PairingIdentityStorage {
     readonly findRuntime = async (tokenHash: string, signal: AbortSignal) => {
         const matches: { readonly sourceId: string; readonly row: Readonly<Record<string, unknown>> }[] = [];
         for (const source of this.#sources) {
-            const rows = await source.database
-                .prepare(`SELECT project_id, runtime_id, channel_id, pairing_id
-                    FROM pairing_channels
-                    WHERE daemon_token_hash = ? AND status = 'paired'`)
-                .bind(tokenHash)
-                .all<Readonly<Record<string, unknown>>>(signal);
-            for (const row of rows.results) {
+            const rows = await relayDrizzle(source.database, signal)
+                .select({
+                    project_id: pairingChannel.projectId,
+                    runtime_id: pairingChannel.runtimeId,
+                    channel_id: pairingChannel.channelId,
+                    pairing_id: pairingChannel.pairingId,
+                })
+                .from(pairingChannel)
+                .where(and(eq(pairingChannel.daemonTokenHash, tokenHash), eq(pairingChannel.status, "paired")));
+            for (const row of rows) {
                 matches.push({ sourceId: source.sourceId, row });
             }
         }

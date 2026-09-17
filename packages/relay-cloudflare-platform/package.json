@@ -16,6 +16,7 @@
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@moxt-ai/mobius-relay-core": "workspace:*",
+        "drizzle-orm": "^0.45.2",
         "hono": "^4.13.7",
         "valibot": "1.5.0"
     },

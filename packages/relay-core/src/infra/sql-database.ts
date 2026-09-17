@@ -1,4 +1,5 @@
 export type { DoSqlDatabase, DoSqlRow, DoSqlValue } from "./do-sql-database.ts";
+export { type RelayDrizzleDatabase, relayDrizzle } from "./drizzle-database.ts";
 
 export class DatabaseError extends Error {
     readonly code: "database_unavailable" | "database_timeout" | "database_statement_invalid";

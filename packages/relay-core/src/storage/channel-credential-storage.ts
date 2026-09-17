@@ -1,4 +1,7 @@
+import { and, eq, isNull, or } from "drizzle-orm";
+import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../infra/sql-database.ts";
+import { channelHostCredential, pairingChannel, projectOwnerCredential } from "../schema/index.ts";
 
 export interface ChannelCredentialIdentity {
     readonly channelId: string;
@@ -14,29 +17,38 @@ export class ChannelCredentialStorage {
         this.#database = database;
     }
 
-    readonly readActive = (identity: ChannelCredentialIdentity, signal: AbortSignal) =>
-        this.#database
-            .prepare(`SELECT 1 AS active FROM pairing_channels AS channels
-            WHERE channels.channel_id = ? AND channels.runtime_id = ?
-                AND channels.project_id = ? AND channels.status = 'paired'
-                AND (
-                    EXISTS (
-                        SELECT 1 FROM channel_host_credentials AS credentials
-                        WHERE credentials.credential_id = ? AND credentials.channel_id = channels.channel_id
-                            AND credentials.revoked_at IS NULL
-                    )
-                    OR EXISTS (
-                        SELECT 1 FROM project_owner_credentials AS owners
-                        WHERE owners.credential_id = ? AND owners.project_id = channels.project_id
-                            AND owners.revoked_at IS NULL
-                    )
-                )`)
-            .bind(
-                identity.channelId,
-                identity.runtimeId,
-                identity.projectId,
-                identity.credentialId,
-                identity.credentialId,
+    readonly readActive = async (identity: ChannelCredentialIdentity, signal: AbortSignal) => {
+        const database = relayDrizzle(this.#database, signal);
+        const channels = await database
+            .select({ channelId: pairingChannel.channelId })
+            .from(pairingChannel)
+            .where(
+                and(
+                    eq(pairingChannel.channelId, identity.channelId),
+                    eq(pairingChannel.runtimeId, identity.runtimeId),
+                    eq(pairingChannel.projectId, identity.projectId),
+                    eq(pairingChannel.status, "paired"),
+                    or(
+                        database.$count(
+                            channelHostCredential,
+                            and(
+                                eq(channelHostCredential.credentialId, identity.credentialId),
+                                eq(channelHostCredential.channelId, pairingChannel.channelId),
+                                isNull(channelHostCredential.revokedAt),
+                            ),
+                        ),
+                        database.$count(
+                            projectOwnerCredential,
+                            and(
+                                eq(projectOwnerCredential.credentialId, identity.credentialId),
+                                eq(projectOwnerCredential.projectId, pairingChannel.projectId),
+                                isNull(projectOwnerCredential.revokedAt),
+                            ),
+                        ),
+                    ),
+                ),
             )
-            .first<{ readonly active: number }>(signal);
+            .limit(1);
+        return channels.length === 0 ? null : { active: 1 };
+    };
 }
