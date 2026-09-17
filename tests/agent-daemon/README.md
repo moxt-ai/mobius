@@ -58,6 +58,7 @@ tests/agent-daemon/
   cases/
     claude.integration.test.ts
     codex.integration.test.ts
+    copilot.integration.test.ts
     deepseek.integration.test.ts
     gemini.integration.test.ts
     grok.integration.test.ts
@@ -68,6 +69,7 @@ tests/agent-daemon/
   infra/
     claude.ts
     codex.ts
+    copilot.ts
     deepseek.ts
     executable.ts
     gemini.ts
@@ -100,9 +102,10 @@ pnpm build
 MOBIUS_TEST_OPENCODE_PATH=/absolute/path/to/opencode pnpm test:agent-daemon
 ```
 
-The Claude, Codex, DeepSeek Harness, Gemini, Grok Build, Hermes, Pi, and WorkBuddy cases likewise accept
+The Claude, Codex, GitHub Copilot CLI, DeepSeek Harness, Gemini, Grok Build, Hermes, Pi, and WorkBuddy cases likewise accept
 `MOBIUS_TEST_CLAUDE_PATH`, `MOBIUS_TEST_CLAUDE_ACP_PATH`,
 `MOBIUS_TEST_CODEX_PATH`, `MOBIUS_TEST_CODEX_ACP_PATH`,
+`MOBIUS_TEST_COPILOT_PATH`,
 `MOBIUS_TEST_DEEPSEEK_HARNESS_PATH`,
 `MOBIUS_TEST_GROK_BUILD_PATH`,
 `MOBIUS_TEST_HERMES_PATH`,

@@ -13,6 +13,8 @@ describe("agent and daemon test planning", () => {
     });
 
     it("selects one Agent for its case, fixture, or production specification", () => {
+        assert.deepEqual(selected(["tests/agent-daemon/cases/copilot.integration.test.ts"]), ["copilot"]);
+        assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/copilot-cli-agent.ts"]), ["copilot"]);
         assert.deepEqual(selected(["tests/agent-daemon/cases/hermes.integration.test.ts"]), ["hermes"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/gemini-cli-agent.ts"]), ["gemini"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/grok-build-agent.ts"]), ["grok"]);
@@ -22,6 +24,7 @@ describe("agent and daemon test planning", () => {
         assert.deepEqual(selected(["tests/agent-daemon/providers/openai.ts"]), [
             "opencode",
             "codex",
+            "copilot",
             "pi",
             "deepseek",
             "hermes",
@@ -31,7 +34,18 @@ describe("agent and daemon test planning", () => {
     });
 
     it("selects all Agents for shared production and test infrastructure", () => {
-        const all = ["opencode", "codex", "pi", "gemini", "claude", "deepseek", "hermes", "grok", "workbuddy"];
+        const all = [
+            "opencode",
+            "codex",
+            "copilot",
+            "pi",
+            "gemini",
+            "claude",
+            "deepseek",
+            "hermes",
+            "grok",
+            "workbuddy",
+        ];
         assert.deepEqual(selected(["packages/cli/src/acp/session-manager.ts"]), all);
         assert.deepEqual(selected(["tests/agent-daemon/new-shared-helper.ts"]), all);
         assert.deepEqual(selected([".github/actions/setup/action.yml"]), all);
