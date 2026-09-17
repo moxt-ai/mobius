@@ -1,0 +1,4 @@
+{
+    "staging": { "apac": "aws:ap-southeast-1", "wnam": "aws:us-west-2" },
+    "production": { "apac": "aws:ap-southeast-1", "wnam": "aws:us-west-2" }
+}

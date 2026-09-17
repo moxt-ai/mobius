@@ -1,7 +1,7 @@
 {
     "name": "<%% workerName %%>",
     "main": "<%% entrypoint %%>",
-    "placement": { "mode": "smart" },
+    "placement": { "region": "<%% placementRegion %%>" },
     "vars": { "MOBIUS_WORKER_REGION": "<%% projectRegion %%>" },
     "workers_dev": false,
     "preview_urls": false,
