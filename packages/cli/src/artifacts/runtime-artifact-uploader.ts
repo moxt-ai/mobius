@@ -12,6 +12,7 @@ import { fetch, type Response } from "undici";
 import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { DaemonConfig } from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import { runtimeAuthorization } from "../relay-connection/runtime-authentication.ts";
 
 const UPLOAD_TIMEOUT_MILLISECONDS = 20_000;
 
@@ -39,14 +40,6 @@ export class UploadedRuntimeArtifact {
         this.name = name;
         this.sha256 = sha256;
     }
-}
-
-function daemonToken(config: DaemonConfig): string {
-    const token = config.relayUrl.searchParams.get("token");
-    if (token === null || token.length < 32) {
-        throw new RuntimeArtifactUploadError("artifact_endpoint_invalid", "The Relay daemon token is missing");
-    }
-    return token;
 }
 
 function channelOrigin(config: DaemonConfig): URL {
@@ -98,16 +91,19 @@ async function readAuthorization(response: Response): Promise<MobiusArtifactUplo
     }
 }
 
-function sessionArtifactUrl(origin: URL, sessionId: string, resourcePath: string, token: string): URL {
-    const url = new URL(`${origin.pathname}/sessions/${encodeURIComponent(sessionId)}/${resourcePath}`, origin);
-    url.searchParams.set("token", token);
-    return url;
+function sessionArtifactUrl(origin: URL, sessionId: string, resourcePath: string): URL {
+    return new URL(`${origin.pathname}/sessions/${encodeURIComponent(sessionId)}/${resourcePath}`, origin);
 }
 
-async function postLease(url: URL, request: MobiusArtifactUploadRequest, signal: AbortSignal): Promise<Response> {
+async function postLease(
+    url: URL,
+    headers: Readonly<Record<string, string>>,
+    request: MobiusArtifactUploadRequest,
+    signal: AbortSignal,
+): Promise<Response> {
     return await fetch(url, {
         dispatcher: environmentProxyDispatcher,
-        headers: { "content-type": "application/json" },
+        headers: { ...headers, "content-type": "application/json" },
         method: "POST",
         body: JSON.stringify(request),
         signal,
@@ -116,6 +112,7 @@ async function postLease(url: URL, request: MobiusArtifactUploadRequest, signal:
 
 async function putContent(
     url: URL,
+    headers: Readonly<Record<string, string>>,
     authorization: MobiusArtifactUpload,
     bytes: Uint8Array,
     signal: AbortSignal,
@@ -123,6 +120,7 @@ async function putContent(
     return await fetch(url, {
         dispatcher: environmentProxyDispatcher,
         headers: {
+            ...headers,
             "content-type": authorization.mediaType,
             "x-mobius-upload-token": authorization.uploadToken,
         },
@@ -153,11 +151,12 @@ export async function uploadRuntimeArtifact(
     const timeoutSignal = AbortSignal.timeout(UPLOAD_TIMEOUT_MILLISECONDS);
     const requestSignal = AbortSignal.any([signal, timeoutSignal]);
     const origin = channelOrigin(config);
-    const token = daemonToken(config);
+    const headers = runtimeAuthorization(config.relayUrl);
     let created: Response;
     try {
         created = await postLease(
-            sessionArtifactUrl(origin, sessionId, "artifacts/uploads", token),
+            sessionArtifactUrl(origin, sessionId, "artifacts/uploads"),
+            headers,
             request,
             requestSignal,
         );
@@ -179,12 +178,8 @@ export async function uploadRuntimeArtifact(
     let uploaded: Response;
     try {
         uploaded = await putContent(
-            sessionArtifactUrl(
-                origin,
-                sessionId,
-                `artifacts/${encodeURIComponent(authorization.artifactId)}/content`,
-                token,
-            ),
+            sessionArtifactUrl(origin, sessionId, `artifacts/${encodeURIComponent(authorization.artifactId)}/content`),
+            headers,
             authorization,
             artifact.bytes,
             requestSignal,

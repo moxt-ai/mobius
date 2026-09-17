@@ -1484,7 +1484,7 @@ describe.sequential("Cloudflare session deployment", () => {
             const bytes = new TextEncoder().encode("runtime raster");
             const digest = await sha256Hex(bytes);
             const leaseResponse = await app.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/uploads?token=${pairing.claimed.daemonToken}`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/uploads`,
                 {
                     body: JSON.stringify({
                         byteLength: bytes.byteLength,
@@ -1492,7 +1492,10 @@ describe.sequential("Cloudflare session deployment", () => {
                         name: "preview.png",
                         sha256: digest,
                     }),
-                    headers: { "content-type": "application/json" },
+                    headers: {
+                        authorization: `Bearer ${pairing.claimed.daemonToken}`,
+                        "content-type": "application/json",
+                    },
                     method: "POST",
                 },
             );
@@ -1506,10 +1509,11 @@ describe.sequential("Cloudflare session deployment", () => {
                 throw new Error("Expected a runtime upload lease");
             }
             const putResponse = await app.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/${lease["artifactId"]}/content?token=${pairing.claimed.daemonToken}`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${session.sessionId}/artifacts/${lease["artifactId"]}/content`,
                 {
                     body: bytes,
                     headers: {
+                        authorization: `Bearer ${pairing.claimed.daemonToken}`,
                         "content-type": "image/png",
                         "x-mobius-upload-token": lease["uploadToken"],
                     },
@@ -2605,7 +2609,7 @@ describe.sequential("Cloudflare session deployment", () => {
             const command = prompt("media-session", "media-command", "Create media");
             const bytes = new TextEncoder().encode("durable media bytes");
             const leaseResponse = await app.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/uploads?token=${pairing.claimed.daemonToken}`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/uploads`,
                 {
                     body: JSON.stringify({
                         byteLength: bytes.byteLength,
@@ -2613,7 +2617,10 @@ describe.sequential("Cloudflare session deployment", () => {
                         name: "demo.mp4",
                         sha256: await sha256Hex(bytes),
                     }),
-                    headers: { "content-type": "application/json" },
+                    headers: {
+                        authorization: `Bearer ${pairing.claimed.daemonToken}`,
+                        "content-type": "application/json",
+                    },
                     method: "POST",
                 },
             );
@@ -2627,10 +2634,11 @@ describe.sequential("Cloudflare session deployment", () => {
                 throw new Error("Expected a media artifact upload lease");
             }
             const uploadResponse = await app.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/${lease["artifactId"]}/content?token=${pairing.claimed.daemonToken}`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/sessions/${command.sessionId}/artifacts/${lease["artifactId"]}/content`,
                 {
                     body: bytes,
                     headers: {
+                        authorization: `Bearer ${pairing.claimed.daemonToken}`,
                         "content-type": "video/mp4",
                         "x-mobius-upload-token": lease["uploadToken"],
                     },

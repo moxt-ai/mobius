@@ -111,7 +111,7 @@ export function createChannelRoutes() {
                 return context.json(
                     await useCases.createRuntimeArtifactUpload(
                         validateIdentifier(context.req.param("channelId"), "channel_id"),
-                        context.req.query("token") ?? "",
+                        bearerToken(context.req.raw),
                         validateIdentifier(context.req.param("sessionId"), "session_id"),
                         new CreateArtifactUploadRequest(
                             readString(body, "name", 500),
@@ -131,7 +131,7 @@ export function createChannelRoutes() {
             const channelId = validateIdentifier(context.req.param("channelId"), "channel_id");
             const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
             const artifactId = validateIdentifier(context.req.param("artifactId"), "artifact_id");
-            const token = context.req.query("token") ?? "";
+            const token = bearerToken(context.req.raw);
             const now = context.env.gateways.nowEpochMilliseconds();
             const lease = await useCases.authorizeRuntimeArtifactUpload(
                 channelId,
@@ -177,7 +177,7 @@ export function createChannelRoutes() {
             const useCases = context.env.services.channels;
             const content = await useCases.readArtifactContent(
                 validateIdentifier(context.req.param("channelId"), "channel_id"),
-                context.req.query("token") ?? bearerToken(context.req.raw),
+                bearerToken(context.req.raw),
                 validateIdentifier(context.req.param("sessionId"), "session_id"),
                 validateIdentifier(context.req.param("commandId"), "command_id"),
                 validateIdentifier(context.req.param("artifactId"), "artifact_id"),

@@ -6,7 +6,11 @@ import {
     ProjectScope,
     SessionRuntimeError,
 } from "../../entity/do/session.ts";
-import type { AgentDescriptor, InstallableAgentDescriptor } from "../../entity/pairing/pairing.ts";
+import {
+    type AgentDescriptor,
+    type InstallableAgentDescriptor,
+    PairingDirectoryError,
+} from "../../entity/pairing/pairing.ts";
 import type { ChannelGateway, SessionArtifactGateway, SessionQueryGateway } from "../../gateway/index.ts";
 import type { PairingOperations } from "../pairing/pairing-operations.ts";
 export class ChannelService {
@@ -67,6 +71,14 @@ export class ChannelService {
     readonly authorizeRuntime = (token: string, signal: AbortSignal) =>
         this.#pairings.authorizeRuntimeCredential(token, signal);
 
+    private readonly authorizeChannelRuntime = async (channelId: string, token: string, signal: AbortSignal) => {
+        const access = await this.#pairings.authorizeRuntimeCredential(token, signal);
+        if (access.channelId !== channelId) {
+            throw new PairingDirectoryError("unauthorized", "A valid Runtime credential is required");
+        }
+        return access;
+    };
+
     readonly readArtifactContent = async (
         channelId: string,
         token: string,
@@ -75,7 +87,7 @@ export class ChannelService {
         artifactId: string,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
+        const access = await this.authorizeChannelRuntime(channelId, token, signal);
         const scope = new ProjectScope(access.projectId);
         const runtimeId = await this.#sessionQueries.readCommandRuntime(scope, sessionId, commandId, signal);
         if (runtimeId !== access.runtimeId) {
@@ -90,7 +102,7 @@ export class ChannelService {
         sessionId: string,
         signal: AbortSignal,
     ) => {
-        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
+        const access = await this.authorizeChannelRuntime(channelId, token, signal);
         const session = await this.#sessionQueries.readSession(access.scope, sessionId, signal);
         if (session.runtimeId !== access.runtimeId) {
             throw new SessionRuntimeError("session_access_denied", "The Session is bound to another Runtime");
