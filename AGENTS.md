@@ -51,6 +51,7 @@ Make illegal states unrepresentable.
 - Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.
 - Assert externally observable results, not private control flow, collaborator calls, or implementation details.
 - Documentation-only and mechanical refactoring changes do not require new tests when behavior is unchanged.
+- Format pull request titles as Conventional Commits: `<type>(<optional-scope>): <imperative summary>`, omitting the parentheses when no scope is needed (for example, `feat(platform): add project routing` or `chore: update dependencies`).
 
 ## Abstraction
 

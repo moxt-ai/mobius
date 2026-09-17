@@ -98,9 +98,10 @@ export type PlatformPrincipal =
     | { readonly kind: "developer"; readonly identity: VerifiedExternalIdentity };
 
 export interface PlatformProjectPlacement {
-    readonly d1ShardId: string;
-    readonly r2BucketId: string;
+    readonly locationHint: PlatformProjectLocationHint;
 }
+
+export type PlatformProjectLocationHint = "wnam" | "enam" | "sam" | "weur" | "eeur" | "apac" | "oc" | "afr" | "me";
 
 export interface PlatformProjectPlacementRegistry {
     readonly resolveLocationHint: (locationHint: string) => PlatformProjectPlacement | null;

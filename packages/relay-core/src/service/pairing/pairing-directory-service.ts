@@ -293,7 +293,7 @@ export class PairingDirectoryService implements PairingOperations {
             return this.decodeCreatedRuntimePairing(existing, owner, token, normalizedKey, signal);
         }
         const secrets = await deriveRuntimePairingSecrets(token, owner.projectId, normalizedKey);
-        const pairingId = crypto.randomUUID();
+        const pairingId = `${owner.projectId}.${crypto.randomUUID()}`;
         const channelId = `chn_${createRandomToken(18)}`;
         const runtimeId = `rnt_${createRandomToken(18)}`;
         const expiresAt = now + PAIRING_LIFETIME_MILLISECONDS;
@@ -451,7 +451,6 @@ export class PairingDirectoryService implements PairingOperations {
         signal: AbortSignal,
     ): Promise<ClaimedPairing> => {
         signal.throwIfAborted();
-        const daemonToken = createRandomToken(32);
         const now = Date.now();
         const codeHash = await hashSecret(normalizePairingCode(pairingCode));
         const storage = await this.identityStorage({ kind: "pairing-code", codeHash }, signal);
@@ -460,6 +459,7 @@ export class PairingDirectoryService implements PairingOperations {
             throw new PairingDirectoryError("invalid_pairing_code", "The pairing code is invalid or expired");
         }
         if (pairing.status === "pending" && pairing.expires_at > now) {
+            const daemonToken = `${pairing.project_id}_${createRandomToken(32)}`;
             const claimed = await storage.claim(
                 codeHash,
                 await hashSecret(daemonToken),

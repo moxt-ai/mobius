@@ -24,15 +24,16 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
             modules: true,
             script: output.text,
             compatibilityDate: "2026-09-03",
-            d1Databases:
-                profile === "standalone"
-                    ? ["DIRECTORY_DATABASE"]
-                    : ["D1_SHARD_APAC_01", "D1_SHARD_WNAM_01", "PLATFORM_DIRECTORY_DATABASE"],
+            d1Databases: profile === "standalone" ? ["DIRECTORY_DATABASE"] : ["PLATFORM_DIRECTORY_DATABASE"],
             r2Buckets: profile === "standalone" ? [] : ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
             bindings:
                 profile === "standalone"
                     ? { MOBIUS_TENANT_ID: "standalone", PUBLIC_PROJECT_BOOTSTRAP_ENABLED: "true" }
-                    : {},
+                    : {
+                          MOBIUS_PLATFORM_ALLOWED_ORIGINS: "[]",
+                          MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
+                          MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",
+                      },
             durableObjects: {
                 RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
                 SESSION_RELAY: {
@@ -40,6 +41,7 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
                     useSQLite: true,
                 },
                 BOT_CONNECTIONS: { className: "BotConnectionActor", useSQLite: true },
+                ...(profile === "platform" ? { PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true } } : {}),
             },
         }),
     );
@@ -68,15 +70,6 @@ export async function createTestMobiusPlatformBindings() {
     const runtime = await createCloudflareRuntime("platform");
     try {
         const env = await runtime.getBindings<PlatformRelayBindings>();
-        for (const database of [env.D1_SHARD_APAC_01, env.D1_SHARD_WNAM_01]) {
-            if (database !== undefined) {
-                await migrate(database, new NodeURL("../../packages/relay-core/migrations/d1", import.meta.url));
-                await migrate(
-                    database,
-                    new NodeURL("../../packages/relay-cloudflare-platform/migrations/sharding", import.meta.url),
-                );
-            }
-        }
         await migrate(
             env.PLATFORM_DIRECTORY_DATABASE,
             new NodeURL("../../packages/relay-cloudflare-platform/migrations/dashboard", import.meta.url),

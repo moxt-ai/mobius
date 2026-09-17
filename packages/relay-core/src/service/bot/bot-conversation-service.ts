@@ -169,7 +169,7 @@ export class BotConversationService {
         signal: AbortSignal,
     ): Promise<BotConversationPlan> => {
         signal.throwIfAborted();
-        const conversationId = `bcv_${createRandomToken(18)}`;
+        const conversationId = `bcv_${scope.projectId}_${createRandomToken(18)}`;
         const sessionId = `ses_${createRandomToken(18)}`;
         const outboxId = `bco_${createRandomToken(18)}`;
         const provisioning = new BotSessionProvisioning(

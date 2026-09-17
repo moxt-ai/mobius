@@ -15,7 +15,6 @@ import {
 
 interface PlatformDurableObjectEnvironment extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
-    readonly D1_SHARD_APAC_01: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }

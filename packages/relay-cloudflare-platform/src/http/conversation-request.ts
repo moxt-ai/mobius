@@ -4,12 +4,18 @@ import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 
 export function requestedProjectId(request: Request): string {
-    const prefix = `${MOBIUS_API_PREFIX}/v1/projects/`;
     const url = new URL(request.url);
     let projectId = "";
     try {
-        if (url.pathname.startsWith(prefix)) {
-            projectId = decodeURIComponent(url.pathname.slice(prefix.length).split("/")[0] ?? "");
+        for (const prefix of [
+            `${MOBIUS_API_PREFIX}/dashboard/v1/projects/`,
+            `${MOBIUS_API_PREFIX}/v1/projects/`,
+            `${MOBIUS_API_PREFIX}/projects/`,
+        ]) {
+            if (url.pathname.startsWith(prefix)) {
+                projectId = decodeURIComponent(url.pathname.slice(prefix.length).split("/")[0] ?? "");
+                break;
+            }
         }
     } catch (cause) {
         throw new PlatformControlPlaneError("invalid_request", "A valid Project ID is required", 400, { cause });

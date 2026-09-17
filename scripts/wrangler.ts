@@ -1,7 +1,5 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWorktreeEnvironment } from "./worktree/environment.ts";
@@ -27,24 +25,7 @@ const standaloneTarget: WranglerTarget = {
 };
 const platformTarget: WranglerTarget = {
     configDirectory: resolve(repositoryRoot, "packages/relay-cloudflare-platform"),
-    migrationBindings: (environment) => {
-        switch (environment) {
-            case undefined:
-                return ["D1_SHARD_APAC_01", PLATFORM_DIRECTORY_DATABASE_BINDING];
-            case "staging":
-                return ["D1_SHARD_APAC_01", "D1_SHARD_WNAM_01", PLATFORM_DIRECTORY_DATABASE_BINDING];
-            case "production":
-                return [
-                    "D1_SHARD_APAC_01",
-                    "D1_SHARD_APAC_02",
-                    "D1_SHARD_WNAM_01",
-                    "D1_SHARD_WNAM_02",
-                    PLATFORM_DIRECTORY_DATABASE_BINDING,
-                ];
-            default:
-                throw new Error("Unsupported Platform migration environment");
-        }
-    },
+    migrationBindings: () => [PLATFORM_DIRECTORY_DATABASE_BINDING],
     packageName: "@moxt-ai/mobius-relay-cloudflare-platform",
 };
 const platformConfigSuffix = "packages/relay-cloudflare-platform/wrangler.jsonc";
@@ -214,55 +195,6 @@ async function applyD1Migrations(
         ? environmentOptions[0].slice("--env=".length)
         : environmentOptions[1];
     for (const binding of target.migrationBindings(environment)) {
-        if (target === platformTarget && binding === PLATFORM_DIRECTORY_DATABASE_BINDING) {
-            const directory = await mkdtemp(resolve(tmpdir(), "mobius-platform-migrations-"));
-            try {
-                const config = resolve(directory, "wrangler.json");
-                await runPnpm(
-                    [
-                        "--filter",
-                        target.packageName,
-                        "exec",
-                        "node",
-                        "scripts/sharding-migrations.ts",
-                        ...selectWranglerOptions(wranglerArguments, ["--config", "--env"]),
-                        "--output",
-                        config,
-                    ],
-                    signal,
-                );
-                const persist = selectWranglerOptions(wranglerArguments, ["--persist-to"]);
-                const localOptions =
-                    location === "--local" && persist.length === 0
-                        ? ["--persist-to", resolve(target.configDirectory, ".wrangler/state")]
-                        : persist;
-                for (const shard of target
-                    .migrationBindings(environment)
-                    .filter((name) => name !== PLATFORM_DIRECTORY_DATABASE_BINDING)) {
-                    await runPnpm(
-                        [
-                            "--filter",
-                            target.packageName,
-                            "exec",
-                            "wrangler",
-                            "d1",
-                            "migrations",
-                            "apply",
-                            shard,
-                            location,
-                            "--config",
-                            config,
-                            ...localOptions,
-                            ...selectWranglerOptions(wranglerArguments, ["--profile"]),
-                            ...temporaryOptions,
-                        ],
-                        signal,
-                    );
-                }
-            } finally {
-                await rm(directory, { recursive: true, force: true });
-            }
-        }
         await runPnpm(
             [
                 "--filter",
@@ -329,50 +261,6 @@ async function run(signal: AbortSignal): Promise<void> {
 
     if (!dryRun && !temporaryDeployment) {
         await applyD1Migrations("--remote", wranglerArguments, target, signal);
-    }
-
-    if (
-        target === platformTarget &&
-        !temporaryDeployment &&
-        (environment === "staging" || environment === "production")
-    ) {
-        const regionalDirectory = resolve(repositoryRoot, ".wrangler/regional", environment);
-        await runPnpm(
-            [
-                "--filter",
-                target.packageName,
-                "exec",
-                "node",
-                "scripts/regional-workers.ts",
-                "--template",
-                resolve(target.configDirectory, "wrangler.regional.template.json"),
-                "--config",
-                resolve(target.configDirectory, "wrangler.jsonc"),
-                "--env",
-                environment,
-                "--placement",
-                resolve(target.configDirectory, "regional-placement.json"),
-                "--output",
-                regionalDirectory,
-            ],
-            signal,
-        );
-        for (const region of ["apac", "wnam"]) {
-            await runPnpm(
-                [
-                    "--filter",
-                    target.packageName,
-                    "exec",
-                    "wrangler",
-                    "deploy",
-                    "--config",
-                    resolve(regionalDirectory, `${region}.json`),
-                    ...(dryRun ? ["--dry-run"] : []),
-                    ...selectWranglerOptions(wranglerArguments, ["--message", "--var", "--secrets-file"]),
-                ],
-                signal,
-            );
-        }
     }
 
     const output = await runPnpm(deploymentArguments, signal);

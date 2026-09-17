@@ -145,6 +145,8 @@ export {
     type ImmutableContent,
     type ImmutableContentStore,
 } from "./infra/content-store.ts";
+export { D1DatabaseAdapter } from "./infra/d1-database.ts";
+export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
 export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
     ProjectStorageContext,

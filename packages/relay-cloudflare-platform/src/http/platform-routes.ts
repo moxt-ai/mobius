@@ -70,7 +70,7 @@ function queryLimit(value: unknown): number {
 
 export function createPlatformControlApplication() {
     return new Hono<PlatformHttpEnvironment>({ strict: false })
-        .basePath(MOBIUS_API_PREFIX)
+        .basePath(`${MOBIUS_API_PREFIX}/dashboard`)
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
         .use(

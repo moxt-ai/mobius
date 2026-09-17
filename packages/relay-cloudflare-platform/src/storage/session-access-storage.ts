@@ -2,22 +2,22 @@ import * as v from "valibot";
 import { type SessionAccessRecord, sessionAccessRecordSchema } from "../entity/session-access-record.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
-import { type PlatformDatabaseBinding, projectDatabase } from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectDatabase } from "./platform-database-resolver.ts";
 import { PlatformProjectAuthorizationStorage } from "./platform-project-authorization-storage.ts";
 
 export class SessionAccessStorage {
-    private readonly shards: readonly PlatformDatabaseBinding[];
+    private readonly databases: PlatformDatabaseResolver;
     private readonly control: PlatformControlPlaneStorage;
     private readonly projects: PlatformProjectAuthorizationStorage;
-    constructor(database: D1Database, shards: readonly PlatformDatabaseBinding[]) {
-        this.shards = shards;
-        this.control = new PlatformControlPlaneStorage(database, shards);
-        this.projects = new PlatformProjectAuthorizationStorage(shards);
+    constructor(database: D1Database, databases: PlatformDatabaseResolver) {
+        this.databases = databases;
+        this.control = new PlatformControlPlaneStorage(database, databases);
+        this.projects = new PlatformProjectAuthorizationStorage(databases);
     }
 
     readonly insert = async (row: SessionAccessRecord, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
-        const database = projectDatabase(this.shards, row.project_id);
+        const database = projectDatabase(this.databases, row.project_id);
         await waitForD1(
             () =>
                 database.batch([
@@ -62,7 +62,7 @@ export class SessionAccessStorage {
         signal.throwIfAborted();
         const value: unknown = await waitForD1(
             () =>
-                projectDatabase(this.shards, projectId)
+                projectDatabase(this.databases, projectId)
                     .prepare(`SELECT s.* FROM session_access_credentials s
             WHERE s.credential_id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
               AND s.project_id = ?

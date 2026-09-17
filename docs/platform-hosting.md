@@ -14,23 +14,22 @@ the legacy compatibility entry while migrating an older deployment.
 
 ## Cloudflare resources
 
-Create the directory database and configured Project shards before the first remote deployment:
+Create the directory database and R2 buckets before the first remote deployment:
 
-- `D1_SHARD_APAC_01` and the other configured `D1_SHARD_*` bindings store Project
-  resources. Apply shared `packages/relay-core/migrations/d1`, then
-  `packages/relay-cloudflare-platform/migrations/sharding` using the independent
-  `platform_sharding_migrations` history table.
+- `PROJECT_RELAY` is a SQLite Durable Object namespace. One object owns each
+  Project's relational resources and initializes its schema when first used.
+- `R2_BUCKET_APAC` and `R2_BUCKET_WNAM` retain Project content. `apac` and `oc`
+  use APAC; every other supported location hint uses WNAM.
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
   and dashboard audit records and uses
   `packages/relay-cloudflare-platform/migrations/dashboard`.
   Session/Conversation access credentials, App credential Project scopes, and
-  Project audit events belong to the encoded Project shard.
+  Project audit events belong to the Project Durable Object.
 
 Copy `packages/relay-cloudflare-platform/wrangler.jsonc` into deployment-owned
-configuration and add each database's `database_name` and `database_id`. Do not
-point both bindings at one database: they have separate ownership and migration
-histories. The Worker also creates independent Runtime Relay, Session Relay, and
-Bot Connection Durable Object namespaces.
+configuration and add the directory database's `database_name` and `database_id`.
+The Worker also creates independent Project, Runtime Relay, Session Relay, and Bot
+Connection Durable Object namespaces.
 
 Bind a separate Workers KV namespace as `APP_CREDENTIAL_CACHE` for each
 environment. The checked-in staging and production configurations include their
@@ -224,72 +223,34 @@ the server reads the exact IDs from the credential record. Turn and artifact IDs
 are subordinate resources of that already-fixed Session and are reauthorized by
 the Session service.
 
-### Project-ID regional routing
+### Project Durable Object routing
 
 After this, a backend can call the public Project API and have its request
-authorized and executed by the Worker assigned to the Project's region.
-The public Worker decodes the Project ID and forwards Project-scoped HTTP
-requests with service-binding `fetch()` to `mobius-platform-<environment>-apac`
-or `mobius-platform-<environment>-wnam`. No directory query is needed to route.
-Credentials, bodies, streaming responses, and WebSocket upgrades remain on the
-normal product boundary; the destination performs the existing authorization.
-A backend rejects a Project from the other logical region with HTTP 421.
-Requests without a Project in the URL continue through the public Worker.
+authorized and executed inside the Project's Durable Object. The dashboard Worker
+decodes the Project ID, selects the object with the encoded Cloudflare location
+hint, and forwards the request without a directory lookup. Runtime pairing IDs,
+Runtime credentials, and Bot connection resources carry the Project ID so
+otherwise-unscoped requests route to the same object. Credentials, bodies,
+streaming responses, and WebSocket upgrades remain on the normal product
+boundary; the Project Durable Object performs authorization.
 
-`regional-placement.json` specifies explicit placement hints, separate from
-logical shard names. APAC backends target Singapore and WNAM backends target the
-western US. Placement hints select nearby Cloudflare execution and are not
-data-center guarantees. The public router has placement disabled so it runs near
-the caller.
-
-Each product owns a small regional override template in `wrangler.regional.template.json`.
-It contains only the Worker name, entrypoint, placement hint, logical region, and
-deployment flags. Shared bindings and settings are inherited from the existing
-Wrangler configuration. The renderer JSON-encodes `<%% name %%>` substitutions
-and validates the rendered overrides before merging them. Public routes, assets,
-router service bindings, migrations, and queue consumers are excluded from the
-inherited settings; Durable Objects reference their existing owner Worker.
-
-`pnpm wrangler deploy --config packages/relay-cloudflare-platform/wrangler.jsonc
---env staging` applies migrations, generates regional configurations under
-`.wrangler/regional/staging`, deploys both backends, and finally deploys the public
-router. `--dry-run` validates all three bundles. Regional Workers share the
-existing D1/R2/KV resources and reference Durable Objects owned by the public
-Worker; they do not create new Durable Object namespaces or queue consumers.
-The same generator is used by Mobius Chat after its Vite build.
-
-Public routing uses `MOBIUS_WORKER_REGION=edge`; backends use `apac` or `wnam`.
-Unset means the existing single-Worker local-development mode. These are
-deployment bindings, never request-header overrides. Regional fetches propagate
-cancellation and bound the wait for response headers to two minutes.
-
-### Shard-local Project authorization
+### Project-local authorization
 
 After this, an App-wide backend can read a provisioned Project while the control
 plane is unavailable, provided its App authentication is already cached. The
-Worker decodes the Project ID to select a configured shard and reads
+Worker decodes the Project ID to select its Durable Object and reads
 `platform_project_authorizations` there. It checks the App ID, Tenant ID, and
 active lifecycle locally; it never falls back to the central Project directory.
 There is no Project-authorization KV cache or lifecycle TTL.
 
 Provisioning records the administrative Project directory and audit in the
-control plane, then creates the shard-local authorization record before returning
+control plane, then creates the Project-local authorization record before returning
 success. An idempotent provisioning retry completes a missing shard write but
 does not overwrite an existing record's ownership or lifecycle.
 
-App deletion writes revocation tombstones to every configured
-shard before committing the control-plane deletion and invalidating App
-authentication. Shards reject both existing Projects and authorization records
-written later by concurrent provisioning. If deletion stops partway through the
-shards, completed tombstones continue denying access; retry deletion to finish.
-New shards must be initialized consistently before accepting Project traffic.
-
-**Clean-cutover deployment:** migration `0011_platform_project_authorizations.sql`
-creates the shard tables. Existing Projects are not backfilled and cannot be
-authorized using central directory rows alone. This change assumes the planned
-data reset and fresh Project provisioning. Apply shard migrations before deploying
-the Worker. The control plane retains its directory for listing, quotas, and
-administrative operations.
+**Clean-cutover deployment:** existing Projects are not migrated. This change
+assumes the planned data reset and fresh Project provisioning. The control plane
+retains its directory for listing, quotas, and administrative operations.
 
 ## Backend flow
 
@@ -328,7 +289,7 @@ provided.
 ## App Project provisioning
 
 Registered applications create Projects with their server-held AppCredential via
-`POST /mobius/api/v1/apps/:appId/projects` or
+`POST /mobius/api/dashboard/v1/apps/:appId/projects` or
 `MobiusPlatformAppClient.createProject(appId, request, signal)`. The credential
 must belong to the requested App, cover all Projects, and include the complete
 server permission set. Developer OIDC is also supported on the same route.

@@ -17,6 +17,10 @@
             {
                 "name": "BOT_CONNECTIONS",
                 "class_name": "BotConnectionActor"
+            },
+            {
+                "name": "PROJECT_RELAY",
+                "class_name": "ProjectRelay"
             }
         ]
     },
@@ -24,19 +28,22 @@
         {
             "tag": "platform-initial",
             "new_sqlite_classes": ["RuntimeRelay", "PlatformSessionRelay", "BotConnectionActor"]
+        },
+        {
+            "tag": "platform-project-relay",
+            "new_sqlite_classes": ["ProjectRelay"]
         }
     ],
     "d1_databases": [
-        {
-            "binding": "D1_SHARD_APAC_01",
-            "migrations_dir": "../relay-core/migrations/d1"
-        },
         {
             "binding": "PLATFORM_DIRECTORY_DATABASE",
             "migrations_dir": "migrations/dashboard"
         }
     ],
-    "r2_buckets": [{ "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-local-apac-objects" }],
+    "r2_buckets": [
+        { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-platform-local-apac-objects" },
+        { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-platform-local-wnam-objects" }
+    ],
     "vars": {
         "MOBIUS_PLATFORM_ALLOWED_ORIGINS": "[\"*\"]",
         "MOBIUS_PLATFORM_OIDC_PROVIDERS": "[]",
@@ -55,10 +62,6 @@
     "env": {
         "staging": {
             "name": "mobius-platform-staging",
-            "services": [
-                { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-staging-apac" },
-                { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-staging-wnam" }
-            ],
             "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "04588dbeba594690b790fcb087ddeb23" }],
             "workers_dev": false,
             "preview_urls": false,
@@ -67,24 +70,11 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
-                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" }
+                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" },
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },
             "d1_databases": [
-                {
-                    "binding": "D1_SHARD_APAC_01",
-                    "database_name": "mobius-cloud-staging-apac-01",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "76a58022-7ee3-4faf-9cc2-db458231cd2e",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
-                {
-                    "binding": "D1_SHARD_WNAM_01",
-                    "database_name": "mobius-cloud-staging-wnam-01",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "c008aef6-7534-4b25-8649-ebf1b55bb4ee",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
                 {
                     "binding": "PLATFORM_DIRECTORY_DATABASE",
                     "database_name": "mobius-platform-staging-control-plane-wnam",
@@ -96,15 +86,10 @@
             "r2_buckets": [
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-staging-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-staging-wnam-objects" }
-            ],
-            "vars": { "MOBIUS_WORKER_REGION": "edge" }
+            ]
         },
         "production": {
             "name": "mobius-platform-production",
-            "services": [
-                { "binding": "MOBIUS_REGIONAL_APAC", "service": "mobius-platform-production-apac" },
-                { "binding": "MOBIUS_REGIONAL_WNAM", "service": "mobius-platform-production-wnam" }
-            ],
             "kv_namespaces": [{ "binding": "APP_CREDENTIAL_CACHE", "id": "b15cc4481591452392682c2ff0793196" }],
             "workers_dev": false,
             "preview_urls": false,
@@ -113,38 +98,11 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
-                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" }
+                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" },
+                    { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },
             "d1_databases": [
-                {
-                    "binding": "D1_SHARD_APAC_01",
-                    "database_name": "mobius-cloud-production-apac-01",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "9ba3f0bb-59f4-4a43-bf51-2a2317e75d01",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
-                {
-                    "binding": "D1_SHARD_APAC_02",
-                    "database_name": "mobius-cloud-production-apac-02",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "c20de4d5-4d9b-4ed2-b11f-fd660124de2d",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
-                {
-                    "binding": "D1_SHARD_WNAM_01",
-                    "database_name": "mobius-cloud-production-wnam-01",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "5e809606-9770-48ae-9c38-046903b0daa8",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
-                {
-                    "binding": "D1_SHARD_WNAM_02",
-                    "database_name": "mobius-cloud-production-wnam-02",
-                    "migrations_table": "mobius_migrations",
-                    "database_id": "67c6aacd-29d1-4e0b-ae87-5a45d4ff69e3",
-                    "migrations_dir": "../relay-core/migrations/d1"
-                },
                 {
                     "binding": "PLATFORM_DIRECTORY_DATABASE",
                     "database_name": "mobius-platform-production-control-plane-wnam",
@@ -156,8 +114,7 @@
             "r2_buckets": [
                 { "binding": "R2_BUCKET_APAC", "bucket_name": "mobius-cloud-production-apac-objects" },
                 { "binding": "R2_BUCKET_WNAM", "bucket_name": "mobius-cloud-production-wnam-objects" }
-            ],
-            "vars": { "MOBIUS_WORKER_REGION": "edge" }
+            ]
         }
     }
 }

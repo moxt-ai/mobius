@@ -26,7 +26,11 @@ import {
     type PlatformPrincipal,
     type PlatformProjectPlacementRegistry,
 } from "../entity/platform-control-plane.ts";
-import { decodePlatformProjectPlacement, encodePlatformProjectId } from "../entity/platform-project-id.ts";
+import {
+    decodePlatformProjectPlacement,
+    encodePlatformProjectId,
+    projectBucketLocation,
+} from "../entity/platform-project-id.ts";
 import type {
     AppRow,
     AuditRow,
@@ -481,7 +485,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
                 400,
             );
         }
-        return { location: placement.r2BucketId };
+        return { location: projectBucketLocation(placement.locationHint) };
     };
 
     readonly resolveSessionQuota = async (scope: ProjectScope, signal: AbortSignal): Promise<SessionQuotaPolicy> => {
@@ -647,7 +651,11 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             throw new PlatformControlPlaneError("app_access_denied", "The App is unavailable", 403);
         }
         const now = Date.now();
-        await this.#projectAuthorization.revokeApp(app.app_id, signal);
+        await this.#projectAuthorization.revokeApp(
+            app.app_id,
+            (await this.#storage.listProjects(app.app_id, signal)).map((project) => project.project_id),
+            signal,
+        );
         const deleted = await this.#storage.deleteApp(
             app.app_id,
             now,
@@ -817,6 +825,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             display_name: normalizedDisplayName,
             idempotency_key: normalizedIdempotencyKey,
             lifecycle: "active",
+            location_hint: placement.locationHint,
             project_id: projectId,
             request_digest: digest,
             suspended_at: null,

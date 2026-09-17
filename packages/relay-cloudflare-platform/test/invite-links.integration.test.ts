@@ -26,7 +26,7 @@ function fixture() {
     const visitor = identity.session("user_visitor", "");
     const request = (path: string, token: string, method = "GET", body?: unknown) =>
         application.fetch(
-            new Request(`https://platform.test/mobius/api/v1/platform/${path}`, {
+            new Request(`https://platform.test/mobius/api/dashboard/v1/platform/${path}`, {
                 method,
                 headers: {
                     authorization: `Bearer ${token}`,

@@ -1,17 +1,26 @@
-import { PlatformControlPlaneError, type PlatformProjectPlacement } from "./platform-control-plane.ts";
+import {
+    PlatformControlPlaneError,
+    type PlatformProjectLocationHint,
+    type PlatformProjectPlacement,
+} from "./platform-control-plane.ts";
 
 const placements: ReadonlyMap<string, PlatformProjectPlacement> = new Map([
-    ["a01", { d1ShardId: "apac-01", r2BucketId: "apac" }],
-    ["a02", { d1ShardId: "apac-02", r2BucketId: "apac" }],
-    ["w01", { d1ShardId: "wnam-01", r2BucketId: "wnam" }],
-    ["w02", { d1ShardId: "wnam-02", r2BucketId: "wnam" }],
+    ["wn", { locationHint: "wnam" }],
+    ["en", { locationHint: "enam" }],
+    ["sa", { locationHint: "sam" }],
+    ["we", { locationHint: "weur" }],
+    ["ee", { locationHint: "eeur" }],
+    ["ap", { locationHint: "apac" }],
+    ["oc", { locationHint: "oc" }],
+    ["af", { locationHint: "afr" }],
+    ["me", { locationHint: "me" }],
 ]);
 
 /** Platform IDs contain a locally mapped shard code followed by a 144-bit local identifier. */
 export function encodePlatformProjectId(placement: PlatformProjectPlacement, localId: string): string {
     for (const [code, candidate] of placements) {
-        if (candidate.d1ShardId === placement.d1ShardId && candidate.r2BucketId === placement.r2BucketId) {
-            return `prj_${code}_${localId}`;
+        if (candidate.locationHint === placement.locationHint) {
+            return `prj_${code}_01_${localId}`;
         }
     }
     throw new PlatformControlPlaneError(
@@ -22,10 +31,20 @@ export function encodePlatformProjectId(placement: PlatformProjectPlacement, loc
 }
 
 export function decodePlatformProjectPlacement(projectId: string): PlatformProjectPlacement | null {
-    const match = /^prj_([aw][0-9]{2})_[A-Za-z0-9_-]{24}$/.exec(projectId);
+    const match = /^prj_(wn|en|sa|we|ee|ap|oc|af|me)_01_([A-Za-z0-9_-]{24})$/.exec(projectId);
     const code = match?.[1];
     if (match?.[0] !== projectId || code === undefined) {
         return null;
     }
     return placements.get(code) ?? null;
+}
+
+export function projectBucketLocation(locationHint: PlatformProjectLocationHint): "apac" | "wnam" {
+    return locationHint === "apac" || locationHint === "oc" ? "apac" : "wnam";
+}
+
+export function projectIdFromPrefixedValue(value: string): string | null {
+    const match = /(?:^|_)(prj_(?:wn|en|sa|we|ee|ap|oc|af|me)_01_[A-Za-z0-9_-]{24})(?:[._]|$)/.exec(value);
+    const projectId = match?.[1];
+    return projectId !== undefined && decodePlatformProjectPlacement(projectId) !== null ? projectId : null;
 }

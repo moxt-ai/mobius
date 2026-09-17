@@ -1,10 +1,10 @@
-import type { ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core";
+import { D1DatabaseAdapter, type ProjectDatabaseBindings } from "@moxt-ai/mobius-relay-core";
 
 export class SingleDatabaseResolver implements ProjectDatabaseBindings {
-    readonly #database: D1Database;
+    readonly #database: D1DatabaseAdapter;
 
     constructor(database: D1Database) {
-        this.#database = database;
+        this.#database = D1DatabaseAdapter.from(database);
     }
 
     readonly resolve: ProjectDatabaseBindings["resolve"] = () => this.#database;

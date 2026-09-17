@@ -412,7 +412,7 @@ export interface MobiusPlatformDeveloperClientOptions extends MobiusEndpointOpti
 export class MobiusPlatformDeveloperClient {
     readonly createOrganizationInvite = async (organizationId: string, signal: AbortSignal) => {
         const value = await this.#executor.post(
-            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
+            `dashboard/v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
             {},
             signal,
         );
@@ -425,7 +425,7 @@ export class MobiusPlatformDeveloperClient {
 
     readonly listOrganizationInvites = async (organizationId: string, signal: AbortSignal) => {
         const value = await this.#executor.get(
-            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
+            `dashboard/v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links`,
             signal,
         );
         const result = organizationInviteListSchema.safeParse(value);
@@ -441,7 +441,7 @@ export class MobiusPlatformDeveloperClient {
         signal: AbortSignal,
     ): Promise<void> => {
         await this.#executor.delete(
-            `v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links/${requestedIdentifier(id, "invitation")}`,
+            `dashboard/v1/platform/tenants/${requestedIdentifier(organizationId, "organization")}/invite-links/${requestedIdentifier(id, "invitation")}`,
             signal,
         );
     };
@@ -457,7 +457,7 @@ export class MobiusPlatformDeveloperClient {
             throw new MobiusValidationError("The invitation link is invalid");
         }
         const result = organizationInvitePreviewSchema.safeParse(
-            await this.#executor.post(`v1/platform/invite-links/${action}`, body.data, signal),
+            await this.#executor.post(`dashboard/v1/platform/invite-links/${action}`, body.data, signal),
         );
         if (!result.success) {
             throw new MobiusProtocolError("The Platform returned an invalid invitation");
@@ -475,7 +475,7 @@ export class MobiusPlatformDeveloperClient {
     }
 
     readonly listTenants = async (signal: AbortSignal): Promise<readonly MobiusPlatformTenant[]> => {
-        const value = record(await this.#executor.get("v1/platform/tenants", signal), "Tenant list");
+        const value = record(await this.#executor.get("dashboard/v1/platform/tenants", signal), "Tenant list");
         const tenants = value["tenants"];
         if (!Array.isArray(tenants) || tenants.length > 1_000) {
             throw new MobiusProtocolError("The Platform returned an invalid Tenant list");
@@ -487,7 +487,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformTenant(
             record(
                 await this.#executor.get(
-                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
+                    `dashboard/v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}`,
                     signal,
                 ),
                 "Tenant",
@@ -496,14 +496,14 @@ export class MobiusPlatformDeveloperClient {
 
     readonly readConfiguration = async (signal: AbortSignal): Promise<MobiusPlatformConfiguration> =>
         new MobiusPlatformConfiguration(
-            record(await this.#executor.get("v1/platform/configuration", signal), "Platform configuration"),
+            record(await this.#executor.get("dashboard/v1/platform/configuration", signal), "Platform configuration"),
         );
 
     readonly readApp = async (appId: string, signal: AbortSignal): Promise<MobiusPlatformApp> =>
         new MobiusPlatformApp(
             record(
                 await this.#executor.get(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
                     signal,
                 ),
                 "App",
@@ -514,7 +514,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformTenantUsage(
             record(
                 await this.#executor.get(
-                    `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/usage`,
+                    `dashboard/v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/usage`,
                     signal,
                 ),
                 "Tenant usage",
@@ -531,7 +531,7 @@ export class MobiusPlatformDeveloperClient {
         }
         const value = record(
             await this.#executor.get(
-                `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/audit-events?limit=${limit.toString()}`,
+                `dashboard/v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/audit-events?limit=${limit.toString()}`,
                 signal,
             ),
             "audit page",
@@ -546,7 +546,7 @@ export class MobiusPlatformDeveloperClient {
     readonly listApps = async (tenantId: string, signal: AbortSignal): Promise<readonly MobiusPlatformApp[]> => {
         const value = record(
             await this.#executor.get(
-                `v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/apps`,
+                `dashboard/v1/platform/tenants/${encodeURIComponent(requestedIdentifier(tenantId, "Tenant identifier"))}/apps`,
                 signal,
             ),
             "App list",
@@ -566,7 +566,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusCreatedPlatformApp(
             record(
                 await this.#executor.post(
-                    "v1/apps",
+                    "dashboard/v1/apps",
                     {
                         displayName: requestedDisplayName(displayName),
                         tenantId: requestedIdentifier(tenantId, "Tenant identifier"),
@@ -581,7 +581,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformApp(
             record(
                 await this.#executor.put(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
                     { displayName: requestedDisplayName(displayName) },
                     signal,
                 ),
@@ -593,7 +593,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformApp(
             record(
                 await this.#executor.delete(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
                     signal,
                 ),
                 "App",
@@ -603,7 +603,7 @@ export class MobiusPlatformDeveloperClient {
     readonly listProjects = async (appId: string, signal: AbortSignal): Promise<readonly MobiusPlatformProject[]> => {
         const value = record(
             await this.#executor.get(
-                `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
+                `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
                 signal,
             ),
             "Project list",
@@ -623,7 +623,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformProject(
             record(
                 await this.#executor.post(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
                     {
                         clientReference: requestedIdentifier(request.clientReference, "Project client reference"),
                         displayName: requestedDisplayName(request.displayName),
@@ -644,7 +644,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusPlatformAppCredential(
             record(
                 await this.#executor.post(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
                     {
                         permissions: requestedPermissions(request.permissions),
                         projectIds: Object.freeze(
@@ -663,7 +663,7 @@ export class MobiusPlatformDeveloperClient {
     ): Promise<readonly MobiusPlatformAppCredentialMetadata[]> => {
         const value = record(
             await this.#executor.get(
-                `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
+                `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/credentials`,
                 signal,
             ),
             "AppCredential list",
@@ -690,7 +690,7 @@ export class MobiusPlatformDeveloperClient {
         return new MobiusRotatedPlatformAppCredential(
             record(
                 await this.#executor.post(
-                    `v1/platform/app-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "AppCredential identifier"))}/rotate`,
+                    `dashboard/v1/platform/app-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "AppCredential identifier"))}/rotate`,
                     {
                         overlapSeconds,
                     },
@@ -708,7 +708,7 @@ export class MobiusPlatformDeveloperClient {
         new MobiusCredentialRevocation(
             record(
                 await this.#executor.post(
-                    `v1/platform/app-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "AppCredential identifier"))}/revoke`,
+                    `dashboard/v1/platform/app-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "AppCredential identifier"))}/revoke`,
                     {},
                     signal,
                 ),
@@ -735,7 +735,7 @@ export class MobiusPlatformAppClient {
         new MobiusPlatformProject(
             record(
                 await this.#executor.post(
-                    `v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
+                    `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}/projects`,
                     {
                         clientReference: requestedIdentifier(request.clientReference, "Project client reference"),
                         displayName: requestedDisplayName(request.displayName),

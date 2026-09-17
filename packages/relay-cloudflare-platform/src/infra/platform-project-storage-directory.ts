@@ -1,7 +1,7 @@
 import type { ProjectStorageDirectory } from "@moxt-ai/mobius-relay-core/contracts";
 import { PairingDirectoryError } from "@moxt-ai/mobius-relay-core/contracts";
 import type { PlatformProjectPlacementRegistry } from "../entity/platform-control-plane.ts";
-import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
+import { decodePlatformProjectPlacement, projectBucketLocation } from "../entity/platform-project-id.ts";
 
 export class PlatformProjectStorageDirectory implements ProjectStorageDirectory {
     readonly #registry: PlatformProjectPlacementRegistry;
@@ -18,7 +18,14 @@ export class PlatformProjectStorageDirectory implements ProjectStorageDirectory 
         }
         return {
             projectId,
-            storagePlacement: { hasShard: true, shard: { ...placement, revision: 1 } },
+            storagePlacement: {
+                hasShard: true,
+                shard: {
+                    d1ShardId: projectId,
+                    r2BucketId: projectBucketLocation(placement.locationHint),
+                    revision: 1,
+                },
+            },
         };
     };
 }

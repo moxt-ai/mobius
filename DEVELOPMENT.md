@@ -71,30 +71,29 @@ construct their Cloudflare gateways explicitly. Durable Object hosts use
 `createDurableObjectContext` with bindings and content placement; they do not
 construct SQL adapters, R2 content stores, channel peers, or alarm schedulers.
 
-Platform Project IDs use `prj_<shard-code>_<local-id>`, for example
-`prj_a01_<24-character-base64url-token>`. A shared local mapping resolves `a01`/`a02`
-to D1 `apac-01`/`apac-02` and R2 `apac`, and `w01`/`w02` to D1 `wnam-01`/`wnam-02`
-and R2 `wnam`. The local ID has 144 bits of randomness.
-The mapped logical D1 shard and regional R2 bucket are checked
-against configured bindings locally in Workers and Durable Objects, without a
-placement database lookup. Placement is immutable for an ID; physical bindings
-may change while keeping their logical names. Unencoded IDs are rejected by
-Platform storage routing. Routing does not grant access: credential, ownership,
-and lifecycle checks remain at their authorization boundaries.
+Platform Project IDs use `prj_<location-code>_<r2-shard>_<local-id>`, for example
+`prj_ap_01_<24-character-base64url-token>`. Location codes represent `wnam`,
+`enam`, `sam`, `weur`, `eeur`, `apac`, `oc`, `afr`, and `me`; `01` selects the
+existing R2 shard. `apac` and `oc` use `R2_BUCKET_APAC`, while all other hints use
+`R2_BUCKET_WNAM`. The local ID has 144 bits of randomness. Each Project ID names
+one Project Durable Object, which owns the Project relational database. Routing
+does not grant access: credential, ownership, and lifecycle checks remain at
+their authorization boundaries.
 
 Other applications can resolve one ID with the public, database-free endpoint
-`GET /mobius/api/v1/projects/:projectId/storage-placement`. For an `a01` ID, it
-returns only `{ "location": "apac" }`; `w01`/`w02` IDs return `{ "location": "wnam" }`.
+`GET /mobius/api/dashboard/v1/projects/:projectId/storage-placement`. For `ap`
+and `oc` IDs it returns `{ "location": "apac" }`; all other supported codes return
+`{ "location": "wnam" }`.
 This decodes placement only; it does not check Project existence or grant access.
 Malformed IDs and unknown shard codes return HTTP 400 with `invalid_request`;
 mapped placements missing configured bindings return HTTP 400 with
 `storage_location_unavailable`.
 
-The control plane stores administrative Project metadata directly in `platform_projects`.
-Request authorization reads ownership and lifecycle from
-`platform_project_authorizations` in the shard encoded by the Project ID.
-Provisioning creates that record before returning success; there is no central
-authorization fallback or Project KV cache. App deletion installs
+The control plane stores administrative Project metadata directly in
+`platform_projects`. Request authorization reads ownership and lifecycle from
+`platform_project_authorizations` in the Project Durable Object. Provisioning
+creates that record before returning success; there is no central authorization
+fallback or Project KV cache. App deletion installs
 shard-local App tombstones, including protection against late provisioning.
 Migration `0011_platform_project_authorizations.sql` assumes a clean data reset;
 existing central Project rows are not backfilled.

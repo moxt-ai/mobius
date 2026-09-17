@@ -24,15 +24,15 @@ import {
 } from "../entity/platform-records.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
-import { type PlatformDatabaseBinding, projectDatabase } from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectDatabase } from "./platform-database-resolver.ts";
 
 export class PlatformControlPlaneStorage {
     readonly #database: D1Database;
-    readonly #shards: readonly PlatformDatabaseBinding[];
+    readonly #databases: PlatformDatabaseResolver;
 
-    constructor(database: D1Database, shards: readonly PlatformDatabaseBinding[]) {
+    constructor(database: D1Database, databases: PlatformDatabaseResolver) {
         this.#database = database;
-        this.#shards = shards;
+        this.#databases = databases;
     }
 
     readonly createTenant = async (
@@ -56,7 +56,7 @@ export class PlatformControlPlaneStorage {
                             tenant.created_at,
                             tenant.updated_at,
                         ),
-                    this.auditStatement(audit),
+                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
@@ -97,7 +97,7 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_apps SET display_name = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
                         )
                         .bind(displayName, updatedAt, appId),
-                    this.auditStatement(audit),
+                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
@@ -130,7 +130,7 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_app_credentials SET revoked_at = COALESCE(revoked_at, ?) WHERE app_id = ?",
                         )
                         .bind(deletedAt, appId),
-                    this.auditStatement(audit),
+                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
@@ -260,8 +260,8 @@ export class PlatformControlPlaneStorage {
                         .prepare(
                             `INSERT INTO platform_projects (
                                 project_id, tenant_id, app_id, display_name, client_reference,
-                                idempotency_key, request_digest, lifecycle, created_at, updated_at
-                              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?
+                                idempotency_key, request_digest, lifecycle, location_hint, created_at, updated_at
+                              ) SELECT ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?
                                WHERE (SELECT COUNT(*) FROM platform_projects
                                        WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
                         )
@@ -273,6 +273,7 @@ export class PlatformControlPlaneStorage {
                             project.client_reference,
                             project.idempotency_key,
                             project.request_digest,
+                            project.location_hint,
                             project.created_at,
                             project.updated_at,
                             project.tenant_id,
@@ -347,7 +348,7 @@ export class PlatformControlPlaneStorage {
                         .first(),
                     ...projectIds.map(
                         async (projectId) =>
-                            await projectDatabase(this.#shards, projectId)
+                            await projectDatabase(this.#databases, projectId)
                                 .prepare(`SELECT COUNT(*) AS active_count FROM session_quota_reservations
                                        WHERE project_id = ?`)
                                 .bind(projectId)
@@ -375,7 +376,7 @@ export class PlatformControlPlaneStorage {
         limit: number,
         signal: AbortSignal,
     ): Promise<readonly AuditRow[]> => {
-        const database = projectId === null ? this.#database : projectDatabase(this.#shards, projectId);
+        const database = projectId === null ? this.#database : projectDatabase(this.#databases, projectId);
         const table = projectId === null ? "platform_dashboard_audit_events" : "platform_audit_events";
         const rows = await waitForD1(
             () =>
@@ -398,7 +399,7 @@ export class PlatformControlPlaneStorage {
         for (const projectId of projectIds) {
             await waitForD1(
                 () =>
-                    projectDatabase(this.#shards, projectId)
+                    projectDatabase(this.#databases, projectId)
                         .prepare(
                             `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
                          VALUES (?, ?, ?)`,
@@ -408,7 +409,7 @@ export class PlatformControlPlaneStorage {
                 signal,
             );
         }
-        const statements = [this.credentialInsertStatement(credential), this.auditStatement(audit)];
+        const statements = [this.credentialInsertStatement(credential), this.dashboardAuditStatement(audit)];
         const results = await waitForD1(() => this.#database.batch(statements), signal);
         return results.every((result) => result.meta.changes === 1);
     };
@@ -465,7 +466,7 @@ export class PlatformControlPlaneStorage {
         for (const projectId of await this.listCredentialProjectIds(sourceCredentialId, signal)) {
             await waitForD1(
                 () =>
-                    projectDatabase(this.#shards, projectId)
+                    projectDatabase(this.#databases, projectId)
                         .prepare(
                             `INSERT INTO platform_app_credential_projects (credential_id, project_id, created_at)
                  SELECT ?, project_id, ? FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?`,
@@ -486,7 +487,7 @@ export class PlatformControlPlaneStorage {
                               WHERE credential_id = ? AND revoked_at IS NULL AND replaced_by_credential_id IS NULL`,
                         )
                         .bind(credential.credentialId, overlapEndsAt, sourceCredentialId),
-                    this.auditStatement(audit),
+                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
@@ -511,7 +512,7 @@ export class PlatformControlPlaneStorage {
                             "UPDATE platform_app_credentials SET revoked_at = ? WHERE credential_id = ? AND revoked_at IS NULL",
                         )
                         .bind(revokedAt, credentialId),
-                    this.auditStatement(audit),
+                    this.dashboardAuditStatement(audit),
                 ]),
             signal,
         );
@@ -528,7 +529,7 @@ export class PlatformControlPlaneStorage {
     ): Promise<boolean> => {
         const row = await waitForD1(
             () =>
-                projectDatabase(this.#shards, projectId)
+                projectDatabase(this.#databases, projectId)
                     .prepare(
                         "SELECT 1 AS present FROM platform_app_credential_projects WHERE credential_id = ? AND project_id = ?",
                     )
@@ -622,7 +623,7 @@ export class PlatformControlPlaneStorage {
             () =>
                 Promise.all(
                     projectIds.map((projectId) =>
-                        projectDatabase(this.#shards, projectId)
+                        projectDatabase(this.#databases, projectId)
                             .prepare(
                                 `SELECT projects.project_id
                            FROM platform_app_credential_projects AS scopes
@@ -674,7 +675,11 @@ export class PlatformControlPlaneStorage {
     };
 
     readonly recordAudit = async (audit: PlatformAuditRecord, signal: AbortSignal): Promise<boolean> => {
-        const result = await waitForD1(() => this.auditStatement(audit).run(), signal);
+        const statement =
+            audit.projectId === ""
+                ? this.dashboardAuditStatement(audit)
+                : this.projectAuditStatement(audit.projectId, audit);
+        const result = await waitForD1(() => statement.run(), signal);
         return result.success;
     };
 
@@ -725,10 +730,34 @@ export class PlatformControlPlaneStorage {
                 audit.appId,
             );
 
-    private readonly auditStatement = (audit: PlatformAuditRecord): D1PreparedStatement =>
-        (audit.projectId === "" ? this.#database : projectDatabase(this.#shards, audit.projectId))
+    private readonly dashboardAuditStatement = (audit: PlatformAuditRecord): D1PreparedStatement =>
+        this.#database
             .prepare(
-                `INSERT INTO ${audit.projectId === "" ? "platform_dashboard_audit_events" : "platform_audit_events"} (
+                `INSERT INTO platform_dashboard_audit_events (
+                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
+                   actor_ref, action, subject_id, outcome, details_json, recorded_at
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(audit_id) DO NOTHING`,
+            )
+            .bind(
+                audit.action === "project.created" ? `pae_created_${audit.projectId}` : audit.auditId,
+                audit.tenantId,
+                audit.appId,
+                audit.projectId,
+                audit.actorKind,
+                audit.actorId,
+                audit.actorRef,
+                audit.action,
+                audit.subjectId,
+                audit.outcome,
+                audit.detailsJson,
+                audit.recordedAt,
+            );
+
+    private readonly projectAuditStatement = (projectId: string, audit: PlatformAuditRecord) =>
+        projectDatabase(this.#databases, projectId)
+            .prepare(
+                `INSERT INTO platform_audit_events (
                    audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
                    actor_ref, action, subject_id, outcome, details_json, recorded_at
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

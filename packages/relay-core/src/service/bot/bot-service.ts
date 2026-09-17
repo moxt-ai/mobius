@@ -1045,7 +1045,7 @@ export class BotService {
         );
         const cx = await this.projectContext(access.scope, signal);
         const profile: BotProfileRevision = {
-            botId: `bot_${createRandomToken(18)}`,
+            botId: `bot_${access.scope.projectId}_${createRandomToken(18)}`,
             profileRevisionId: `bpr_${createRandomToken(18)}`,
             revisionNumber: 1,
             lifecycleRevision: 1,
@@ -1405,8 +1405,8 @@ export class BotService {
         if (bot.lifecycle === "archived") {
             throw new BotApiError("bot_not_active", "The Bot cannot create a connection grant", "conflict");
         }
-        const grantId = `bcg_${createRandomToken(18)}`;
-        const grantSecret = createRandomToken(32);
+        const grantId = `bcg_${access.scope.projectId}_${createRandomToken(18)}`;
+        const grantSecret = `${access.scope.projectId}_${createRandomToken(32)}`;
         const expiresAt = now + expiresInSeconds * 1_000;
         const secretDigest = await hashSecret(grantSecret);
         signal.throwIfAborted();
@@ -1494,9 +1494,9 @@ export class BotService {
             signal,
         );
         const cx = await this.context(grant.project_id, signal);
-        const connectionId = `bcn_${createRandomToken(18)}`;
+        const connectionId = `bcn_${grant.project_id}_${createRandomToken(18)}`;
         const credentialId = `bcc_${createRandomToken(18)}`;
-        const credential = createRandomToken(32);
+        const credential = `${grant.project_id}_${createRandomToken(32)}`;
         const credentialDigest = await hashSecret(credential);
         signal.throwIfAborted();
         const expiresAt = now + BOT_CONNECTION_CREDENTIAL_LIFETIME_MILLISECONDS;

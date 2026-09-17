@@ -1,13 +1,17 @@
 import { DatabaseError } from "@moxt-ai/mobius-relay-core/database";
-import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
 import { type PlatformProjectScopeRow, PlatformProjectScopeRowSchema } from "../entity/platform-records.ts";
 import { decodeOptionalStorageRecord } from "./decode-storage-record.ts";
+import {
+    type PlatformDatabaseResolver,
+    type PlatformProjectDatabase,
+    projectDatabase,
+} from "./platform-database-resolver.ts";
 
 export class PlatformProjectAuthorizationStorage {
-    readonly #shards: readonly { readonly id: string; readonly database: D1Database }[];
+    readonly #databases: PlatformDatabaseResolver;
 
-    constructor(shards: readonly { readonly id: string; readonly database: D1Database }[]) {
-        this.#shards = shards;
+    constructor(databases: PlatformDatabaseResolver) {
+        this.#databases = databases;
     }
 
     readonly read = async (projectId: string, signal: AbortSignal): Promise<PlatformProjectScopeRow | null> => {
@@ -49,8 +53,9 @@ export class PlatformProjectAuthorizationStorage {
         }
     };
 
-    readonly revokeApp = async (appId: string, signal: AbortSignal): Promise<void> => {
-        for (const { database } of this.#shards) {
+    readonly revokeApp = async (appId: string, projectIds: readonly string[], signal: AbortSignal): Promise<void> => {
+        for (const projectId of projectIds) {
+            const database = this.database(projectId);
             await this.operation(
                 () =>
                     database
@@ -65,14 +70,8 @@ export class PlatformProjectAuthorizationStorage {
         }
     };
 
-    private readonly database = (projectId: string): D1Database => {
-        const placement = decodePlatformProjectPlacement(projectId);
-        const database = this.#shards.find((shard) => shard.id === placement?.d1ShardId)?.database;
-        if (database === undefined) {
-            throw new DatabaseError("database_unavailable", "Project storage is unavailable");
-        }
-        return database;
-    };
+    private readonly database = (projectId: string): PlatformProjectDatabase =>
+        projectDatabase(this.#databases, projectId);
 
     private readonly operation = async <Value>(
         operation: () => Promise<Value>,

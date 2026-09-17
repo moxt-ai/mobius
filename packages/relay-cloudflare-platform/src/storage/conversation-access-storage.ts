@@ -14,7 +14,12 @@ import {
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
-import { type PlatformDatabaseBinding, projectDatabase } from "./platform-database-resolver.ts";
+import {
+    type PlatformDatabaseResolver,
+    type PlatformProjectDatabase,
+    type PlatformProjectPreparedStatement,
+    projectDatabase,
+} from "./platform-database-resolver.ts";
 import { PlatformProjectAuthorizationStorage } from "./platform-project-authorization-storage.ts";
 
 const storedCredentialSchema = v.omit(ConversationCredentialRowSchema, [
@@ -29,15 +34,15 @@ const storedCredentialSchema = v.omit(ConversationCredentialRowSchema, [
 
 export class ConversationAccessStorage {
     readonly #platformDatabase: D1Database;
-    readonly #shards: readonly PlatformDatabaseBinding[];
+    readonly #databases: PlatformDatabaseResolver;
     readonly #control: PlatformControlPlaneStorage;
     readonly #projects: PlatformProjectAuthorizationStorage;
 
-    constructor(platformDatabase: D1Database, shards: readonly PlatformDatabaseBinding[]) {
+    constructor(platformDatabase: D1Database, databases: PlatformDatabaseResolver) {
         this.#platformDatabase = platformDatabase;
-        this.#shards = shards;
-        this.#control = new PlatformControlPlaneStorage(platformDatabase, shards);
-        this.#projects = new PlatformProjectAuthorizationStorage(shards);
+        this.#databases = databases;
+        this.#control = new PlatformControlPlaneStorage(platformDatabase, databases);
+        this.#projects = new PlatformProjectAuthorizationStorage(databases);
     }
 
     readonly readActiveConversationDirectory = async (
@@ -49,7 +54,7 @@ export class ConversationAccessStorage {
             ConversationDirectoryRowSchema,
             await waitForD1(
                 () =>
-                    projectDatabase(this.#shards, projectId)
+                    projectDatabase(this.#databases, projectId)
                         .prepare(
                             `SELECT conversations.conversation_id, conversations.session_id,
                                  bots.project_id
@@ -69,7 +74,8 @@ export class ConversationAccessStorage {
         credential: ConversationCredentialInsert,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        const result = await waitForD1(() => this.credentialInsertStatement(credential).run(), signal);
+        const database = projectDatabase(this.#databases, credential.projectId);
+        const result = await waitForD1(() => this.credentialInsertStatement(database, credential).run(), signal);
         return result.meta.changes === 1;
     };
 
@@ -79,11 +85,11 @@ export class ConversationAccessStorage {
         revokedAt: number,
         signal: AbortSignal,
     ): Promise<boolean> => {
-        const database = projectDatabase(this.#shards, credential.projectId);
+        const database = projectDatabase(this.#databases, credential.projectId);
         const results = await waitForD1(
             () =>
                 database.batch([
-                    this.credentialInsertStatement(credential),
+                    this.credentialInsertStatement(database, credential),
                     database
                         .prepare(
                             "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
@@ -103,7 +109,7 @@ export class ConversationAccessStorage {
     ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                projectDatabase(this.#shards, projectId)
+                projectDatabase(this.#databases, projectId)
                     .prepare(
                         "UPDATE conversation_access_credentials SET revoked_at = ? WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL",
                     )
@@ -138,7 +144,7 @@ export class ConversationAccessStorage {
             storedCredentialSchema,
             await waitForD1(
                 () =>
-                    projectDatabase(this.#shards, projectId)
+                    projectDatabase(this.#databases, projectId)
                         .prepare(`SELECT * FROM conversation_access_credentials WHERE project_id = ? AND ${column} = ?`)
                         .bind(projectId, id)
                         .first(),
@@ -182,7 +188,7 @@ export class ConversationAccessStorage {
     ): Promise<boolean> => {
         const result = await waitForD1(
             () =>
-                projectDatabase(this.#shards, projectId)
+                projectDatabase(this.#databases, projectId)
                     .prepare(
                         `UPDATE conversation_access_credentials SET last_used_at = ?
                           WHERE credential_id = ? AND project_id = ? AND revoked_at IS NULL AND expires_at > ?`,
@@ -306,8 +312,11 @@ export class ConversationAccessStorage {
         return decodeStorageRecords(ConversationMessageRowSchema, rows.results);
     };
 
-    private readonly credentialInsertStatement = (credential: ConversationCredentialInsert): D1PreparedStatement =>
-        projectDatabase(this.#shards, credential.projectId)
+    private readonly credentialInsertStatement = (
+        database: PlatformProjectDatabase,
+        credential: ConversationCredentialInsert,
+    ): PlatformProjectPreparedStatement =>
+        database
             .prepare(
                 `INSERT INTO conversation_access_credentials (
                    credential_id, public_credential_id, parent_credential_id,
