@@ -228,6 +228,15 @@ function emptyDisplayContent(type: AgentDisplayContent["type"]): AgentDisplayCon
     };
 }
 
+function resourceName(uri: string): string {
+    try {
+        const pathname = new URL(uri).pathname;
+        return decodeURIComponent(pathname.slice(pathname.lastIndexOf("/") + 1));
+    } catch {
+        return "";
+    }
+}
+
 export function imageDisplayContent(
     mimeType: string,
     name: string,
@@ -266,18 +275,21 @@ export function normalizeContentBlock(content: ContentBlock): AgentDisplayConten
         };
     }
     if (content.type === "resource") {
+        const type = content.resource.mimeType?.startsWith("video/") === true ? "video" : "resource";
         if ("text" in content.resource) {
             return {
-                ...emptyDisplayContent("resource"),
+                ...emptyDisplayContent(type),
                 mimeType: content.resource.mimeType ?? "",
+                name: resourceName(content.resource.uri),
                 text: content.resource.text,
                 uri: content.resource.uri,
             };
         }
         return {
-            ...emptyDisplayContent("resource"),
+            ...emptyDisplayContent(type),
             data: content.resource.blob,
             mimeType: content.resource.mimeType ?? "",
+            name: resourceName(content.resource.uri),
             uri: content.resource.uri,
         };
     }

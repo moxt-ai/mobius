@@ -1235,7 +1235,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 },
             });
             const echoedPrompt =
-                prompt === "generate markdown image"
+                prompt === "generate markdown image" || prompt === "generate media artifacts"
                     ? (() => {
                           const path = join(process.cwd(), "generated-image.png");
                           writeFileSync(
@@ -1248,6 +1248,23 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                           return `![Generated image](<${path}> "Generated locally")`;
                       })()
                     : prompt;
+            if (prompt === "generate media artifacts") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            resource: {
+                                blob: "AAAAGGZ0eXBpc29tAAACAGlzb21pc28y",
+                                mimeType: "video/mp4",
+                                uri: "file:///generated-video.mp4",
+                            },
+                            type: "resource",
+                        },
+                        messageId: `assistant-${turnNumber.toString()}`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+            }
             if (
                 prompt !== "exercise ACP controls" &&
                 prompt !== "Report working directory" &&

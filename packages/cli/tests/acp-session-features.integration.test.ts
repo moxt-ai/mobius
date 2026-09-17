@@ -19,7 +19,7 @@ import { describe, expect, it } from "vitest";
 import type { AcpActivity } from "../src/acp/activity.ts";
 import { AcpSessionManager, type AcpSessionObserver } from "../src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
-import type { LocalRasterImage } from "../src/authorization/local-raster.ts";
+import type { LocalArtifact } from "../src/authorization/local-artifact.ts";
 import { LocalAgentDefinition } from "../src/config.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
@@ -34,13 +34,19 @@ class RecordingObserver implements AcpSessionObserver {
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
     readonly usage: SessionUsageUpdatedEvent[] = [];
-    readonly importedImages: LocalRasterImage[] = [];
+    readonly importedArtifacts: LocalArtifact[] = [];
+    readonly importedImages: LocalArtifact[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
 
-    readonly importLocalImage = (_sessionId: string, image: LocalRasterImage): Promise<string> => {
-        this.importedImages.push(image);
-        return Promise.resolve("artifact-inline-image");
+    readonly importLocalArtifact = (_sessionId: string, artifact: LocalArtifact): Promise<string> => {
+        this.importedArtifacts.push(artifact);
+        if (artifact.mimeType.startsWith("image/")) {
+            this.importedImages.push(artifact);
+        }
+        return Promise.resolve(
+            artifact.mimeType.startsWith("video/") ? "artifact-inline-video" : "artifact-inline-image",
+        );
     };
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
@@ -173,6 +179,48 @@ describe("ACP session features", () => {
                         artifactId: "artifact-inline-image",
                         name: "generated-image.png",
                         type: "image",
+                    }),
+                }),
+            );
+        } finally {
+            await manager.close();
+            await rm(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an ACP agent returns image and video output, When Mobius records the reply, Then both validated media artifacts remain available by reference", async () => {
+        const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "media-command",
+                cwd: directory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "generate media artifacts",
+                resources: [],
+                sessionId: "media-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(observer.importedArtifacts).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ mimeType: "image/png", name: "generated-image.png" }),
+                    expect.objectContaining({ mimeType: "video/mp4", name: "generated-video.mp4" }),
+                ]),
+            );
+            expect(observer.content).toContainEqual(
+                expect.objectContaining({
+                    content: expect.objectContaining({
+                        artifactId: "artifact-inline-video",
+                        data: "",
+                        mimeType: "video/mp4",
+                        name: "generated-video.mp4",
+                        type: "video",
                     }),
                 }),
             );

@@ -143,8 +143,8 @@ import {
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { uploadRuntimeArtifact } from "./artifacts/runtime-artifact-uploader.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
+import type { LocalArtifact } from "./authorization/local-artifact.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
-import type { LocalRasterImage } from "./authorization/local-raster.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { EmbeddedBotContextApplicator } from "./bots/bot-context-applicator.ts";
 import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
@@ -184,13 +184,13 @@ class DaemonAcpObserver implements AcpSessionObserver {
         this.#record = record;
     }
 
-    readonly importLocalImage = async (
+    readonly importLocalArtifact = async (
         sessionId: string,
-        image: LocalRasterImage,
+        artifact: LocalArtifact,
         signal: AbortSignal,
     ): Promise<string> => {
         try {
-            return (await uploadRuntimeArtifact(this.#config, sessionId, image, signal)).artifactId;
+            return (await uploadRuntimeArtifact(this.#config, sessionId, artifact, signal)).artifactId;
         } catch (cause) {
             signal.throwIfAborted();
             if (cause instanceof Error && cause.name === "AbortError") {

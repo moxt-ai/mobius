@@ -47,8 +47,10 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
+import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readAuthorizedRaster, readInlineRaster } from "../authorization/local-raster.ts";
+import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
 import type { LocalAgentDefinition } from "../config.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
@@ -157,7 +159,7 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly importLocalImage: (sessionId: string, image: LocalRasterImage, signal: AbortSignal) => Promise<string>;
+    readonly importLocalArtifact: (sessionId: string, artifact: LocalArtifact, signal: AbortSignal) => Promise<string>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -170,9 +172,9 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly importLocalImage = (
+    readonly importLocalArtifact = (
         _sessionId: string,
-        _image: LocalRasterImage,
+        _artifact: LocalArtifact,
         signal: AbortSignal,
     ): Promise<string> => {
         signal.throwIfAborted();
@@ -1073,6 +1075,13 @@ class AcpProcessSession implements AcpClientHandler {
                 return await this.importRaster(raster, signal);
             }
         }
+        if (content.type === "video" && content.data.length > 0) {
+            const video = readInlineVideo(content.data, content.mimeType, content.name);
+            if (video === null) {
+                return { ...content, data: "" };
+            }
+            return await this.importVideo(video, AbortSignal.timeout(20_000));
+        }
         return content;
     };
 
@@ -1108,13 +1117,30 @@ class AcpProcessSession implements AcpClientHandler {
         raster: LocalRasterImage,
         signal: AbortSignal,
     ): Promise<AgentDisplayContent> => {
-        const artifactId = await this.#getObserver().importLocalImage(this.#mobiusSessionId, raster, signal);
+        const artifactId = await this.#getObserver().importLocalArtifact(this.#mobiusSessionId, raster, signal);
         return imageDisplayContent(
             raster.mimeType,
             raster.name,
             artifactId.length > 0 ? "" : raster.base64(),
             artifactId,
         );
+    };
+
+    private readonly importVideo = async (video: LocalVideo, signal: AbortSignal): Promise<AgentDisplayContent> => {
+        const artifactId = await this.#getObserver().importLocalArtifact(this.#mobiusSessionId, video, signal);
+        return {
+            artifactId,
+            data: artifactId.length > 0 ? "" : video.base64(),
+            mimeType: video.mimeType,
+            name: video.name,
+            newText: "",
+            oldText: "",
+            path: "",
+            terminalId: "",
+            text: "",
+            type: "video",
+            uri: "",
+        };
     };
 
     async #initializeAgent(signal: AbortSignal): Promise<void> {

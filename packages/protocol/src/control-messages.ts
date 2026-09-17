@@ -225,7 +225,7 @@ const displayContentSchema = z
         path: z.string().max(2_048),
         terminalId: z.string().max(255),
         text: LONG_TEXT,
-        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text"]),
+        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text", "video"]),
         uri: z.string().max(4_096),
     })
     .readonly();
@@ -243,7 +243,7 @@ const recordedDisplayContentSchema = z
         path: z.string().max(2_048),
         terminalId: z.string().max(255),
         text: z.string().max(4_000_000),
-        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text"]),
+        type: z.enum(["diff", "image", "resource", "resource_link", "terminal", "text", "video"]),
         uri: z.string().max(4_096),
     })
     .readonly();

@@ -9,7 +9,7 @@ import {
     MobiusValidationError,
 } from "@moxt-ai/mobius-sdk";
 import { fetch, type Response } from "undici";
-import type { LocalRasterImage } from "../authorization/local-raster.ts";
+import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { DaemonConfig } from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 
@@ -135,17 +135,17 @@ async function putContent(
 export async function uploadRuntimeArtifact(
     config: DaemonConfig,
     sessionId: string,
-    image: LocalRasterImage,
+    artifact: LocalArtifact,
     signal: AbortSignal,
 ): Promise<UploadedRuntimeArtifact> {
     signal.throwIfAborted();
     let request: MobiusArtifactUploadRequest;
     try {
         request = new MobiusArtifactUploadRequest(
-            image.name,
-            image.mimeType,
-            image.bytes.byteLength,
-            createHash("sha256").update(image.bytes).digest("hex"),
+            artifact.name,
+            artifact.mimeType,
+            artifact.bytes.byteLength,
+            createHash("sha256").update(artifact.bytes).digest("hex"),
         );
     } catch (cause) {
         translateSdkError(cause);
@@ -186,7 +186,7 @@ export async function uploadRuntimeArtifact(
                 token,
             ),
             authorization,
-            image.bytes,
+            artifact.bytes,
             requestSignal,
         );
     } catch (cause) {
