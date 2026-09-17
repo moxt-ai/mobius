@@ -86,6 +86,7 @@ import {
 } from "./session-store.ts";
 
 const PROCESS_STOP_TIMEOUT_MILLISECONDS = 1_000;
+const MAX_ACP_PROCESSES = 10;
 const MAX_PRE_SESSION_UPDATES = 100;
 const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 const SESSION_CONTROL_COMMAND_ID = "session-control";
@@ -239,6 +240,102 @@ class RetryableAcpInitializationError extends AcpExecutionError {
     constructor(cause: unknown) {
         super("ACP agent initialization failed", { cause });
         this.name = "RetryableAcpInitializationError";
+    }
+}
+
+class AcpProcessCapacityLease {
+    readonly #releaseCapacity: () => void;
+    #released = false;
+
+    constructor(releaseCapacity: () => void) {
+        this.#releaseCapacity = releaseCapacity;
+    }
+
+    readonly release = (): void => {
+        if (this.#released) {
+            return;
+        }
+        this.#released = true;
+        this.#releaseCapacity();
+    };
+}
+
+class AcpProcessCapacityWaiter {
+    readonly completion = Promise.withResolvers<AcpProcessCapacityLease>();
+    readonly signal: AbortSignal;
+
+    constructor(signal: AbortSignal) {
+        this.signal = signal;
+    }
+
+    readonly cancel = (): void => {
+        try {
+            this.signal.throwIfAborted();
+        } catch (error) {
+            this.completion.reject(error);
+        }
+    };
+}
+
+class AcpProcessCapacityLock {
+    #locked = false;
+    readonly #waiters: AcpProcessCapacityWaiter[] = [];
+
+    readonly acquire = async (signal: AbortSignal): Promise<AcpProcessCapacityLease> => {
+        signal.throwIfAborted();
+        if (!this.#locked) {
+            this.#locked = true;
+            return new AcpProcessCapacityLease(this.#release);
+        }
+
+        const waiter = new AcpProcessCapacityWaiter(signal);
+        this.#waiters.push(waiter);
+        signal.addEventListener("abort", waiter.cancel, { once: true });
+        if (signal.aborted) {
+            waiter.cancel();
+        }
+        try {
+            return await waiter.completion.promise;
+        } finally {
+            signal.removeEventListener("abort", waiter.cancel);
+            const index = this.#waiters.indexOf(waiter);
+            if (index >= 0) {
+                this.#waiters.splice(index, 1);
+            }
+        }
+    };
+
+    readonly #release = (): void => {
+        while (this.#waiters.length > 0) {
+            const waiter = this.#waiters.shift();
+            if (waiter === undefined || waiter.signal.aborted) {
+                continue;
+            }
+            waiter.completion.resolve(new AcpProcessCapacityLease(this.#release));
+            return;
+        }
+        this.#locked = false;
+    };
+}
+
+async function waitForAcpProcessCapacity(completion: Promise<void>, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    const cancelled = Promise.withResolvers<void>();
+    const cancel = (): void => {
+        try {
+            signal.throwIfAborted();
+        } catch (error) {
+            cancelled.reject(error);
+        }
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+    if (signal.aborted) {
+        cancel();
+    }
+    try {
+        await Promise.race([completion, cancelled.promise]);
+    } finally {
+        signal.removeEventListener("abort", cancel);
     }
 }
 
@@ -1915,21 +2012,24 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly close = async (): Promise<void> => {
-        await this.cancelPendingInteractions();
-        if (this.#capabilities.closeSession && this.#nativeSessionId.length > 0) {
-            try {
-                await this.#connection.agent.request(
-                    methods.agent.session.close,
-                    { sessionId: this.#nativeSessionId },
-                    {
-                        cancellationSignal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
-                    },
-                );
-            } catch {
-                // Process teardown below remains authoritative.
+        try {
+            await this.cancelPendingInteractions();
+            if (this.#capabilities.closeSession && this.#nativeSessionId.length > 0) {
+                try {
+                    await this.#connection.agent.request(
+                        methods.agent.session.close,
+                        { sessionId: this.#nativeSessionId },
+                        {
+                            cancellationSignal: AbortSignal.timeout(PROCESS_STOP_TIMEOUT_MILLISECONDS),
+                        },
+                    );
+                } catch {
+                    // Process teardown below remains authoritative.
+                }
             }
+        } finally {
+            await this.closeProcess();
         }
-        await this.closeProcess();
     };
 
     readonly closeProcess = async (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> => {
@@ -2043,6 +2143,37 @@ class AcpProcessSession implements AcpClientHandler {
     };
 }
 
+abstract class AcpProcessEvictionCandidate {}
+
+class MissingAcpProcessEvictionCandidate extends AcpProcessEvictionCandidate {}
+
+abstract class FoundAcpProcessEvictionCandidate extends AcpProcessEvictionCandidate {
+    readonly runtime: AcpProcessSession;
+
+    constructor(runtime: AcpProcessSession) {
+        super();
+        this.runtime = runtime;
+    }
+}
+
+class FoundAcpSessionProcessEvictionCandidate extends FoundAcpProcessEvictionCandidate {
+    readonly sessionId: string;
+
+    constructor(sessionId: string, runtime: AcpProcessSession) {
+        super(runtime);
+        this.sessionId = sessionId;
+    }
+}
+
+class FoundAcpNativeBrowserProcessEvictionCandidate extends FoundAcpProcessEvictionCandidate {
+    readonly sessionId: string;
+
+    constructor(sessionId: string, runtime: AcpProcessSession) {
+        super(runtime);
+        this.sessionId = sessionId;
+    }
+}
+
 export class AcpSessionManager {
     readonly #activeCommandIds = new Map<string, string>();
     readonly #agentSettingsObserver = new NullAcpSessionObserver();
@@ -2051,10 +2182,18 @@ export class AcpSessionManager {
     readonly #nativeBrowserPreparing = new Map<string, Promise<AcpProcessSession>>();
     readonly #nativeBrowserSessions = new Map<string, AcpProcessSession>();
     readonly #nativeBrowserStore = new MemoryAcpSessionStore();
+    readonly #nativeBrowserUseCounts = new Map<string, number>();
     readonly #activeSessionIds = new Set<string>();
     readonly #cancellationRequests = new Map<string, Promise<void>>();
     readonly #preparing = new Map<string, Promise<AcpProcessSession>>();
+    #processCapacityChanged = Promise.withResolvers<void>();
+    readonly #processCapacityLock = new AcpProcessCapacityLock();
+    readonly #retainedProcesses = new Map<AcpProcessSession, FoundAcpProcessEvictionCandidate>();
+    #retiringProcessCount = 0;
+    readonly #sessionUseCounts = new Map<string, number>();
     readonly #sessions = new Map<string, AcpProcessSession>();
+    #startingProcessCount = 0;
+    #transientProcessCount = 0;
     readonly #store: AcpSessionStore;
     #observer: AcpSessionObserver;
 
@@ -2070,18 +2209,288 @@ export class AcpSessionManager {
         this.#observer = observer;
     };
 
+    #notifyProcessCapacityChanged(): void {
+        const changed = this.#processCapacityChanged;
+        this.#processCapacityChanged = Promise.withResolvers<void>();
+        changed.resolve();
+    }
+
+    #touchSession(sessionId: string): void {
+        const runtime = this.#sessions.get(sessionId);
+        if (runtime === undefined) {
+            return;
+        }
+        this.#touchProcess(runtime);
+    }
+
+    #touchExpectedSession(sessionId: string, expected: AcpProcessSession): void {
+        if (this.#sessions.get(sessionId) !== expected) {
+            return;
+        }
+        this.#touchProcess(expected);
+    }
+
+    #touchNativeBrowserSession(sessionId: string): void {
+        const runtime = this.#nativeBrowserSessions.get(sessionId);
+        if (runtime === undefined) {
+            return;
+        }
+        this.#touchProcess(runtime);
+    }
+
+    #touchExpectedNativeBrowserSession(sessionId: string, expected: AcpProcessSession): void {
+        if (this.#nativeBrowserSessions.get(sessionId) !== expected) {
+            return;
+        }
+        this.#touchProcess(expected);
+    }
+
+    #touchProcess(runtime: AcpProcessSession): void {
+        const retained = this.#retainedProcesses.get(runtime);
+        if (retained === undefined) {
+            return;
+        }
+        this.#retainedProcesses.delete(runtime);
+        this.#retainedProcesses.set(runtime, retained);
+    }
+
+    #beginSessionUse(sessionId: string): void {
+        this.#sessionUseCounts.set(sessionId, (this.#sessionUseCounts.get(sessionId) ?? 0) + 1);
+        this.#touchSession(sessionId);
+    }
+
+    #endSessionUse(sessionId: string): void {
+        const count = this.#sessionUseCounts.get(sessionId) ?? 0;
+        if (count <= 1) {
+            this.#sessionUseCounts.delete(sessionId);
+        } else {
+            this.#sessionUseCounts.set(sessionId, count - 1);
+        }
+        this.#touchSession(sessionId);
+        this.#notifyProcessCapacityChanged();
+    }
+
+    #beginNativeBrowserUse(sessionId: string): void {
+        this.#nativeBrowserUseCounts.set(sessionId, (this.#nativeBrowserUseCounts.get(sessionId) ?? 0) + 1);
+        this.#touchNativeBrowserSession(sessionId);
+    }
+
+    #endNativeBrowserUse(sessionId: string): void {
+        const count = this.#nativeBrowserUseCounts.get(sessionId) ?? 0;
+        if (count <= 1) {
+            this.#nativeBrowserUseCounts.delete(sessionId);
+        } else {
+            this.#nativeBrowserUseCounts.set(sessionId, count - 1);
+        }
+        this.#touchNativeBrowserSession(sessionId);
+        this.#notifyProcessCapacityChanged();
+    }
+
+    #isNativeSessionOperationActive(sessionId: string): boolean {
+        const stored = this.#store.read(sessionId);
+        return (
+            stored instanceof FoundAcpStoredSession &&
+            this.#nativeOperations.has(`${stored.session.agentId}:${stored.session.nativeSessionId}`)
+        );
+    }
+
+    #leastRecentlyUsedEvictionCandidate(): AcpProcessEvictionCandidate {
+        for (const candidate of this.#retainedProcesses.values()) {
+            if (candidate instanceof FoundAcpSessionProcessEvictionCandidate) {
+                if (
+                    this.#activeSessionIds.has(candidate.sessionId) ||
+                    this.#cancellationRequests.has(candidate.sessionId) ||
+                    this.#preparing.has(candidate.sessionId) ||
+                    (this.#sessionUseCounts.get(candidate.sessionId) ?? 0) > 0 ||
+                    this.#isNativeSessionOperationActive(candidate.sessionId)
+                ) {
+                    continue;
+                }
+                return candidate;
+            }
+            if (
+                candidate instanceof FoundAcpNativeBrowserProcessEvictionCandidate &&
+                !this.#nativeBrowserPreparing.has(candidate.sessionId) &&
+                (this.#nativeBrowserUseCounts.get(candidate.sessionId) ?? 0) === 0
+            ) {
+                return candidate;
+            }
+        }
+        return new MissingAcpProcessEvictionCandidate();
+    }
+
+    #ownedProcessCount(): number {
+        return (
+            this.#retainedProcesses.size +
+            this.#startingProcessCount +
+            this.#transientProcessCount +
+            this.#retiringProcessCount
+        );
+    }
+
+    async #retireProcess(runtime: AcpProcessSession, retained: boolean, close: () => Promise<void>): Promise<void> {
+        if (retained) {
+            this.#retainedProcesses.delete(runtime);
+            this.#retiringProcessCount += 1;
+        }
+        try {
+            await close();
+        } finally {
+            if (retained) {
+                this.#retiringProcessCount -= 1;
+                this.#notifyProcessCapacityChanged();
+            }
+        }
+    }
+
+    async #retireSessionProcess(
+        sessionId: string,
+        runtime: AcpProcessSession,
+        close: () => Promise<void>,
+    ): Promise<void> {
+        const retained = this.#sessions.get(sessionId) === runtime;
+        if (retained) {
+            this.#sessions.delete(sessionId);
+        }
+        await this.#retireProcess(runtime, retained, close);
+    }
+
+    async #retireNativeBrowserProcess(
+        sessionId: string,
+        runtime: AcpProcessSession,
+        close: () => Promise<void>,
+    ): Promise<void> {
+        const retained = this.#nativeBrowserSessions.get(sessionId) === runtime;
+        if (retained) {
+            this.#nativeBrowserSessions.delete(sessionId);
+            this.#nativeBrowserStore.remove(sessionId);
+        }
+        await this.#retireProcess(runtime, retained, close);
+    }
+
+    async #reserveProcessCapacity(signal: AbortSignal): Promise<void> {
+        const lease = await this.#processCapacityLock.acquire(signal);
+        try {
+            for (;;) {
+                signal.throwIfAborted();
+                if (this.#ownedProcessCount() < MAX_ACP_PROCESSES) {
+                    this.#startingProcessCount += 1;
+                    return;
+                }
+                const candidate = this.#leastRecentlyUsedEvictionCandidate();
+                if (candidate instanceof FoundAcpSessionProcessEvictionCandidate) {
+                    await this.#retireSessionProcess(
+                        candidate.sessionId,
+                        candidate.runtime,
+                        async () => await candidate.runtime.close(),
+                    );
+                    continue;
+                }
+                if (candidate instanceof FoundAcpNativeBrowserProcessEvictionCandidate) {
+                    await this.#retireNativeBrowserProcess(
+                        candidate.sessionId,
+                        candidate.runtime,
+                        async () => await candidate.runtime.close(),
+                    );
+                    continue;
+                }
+                const changed = this.#processCapacityChanged.promise;
+                await waitForAcpProcessCapacity(changed, signal);
+            }
+        } finally {
+            lease.release();
+        }
+    }
+
+    async #startRetainedSessionProcess(
+        options: AcpPrepareOptions,
+        start: () => Promise<AcpProcessSession>,
+    ): Promise<AcpProcessSession> {
+        await this.#reserveProcessCapacity(options.signal);
+        try {
+            const runtime = await start();
+            this.#startingProcessCount -= 1;
+            this.#sessions.set(options.sessionId, runtime);
+            this.#retainedProcesses.set(
+                runtime,
+                new FoundAcpSessionProcessEvictionCandidate(options.sessionId, runtime),
+            );
+            this.#notifyProcessCapacityChanged();
+            return runtime;
+        } catch (error) {
+            this.#startingProcessCount -= 1;
+            this.#notifyProcessCapacityChanged();
+            throw error;
+        }
+    }
+
+    async #startRetainedNativeBrowserProcess(
+        options: AcpPrepareOptions,
+        start: () => Promise<AcpProcessSession>,
+    ): Promise<AcpProcessSession> {
+        await this.#reserveProcessCapacity(options.signal);
+        try {
+            const runtime = await start();
+            this.#startingProcessCount -= 1;
+            this.#nativeBrowserSessions.set(options.sessionId, runtime);
+            this.#retainedProcesses.set(
+                runtime,
+                new FoundAcpNativeBrowserProcessEvictionCandidate(options.sessionId, runtime),
+            );
+            this.#notifyProcessCapacityChanged();
+            return runtime;
+        } catch (error) {
+            this.#startingProcessCount -= 1;
+            this.#notifyProcessCapacityChanged();
+            throw error;
+        }
+    }
+
+    async #runWithTransientProcess<T>(
+        signal: AbortSignal,
+        start: () => Promise<AcpProcessSession>,
+        operation: (runtime: AcpProcessSession) => Promise<T>,
+        close: (runtime: AcpProcessSession) => Promise<void>,
+    ): Promise<T> {
+        await this.#reserveProcessCapacity(signal);
+        let runtime: AcpProcessSession;
+        try {
+            runtime = await start();
+        } catch (error) {
+            this.#startingProcessCount -= 1;
+            this.#notifyProcessCapacityChanged();
+            throw error;
+        }
+        this.#startingProcessCount -= 1;
+        this.#transientProcessCount += 1;
+        this.#notifyProcessCapacityChanged();
+        try {
+            return await operation(runtime);
+        } finally {
+            try {
+                await close(runtime);
+            } finally {
+                this.#transientProcessCount -= 1;
+                this.#notifyProcessCapacityChanged();
+            }
+        }
+    }
+
     async #startNativeBrowserPreparation(options: AcpPrepareOptions): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                const runtime = await AcpProcessSession.startNativeSessionBrowser(
+                return await this.#startRetainedNativeBrowserProcess(
                     options,
-                    () => this.#nativeBrowserObserver,
-                    this.#nativeBrowserStore,
+                    async () =>
+                        await AcpProcessSession.startNativeSessionBrowser(
+                            options,
+                            () => this.#nativeBrowserObserver,
+                            this.#nativeBrowserStore,
+                        ),
                 );
-                this.#nativeBrowserSessions.set(options.sessionId, runtime);
-                return runtime;
             } finally {
                 this.#nativeBrowserPreparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#nativeBrowserPreparing.set(options.sessionId, operation);
@@ -2094,18 +2503,19 @@ export class AcpSessionManager {
     ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                this.#nativeBrowserSessions.delete(options.sessionId);
-                await existing.close();
-                this.#nativeBrowserStore.remove(options.sessionId);
-                const runtime = await AcpProcessSession.startNativeSessionBrowser(
+                await this.#retireNativeBrowserProcess(options.sessionId, existing, async () => await existing.close());
+                return await this.#startRetainedNativeBrowserProcess(
                     options,
-                    () => this.#nativeBrowserObserver,
-                    this.#nativeBrowserStore,
+                    async () =>
+                        await AcpProcessSession.startNativeSessionBrowser(
+                            options,
+                            () => this.#nativeBrowserObserver,
+                            this.#nativeBrowserStore,
+                        ),
                 );
-                this.#nativeBrowserSessions.set(options.sessionId, runtime);
-                return runtime;
             } finally {
                 this.#nativeBrowserPreparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#nativeBrowserPreparing.set(options.sessionId, operation);
@@ -2118,11 +2528,13 @@ export class AcpSessionManager {
     ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics);
-                this.#sessions.set(options.sessionId, runtime);
-                return runtime;
+                return await this.#startRetainedSessionProcess(
+                    options,
+                    async () => await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics),
+                );
             } finally {
                 this.#preparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#preparing.set(options.sessionId, operation);
@@ -2136,17 +2548,20 @@ export class AcpSessionManager {
     ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                const runtime = await AcpProcessSession.startSessionForkAtTurn(
+                return await this.#startRetainedSessionProcess(
                     options,
-                    sourceNativeSessionId,
-                    forkPoint,
-                    () => this.#observer,
-                    this.#store,
+                    async () =>
+                        await AcpProcessSession.startSessionForkAtTurn(
+                            options,
+                            sourceNativeSessionId,
+                            forkPoint,
+                            () => this.#observer,
+                            this.#store,
+                        ),
                 );
-                this.#sessions.set(options.sessionId, runtime);
-                return runtime;
             } finally {
                 this.#preparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#preparing.set(options.sessionId, operation);
@@ -2160,14 +2575,19 @@ export class AcpSessionManager {
     ): Promise<AcpProcessSession> {
         const operation = (async () => {
             try {
-                this.#sessions.delete(options.sessionId);
-                await metrics.measure("runtime-replacement-close", async () => await existing.close());
+                await this.#retireSessionProcess(
+                    options.sessionId,
+                    existing,
+                    async () => await metrics.measure("runtime-replacement-close", async () => await existing.close()),
+                );
                 this.#store.remove(options.sessionId);
-                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics);
-                this.#sessions.set(options.sessionId, runtime);
-                return runtime;
+                return await this.#startRetainedSessionProcess(
+                    options,
+                    async () => await AcpProcessSession.start(options, () => this.#observer, this.#store, metrics),
+                );
             } finally {
                 this.#preparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#preparing.set(options.sessionId, operation);
@@ -2181,10 +2601,12 @@ export class AcpSessionManager {
         const desiredConfigOptions = existing.prepared().configOptions;
         const operation = (async () => {
             try {
-                this.#sessions.delete(options.sessionId);
-                await existing.close();
+                await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
                 this.#store.remove(options.sessionId);
-                const runtime = await AcpProcessSession.start(options, () => this.#observer, this.#store);
+                const runtime = await this.#startRetainedSessionProcess(
+                    options,
+                    async () => await AcpProcessSession.start(options, () => this.#observer, this.#store),
+                );
                 try {
                     for (const desired of desiredConfigOptions) {
                         const current = runtime.prepared().configOptions.find((option) => option.id === desired.id);
@@ -2219,14 +2641,14 @@ export class AcpSessionManager {
                         }
                     }
                 } catch (error) {
-                    await runtime.close();
+                    await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
                     this.#store.remove(options.sessionId);
                     throw error;
                 }
-                this.#sessions.set(options.sessionId, runtime);
                 return runtime;
             } finally {
                 this.#preparing.delete(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         })();
         this.#preparing.set(options.sessionId, operation);
@@ -2255,6 +2677,7 @@ export class AcpSessionManager {
         if (pending !== undefined) {
             const runtime = await metrics.measure("session-preparation-wait", async () => await pending);
             if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                this.#touchExpectedSession(options.sessionId, runtime);
                 return runtime.prepared();
             }
             return await this.prepareSession(options, metrics);
@@ -2262,6 +2685,7 @@ export class AcpSessionManager {
         const existing = this.#sessions.get(options.sessionId);
         if (existing !== undefined) {
             if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                this.#touchExpectedSession(options.sessionId, existing);
                 return existing.prepared();
             }
             if (!existing.canRebind()) {
@@ -2285,22 +2709,26 @@ export class AcpSessionManager {
      */
     readonly inspectAgentSettings = async (
         options: AcpAgentSettingsInspectionOptions,
-    ): Promise<AcpAgentSettingsSnapshot> => {
-        const runtime = await AcpProcessSession.start(
-            {
-                ...options,
-                sessionId: `agent-settings-${crypto.randomUUID()}`,
+    ): Promise<AcpAgentSettingsSnapshot> =>
+        await this.#runWithTransientProcess(
+            options.signal,
+            async () =>
+                await AcpProcessSession.start(
+                    {
+                        ...options,
+                        sessionId: `agent-settings-${crypto.randomUUID()}`,
+                    },
+                    () => this.#agentSettingsObserver,
+                    new MemoryAcpSessionStore(),
+                ),
+            (runtime) => {
+                const prepared = runtime.prepared();
+                return Promise.resolve(
+                    new AcpAgentSettingsSnapshot(prepared.agentName, prepared.agentVersion, prepared.configOptions),
+                );
             },
-            () => this.#agentSettingsObserver,
-            new MemoryAcpSessionStore(),
+            async (runtime) => await runtime.close(),
         );
-        try {
-            const prepared = runtime.prepared();
-            return new AcpAgentSettingsSnapshot(prepared.agentName, prepared.agentVersion, prepared.configOptions);
-        } finally {
-            await runtime.close();
-        }
-    };
 
     /**
      * @deprecated Retained for the Bot-scoped legacy Agent-configuration API.
@@ -2313,18 +2741,20 @@ export class AcpSessionManager {
         if (this.#preparing.has(options.sessionId) || this.#sessions.has(options.sessionId)) {
             throw new AcpExecutionError("The configuration inspection session is already in use", {}, "session_busy");
         }
-        const runtime = await this.#startPreparation(options, metrics);
+        this.#beginSessionUse(options.sessionId);
         try {
-            return runtime.prepared();
-        } finally {
-            if (this.#sessions.get(options.sessionId) === runtime) {
-                this.#sessions.delete(options.sessionId);
-            }
+            const runtime = await this.#startPreparation(options, metrics);
             try {
-                await runtime.close();
+                return runtime.prepared();
             } finally {
-                this.#store.remove(options.sessionId);
+                try {
+                    await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
+                } finally {
+                    this.#store.remove(options.sessionId);
+                }
             }
+        } finally {
+            this.#endSessionUse(options.sessionId);
         }
     };
 
@@ -2346,6 +2776,7 @@ export class AcpSessionManager {
             );
         }
         if (existing.usesEnvironment(options.agent.environment)) {
+            this.#touchExpectedSession(options.sessionId, existing);
             return existing.prepared();
         }
         if (!existing.canRebind()) {
@@ -2363,6 +2794,7 @@ export class AcpSessionManager {
         if (pending !== undefined) {
             const runtime = await pending;
             if (runtime.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                this.#touchExpectedNativeBrowserSession(options.sessionId, runtime);
                 return runtime.prepared();
             }
             return await this.prepareNativeSessionBrowser(options);
@@ -2370,6 +2802,7 @@ export class AcpSessionManager {
         const existing = this.#nativeBrowserSessions.get(options.sessionId);
         if (existing !== undefined) {
             if (existing.belongsTo(options.agent.id, options.cwd, options.additionalDirectories)) {
+                this.#touchExpectedNativeBrowserSession(options.sessionId, existing);
                 return existing.prepared();
             }
             if (!existing.canRebind()) {
@@ -2387,8 +2820,13 @@ export class AcpSessionManager {
     };
 
     readonly configureSession = async (options: AcpConfigureOptions): Promise<readonly SessionConfigOption[]> => {
-        const runtime = await this.ensureSession(options);
-        return await runtime.configure(options);
+        this.#beginSessionUse(options.sessionId);
+        try {
+            const runtime = await this.ensureSession(options);
+            return await runtime.configure(options);
+        } finally {
+            this.#endSessionUse(options.sessionId);
+        }
     };
 
     readonly cancelPrompt = async (sessionId: string): Promise<void> => {
@@ -2405,6 +2843,8 @@ export class AcpSessionManager {
                 } finally {
                     if (this.#sessions.get(sessionId) === runtime) {
                         this.#sessions.delete(sessionId);
+                        this.#retainedProcesses.delete(runtime);
+                        this.#notifyProcessCapacityChanged();
                     }
                 }
             }
@@ -2500,10 +2940,7 @@ export class AcpSessionManager {
                 return this.#cancellationRequests.has(options.sessionId) ? { stopReason: "cancelled" } : result;
             } catch (error) {
                 if (this.#cancellationRequests.has(options.sessionId)) {
-                    if (this.#sessions.get(options.sessionId) === runtime) {
-                        this.#sessions.delete(options.sessionId);
-                    }
-                    await runtime.closeProcess();
+                    await this.#cancellationRequests.get(options.sessionId);
                     return { stopReason: "cancelled" };
                 }
                 throw error;
@@ -2511,8 +2948,11 @@ export class AcpSessionManager {
         } catch (error) {
             const failedRuntime = this.#sessions.get(options.sessionId);
             if (failedRuntime !== undefined) {
-                this.#sessions.delete(options.sessionId);
-                await failedRuntime.close();
+                await this.#retireSessionProcess(
+                    options.sessionId,
+                    failedRuntime,
+                    async () => await failedRuntime.close(),
+                );
             }
             if (this.#cancellationRequests.has(options.sessionId)) {
                 return { stopReason: "cancelled" };
@@ -2533,6 +2973,8 @@ export class AcpSessionManager {
                     this.#activeCommandIds.delete(options.sessionId);
                 }
                 this.#cancellationRequests.delete(options.sessionId);
+                this.#touchSession(options.sessionId);
+                this.#notifyProcessCapacityChanged();
             }
         }
     };
@@ -2554,11 +2996,18 @@ export class AcpSessionManager {
     };
 
     readonly close = async (): Promise<void> => {
-        const sessions = [...this.#sessions.values()];
-        const nativeBrowserSessions = [...this.#nativeBrowserSessions.values()];
-        this.#sessions.clear();
-        this.#nativeBrowserSessions.clear();
-        await Promise.all([...sessions, ...nativeBrowserSessions].map(async (session) => await session.close()));
+        const sessions = [...this.#sessions.entries()];
+        const nativeBrowserSessions = [...this.#nativeBrowserSessions.entries()];
+        await Promise.all([
+            ...sessions.map(
+                async ([sessionId, runtime]) =>
+                    await this.#retireSessionProcess(sessionId, runtime, async () => await runtime.close()),
+            ),
+            ...nativeBrowserSessions.map(
+                async ([sessionId, runtime]) =>
+                    await this.#retireNativeBrowserProcess(sessionId, runtime, async () => await runtime.close()),
+            ),
+        ]);
     };
 
     readonly hasPreparedSession = (
@@ -2578,6 +3027,7 @@ export class AcpSessionManager {
                     "session_identity_mismatch",
                 );
             }
+            this.#touchExpectedSession(options.sessionId, existing);
             return existing;
         }
         await this.prepareSession(options);
@@ -2598,6 +3048,7 @@ export class AcpSessionManager {
                     "session_identity_mismatch",
                 );
             }
+            this.#touchExpectedNativeBrowserSession(options.sessionId, existing);
             return existing;
         }
         await this.prepareNativeSessionBrowser(options);
@@ -2611,8 +3062,14 @@ export class AcpSessionManager {
     readonly listNativeSessions = async (
         options: AcpPrepareOptions,
         cursor: string | null,
-    ): Promise<NativeSessionPage> =>
-        await (await this.#ensureNativeSessionBrowser(options)).listNativeSessions(cursor, options.signal);
+    ): Promise<NativeSessionPage> => {
+        this.#beginNativeBrowserUse(options.sessionId);
+        try {
+            return await (await this.#ensureNativeSessionBrowser(options)).listNativeSessions(cursor, options.signal);
+        } finally {
+            this.#endNativeBrowserUse(options.sessionId);
+        }
+    };
 
     readonly previewNativeSession = async (
         options: AcpPrepareOptions,
@@ -2632,17 +3089,20 @@ export class AcpSessionManager {
         }
         this.#nativeOperations.add(key);
         try {
-            const runtime = await AcpProcessSession.startNativeSessionBrowser(
-                options,
-                () => this.#nativeBrowserObserver,
-                new MemoryAcpSessionStore(),
+            return await this.#runWithTransientProcess(
+                options.signal,
+                async () =>
+                    await AcpProcessSession.startNativeSessionBrowser(
+                        options,
+                        () => this.#nativeBrowserObserver,
+                        new MemoryAcpSessionStore(),
+                    ),
+                async (runtime) => {
+                    runtime.selectNativeSession(nativeSessionId);
+                    return await runtime.loadHistory(options.signal);
+                },
+                async (runtime) => await runtime.closeProcess(),
             );
-            try {
-                runtime.selectNativeSession(nativeSessionId);
-                return await runtime.loadHistory(options.signal);
-            } finally {
-                await runtime.closeProcess();
-            }
         } finally {
             this.#nativeOperations.delete(key);
         }
@@ -2672,31 +3132,40 @@ export class AcpSessionManager {
         }
         const existing = linked[0];
         if (origin.kind === "import" && existing !== undefined) {
-            const runtime = await this.ensureSession({
-                ...options,
-                sessionId: existing.sessionId,
-            });
-            if (this.#activeSessionIds.has(existing.sessionId) || this.#nativeOperations.has(key)) {
-                throw new AcpExecutionError(
-                    "Wait for the native session's running operation to finish",
-                    {},
-                    "session_busy",
-                );
-            }
-            this.#nativeOperations.add(key);
+            this.#beginSessionUse(existing.sessionId);
             try {
-                const history = await runtime.loadHistory(options.signal);
-                return {
-                    prepared: runtime.prepared(),
+                const runtime = await this.ensureSession({
+                    ...options,
                     sessionId: existing.sessionId,
-                    history,
-                };
-            } catch (error) {
-                this.#sessions.delete(existing.sessionId);
-                await runtime.closeProcess();
-                throw error;
+                });
+                if (this.#activeSessionIds.has(existing.sessionId) || this.#nativeOperations.has(key)) {
+                    throw new AcpExecutionError(
+                        "Wait for the native session's running operation to finish",
+                        {},
+                        "session_busy",
+                    );
+                }
+                this.#nativeOperations.add(key);
+                try {
+                    const history = await runtime.loadHistory(options.signal);
+                    return {
+                        prepared: runtime.prepared(),
+                        sessionId: existing.sessionId,
+                        history,
+                    };
+                } catch (error) {
+                    await this.#retireSessionProcess(
+                        existing.sessionId,
+                        runtime,
+                        async () => await runtime.closeProcess(),
+                    );
+                    throw error;
+                } finally {
+                    this.#nativeOperations.delete(key);
+                    this.#notifyProcessCapacityChanged();
+                }
             } finally {
-                this.#nativeOperations.delete(key);
+                this.#endSessionUse(existing.sessionId);
             }
         }
         if (
@@ -2707,6 +3176,7 @@ export class AcpSessionManager {
         ) {
             throw new AcpExecutionError("The destination conversation already exists", {}, "session_identity_mismatch");
         }
+        this.#beginSessionUse(options.sessionId);
         this.#nativeOperations.add(key);
         try {
             const runtime = await this.#startPreparation({ ...options, origin });
@@ -2720,23 +3190,23 @@ export class AcpSessionManager {
                     history,
                 };
             } catch (error) {
-                this.#sessions.delete(options.sessionId);
                 this.#store.remove(options.sessionId);
-                await runtime.closeProcess();
+                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
                 throw error;
             } finally {
                 this.#nativeOperations.delete(openedKey);
+                this.#notifyProcessCapacityChanged();
             }
         } catch (error) {
             this.#store.remove(options.sessionId);
             const runtime = this.#sessions.get(options.sessionId);
-            this.#sessions.delete(options.sessionId);
             if (runtime !== undefined) {
-                await runtime.closeProcess();
+                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
             }
             throw error;
         } finally {
             this.#nativeOperations.delete(key);
+            this.#endSessionUse(options.sessionId);
         }
     };
 
@@ -2791,6 +3261,7 @@ export class AcpSessionManager {
         ) {
             throw new AcpExecutionError("The destination conversation already exists", {}, "session_identity_mismatch");
         }
+        this.#beginSessionUse(options.sessionId);
         this.#nativeOperations.add(key);
         try {
             const runtime = await this.#startSessionForkAtTurnPreparation(
@@ -2807,15 +3278,16 @@ export class AcpSessionManager {
                     sessionId: options.sessionId,
                 };
             } catch (error) {
-                this.#sessions.delete(options.sessionId);
                 this.#store.remove(options.sessionId);
-                await runtime.closeProcess();
+                await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.closeProcess());
                 throw error;
             } finally {
                 this.#nativeOperations.delete(openedKey);
+                this.#notifyProcessCapacityChanged();
             }
         } finally {
             this.#nativeOperations.delete(key);
+            this.#endSessionUse(options.sessionId);
         }
     };
 
@@ -2823,39 +3295,48 @@ export class AcpSessionManager {
         options: AcpPrepareOptions,
         nativeSessionId: string,
     ): Promise<readonly string[]> => {
-        const runtime = await this.#ensureNativeSessionBrowser(options);
-        const key = `${options.agent.id}:${nativeSessionId}`;
-        const linked = this.#store.findNative(options.agent.id, nativeSessionId);
-        if (
-            this.#nativeOperations.has(key) ||
-            linked.some((entry) => this.#activeSessionIds.has(entry.sessionId) || this.#preparing.has(entry.sessionId))
-        ) {
-            throw new AcpExecutionError(
-                "Wait for the native session's running operation to finish",
-                {},
-                "session_busy",
-            );
-        }
-        this.#nativeOperations.add(key);
+        this.#beginNativeBrowserUse(options.sessionId);
         try {
-            for (const entry of linked) {
-                const active = this.#sessions.get(entry.sessionId);
-                if (active !== undefined && active !== runtime) {
-                    this.#sessions.delete(entry.sessionId);
-                    await active.close();
+            const runtime = await this.#ensureNativeSessionBrowser(options);
+            const key = `${options.agent.id}:${nativeSessionId}`;
+            const linked = this.#store.findNative(options.agent.id, nativeSessionId);
+            if (
+                this.#nativeOperations.has(key) ||
+                linked.some(
+                    (entry) => this.#activeSessionIds.has(entry.sessionId) || this.#preparing.has(entry.sessionId),
+                )
+            ) {
+                throw new AcpExecutionError(
+                    "Wait for the native session's running operation to finish",
+                    {},
+                    "session_busy",
+                );
+            }
+            this.#nativeOperations.add(key);
+            try {
+                for (const entry of linked) {
+                    const active = this.#sessions.get(entry.sessionId);
+                    if (active !== undefined && active !== runtime) {
+                        await this.#retireSessionProcess(entry.sessionId, active, async () => await active.close());
+                    }
                 }
+                options.signal.throwIfAborted();
+                await runtime.deleteNativeSession(nativeSessionId, options.signal);
+                const deleted = this.#store.markDeleted(options.agent.id, nativeSessionId);
+                if (runtime.nativeSessionId() === nativeSessionId) {
+                    await this.#retireNativeBrowserProcess(
+                        options.sessionId,
+                        runtime,
+                        async () => await runtime.close(),
+                    );
+                }
+                return deleted;
+            } finally {
+                this.#nativeOperations.delete(key);
+                this.#notifyProcessCapacityChanged();
             }
-            options.signal.throwIfAborted();
-            await runtime.deleteNativeSession(nativeSessionId, options.signal);
-            const deleted = this.#store.markDeleted(options.agent.id, nativeSessionId);
-            if (runtime.nativeSessionId() === nativeSessionId) {
-                this.#nativeBrowserSessions.delete(options.sessionId);
-                this.#nativeBrowserStore.remove(options.sessionId);
-                await runtime.close();
-            }
-            return deleted;
         } finally {
-            this.#nativeOperations.delete(key);
+            this.#endNativeBrowserUse(options.sessionId);
         }
     };
 }

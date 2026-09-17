@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import { AcpSessionManager, createWritableAcpStream } from "../src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
+import { FoundAcpStoredSession, SqliteAcpSessionStore } from "../src/acp/session-store.ts";
 import { LocalAgentDefinition } from "../src/config.ts";
 import { AccumulatingOperationMetrics } from "../src/infra/operation-metrics.ts";
 
@@ -459,6 +459,247 @@ child.once("exit", (code) => process.exit(code ?? 84));
 
         expect(firstChunks.join("")).toBe("Codex turn 1: first");
         expect(secondChunks.join("")).toBe("Codex turn 2: second");
+    });
+
+    it("Given ten retained Agent conversations, When an eleventh starts, Then the least recently used process is released and its conversation can resume", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-process-lru-"));
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const store = new SqliteAcpSessionStore(databasePath);
+        const manager = new AcpSessionManager(undefined, store);
+        const agent = new LocalAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const signal = new AbortController().signal;
+        const runTurn = async (sessionId: string, prompt: string): Promise<string> => {
+            const chunks: string[] = [];
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: `${sessionId}-${prompt}`,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    chunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt,
+                resources: [],
+                sessionId,
+                signal,
+            });
+            return chunks.join("");
+        };
+        const nativeSessionId = (sessionId: string): string => {
+            const stored = store.read(sessionId);
+            if (!(stored instanceof FoundAcpStoredSession)) {
+                throw new Error(`Expected ${sessionId} to have a persisted native session`);
+            }
+            return stored.session.nativeSessionId;
+        };
+        const activeWriterNames = async (): Promise<readonly string[]> =>
+            (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".writer"));
+
+        try {
+            for (let index = 1; index <= 10; index += 1) {
+                await runTurn(`conversation-${index.toString()}`, "first");
+            }
+            await expect(runTurn("conversation-1", "keep recent")).resolves.toBe("Codex turn 2: keep recent");
+            const recentWriter = `${encodeURIComponent(nativeSessionId("conversation-1"))}.writer`;
+            const leastRecentlyUsedWriter = `${encodeURIComponent(nativeSessionId("conversation-2"))}.writer`;
+
+            await expect(runTurn("conversation-11", "first")).resolves.toBe("Codex turn 1: first");
+
+            const writersAfterEviction = await activeWriterNames();
+            expect(writersAfterEviction).toHaveLength(10);
+            expect(writersAfterEviction).toContain(recentWriter);
+            expect(writersAfterEviction).not.toContain(leastRecentlyUsedWriter);
+            await expect(runTurn("conversation-2", "continue after eviction")).resolves.toBe(
+                "Codex turn 2: continue after eviction",
+            );
+            await expect(activeWriterNames()).resolves.toHaveLength(10);
+        } finally {
+            await manager.close();
+            store.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given conversation and native-browser ACP processes fill the shared capacity, When another conversation starts, Then global LRU keeps only ten processes", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-global-process-lru-"));
+        const manager = new AcpSessionManager();
+        const signal = new AbortController().signal;
+        const agentFor = (processId: string): LocalAgentDefinition =>
+            new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath, "--agent-name", "Codex"], {
+                MOBIUS_FAKE_ACP_PROCESS_DIRECTORY: temporaryDirectory,
+                MOBIUS_FAKE_ACP_PROCESS_ID: processId,
+            });
+        const prepareNativeBrowser = async (sessionId: string): Promise<void> => {
+            await manager.prepareNativeSessionBrowser({
+                additionalDirectories: [],
+                agent: agentFor(sessionId),
+                cwd: temporaryDirectory,
+                sessionId,
+                signal,
+            });
+        };
+        const runTurn = async (sessionId: string): Promise<void> => {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: agentFor(sessionId),
+                commandId: `${sessionId}-turn`,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "first",
+                resources: [],
+                sessionId,
+                signal,
+            });
+        };
+
+        try {
+            for (let index = 1; index <= 10; index += 1) {
+                const sessionId = `process-${index.toString()}`;
+                if (index % 2 === 1) {
+                    await prepareNativeBrowser(sessionId);
+                } else {
+                    await runTurn(sessionId);
+                }
+            }
+            await prepareNativeBrowser("process-1");
+
+            await runTurn("process-11");
+
+            const processMarkers = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".process"));
+            expect(processMarkers).toHaveLength(10);
+            expect(processMarkers).toContain(`${encodeURIComponent("process-1")}.process`);
+            expect(processMarkers).not.toContain(`${encodeURIComponent("process-2")}.process`);
+        } finally {
+            await manager.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given ten retained ACP processes, When Agent settings are inspected, Then the short-lived process shares the limit and evicts the least recently used process", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-transient-process-lru-"));
+        const manager = new AcpSessionManager();
+        const signal = new AbortController().signal;
+        const agentFor = (processId: string): LocalAgentDefinition =>
+            new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath, "--agent-name", "Codex"], {
+                MOBIUS_FAKE_ACP_PROCESS_DIRECTORY: temporaryDirectory,
+                MOBIUS_FAKE_ACP_PROCESS_ID: processId,
+            });
+
+        try {
+            for (let index = 1; index <= 10; index += 1) {
+                const sessionId = `retained-${index.toString()}`;
+                await manager.prepareNativeSessionBrowser({
+                    additionalDirectories: [],
+                    agent: agentFor(sessionId),
+                    cwd: temporaryDirectory,
+                    sessionId,
+                    signal,
+                });
+            }
+
+            await manager.inspectAgentSettings({
+                additionalDirectories: [],
+                agent: agentFor("settings-inspection"),
+                cwd: temporaryDirectory,
+                signal,
+            });
+
+            const processMarkers = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".process"));
+            expect(processMarkers).toHaveLength(9);
+            expect(processMarkers).not.toContain(`${encodeURIComponent("retained-1")}.process`);
+            expect(processMarkers).not.toContain(`${encodeURIComponent("settings-inspection")}.process`);
+        } finally {
+            await manager.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given the least recently used conversation has an active turn, When an eleventh conversation starts, Then the active process is retained and the oldest idle process is released", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-active-process-lru-"));
+        const store = new SqliteAcpSessionStore(join(temporaryDirectory, "sessions.sqlite"));
+        const manager = new AcpSessionManager(undefined, store);
+        const agent = new LocalAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "Codex", "--exclusive-writer"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: temporaryDirectory },
+        );
+        const signal = new AbortController().signal;
+        const activityStarted = Promise.withResolvers<void>();
+        const activeTurn = manager.runPrompt({
+            additionalDirectories: [],
+            agent,
+            commandId: "conversation-1-active",
+            cwd: temporaryDirectory,
+            images: [],
+            onActivity: () => {
+                activityStarted.resolve();
+                return Promise.resolve();
+            },
+            onText: () => Promise.resolve(),
+            prompt: "wait until cancelled",
+            resources: [],
+            sessionId: "conversation-1",
+            signal,
+        });
+        const runTurn = async (sessionId: string): Promise<void> => {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: `${sessionId}-turn`,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "first",
+                resources: [],
+                sessionId,
+                signal,
+            });
+        };
+        const writerName = (sessionId: string): string => {
+            const stored = store.read(sessionId);
+            if (!(stored instanceof FoundAcpStoredSession)) {
+                throw new Error(`Expected ${sessionId} to have a persisted native session`);
+            }
+            return `${encodeURIComponent(stored.session.nativeSessionId)}.writer`;
+        };
+
+        try {
+            await activityStarted.promise;
+            for (let index = 2; index <= 10; index += 1) {
+                await runTurn(`conversation-${index.toString()}`);
+            }
+            const activeWriter = writerName("conversation-1");
+            const oldestIdleWriter = writerName("conversation-2");
+
+            await runTurn("conversation-11");
+
+            const activeWriters = (await readdir(temporaryDirectory)).filter((name) => name.endsWith(".writer"));
+            expect(activeWriters).toHaveLength(10);
+            expect(activeWriters).toContain(activeWriter);
+            expect(activeWriters).not.toContain(oldestIdleWriter);
+            await manager.cancelPrompt("conversation-1");
+            await expect(activeTurn).resolves.toEqual({ stopReason: "cancelled" });
+        } finally {
+            await manager.cancelPrompt("conversation-1");
+            await activeTurn.catch(() => undefined);
+            await manager.close();
+            store.close();
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
     });
 
     it("Given an ACP agent announces a different session while creating one, When Mobius receives the created session, Then the local boundary rejects the queued update", async () => {

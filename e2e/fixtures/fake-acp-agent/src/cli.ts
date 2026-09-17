@@ -204,6 +204,17 @@ const nativeMetadata = new Map<
     }
 >();
 
+// Observe real subprocess lifetime at the external Agent boundary without inspecting manager internals.
+const processDirectory = process.env["MOBIUS_FAKE_ACP_PROCESS_DIRECTORY"] ?? "";
+const processMarkerId = process.env["MOBIUS_FAKE_ACP_PROCESS_ID"] ?? "";
+const processMarkerPath =
+    processDirectory.length === 0 || processMarkerId.length === 0
+        ? ""
+        : join(processDirectory, `${encodeURIComponent(processMarkerId)}.process`);
+if (processMarkerPath.length > 0) {
+    mkdirSync(processDirectory, { recursive: true });
+    writeFileSync(processMarkerPath, String(process.pid), { flag: "wx" });
+}
 // The real Codex writer cannot be shared safely or deterministically in tests.
 // Model its exclusive ownership at the external Agent boundary with real files.
 const writerFiles = new Map<string, string>();
@@ -228,6 +239,9 @@ function releaseWriter(sessionId: string): void {
 process.on("exit", () => {
     for (const id of writerFiles.keys()) {
         releaseWriter(id);
+    }
+    if (processMarkerPath.length > 0 && existsSync(processMarkerPath)) {
+        unlinkSync(processMarkerPath);
     }
 });
 process.on("SIGTERM", () => process.exit(0));
