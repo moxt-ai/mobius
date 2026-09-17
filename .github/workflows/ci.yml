@@ -45,8 +45,8 @@ jobs:
           SESSION_ACTIVE_SESSIONS_PER_PROJECT: ${{ vars.SESSION_ACTIVE_SESSIONS_PER_PROJECT }}
           SESSION_ARCHIVE_BYTES_PER_SESSION: ${{ vars.SESSION_ARCHIVE_BYTES_PER_SESSION }}
 
-  checks:
-    name: ${{ matrix.task }}
+  static:
+    name: static
     # Post-merge pushes to main skip test/lint/typecheck; the merge queue already verified them.
     if: github.event_name != 'push'
     permissions:
@@ -54,69 +54,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:
-      group: check-${{ matrix.task }}-${{ github.workflow }}-${{ github.ref }}
+      group: static-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: true
-    strategy:
-      fail-fast: false
-      matrix:
-        task: [lint, typecheck, knip, "test:cli", "test:sdk", "test:integration", "test:e2e", "test:web", "test:standalone", "test:platform"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: ./.github/actions/setup
+
+      - run: pnpm check:static
+
+  tests:
+    name: test:${{ matrix.group }}
+    # Three groups retain useful parallelism without rebuilding the workspace for every suite.
+    if: github.event_name != 'push'
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    concurrency:
+      group: test-${{ matrix.group }}-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [client, relay, hosting]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          node-version-file: .nvmrc
+          persist-credentials: false
 
-      - name: Enable pnpm
-        id: pnpm
-        shell: bash
-        run: |
-          corepack enable
-          pnpm --version
-          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm.outputs.store-path }}
-          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Run static check
-        if: matrix.task == 'lint' || matrix.task == 'typecheck' || matrix.task == 'knip'
-        run: pnpm "$TASK"
+      - name: Run ${{ matrix.group }} suites
+        run: pnpm "test:coverage:$TEST_GROUP"
         env:
-          TASK: ${{ matrix.task }}
-          # Knip loads the Platform Vite configuration.
-          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
+          TEST_GROUP: ${{ matrix.group }}
 
-      - name: Build test assets
-        if: startsWith(matrix.task, 'test:')
-        run: pnpm build
-        env:
-          # Build-only fixture; this bundle is never deployed.
-          VITE_CLERK_PUBLISHABLE_KEY: pk_test_Y2xlcmsuZXhhbXBsZS5jb20k
-
-      - name: Run coverage suite
-        id: suite
-        if: startsWith(matrix.task, 'test:')
-        run: |
-          suite="${TASK#test:}"
-          echo "name=$suite" >> "$GITHUB_OUTPUT"
-          pnpm test:coverage:suite "$suite"
-        env:
-          TASK: ${{ matrix.task }}
-
-      - name: Save suite coverage
-        if: ${{ !cancelled() && steps.suite.outputs.name != '' }}
+      - name: Save coverage maps
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: coverage-suite-${{ steps.suite.outputs.name }}
-          path: coverage/${{ steps.suite.outputs.name }}/coverage-final.json
+          name: coverage-${{ matrix.group }}
+          path: coverage/*/coverage-final.json
           if-no-files-found: error
           retention-days: 14
 
@@ -167,26 +148,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: Enable pnpm
-        id: pnpm
-        shell: bash
-        run: |
-          corepack enable
-          pnpm --version
-          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm.outputs.store-path }}
-          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Build test assets
         run: pnpm build
@@ -217,69 +179,22 @@ jobs:
 
   check:
     name: check
-    needs: [checks, agent-daemon-plan, agent-daemon]
+    needs: [static, tests, agent-daemon-plan, agent-daemon]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: Enable pnpm
-        id: pnpm
-        run: |
-          corepack enable
-          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm.outputs.store-path }}
-          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Download suite coverage
-        if: needs.checks.result == 'success'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          pattern: coverage-suite-*
-          path: coverage-suites/
-
-      - name: Merge coverage
-        if: needs.checks.result == 'success'
-        run: |
-          for suite in cli sdk integration e2e web standalone platform; do
-            mkdir -p "coverage/$suite"
-            cp "coverage-suites/coverage-suite-$suite/coverage-final.json" "coverage/$suite/coverage-final.json"
-          done
-          pnpm test:coverage:merge
-
-      - name: Save coverage report
-        if: ${{ !cancelled() && hashFiles('coverage/lcov.info') != '' }}
-        continue-on-error: true
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-report
-          path: coverage/
-          retention-days: 14
-
       - name: Require every check to pass
-        if: always()
         run: |
-          test "$CHECKS_RESULT" = success || test "$CHECKS_RESULT" = skipped
+          test "$STATIC_RESULT" = success || test "$STATIC_RESULT" = skipped
+          test "$TESTS_RESULT" = success || test "$TESTS_RESULT" = skipped
           test "$AGENT_DAEMON_PLAN_RESULT" = success || test "$AGENT_DAEMON_PLAN_RESULT" = skipped
           test "$AGENT_DAEMON_RESULT" = success || test "$AGENT_DAEMON_RESULT" = skipped
         env:
           AGENT_DAEMON_RESULT: ${{ needs.agent-daemon.result }}
           AGENT_DAEMON_PLAN_RESULT: ${{ needs.agent-daemon-plan.result }}
-          CHECKS_RESULT: ${{ needs.checks.result }}
+          STATIC_RESULT: ${{ needs.static.result }}
+          TESTS_RESULT: ${{ needs.tests.result }}
 
   deploy-cloudflare:
     name: deploy Cloudflare
@@ -303,26 +218,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: Enable pnpm
-        id: pnpm
-        shell: bash
-        run: |
-          corepack enable
-          pnpm --version
-          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm.outputs.store-path }}
-          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Deploy mobius-relay
         env:
@@ -389,26 +285,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: Enable pnpm
-        id: pnpm
-        shell: bash
-        run: |
-          corepack enable
-          pnpm --version
-          echo "store-path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ steps.pnpm.outputs.store-path }}
-          key: pnpm-v11-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            pnpm-v11-${{ runner.os }}-${{ runner.arch }}-
-
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
 
       - name: Deploy mobius-platform
         env:

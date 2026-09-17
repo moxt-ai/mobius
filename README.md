@@ -5,7 +5,7 @@
 The engineering-quality target is 100% across lines, statements, functions, and
 branches, as an advisory target. `pnpm check` runs the complete verification suites,
 reports combined production TS/TSX coverage, and enforces architecture constraints.
-CI saves coverage reports as downloadable artifacts. See [Testing](TESTING.md)
+CI saves the three test groups' coverage maps as downloadable artifacts. See [Testing](TESTING.md)
 for scope and commands.
 
 ## Project direction

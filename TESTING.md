@@ -71,34 +71,28 @@ V8 provider's inspector. Do not combine reports from different source revisions.
 The command clears its output directory before running and requires each suite's
 report before emitting the canonical report.
 
-CI saves the combined report as a `coverage-report` artifact on PR, merge queue,
-and main runs, retained for 14 days. Upload failures are non-blocking. This uses
-the permitted GitHub-owned artifact action and does not require a Codecov account
-or changes to the repository's Actions allowlist. If Codecov uploads are enabled
-later, `codecov.yml` marks both project and patch coverage as informational.
+CI runs one static job and three test groups. The static job installs once and runs
+lint, typecheck, and Knip together. Each test group installs and builds once, then
+runs related suites sequentially: `client` owns CLI and SDK, `relay` owns integration
+and E2E, and `hosting` owns web, Standalone Worker, and Platform Worker. The groups
+run in parallel, retaining useful suite isolation without rebuilding the workspace
+seven times. Each group saves its Istanbul execution maps as one artifact for 14
+days. The required `check` job only combines job results; it does not check out the
+repository, install dependencies, or merge advisory coverage again.
 
-CI runs lint, typecheck, Knip, `test:cli`, `test:sdk`, `test:integration`,
-`test:e2e`, `test:web`, `test:standalone`, and `test:platform` as ten
-independent jobs with fail-fast disabled. Each
-coverage job builds its own assets before `pnpm test:coverage:suite <suite>`;
-builds already run up to three dependency-ordered workspace tasks concurrently.
-CLI, SDK, integration, E2E, and web tests each use up to four isolated file workers.
-E2E currently has one file, so only one worker is occupied by that suite.
-Worker suites retain their single-worker, shared-runtime configuration, but
-Standalone and Platform run simultaneously on separate runners.
-The required `check` job downloads all seven execution maps and runs
-`pnpm test:coverage:merge`. Failed or cancelled jobs and missing or empty maps
-remain blocking. Combined report upload is non-blocking.
-CLI, web, and Worker integration tests are included in these coverage suites,
-so CI does not repeat the hosting integration commands afterward.
+`pnpm check` remains the canonical local full verification command. It builds once,
+runs all seven suites, and emits the combined HTML and LCOV reports. CI keeps the
+same suite membership but avoids making a combined advisory report part of the
+critical path. Failed tests and missing suite maps remain blocking.
 
 After `pnpm build`, use `pnpm test:cli`, `pnpm test:sdk`,
 `pnpm test:integration`, or `pnpm test:e2e` for the corresponding coverage suite.
 CLI selects `packages/cli/tests/`; SDK selects `packages/mobius-sdk/tests/`;
 E2E selects `e2e/`. Integration owns the remaining root-discovered files,
 including protocol contracts and cross-package Runtime integration tests.
-Each suite writes a separate coverage directory so they can run concurrently
-after the shared build completes.
+Each suite writes a separate coverage directory. The CI test groups expose
+`pnpm test:coverage:client`, `pnpm test:coverage:relay`, and
+`pnpm test:coverage:hosting` for reproducing the same grouped execution locally.
 
 ## Architecture enforcement
 

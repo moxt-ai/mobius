@@ -34,6 +34,7 @@ const agentFiles = new Map(
 );
 
 const sharedFiles = new Set([
+    ".github/actions/setup/action.yml",
     ".github/workflows/ci.yml",
     ".nvmrc",
     "e2e/support/standalone.ts",
