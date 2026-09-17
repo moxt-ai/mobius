@@ -414,16 +414,17 @@ export class BotService {
             "Resolve project context",
             async () => await this.projectContext(access.scope, signal),
         );
-        const binding = await timing.measure(
+        const execution = await timing.measure(
             "create-binding",
-            "Read approved Bot binding",
-            async () => await this.readApprovedBinding(cx, request.botId, signal),
+            "Read approved Bot execution context",
+            async () => await this.readApprovedConversationExecution(cx, access.scope, request.botId, signal),
         );
-        await timing.measure(
-            "create-runtime",
-            "Verify Runtime access",
-            async () => await this.readRuntimeAccess(cx, access.scope, binding.runtimeId, signal),
-        );
+        await timing.measure("create-runtime", "Verify Runtime access", async () => {
+            if (execution.runtimeId !== execution.binding.runtimeId) {
+                throw new BotApiError("binding_incompatible", "The approved Runtime is unavailable", "conflict");
+            }
+        });
+        const { binding } = execution;
         const plan = await timing.measure(
             "create-plan",
             "Plan conversation creation",
@@ -472,11 +473,11 @@ export class BotService {
             });
             return provisioned;
         });
-        await timing.measure(
+        const activatedConversation = await timing.measure(
             "create-activate",
             "Activate conversation",
             async () =>
-                await cx.services.conversations.activateConversation(
+                await cx.services.conversations.activateProjectConversation(
                     access.scope,
                     plan.provisioning.conversationId,
                     now,
@@ -485,9 +486,8 @@ export class BotService {
         );
         const conversation = await timing.measure(
             "create-read",
-            "Read created conversation",
-            async () =>
-                await cx.services.conversations.projectResource(access, plan.provisioning.conversationId, signal),
+            "Reuse activated conversation",
+            async () => activatedConversation,
         );
         const ready = await timing.measure(
             "prepare",
@@ -981,6 +981,48 @@ export class BotService {
             allowedDeliveryTargets: Object.freeze(targets),
             completionPolicy: policy,
             sessionConfigurations: configuration,
+        };
+    };
+
+    private readonly readApprovedConversationExecution = async (
+        cx: BotProjectStorageContext,
+        scope: ProjectScope,
+        botId: string,
+        signal: AbortSignal,
+    ): Promise<{ readonly binding: ApprovedBindingContext; readonly runtimeId: string }> => {
+        const execution = await cx.storages.control.readActiveConversationExecution(scope, botId, signal);
+        if (execution === null) {
+            const binding = await this.readApprovedBinding(cx, botId, signal);
+            const runtime = await this.readRuntimeAccess(cx, scope, binding.runtimeId, signal);
+            return { binding, runtimeId: runtime.runtimeId };
+        }
+        if (typeof execution.local_grant_id !== "string") {
+            throw new BotApiError("binding_not_approved", "The Bot binding is not approved", "conflict");
+        }
+        const targets = await this.approvedTargets(
+            cx,
+            execution.bot_id,
+            stringArray(execution.allowed_delivery_target_ids_json, "The binding targets are invalid"),
+            signal,
+        );
+        return {
+            binding: {
+                bindingId: execution.binding_id,
+                bindingRevision: execution.binding_revision,
+                botId: execution.bot_id,
+                behaviorRevisionId: execution.behavior_revision_id,
+                runtimeId: execution.runtime_id,
+                agentRef: execution.agent_ref,
+                workspaceRef: execution.workspace_ref,
+                agentConfigRevision: execution.agent_config_revision,
+                localGrantId: execution.local_grant_id,
+                behaviorInstructions: execution.behavior_instructions,
+                behaviorDigest: execution.behavior_content_digest,
+                allowedDeliveryTargets: Object.freeze(targets),
+                completionPolicy: completionPolicy(execution.completion_policy_json),
+                sessionConfigurations: sessionConfigurations(execution.behavior_agent_configuration_json),
+            },
+            runtimeId: execution.paired_runtime_id,
         };
     };
 

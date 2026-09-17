@@ -43,10 +43,10 @@ export class BotConversationStorage {
         before: ProvisioningOutboxRow,
         now: number,
         signal: AbortSignal,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
         signal.throwIfAborted();
         const normalizedConversationId = before.conversation_id;
-        await this.#database.batch(
+        const results = await this.#database.batch(
             [
                 this.#database
                     .prepare(
@@ -84,6 +84,7 @@ export class BotConversationStorage {
             signal,
         );
         signal.throwIfAborted();
+        return results.every((result) => result.meta.changes === 1);
     };
 
     readonly readPendingProvisioning = async (

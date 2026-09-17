@@ -4,6 +4,7 @@ import type { ApprovedBindingContext } from "../../entity/bot/bot-binding.ts";
 import {
     assertProvisioningMatches,
     type BotConversationPlan,
+    type BotConversationRecord,
     type BotProvisioningOutboxRecord,
     conversationResponse,
     decodeProvisioningPayload,
@@ -110,17 +111,6 @@ export class BotConversationService {
         now: number,
         signal: AbortSignal,
     ) => {
-        const duplicate = await this.#storage.readDuplicateConversation(access.botId, "owner", idempotencyKey, signal);
-        if (duplicate !== null) {
-            if (duplicate.client_reference !== clientReference || duplicate.title !== title) {
-                throw new BotApiError(
-                    "idempotency_conflict",
-                    "The conversation idempotency key was reused with different content",
-                    "conflict",
-                );
-            }
-            return this.planFromOutbox(duplicate);
-        }
         return this.createConversation(
             access.scope,
             access.botId,
@@ -280,7 +270,26 @@ export class BotConversationService {
             }
             return this.planFromOutbox(duplicate);
         }
-        const row = await this.readConversation(conversationId, signal);
+        const row: BotConversationRecord = {
+            activated_at: null,
+            behavior_revision_id: provisioning.behaviorRevisionId,
+            binding_id: provisioning.bindingId,
+            binding_revision: provisioning.bindingRevision,
+            bot_id: botId,
+            client_conversation_key: clientConversationKey,
+            client_reference: clientReference,
+            connection_id: replyRoute instanceof BotConnectionReplyRoute ? replyRoute.connectionId : null,
+            conversation_id: conversationId,
+            created_at: now,
+            creator_kind: creatorKind,
+            creator_key: creatorKey,
+            creator_principal_id: creatorPrincipalId,
+            lifecycle: "provisioning",
+            reply_delivery_target_id:
+                replyRoute instanceof BotConnectionReplyRoute ? replyRoute.deliveryTargetId : null,
+            session_id: sessionId,
+            title,
+        };
         return { kind: "provisioning", provisioning, response: conversationResponse(row) };
     };
 
@@ -345,27 +354,49 @@ export class BotConversationService {
         conversationId: string,
         now: number,
         signal: AbortSignal,
-    ) => {
+    ) => conversationResponse(await this.activateConversationRecord(scope, conversationId, now, signal));
+
+    readonly activateProjectConversation = async (
+        scope: ProjectScope,
+        conversationId: string,
+        now: number,
+        signal: AbortSignal,
+    ) =>
+        projectConversationResponse(
+            await this.activateConversationRecord(scope, conversationId, now, signal),
+            scope.projectId,
+        );
+
+    private readonly activateConversationRecord = async (
+        scope: ProjectScope,
+        conversationId: string,
+        now: number,
+        signal: AbortSignal,
+    ): Promise<BotProvisioningOutboxRecord> => {
         const id = validateIdentifier(conversationId, "conversation_id");
         const before = await this.#storage.readProvisioningOutbox(scope, id, signal);
         if (before === null) {
             throw new BotApiError("conversation_access_denied", "The Bot conversation does not exist", "not-found");
         }
         if (before.lifecycle === "active" && before.outbox_state === "completed") {
-            return conversationResponse(before);
+            return before;
         }
         if (before.lifecycle !== "provisioning" || before.outbox_state !== "pending") {
             throw new BotApiError("bot_service_unavailable", "The Bot conversation could not activate", "unavailable");
         }
-        await this.#storage.writeConversationActivation(scope, before, now, signal);
-        const activated = await this.#storage.readProvisioningOutbox(scope, id, signal);
-        if (activated === null) {
-            throw new BotApiError("conversation_access_denied", "The Bot conversation does not exist", "not-found");
-        }
-        if (activated.lifecycle !== "active" || activated.outbox_state !== "completed") {
+        if (!(await this.#storage.writeConversationActivation(scope, before, now, signal))) {
+            const concurrent = await this.#storage.readProvisioningOutbox(scope, id, signal);
+            if (concurrent?.lifecycle === "active" && concurrent.outbox_state === "completed") {
+                return concurrent;
+            }
             throw new BotApiError("bot_service_unavailable", "The Bot conversation could not activate", "unavailable");
         }
-        return conversationResponse(activated);
+        return {
+            ...before,
+            activated_at: typeof before.activated_at === "number" ? before.activated_at : now,
+            lifecycle: "active",
+            outbox_state: "completed",
+        };
     };
 
     readonly failConversationProvisioning = async (

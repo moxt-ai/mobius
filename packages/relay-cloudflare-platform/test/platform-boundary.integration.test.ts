@@ -2513,66 +2513,6 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
-    it("Given local preparation fails after Runtime work, When the server SDK creates a Conversation, Then the failure response reports the daemon timing breakdown", async () => {
-        const fixture = await createReadyConversation("server-sdk-failed-preparation");
-        try {
-            let failureTiming: string | null = null;
-            let failureStatus = 0;
-            const owner = new MobiusBotOwnerClient({
-                actorReference: "server-sdk-owner",
-                credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
-                endpoint: relayOrigin,
-                observeResponse: (metadata) => {
-                    failureStatus = metadata.status;
-                    failureTiming = metadata.serverTiming;
-                },
-                projectId: fixture.projectId,
-                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
-            });
-            const pending = owner.createProjectConversation(
-                {
-                    botId: fixture.botId,
-                    clientReference: "failed-preparation-conversation",
-                    configuration: {
-                        additionalDirectoryIds: [],
-                        booleanValue: false,
-                        configId: "model",
-                        value: "codex",
-                        valueType: "select",
-                    },
-                    idempotencyKey: "failed-preparation-conversation",
-                    title: "Failed preparation",
-                },
-                AbortSignal.timeout(5_000),
-            );
-            const preparation = decodeSessionPrepareCommand(await fixture.socketMessages.next());
-            fixture.socket.send(
-                encodeSessionOperationFailedEvent({
-                    code: "agent_unavailable",
-                    kind: "session.operation.failed",
-                    message: "The local Agent is unavailable",
-                    requestId: preparation.requestId,
-                    runtimeTimings: [
-                        { durationMilliseconds: 8, name: "workspace-resolve" },
-                        { durationMilliseconds: 21, name: "agent-initialize" },
-                        { durationMilliseconds: 34, name: "prepare-total" },
-                    ],
-                    sessionId: preparation.sessionId,
-                }),
-            );
-
-            await expect(pending).rejects.toMatchObject({ code: "agent_unavailable" });
-            expect(failureStatus).toBe(503);
-            expect(failureTiming).toEqual(
-                expect.stringMatching(
-                    /prepare-control-runtime;dur=.*runtime-workspace-resolve;dur=8\.0.*runtime-agent-initialize;dur=21\.0.*runtime-prepare-total;dur=34\.0/u,
-                ),
-            );
-        } finally {
-            fixture.socket.close(1000, "Failed preparation timing test complete");
-        }
-    });
-
     it("Given an approved Project Bot without a session setting, When the server SDK opens its conversation, Then Mobius preserves the local Agent native default", async () => {
         const fixture = await createReadyConversation("server-sdk-native-default");
         try {

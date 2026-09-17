@@ -78,6 +78,13 @@ interface BindingRow {
     readonly workspace_ref: string;
 }
 
+interface ActiveConversationExecutionRow extends BindingRow {
+    readonly behavior_agent_configuration_json: string;
+    readonly behavior_content_digest: string;
+    readonly behavior_instructions: string;
+    readonly paired_runtime_id: string;
+}
+
 interface BotProfileRow extends BotRow {
     readonly avatar_ref: string;
     readonly description: string;
@@ -659,6 +666,35 @@ export class BotControlStorage {
             .first<BindingRow>(signal);
         signal.throwIfAborted();
         return binding;
+    };
+
+    readonly readActiveConversationExecution = async (scope: ProjectScope, botId: string, signal: AbortSignal) => {
+        signal.throwIfAborted();
+        const execution = await this.#database
+            .prepare(
+                `SELECT bindings.*,
+                        behaviors.agent_configuration_json AS behavior_agent_configuration_json,
+                        behaviors.content_digest AS behavior_content_digest,
+                        behaviors.instructions AS behavior_instructions,
+                        runtimes.runtime_id AS paired_runtime_id
+                   FROM bots
+                   INNER JOIN bot_execution_bindings AS bindings
+                     ON bindings.binding_id = bots.active_binding_id
+                    AND bindings.lifecycle = 'approved'
+                   INNER JOIN bot_behavior_revisions AS behaviors
+                     ON behaviors.behavior_revision_id = bindings.behavior_revision_id
+                    AND behaviors.bot_id = bindings.bot_id
+                    AND behaviors.lifecycle = 'approved'
+                   INNER JOIN pairing_channels AS runtimes
+                     ON runtimes.runtime_id = bindings.runtime_id
+                    AND runtimes.project_id = bots.project_id
+                    AND runtimes.status = 'paired'
+                  WHERE bots.bot_id = ? AND bots.project_id = ? AND bots.lifecycle = 'active'`,
+            )
+            .bind(validateIdentifier(botId, "bot_id"), scope.projectId)
+            .first<ActiveConversationExecutionRow>(signal);
+        signal.throwIfAborted();
+        return execution;
     };
 
     readonly readRuntime = async (scope: ProjectScope, runtimeId: string, signal: AbortSignal) => {

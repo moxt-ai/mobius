@@ -81,21 +81,27 @@ export class PairingDirectoryService implements PairingOperations {
         runtimeId: string,
         signal: AbortSignal,
     ): Promise<ChannelHostCredential> => {
-        const runtime = await this.readProjectRuntime(storage, scope, runtimeId, signal);
+        const normalizedRuntimeId = validateIdentifier(runtimeId, "runtime_id");
         const credentialId = `ctl_${createRandomToken(18)}`;
+        let created: Awaited<ReturnType<PairingStorage["createProjectControlHost"]>>;
         try {
-            await storage.createControlHost(
-                runtime.channelId,
+            created = await storage.createProjectControlHost(
+                scope.projectId,
+                normalizedRuntimeId,
                 credentialId,
                 await hashSecret(createRandomToken(32)),
                 Date.now(),
                 signal,
             );
         } catch (cause) {
-            await storage.removeControlHost(runtime.channelId, credentialId, AbortSignal.timeout(15000));
+            await storage.removeProjectControlHost(scope.projectId, credentialId, AbortSignal.timeout(15_000));
             throw cause;
         }
-        return new ChannelHostCredential(runtime.channelId, runtime.runtimeId, scope.projectId, credentialId);
+        if (created === null) {
+            await this.readProjectRuntime(storage, scope, normalizedRuntimeId, signal);
+            throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
+        }
+        return new ChannelHostCredential(created.channel_id, normalizedRuntimeId, scope.projectId, credentialId);
     };
 
     readonly closeControlHost: PairingOperations["closeControlHost"] = async (access, signal) => {
