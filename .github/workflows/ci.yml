@@ -330,7 +330,7 @@ jobs:
               --silent \
               --connect-timeout 5 \
               --max-time 15 \
-              "https://${{ matrix.domain }}/mobius/api/health")" && \
+              "https://${{ matrix.domain }}/mobius/api/dashboard/health")" && \
               [[ "$actual" == "$expected" ]]; then
               exit 0
             fi
