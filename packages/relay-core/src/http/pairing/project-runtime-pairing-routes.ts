@@ -56,7 +56,8 @@ export function createProjectRuntimePairingRoutes() {
         )
         .get("/runtimes/connect", async (context) => {
             const request = context.req.raw;
-            return await context.env.services.channels.acceptRuntime(bearerToken(request), request, request.signal);
+            const access = await context.env.services.channels.authorizeRuntime(bearerToken(request), request.signal);
+            return await context.env.gateways.channelGateway.acceptDaemon(access, request, request.signal);
         })
         .post(
             "/projects/:projectId/runtime-pairings",
@@ -88,13 +89,13 @@ export function createProjectRuntimePairingRoutes() {
         })
         .get("/projects/:projectId/runtimes/:runtimeId/host", async (context) => {
             const request = context.req.raw;
-            return await context.env.services.runtimePairings.acceptProjectOwnerRuntimeHost(
+            const access = await context.env.services.runtimePairings.authorizeProjectOwnerRuntimeHost(
                 validateIdentifier(context.req.param("projectId"), "project_id"),
                 validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                 context.req.query("token") ?? "",
-                request,
                 request.signal,
             );
+            return await context.env.gateways.channelGateway.acceptHost(access, request, request.signal);
         })
         .delete("/projects/:projectId/runtimes/:runtimeId", async (context) => {
             const request = context.req.raw;

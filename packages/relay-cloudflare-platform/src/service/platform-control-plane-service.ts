@@ -3,7 +3,7 @@ import {
     createRandomToken,
     type decodeProjectCredential,
     decodeProjectPermissions,
-    ExternalIdentityCredential,
+    type ExternalIdentityCredential,
     hashSecret,
     PerpetualProjectAccessLifetime,
     type ProjectAccessAuthorizer,
@@ -329,26 +329,6 @@ function decodeObject(encoded: string, message: string): Readonly<Record<string,
     return Object.freeze(Object.fromEntries(Object.entries(value)));
 }
 
-function bearer(request: Request): string {
-    const authorization = request.headers.get("authorization") ?? "";
-    if (!authorization.startsWith("Bearer ")) {
-        throw new PlatformControlPlaneError(
-            "developer_authentication_required",
-            "Developer authentication is required",
-            401,
-        );
-    }
-    const value = authorization.slice("Bearer ".length);
-    if (value.length === 0 || value.length > 16 * 1_024 || hasControlCharacters(value)) {
-        throw new PlatformControlPlaneError(
-            "developer_authentication_required",
-            "Developer authentication is required",
-            401,
-        );
-    }
-    return value;
-}
-
 async function requestDigest(display: string, clientReference: string, locationHint: string): Promise<string> {
     return await hashSecret(JSON.stringify({ clientReference, displayName: display, locationHint }));
 }
@@ -375,14 +355,11 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     }
 
     readonly authenticateDeveloper = async (
-        request: Request,
+        credential: ExternalIdentityCredential,
         signal: AbortSignal,
     ): Promise<VerifiedExternalIdentity> => {
         signal.throwIfAborted();
-        const providerId = request.headers.get("x-mobius-oidc-provider") ?? "";
-        let credential: ExternalIdentityCredential;
         try {
-            credential = new ExternalIdentityCredential(providerId, bearer(request));
             return await this.#authentication.developerAuthenticator.authenticate(credential, signal);
         } catch (cause) {
             signal.throwIfAborted();

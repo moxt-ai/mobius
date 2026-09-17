@@ -58,30 +58,14 @@ export class ChannelService {
     readonly readChannel = (channelId: string, token: string, signal: AbortSignal) =>
         this.#pairings.readChannel(channelId, token, signal);
 
-    readonly acceptHost = async (
-        channelId: string,
-        token: string,
-        request: Request,
-        signal: AbortSignal,
-    ): Promise<Response> => {
-        const access = await this.#pairings.authorizeHost(channelId, token, signal);
-        return await this.#channelGateway.acceptHost(access, request, signal);
-    };
+    readonly authorizeHost = (channelId: string, token: string, signal: AbortSignal) =>
+        this.#pairings.authorizeHost(channelId, token, signal);
 
-    readonly acceptDaemon = async (
-        channelId: string,
-        token: string,
-        request: Request,
-        signal: AbortSignal,
-    ): Promise<Response> => {
-        const access = await this.#pairings.authorizeDaemon(channelId, token, signal);
-        return await this.#channelGateway.acceptDaemon(access, request, signal);
-    };
+    readonly authorizeDaemon = (channelId: string, token: string, signal: AbortSignal) =>
+        this.#pairings.authorizeDaemon(channelId, token, signal);
 
-    readonly acceptRuntime = async (token: string, request: Request, signal: AbortSignal): Promise<Response> => {
-        const access = await this.#pairings.authorizeRuntimeCredential(token, signal);
-        return await this.#channelGateway.acceptDaemon(access, request, signal);
-    };
+    readonly authorizeRuntime = (token: string, signal: AbortSignal) =>
+        this.#pairings.authorizeRuntimeCredential(token, signal);
 
     readonly readArtifactContent = async (
         channelId: string,

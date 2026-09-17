@@ -13,13 +13,9 @@ export class PairingRequestService {
         this.#publicBootstrap = publicBootstrap;
     }
 
-    readonly createPairing = async (request: Request, signal: AbortSignal) => {
+    readonly createPairing = async (clientFingerprint: string, signal: AbortSignal) => {
         signal.throwIfAborted();
-        await this.#publicBootstrap.authorize(
-            request.headers.get("cf-connecting-ip") ?? "unavailable",
-            Date.now(),
-            signal,
-        );
+        await this.#publicBootstrap.authorize(clientFingerprint, Date.now(), signal);
         signal.throwIfAborted();
         return this.#pairings.createPairing(signal);
     };

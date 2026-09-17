@@ -94,12 +94,13 @@ export function createChannelRoutes() {
         })
         .get("/:channelId/host", async (context) => {
             const useCases = context.env.services.channels;
-            return await useCases.acceptHost(
+            const request = context.req.raw;
+            const access = await useCases.authorizeHost(
                 validateIdentifier(context.req.param("channelId"), "channel_id"),
                 context.req.query("token") ?? "",
-                context.req.raw,
-                context.req.raw.signal,
+                request.signal,
             );
+            return await context.env.gateways.channelGateway.acceptHost(access, request, request.signal);
         })
         .post(
             "/:channelId/sessions/:sessionId/artifacts/uploads",
@@ -193,11 +194,12 @@ export function createChannelRoutes() {
         })
         .get("/:channelId/daemon", async (context) => {
             const useCases = context.env.services.channels;
-            return await useCases.acceptDaemon(
+            const request = context.req.raw;
+            const access = await useCases.authorizeDaemon(
                 validateIdentifier(context.req.param("channelId"), "channel_id"),
-                context.req.query("token") ?? bearerToken(context.req.raw),
-                context.req.raw,
-                context.req.raw.signal,
+                context.req.query("token") ?? bearerToken(request),
+                request.signal,
             );
+            return await context.env.gateways.channelGateway.acceptDaemon(access, request, request.signal);
         });
 }

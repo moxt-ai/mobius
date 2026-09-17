@@ -18,8 +18,8 @@ export function createPairingRoutes() {
         .use("*", errorMiddleware)
         .use("/", pairingTimeoutMiddleware("Pairing creation timed out"))
         .post("/", async (context) => {
-            const request = context.req.raw;
-            return context.json(await context.env.services.createPairing(request, context.var.signal), 201);
+            const clientFingerprint = context.req.header("cf-connecting-ip") ?? "unavailable";
+            return context.json(await context.env.services.createPairing(clientFingerprint, context.var.signal), 201);
         })
         .route("/", createPairingClaimRoutes())
         .get("/:pairingId", async (context) => {

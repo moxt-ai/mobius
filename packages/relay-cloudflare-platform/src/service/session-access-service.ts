@@ -25,6 +25,10 @@ const permissions = new Set([
     ProjectPermission.ProjectEventsRead,
 ]);
 
+export type SessionAccessTarget =
+    | { readonly kind: "session"; readonly projectId: string; readonly sessionId: string }
+    | { readonly kind: "unavailable" };
+
 export class SessionAccessService {
     private readonly storage: SessionAccessStorage;
     private readonly control: PlatformControlPlaneService;
@@ -81,7 +85,7 @@ export class SessionAccessService {
         };
     };
 
-    readonly authorizer = (request: Request): ProjectAccessAuthorizer => ({
+    readonly authorizer = (target: () => SessionAccessTarget): ProjectAccessAuthorizer => ({
         authorizeProject: async (projectId, token, permission, actor, signal) => {
             if (!token.startsWith("msession_")) {
                 return await this.control.authorizeProject(projectId, token, permission, actor, signal);
@@ -100,20 +104,14 @@ export class SessionAccessService {
             if (row === null || mismatch !== 0) {
                 throw new ProjectAuthenticationError("credential_expired", "The Session credential is unavailable");
             }
-            const prefix = `/mobius/api/v1/projects/${encodeURIComponent(row.project_id)}/sessions/${encodeURIComponent(row.session_id)}`;
-            const path = new URL(request.url).pathname;
-            const suffix = path.startsWith(`${prefix}/`) ? path.slice(prefix.length) : path === prefix ? "" : null;
-            const allowed =
-                suffix !== null &&
-                ((request.method === "GET" &&
-                    /^(?:|\/(?:messages|native-history|events|interactions)|\/interactions\/[A-Za-z0-9._:-]+|\/turns\/[A-Za-z0-9._:-]+|\/artifacts\/[A-Za-z0-9._:-]+(?:\/content)?)$/u.test(
-                        suffix,
-                    )) ||
-                    (request.method === "POST" &&
-                        /^\/(?:turns|prepare|configuration|turns\/[A-Za-z0-9._:-]+\/cancel|interactions\/[A-Za-z0-9._:-]+\/responses)$/u.test(
-                            suffix,
-                        )));
-            if (!allowed || row.project_id !== projectId || !permissions.has(permission)) {
+            const resolvedTarget = target();
+            if (
+                resolvedTarget.kind !== "session" ||
+                resolvedTarget.projectId !== row.project_id ||
+                resolvedTarget.sessionId !== row.session_id ||
+                row.project_id !== projectId ||
+                !permissions.has(permission)
+            ) {
                 throw new ProjectAuthenticationError(
                     "project_permission_denied",
                     "The credential authorizes only the selected Session",

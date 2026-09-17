@@ -27,12 +27,16 @@ import { createProjectApplication } from "./http/project-routes.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
+import {
+    initializeSessionAccessTargetMiddleware,
+    sessionAccessTargetMiddleware,
+} from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
 import { ConversationAccessService } from "./service/conversation-access-service.ts";
 import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
-import { SessionAccessService } from "./service/session-access-service.ts";
+import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
 import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
@@ -90,6 +94,7 @@ type DispatchEnvironment = {
         readonly projectDatabases: D1Database[];
         readonly relay: RelayContext;
         readonly sessionAccess: SessionAccessService;
+        readonly sessionAccessTarget: SessionAccessTarget;
     };
 };
 
@@ -154,13 +159,25 @@ export function createPlatformApplication(
                         .all("/audit-events/", controlHandler),
                 ),
         );
+    const sessionRoutes = new Hono<DispatchEnvironment>()
+        .all("/:sessionId/access-credentials", conversationHandler)
+        .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/native-history", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/events", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/interactions", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/interactions/:interactionId", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/turns/:turnId", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/artifacts/:artifactId", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/artifacts/:artifactId/content", sessionAccessTargetMiddleware, projectHandler)
+        .post("/:sessionId/turns", sessionAccessTargetMiddleware, projectHandler)
+        .post("/:sessionId/prepare", sessionAccessTargetMiddleware, projectHandler)
+        .post("/:sessionId/configuration", sessionAccessTargetMiddleware, projectHandler)
+        .post("/:sessionId/turns/:turnId/cancel", sessionAccessTargetMiddleware, projectHandler)
+        .post("/:sessionId/interactions/:interactionId/responses", sessionAccessTargetMiddleware, projectHandler)
+        .all("/*", projectHandler);
     const projectRoutes = new Hono<DispatchEnvironment>()
-        .route(
-            "/sessions",
-            new Hono<DispatchEnvironment>()
-                .all("/:sessionId/access-credentials", conversationHandler)
-                .all("/*", projectHandler),
-        )
+        .route("/sessions", sessionRoutes)
         .all("/browser-credentials/*", projectHandler)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
@@ -220,6 +237,7 @@ export function createPlatformApplication(
             await next();
         })
         .route(MOBIUS_API_PREFIX, controlRoutes)
+        .use("*", initializeSessionAccessTargetMiddleware)
         .use("*", async (context, next) => {
             const environment = context.env;
             const { control, storageRegistry, projectDatabases } = context.var;
@@ -234,7 +252,7 @@ export function createPlatformApplication(
             );
             const cx = createWorkerContext({
                 gateways: gateways(environment),
-                authorization: sessionAccess.authorizer(context.req.raw),
+                authorization: sessionAccess.authorizer(() => context.var.sessionAccessTarget),
                 bootstrap: new DisabledPublicProjectBootstrap(),
                 databases,
                 identityDatabases: projectDatabases,

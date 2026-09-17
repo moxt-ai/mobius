@@ -1,5 +1,10 @@
+import { ExternalIdentityCredential } from "@moxt-ai/mobius-relay-core";
 import type { MiddlewareHandler } from "hono";
-import { PlatformControlPlaneError, type PlatformPrincipal } from "../entity/platform-control-plane.ts";
+import {
+    hasControlCharacters,
+    PlatformControlPlaneError,
+    type PlatformPrincipal,
+} from "../entity/platform-control-plane.ts";
 import type { AppCredentialAuthenticationService } from "../service/app-credential-authentication-service.ts";
 import type { PlatformControlPlaneService } from "../service/platform-control-plane-service.ts";
 
@@ -14,6 +19,32 @@ export interface PlatformAuthenticationEnvironment {
 interface AuthenticationMethod {
     readonly accepts: (request: Request) => boolean;
     readonly middleware: MiddlewareHandler<PlatformAuthenticationEnvironment>;
+}
+
+export function developerCredential(request: Request): ExternalIdentityCredential {
+    const authorization = request.headers.get("authorization") ?? "";
+    if (!authorization.startsWith("Bearer ")) {
+        throw new PlatformControlPlaneError(
+            "developer_authentication_required",
+            "Developer authentication is required",
+            401,
+        );
+    }
+    const value = authorization.slice("Bearer ".length);
+    if (value.length === 0 || value.length > 16 * 1_024 || hasControlCharacters(value)) {
+        throw new PlatformControlPlaneError(
+            "developer_authentication_required",
+            "Developer authentication is required",
+            401,
+        );
+    }
+    try {
+        return new ExternalIdentityCredential(request.headers.get("x-mobius-oidc-provider") ?? "", value);
+    } catch (cause) {
+        throw new PlatformControlPlaneError("developer_authentication_failed", "Developer authentication failed", 401, {
+            cause,
+        });
+    }
 }
 
 export const appCredentialAuthentication: AuthenticationMethod = {
@@ -36,7 +67,10 @@ export const developerOidcAuthentication: AuthenticationMethod = {
     middleware: async (context, next) => {
         context.set("principal", {
             kind: "developer",
-            identity: await context.env.control.authenticateDeveloper(context.req.raw, context.var.signal),
+            identity: await context.env.control.authenticateDeveloper(
+                developerCredential(context.req.raw),
+                context.var.signal,
+            ),
         });
         await next();
     },
