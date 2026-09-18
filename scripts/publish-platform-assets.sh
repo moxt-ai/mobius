@@ -24,36 +24,6 @@ if [[ ! -d "$asset_directory" ]]; then
   exit 1
 fi
 
-export bucket
-upload_asset() {
-  local file="$1"
-  local content_type
-  case "$file" in
-    *.css)
-      content_type="text/css; charset=utf-8"
-      ;;
-    *.js)
-      content_type="text/javascript; charset=utf-8"
-      ;;
-    *)
-      echo "Unsupported Platform asset type: $file" >&2
-      return 1
-      ;;
-  esac
-  local key="${file#packages/platform-app/dist/}"
-  if [[ ! "$key" =~ ^assets/[A-Za-z0-9._-]+\.(css|js)$ ]]; then
-    echo "Unsafe Platform asset path: $key" >&2
-    return 1
-  fi
-  pnpm wrangler r2 object put "$bucket/$key" \
-    --file "$file" \
-    --content-type "$content_type" \
-    --cache-control "public, max-age=31536000, immutable" \
-    --remote \
-    --force >/dev/null
-}
-export -f upload_asset
-
 assets=()
 while IFS= read -r -d '' file; do
   assets+=("$file")
@@ -62,11 +32,69 @@ if [[ "${#assets[@]}" -eq 0 ]]; then
   echo "No Platform assets were built" >&2
   exit 1
 fi
-printf '%s\0' "${assets[@]}" | xargs -0 -n 1 -P 12 bash -c 'upload_asset "$1"' _
+
+manifest_directory="$(mktemp -d)"
+headers="$(mktemp)"
+trap 'rm -rf "$manifest_directory"; rm -f "$headers"' EXIT
+javascript_manifest="$manifest_directory/javascript.json"
+css_manifest="$manifest_directory/css.json"
+printf '[]\n' > "$javascript_manifest"
+printf '[]\n' > "$css_manifest"
+
+javascript_entries=()
+css_entries=()
+for file in "${assets[@]}"; do
+  key="${file#packages/platform-app/dist/}"
+  if [[ ! "$key" =~ ^assets/[A-Za-z0-9._-]+\.(css|js)$ ]]; then
+    echo "Unsafe or unsupported Platform asset path: $key" >&2
+    exit 1
+  fi
+  entry="{\"key\":\"$key\",\"file\":\"$file\"}"
+  case "$file" in
+    *.css)
+      css_entries+=("$entry")
+      ;;
+    *.js)
+      javascript_entries+=("$entry")
+      ;;
+  esac
+done
+
+write_manifest() {
+  local manifest="$1"
+  shift
+  printf '%s\n' "$(IFS=,; printf '[%s]' "$*")" > "$manifest"
+}
+write_manifest "$javascript_manifest" "${javascript_entries[@]}"
+write_manifest "$css_manifest" "${css_entries[@]}"
+
+if ! pnpm wrangler r2 bucket info "$bucket" --json >/dev/null; then
+  echo "Platform asset bucket is unavailable: $bucket" >&2
+  echo "Provision it and its CDN domain and CORS policy as documented in docs/platform-hosting.md." >&2
+  exit 1
+fi
+
+publish_assets() {
+  local manifest="$1"
+  local content_type="$2"
+  local count="$3"
+  if [[ "$count" -eq 0 ]]; then
+    return
+  fi
+  # The pinned bulk command reuses one authenticated Wrangler process while
+  # separate manifests preserve the content type for JavaScript and CSS.
+  pnpm wrangler r2 bulk put "$bucket" \
+    --filename "$manifest" \
+    --content-type "$content_type" \
+    --cache-control "public, max-age=31536000, immutable" \
+    --concurrency 20 \
+    --remote \
+    --force
+}
+publish_assets "$javascript_manifest" "text/javascript; charset=utf-8" "${#javascript_entries[@]}"
+publish_assets "$css_manifest" "text/css; charset=utf-8" "${#css_entries[@]}"
 
 probe_key="${assets[0]#packages/platform-app/dist/}"
-headers="$(mktemp)"
-trap 'rm -f "$headers"' EXIT
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
   --header "Origin: $app_origin" \
   --dump-header "$headers" \
