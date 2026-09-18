@@ -1020,6 +1020,8 @@ class AcpProcessSession implements AcpClientHandler {
 
     readonly canRebind = (): boolean => !this.#prompted && !this.#turn.running;
 
+    readonly hasRunningTurn = (): boolean => this.#turn.running;
+
     readonly prepared = (): AcpPreparedSession =>
         new AcpPreparedSession(
             this.#agentName,
@@ -2694,7 +2696,6 @@ export class AcpSessionManager {
         const operation = (async () => {
             try {
                 await this.#retireSessionProcess(options.sessionId, existing, async () => await existing.close());
-                this.#store.remove(options.sessionId);
                 const runtime = await this.#startRetainedSessionProcess(
                     options,
                     async () => await AcpProcessSession.start(options, () => this.#observer, this.#store),
@@ -2737,7 +2738,6 @@ export class AcpSessionManager {
                     }
                 } catch (error) {
                     await this.#retireSessionProcess(options.sessionId, runtime, async () => await runtime.close());
-                    this.#store.remove(options.sessionId);
                     throw error;
                 }
                 return runtime;
@@ -2874,11 +2874,11 @@ export class AcpSessionManager {
             this.#touchExpectedSession(options.sessionId, existing);
             return existing.prepared();
         }
-        if (!existing.canRebind()) {
+        if (existing.hasRunningTurn()) {
             throw new AcpExecutionError(
-                "The execution environment cannot change after a conversation has started",
+                "The execution environment cannot change while a conversation turn is running",
                 {},
-                "session_identity_mismatch",
+                "session_busy",
             );
         }
         return (await this.#replaceExecutionPreparation(existing, options)).prepared();

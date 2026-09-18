@@ -1147,10 +1147,14 @@ async function executePrompt(
                 "prompt_queue_target_unavailable",
             );
         }
+        const executionAgent =
+            command.sessionConfigurations === undefined
+                ? agent
+                : agentForSessionConfiguration(agent, command.sessionConfigurations);
         if (command.sessionConfigurations !== undefined) {
             const prepared = await sessions.prepareExecutionSession({
                 additionalDirectories: resolved.additionalDirectories,
-                agent,
+                agent: executionAgent,
                 cwd: resolved.cwd,
                 sessionId: command.sessionId,
                 signal,
@@ -1163,7 +1167,7 @@ async function executePrompt(
                     audit,
                     prepared.configOptions,
                     command.sessionConfigurations,
-                    agent,
+                    executionAgent,
                     resolved.cwd,
                     resolved.additionalDirectories,
                     command.commandId,
@@ -1194,7 +1198,7 @@ async function executePrompt(
         if (command.disposition === SessionPromptDisposition.Steer) {
             await sessions.steerPrompt({
                 additionalDirectories: resolved.additionalDirectories,
-                agent,
+                agent: executionAgent,
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 images: attachments.images,
@@ -1208,7 +1212,7 @@ async function executePrompt(
         } else {
             const result = await sessions.runPrompt({
                 additionalDirectories: resolved.additionalDirectories,
-                agent,
+                agent: executionAgent,
                 commandId: command.commandId,
                 cwd: resolved.cwd,
                 disposition: command.disposition,
@@ -1278,6 +1282,20 @@ async function executePrompt(
 
 function invalidSessionConfiguration(message: string): AcpExecutionError {
     return new AcpExecutionError(message, {}, "invalid_session_configuration");
+}
+
+function agentForSessionConfiguration(
+    agent: LocalAgentDefinition,
+    selections: readonly SessionConfigurationSelection[],
+): LocalAgentDefinition {
+    const permission = selections.find((selection) => selection.configId === AGENT_PERMISSION_MODE_CONFIG_ID);
+    if (permission === undefined) {
+        throw invalidSessionConfiguration(
+            `The Turn configuration does not match Agent setting ${AGENT_PERMISSION_MODE_CONFIG_ID}`,
+        );
+    }
+    validateSessionConfigurationSelection(agent.permissionProfile.option(agent.environment), permission);
+    return agent.withPermissionMode(permission.value);
 }
 
 function validateSessionConfigurationSelection(
