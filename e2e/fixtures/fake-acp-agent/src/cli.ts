@@ -834,6 +834,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         if (state === undefined) {
             throw new Error("Unknown ACP session");
         }
+        if (process.argv.includes("--ignore-config-update")) {
+            return { configOptions: configOptions(state) };
+        }
         const updated = state.withConfig(context.params.configId, context.params.value);
         sessions.set(context.params.sessionId, updated);
         persistState(context.params.sessionId, updated);

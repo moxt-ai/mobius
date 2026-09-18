@@ -95,9 +95,7 @@ export interface MobiusCredentialProvider {
 }
 
 export interface DiscoverMobiusAgentSettingsRequest {
-    readonly additionalDirectoryIds: readonly string[];
-    readonly agentId: string;
-    readonly directoryId: string;
+    readonly model?: string;
 }
 
 export class StaticMobiusCredentialProvider implements MobiusCredentialProvider {
@@ -876,13 +874,17 @@ export class MobiusRuntimeResources {
 
     readonly discoverAgentSettings = async (
         runtimeId: string,
+        agentId: string,
         request: DiscoverMobiusAgentSettingsRequest,
         signal: AbortSignal,
     ): Promise<AgentSettingsDiscoveredEvent> =>
         decodeAgentSettingsDiscoveredEvent(
             JSON.stringify(
                 await this.#executor.post(
-                    projectPath(this.#projectId, `runtimes/${encodeURIComponent(runtimeId)}/agent-settings`),
+                    projectPath(
+                        this.#projectId,
+                        `runtimes/${encodeURIComponent(runtimeId)}/agents/${encodeURIComponent(agentId)}/settings`,
+                    ),
                     request,
                     signal,
                 ),

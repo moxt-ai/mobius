@@ -13,65 +13,34 @@ import {
 
 setupWebIntegrationEnvironment();
 
-const unavailableReasoningEffort: SessionConfigOption = {
+const nativeMode: SessionConfigOption = {
     booleanValue: false,
-    category: "thought_level",
-    currentValue: "agent_default",
-    description: "This Agent does not expose adjustable reasoning effort for the selected model.",
-    id: "reasoning_effort",
-    name: "Reasoning effort",
+    category: "mode",
+    currentValue: "default",
+    description: "Agent session mode",
+    id: "mode",
+    name: "Mode",
     type: "select",
     values: [
         {
-            description: "Selected by the Agent",
+            description: "Use the Agent default",
             groupId: "",
             groupName: "",
-            name: "Agent default",
-            value: "agent_default",
+            name: "Default",
+            value: "default",
+        },
+        {
+            description: "Plan before editing",
+            groupId: "",
+            groupName: "",
+            name: "Plan",
+            value: "plan",
         },
     ],
 };
 
-const unavailablePermission: SessionConfigOption = {
-    booleanValue: false,
-    category: "_mobius_permission",
-    currentValue: "agent_default",
-    description: "This Agent manages its own local permissions.",
-    id: "permission_mode",
-    name: "Permissions",
-    type: "select",
-    values: [
-        {
-            description: "Managed by the Agent",
-            groupId: "",
-            groupName: "",
-            name: "Agent default",
-            value: "agent_default",
-        },
-    ],
-};
-
-const unavailableModel: SessionConfigOption = {
-    booleanValue: false,
-    category: "model",
-    currentValue: "agent_default",
-    description: "This Agent does not expose an adjustable model.",
-    id: "model",
-    name: "Model",
-    type: "select",
-    values: [
-        {
-            description: "Selected by the Agent",
-            groupId: "",
-            groupName: "",
-            name: "Agent default",
-            value: "agent_default",
-        },
-    ],
-};
-
-describe.sequential("Required reasoning effort configuration", () => {
-    it("Given reasoning effort is unavailable for the selected Agent model, When the user opens run settings, Then the required setting explains the limitation and cannot submit an invalid change", async () => {
+describe.sequential("Agent-native run settings", () => {
+    it("Given an Agent exposes only its native mode, When the user opens run settings, Then Mobius does not invent model, effort, or permission controls", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -80,24 +49,18 @@ describe.sequential("Required reasoning effort configuration", () => {
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare, [
-                unavailablePermission,
-                unavailableModel,
-                unavailableReasoningEffort,
-            ]);
+            await sendReadySession(paired.daemon, prepare, [nativeMode]);
 
             fireEvent.click(
                 await screen.findByRole("button", {
-                    name: /Run settings: Agent default/,
+                    name: /Run settings: Default/,
                 }),
             );
-            expect(
-                screen.getByText("This Agent does not expose adjustable reasoning effort for the selected model."),
-            ).toBeTruthy();
-            expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toHaveProperty("disabled", true);
-            expect(screen.getByRole("combobox", { name: "Permissions" })).toHaveProperty("disabled", true);
-            expect(screen.getByRole("combobox", { name: "Model" })).toHaveProperty("disabled", true);
-            expect(screen.getAllByText("Required")).toHaveLength(3);
+            expect(screen.getByRole("combobox", { name: "Mode" })).toBeTruthy();
+            expect(screen.queryByRole("combobox", { name: "Permissions" })).toBeNull();
+            expect(screen.queryByRole("combobox", { name: "Model" })).toBeNull();
+            expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+            expect(screen.queryByText("Required")).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();

@@ -264,20 +264,46 @@ describe("ACP session control protocol contract", () => {
 
     it("Given a paired local Agent, When its settings are discovered, Then the protocol contains no Session identity", () => {
         const command: AgentSettingsDiscoverCommand = {
-            additionalDirectoryIds: [],
             agentId: "codex",
-            directoryId: "default",
             kind: AGENT_SETTINGS_DISCOVER_KIND,
+            model: "codex-1",
             requestId: "settings-1",
         };
         const discovered: AgentSettingsDiscoveredEvent = {
             agentId: "codex",
             agentName: "Codex",
             agentVersion: "codex 1.0.0",
-            configOptions: [modelOption],
-            directoryId: "default",
             kind: AGENT_SETTINGS_DISCOVERED_KIND,
+            modelEffort: {
+                effortSettingId: "reasoning_effort",
+                modelSettingId: "model",
+                resolution: "complete",
+                valuesByModel: {
+                    "codex-1": [
+                        {
+                            description: "Balanced reasoning",
+                            groupId: "",
+                            groupName: "",
+                            name: "Medium",
+                            value: "medium",
+                        },
+                    ],
+                },
+            },
             requestId: "settings-1",
+            settings: [
+                {
+                    booleanValue: false,
+                    category: modelOption.category,
+                    defaultValue: modelOption.currentValue,
+                    description: modelOption.description,
+                    id: modelOption.id,
+                    name: modelOption.name,
+                    type: modelOption.type,
+                    values: modelOption.values,
+                },
+            ],
+            settingsRevision: "a".repeat(64),
         };
 
         expect(decodeAgentSettingsDiscoverCommand(encodeAgentSettingsDiscoverCommand(command))).toEqual(command);
@@ -287,6 +313,9 @@ describe("ACP session control protocol contract", () => {
         ).toThrowError(ProtocolMessageError);
         expect(() =>
             decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, retiredId: "retired-1" })),
+        ).toThrowError(ProtocolMessageError);
+        expect(() =>
+            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, directoryId: "default" })),
         ).toThrowError(ProtocolMessageError);
     });
 

@@ -7,8 +7,12 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_SETTINGS_DISCOVER_KIND,
+    AGENT_SETTINGS_DISCOVERED_KIND,
+    decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    encodeAgentSettingsDiscoverCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
@@ -172,8 +176,21 @@ async function readTerminalSessionResult(frames: ClientFrames, sessionId: string
     }
 }
 
+async function readAgentSettings(frames: ClientFrames, requestId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== AGENT_SETTINGS_DISCOVERED_KIND) {
+            continue;
+        }
+        const discovered = decodeAgentSettingsDiscoveredEvent(message);
+        if (discovered.requestId === requestId) {
+            return discovered;
+        }
+    }
+}
+
 describe("daemon session configuration boundary", () => {
-    it("Given a conversation changes its local permission mode, When the next configured turn runs, Then Mobius resumes the conversation in the selected environment", async () => {
+    it("Given a conversation changes its DeepSeek access mode, When the next configured turn runs, Then Mobius resumes the conversation in the selected environment", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-session-configuration-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
@@ -220,7 +237,7 @@ describe("daemon session configuration boundary", () => {
             "deepseek-harness",
             "DeepSeek Harness",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness"],
+            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--without-reasoning-effort"],
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -242,10 +259,35 @@ describe("daemon session configuration boundary", () => {
 
         try {
             const frames = new ClientFrames(await socketReady.promise);
+            const discoveryRequestId = "deepseek-settings";
+            writeServerTextFrame(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId: discoveryRequestId,
+                }),
+            );
+            const discovered = await readAgentSettings(frames, discoveryRequestId);
+            expect(discovered.modelEffort).toEqual({
+                effortSettingId: "",
+                modelSettingId: "",
+                resolution: "unavailable",
+                valuesByModel: {},
+            });
+            expect(discovered.settings).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ id: "dsh_access_mode" }),
+                    expect.objectContaining({ id: "model" }),
+                ]),
+            );
+            expect(discovered.settings).not.toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
+            );
             const firstSessionConfigurations: readonly SessionConfigurationSelection[] = [
                 {
                     booleanValue: false,
-                    configId: "permission_mode",
+                    configId: "dsh_access_mode",
                     value: "read-only",
                     valueType: "select",
                 },
@@ -253,12 +295,6 @@ describe("daemon session configuration boundary", () => {
                     booleanValue: false,
                     configId: "model",
                     value: "test-large",
-                    valueType: "select",
-                },
-                {
-                    booleanValue: false,
-                    configId: "reasoning_effort",
-                    value: "high",
                     valueType: "select",
                 },
                 {
@@ -301,7 +337,7 @@ describe("daemon session configuration boundary", () => {
                 commandId: "second_configured_turn",
                 prompt: "second configured turn",
                 sessionConfigurations: firstSessionConfigurations.map((selection) =>
-                    selection.configId === "permission_mode" ? { ...selection, value: "workspace-write" } : selection,
+                    selection.configId === "dsh_access_mode" ? { ...selection, value: "workspace-write" } : selection,
                 ),
             };
             writeServerTextFrame(await socketReady.promise, encodeSessionPromptCommand(secondPrompt));

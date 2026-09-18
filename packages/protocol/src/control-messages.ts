@@ -149,12 +149,49 @@ export type SessionConfigOption = z.infer<typeof sessionConfigOptionSchema>;
 
 const sessionConfigOptionsSchema = z.array(sessionConfigOptionSchema).max(100).readonly();
 
+export const agentSettingSchema = z
+    .strictObject({
+        booleanValue: z.boolean(),
+        category: z.string().max(128),
+        defaultValue: z.string().max(500),
+        description: SHORT_TEXT,
+        id: z.string().min(1).max(128),
+        name: z.string().min(1).max(255),
+        type: z.enum(["boolean", "select"]),
+        values: z.array(configValueSchema).max(500).readonly(),
+    })
+    .readonly();
+
+export type AgentSetting = z.infer<typeof agentSettingSchema>;
+
+const agentSettingsSchema = z.array(agentSettingSchema).max(128).readonly();
+
+export const AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE = "complete";
+export const AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION = "on_model_selection";
+export const AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE = "unavailable";
+
+const agentModelEffortResolutionSchema = z.enum([
+    AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE,
+    AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+    AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
+]);
+
+export const agentModelEffortSchema = z
+    .strictObject({
+        effortSettingId: z.string().max(128),
+        modelSettingId: z.string().max(128),
+        resolution: agentModelEffortResolutionSchema,
+        valuesByModel: z.record(z.string().min(1).max(500), z.array(configValueSchema).max(500).readonly()).readonly(),
+    })
+    .readonly();
+
+export type AgentModelEffort = z.infer<typeof agentModelEffortSchema>;
+
 const agentSettingsDiscoverCommandSchema = z
     .strictObject({
-        additionalDirectoryIds: z.array(DIRECTORY_IDENTIFIER).max(16).readonly(),
         agentId: IDENTIFIER,
-        directoryId: DIRECTORY_IDENTIFIER,
         kind: z.literal(AGENT_SETTINGS_DISCOVER_KIND),
+        model: z.string().min(1).max(500).optional(),
         requestId: IDENTIFIER,
     })
     .readonly();
@@ -166,10 +203,11 @@ const agentSettingsDiscoveredEventSchema = z
         agentId: IDENTIFIER,
         agentName: z.string().max(255),
         agentVersion: z.string().max(128),
-        configOptions: sessionConfigOptionsSchema,
-        directoryId: DIRECTORY_IDENTIFIER,
         kind: z.literal(AGENT_SETTINGS_DISCOVERED_KIND),
+        modelEffort: agentModelEffortSchema,
         requestId: IDENTIFIER,
+        settings: agentSettingsSchema,
+        settingsRevision: z.string().regex(/^[a-f0-9]{64}$/),
     })
     .readonly();
 

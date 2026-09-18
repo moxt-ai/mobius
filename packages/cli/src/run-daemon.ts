@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { basename } from "node:path";
 import { styleText } from "node:util";
 
@@ -12,11 +12,15 @@ import {
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_INSTALL_STARTED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
-    AGENT_PERMISSION_MODE_CONFIG_ID,
+    AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE,
+    AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+    AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
     type AgentContentEvent,
+    type AgentModelEffort,
+    type AgentSetting,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
     decodeAgentInstallCancelCommand,
@@ -116,6 +120,7 @@ import { fetch, type MessageEvent, WebSocket } from "undici";
 import type { AcpActivity } from "./acp/activity.ts";
 import { AcpExecutionError, AcpSessionManager, type AcpSessionObserver } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
+import { agentSettingsAdapterForAgent, applyAgentLaunchSettings } from "./agent-catalog/agent-settings-adapter.ts";
 import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
 import {
     AgentIntegrationDefinition,
@@ -885,29 +890,182 @@ async function discoverAgentSettings(
     sessions: AcpSessionManager,
     signal: AbortSignal,
 ): Promise<AgentSettingsDiscoveredEvent> {
-    const resolved = await resolveSessionDirectories(
-        directories,
-        config.bindingId,
-        command.directoryId,
-        command.additionalDirectoryIds,
-        signal,
-    );
     const agent = config.catalog.find(command.agentId);
+    const cwd = await directories.resolve(config.bindingId, "default", signal);
     const snapshot = await sessions.inspectAgentSettings({
-        additionalDirectories: resolved.additionalDirectories,
+        additionalDirectories: [],
         agent,
-        cwd: resolved.cwd,
+        cwd,
         signal,
     });
+    const adapter = agentSettingsAdapterForAgent(agent.id);
+    const settings = settingsFromSnapshot(agent, snapshot.configOptions);
+    const modelEffort = await discoverModelEffort(
+        command,
+        agent,
+        adapter.modelEffortResolution,
+        snapshot.configOptions,
+        cwd,
+        sessions,
+        signal,
+    );
     return {
         agentId: command.agentId,
         agentName: snapshot.agentName,
         agentVersion: snapshot.agentVersion,
-        configOptions: snapshot.configOptions,
-        directoryId: command.directoryId,
         kind: AGENT_SETTINGS_DISCOVERED_KIND,
+        modelEffort,
         requestId: command.requestId,
+        settings,
+        settingsRevision: settingsRevision(agent, snapshot.agentVersion, settings, modelEffort),
     };
+}
+
+function settingFromOption(option: SessionConfigOption): AgentSetting {
+    return {
+        booleanValue: option.booleanValue,
+        category: option.category,
+        defaultValue: option.type === "boolean" ? "" : option.currentValue,
+        description: option.description,
+        id: option.id,
+        name: option.name,
+        type: option.type,
+        values: option.values,
+    };
+}
+
+function settingsFromSnapshot(
+    agent: LocalAgentDefinition,
+    configOptions: readonly SessionConfigOption[],
+): readonly AgentSetting[] {
+    const settings = [
+        ...agentSettingsAdapterForAgent(agent.id).settings(agent).map(settingFromOption),
+        ...configOptions.map(settingFromOption),
+    ];
+    const identifiers = new Set<string>();
+    for (const setting of settings) {
+        if (identifiers.has(setting.id)) {
+            throw new AcpExecutionError(
+                "The Agent returned duplicate setting identifiers",
+                {},
+                "invalid_session_configuration",
+            );
+        }
+        identifiers.add(setting.id);
+    }
+    if (settings.length > 128) {
+        throw new AcpExecutionError("The Agent returned too many settings", {}, "invalid_session_configuration");
+    }
+    return settings;
+}
+
+function modelOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
+    return options.find((option) => option.id === "model" || option.category === "model");
+}
+
+function effortOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
+    return options.find((option) => option.id === "reasoning_effort" || option.category === "thought_level");
+}
+
+function unavailableModelEffort(): AgentModelEffort {
+    return {
+        effortSettingId: "",
+        modelSettingId: "",
+        resolution: AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
+        valuesByModel: {},
+    };
+}
+
+async function discoverModelEffort(
+    command: AgentSettingsDiscoverCommand,
+    agent: LocalAgentDefinition,
+    resolution: string,
+    initialOptions: readonly SessionConfigOption[],
+    cwd: string,
+    sessions: AcpSessionManager,
+    signal: AbortSignal,
+): Promise<AgentModelEffort> {
+    const model = modelOption(initialOptions);
+    const effort = effortOption(initialOptions);
+    if (
+        resolution !== AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE &&
+        resolution !== AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION
+    ) {
+        return unavailableModelEffort();
+    }
+    if (
+        model === undefined ||
+        model.type !== "select" ||
+        model.values.length === 0 ||
+        effort === undefined ||
+        effort.type !== "select" ||
+        effort.values.length < 2
+    ) {
+        return unavailableModelEffort();
+    }
+    const inspectModel = async (modelValue: string): Promise<readonly SessionConfigOption[]> =>
+        (
+            await sessions.inspectAgentSettings({
+                additionalDirectories: [],
+                agent,
+                cwd,
+                model: modelValue,
+                signal,
+            })
+        ).configOptions;
+    const valuesByModel: Record<string, readonly (typeof effort.values)[number][]> = {};
+    if (resolution === "complete") {
+        for (const value of model.values) {
+            const selectedEffort = effortOption(await inspectModel(value.value));
+            valuesByModel[value.value] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+        }
+        return {
+            effortSettingId: effort.id,
+            modelSettingId: model.id,
+            resolution: "complete",
+            valuesByModel,
+        };
+    }
+    if (command.model !== undefined) {
+        if (!model.values.some((value) => value.value === command.model)) {
+            throw new AcpExecutionError("The selected Agent model is unavailable", {}, "invalid_session_configuration");
+        }
+        const selectedEffort = effortOption(await inspectModel(command.model));
+        valuesByModel[command.model] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+    }
+    return {
+        effortSettingId: effort.id,
+        modelSettingId: model.id,
+        resolution: "on_model_selection",
+        valuesByModel,
+    };
+}
+
+function settingsRevision(
+    agent: LocalAgentDefinition,
+    reportedAgentVersion: string,
+    settings: readonly AgentSetting[],
+    modelEffort: AgentModelEffort,
+): string {
+    // A dynamic effort lookup adds one model's values to an otherwise stable
+    // Agent capability document. It must not look like the Agent's settings
+    // changed each time a caller switches models.
+    const revisionModelEffort =
+        modelEffort.resolution === AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE
+            ? modelEffort
+            : { ...modelEffort, valuesByModel: {} };
+    return createHash("sha256")
+        .update(
+            JSON.stringify({
+                adapterVersion: agent.adapterVersion,
+                agentId: agent.id,
+                agentVersion: agent.agentVersion,
+                modelEffort: revisionModelEffort,
+                reportedAgentVersion,
+                settings,
+            }),
+        )
+        .digest("hex");
 }
 
 async function executeWorkspaceList(
@@ -1147,10 +1305,12 @@ async function executePrompt(
                 "prompt_queue_target_unavailable",
             );
         }
-        const executionAgent =
+        const appliedSettings =
             command.sessionConfigurations === undefined
-                ? agent
+                ? undefined
                 : agentForSessionConfiguration(agent, command.sessionConfigurations);
+        const executionAgent = appliedSettings?.agent ?? agent;
+        const sessionConfigurations = appliedSettings?.sessionConfigurations;
         if (command.sessionConfigurations !== undefined) {
             const prepared = await sessions.prepareExecutionSession({
                 additionalDirectories: resolved.additionalDirectories,
@@ -1160,13 +1320,13 @@ async function executePrompt(
                 signal,
             });
             if (command.disposition === SessionPromptDisposition.Steer) {
-                assertCompleteSessionConfiguration(prepared.configOptions, command.sessionConfigurations);
+                assertCompleteSessionConfiguration(prepared.configOptions, sessionConfigurations ?? []);
             } else {
                 await applyCompleteSessionConfiguration(
                     sessions,
                     audit,
                     prepared.configOptions,
-                    command.sessionConfigurations,
+                    sessionConfigurations ?? [],
                     executionAgent,
                     resolved.cwd,
                     resolved.additionalDirectories,
@@ -1287,15 +1447,15 @@ function invalidSessionConfiguration(message: string): AcpExecutionError {
 function agentForSessionConfiguration(
     agent: LocalAgentDefinition,
     selections: readonly SessionConfigurationSelection[],
-): LocalAgentDefinition {
-    const permission = selections.find((selection) => selection.configId === AGENT_PERMISSION_MODE_CONFIG_ID);
-    if (permission === undefined) {
-        throw invalidSessionConfiguration(
-            `The Turn configuration does not match Agent setting ${AGENT_PERMISSION_MODE_CONFIG_ID}`,
-        );
+): ReturnType<typeof applyAgentLaunchSettings> {
+    try {
+        return applyAgentLaunchSettings(agent, selections);
+    } catch (error) {
+        if (error instanceof Error) {
+            throw invalidSessionConfiguration(error.message);
+        }
+        throw error;
     }
-    validateSessionConfigurationSelection(agent.permissionProfile.option(agent.environment), permission);
-    return agent.withPermissionMode(permission.value);
 }
 
 function validateSessionConfigurationSelection(
@@ -1382,20 +1542,17 @@ function sessionConfigurationPriority(
     selection: SessionConfigurationSelection,
     options: readonly SessionConfigOption[],
 ): number {
-    if (selection.configId === "permission_mode") {
-        return 0;
-    }
     const option = options.find((candidate) => candidate.id === selection.configId);
     if (selection.configId === "model" || option?.category === "model") {
-        return 1;
+        return 0;
     }
     if (selection.configId === "reasoning_effort" || option?.category === "thought_level") {
-        return 2;
+        return 1;
     }
     if (option?.category === "model_config") {
-        return 3;
+        return 2;
     }
-    return 4;
+    return 3;
 }
 
 function assertCompleteSessionConfiguration(
@@ -1419,12 +1576,6 @@ function assertAppliedSessionConfiguration(
     const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
     for (const option of options) {
         const selection = selectionsById.get(option.id);
-        if (option.id === AGENT_PERMISSION_MODE_CONFIG_ID) {
-            if (selection === undefined || !sessionConfigurationMatches(option, selection)) {
-                throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
-            }
-            continue;
-        }
         if (selection === undefined || !sessionConfigurationSelectionIsAvailable(option, selection)) {
             continue;
         }
@@ -1458,64 +1609,59 @@ async function applySessionConfigurationSelection(
 ): Promise<readonly SessionConfigOption[]> {
     const option = options.find((candidate) => candidate.id === selection.configId);
     if (option === undefined) {
-        if (selection.configId !== AGENT_PERMISSION_MODE_CONFIG_ID) {
-            warnIgnoredSetting(
-                audit,
-                "session_configuration_setting_ignored",
-                commandId,
-                sessionId,
-                agent.id,
-                selection,
-                unavailableSessionConfigurationCategory(selection),
-                "setting_unavailable",
-            );
-            return options;
-        }
-        throw invalidSessionConfiguration(`The Agent setting ${selection.configId} is unavailable`);
+        warnIgnoredSetting(
+            audit,
+            "session_configuration_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            unavailableSessionConfigurationCategory(selection),
+            "setting_unavailable",
+        );
+        return options;
     }
-    if (selection.configId !== AGENT_PERMISSION_MODE_CONFIG_ID) {
-        if (option.type !== selection.valueType) {
-            warnIgnoredSetting(
-                audit,
-                "session_configuration_setting_ignored",
-                commandId,
-                sessionId,
-                agent.id,
-                selection,
-                option.category,
-                "setting_schema_mismatch",
-            );
-            return options;
-        }
-        if (
-            (option.type === "boolean" && selection.value.length > 0) ||
-            (option.type === "select" && selection.booleanValue)
-        ) {
-            warnIgnoredSetting(
-                audit,
-                "session_configuration_setting_ignored",
-                commandId,
-                sessionId,
-                agent.id,
-                selection,
-                option.category,
-                "selection_schema_mismatch",
-            );
-            return options;
-        }
-        if (option.type === "select" && !option.values.some((value) => value.value === selection.value)) {
-            warnIgnoredSetting(
-                audit,
-                "session_configuration_setting_ignored",
-                commandId,
-                sessionId,
-                agent.id,
-                selection,
-                option.category,
-                "value_unavailable",
-            );
-            return options;
-        }
+    if (option.type !== selection.valueType) {
+        warnIgnoredSetting(
+            audit,
+            "session_configuration_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            option.category,
+            "setting_schema_mismatch",
+        );
+        return options;
+    }
+    if (
+        (option.type === "boolean" && selection.value.length > 0) ||
+        (option.type === "select" && selection.booleanValue)
+    ) {
+        warnIgnoredSetting(
+            audit,
+            "session_configuration_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            option.category,
+            "selection_schema_mismatch",
+        );
+        return options;
+    }
+    if (option.type === "select" && !option.values.some((value) => value.value === selection.value)) {
+        warnIgnoredSetting(
+            audit,
+            "session_configuration_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            option.category,
+            "value_unavailable",
+        );
+        return options;
     }
     if (sessionConfigurationMatches(option, selection)) {
         return options;
@@ -2119,7 +2265,7 @@ async function runRelayConnection(
                                 );
                                 audit.record({
                                     commandId: command.requestId,
-                                    details: { agentId: command.agentId, directoryId: command.directoryId },
+                                    details: { agentId: command.agentId },
                                     event: "agent_settings_discovered",
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });

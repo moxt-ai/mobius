@@ -300,6 +300,14 @@ integration management, not remote Agent package management: Agent installation,
 removal, upgrades, sign-in, and provider credentials stay outside the Web action
 surface.
 
+Run settings are separately discovered from a ready Runtime for one Agent. The
+discovery contract has no workspace directory input and reports only Agent-owned
+or adapter-owned settings. `modelEffort` declares whether the complete
+model-to-effort matrix is present, one selected model must be resolved, or no
+adjustable effort exists. Clients cache this capability document and explicitly
+reload it when needed; accepted Turns carry the selected snapshot rather than
+triggering a fresh discovery.
+
 Integration installation follows the local execution-boundary pipeline:
 
 ```text

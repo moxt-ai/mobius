@@ -710,19 +710,20 @@ describe.sequential("Cloudflare session deployment", () => {
         try {
             const discovery = client.runtimes.discoverAgentSettings(
                 pairing.created.runtimeId,
+                "codex",
                 {
-                    additionalDirectoryIds: [],
-                    agentId: "codex",
-                    directoryId: "default",
+                    model: "codex-mini",
                 },
                 signal,
             );
             const command = decodeAgentSettingsDiscoverCommand(await daemon.messages.next());
             expect(command).toMatchObject({
                 agentId: "codex",
-                directoryId: "default",
                 kind: AGENT_SETTINGS_DISCOVER_KIND,
+                model: "codex-mini",
             });
+            expect(command).not.toHaveProperty("additionalDirectoryIds");
+            expect(command).not.toHaveProperty("directoryId");
             expect(command).not.toHaveProperty("botId");
             expect(command).not.toHaveProperty("sessionId");
             daemon.socket.send(
@@ -730,11 +731,21 @@ describe.sequential("Cloudflare session deployment", () => {
                     agentId: "codex",
                     agentName: "Codex",
                     agentVersion: "codex 0.153.0",
-                    configOptions: [
+                    kind: "agent.settings.discovered",
+                    modelEffort: {
+                        effortSettingId: "reasoning_effort",
+                        modelSettingId: "model",
+                        resolution: "complete",
+                        valuesByModel: {
+                            "codex-mini": [],
+                        },
+                    },
+                    requestId: command.requestId,
+                    settings: [
                         {
                             booleanValue: false,
                             category: "model",
-                            currentValue: "codex-mini",
+                            defaultValue: "codex-mini",
                             description: "Select a coding model.",
                             id: "model",
                             name: "Model",
@@ -750,15 +761,13 @@ describe.sequential("Cloudflare session deployment", () => {
                             ],
                         },
                     ],
-                    directoryId: "default",
-                    kind: "agent.settings.discovered",
-                    requestId: command.requestId,
+                    settingsRevision: "a".repeat(64),
                 }),
             );
             const snapshot = await discovery;
             expect(snapshot).toMatchObject({
                 agentId: "codex",
-                configOptions: [expect.objectContaining({ currentValue: "codex-mini", id: "model" })],
+                settings: [expect.objectContaining({ defaultValue: "codex-mini", id: "model" })],
             });
             expect(snapshot).not.toHaveProperty("botId");
             expect(snapshot).not.toHaveProperty("sessionId");

@@ -9,6 +9,8 @@ export type {
     AgentInstallFailedEvent,
     AgentInstallProgressEvent,
     AgentInstallStartedEvent,
+    AgentModelEffort,
+    AgentSetting,
     AgentSettingsDiscoveredEvent,
     Interaction,
     NativeSessionCommand,

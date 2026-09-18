@@ -3,11 +3,6 @@ import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
 
 import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
 import { ExecutableIdentity } from "../process/executable.ts";
-import {
-    AGENT_DEFAULT_PERMISSION_MODE,
-    type AgentPermissionProfile,
-    permissionProfileForAgent,
-} from "./agent-permission-profile.ts";
 
 function readTrustedIdentity(path: string): ExecutableIdentity {
     const resolvedPath = realpathSync(path);
@@ -34,7 +29,6 @@ export class LocalAgentDefinition {
     readonly environment: Readonly<Record<string, string>>;
     readonly id: string;
     readonly label: string;
-    readonly permissionProfile: AgentPermissionProfile;
 
     constructor(
         id: string,
@@ -47,7 +41,6 @@ export class LocalAgentDefinition {
         adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
         agentIdentity: ExecutableIdentity = adapterIdentity,
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
-        permissionProfile: AgentPermissionProfile = permissionProfileForAgent(id),
     ) {
         this.adapterIdentity = adapterIdentity;
         this.adapterPath = adapterIdentity.realPath;
@@ -57,33 +50,24 @@ export class LocalAgentDefinition {
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
-        this.permissionProfile = permissionProfile;
         this.command = adapterIdentity.realPath;
         this.arguments = Object.freeze([...arguments_]);
-        this.environment = permissionProfile.apply(environment, permissionProfile.currentMode(environment));
+        this.environment = Object.freeze({ ...environment });
     }
 
-    readonly withPermissionMode = (permissionMode: string): LocalAgentDefinition => {
-        if (
-            permissionMode === AGENT_DEFAULT_PERMISSION_MODE &&
-            this.permissionProfile.currentMode(this.environment) === AGENT_DEFAULT_PERMISSION_MODE
-        ) {
-            return this;
-        }
-        return new LocalAgentDefinition(
+    readonly withEnvironment = (environment: Readonly<Record<string, string>>): LocalAgentDefinition =>
+        new LocalAgentDefinition(
             this.id,
             this.label,
             this.command,
             this.arguments,
-            this.permissionProfile.apply(this.environment, permissionMode),
+            environment,
             this.adapterVersion,
             this.agentVersion,
             this.adapterIdentity,
             this.agentIdentity,
             this.capabilities,
-            this.permissionProfile,
         );
-    };
 }
 
 export abstract class InstallableAgentDefinition {

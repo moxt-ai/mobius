@@ -37,9 +37,20 @@ Call `transport.close()` when its owner releases the client. The WebSocket
 transport preserves each request's authorization headers and supports JSON and
 binary request/response bodies. Session event streams remain on `HttpTransport`.
 
-Session Turn configuration captures the selected permission mode, model, and
-reasoning effort. Discover the authoritative choices with
-`client.runtimes.discoverAgentSettings(...)` before creating the Session.
+Agent settings are scoped to a Runtime and its selected Agent, not to a
+workspace directory. Discover the authoritative capabilities with
+`client.runtimes.discoverAgentSettings(runtimeId, agentId, request, signal)`.
+The response contains only settings that Agent actually exposes or that its
+dedicated local adapter owns; Mobius never invents a universal permission,
+model, or reasoning-effort control.
+
+`modelEffort.resolution` tells a caller whether every model-to-effort mapping
+is already available (`complete`), an effort lookup must be made with
+`{ model }` after a model is selected (`on_model_selection`), or the Agent has
+no adjustable model/effort pair (`unavailable`). Cache the base response and
+any per-model response until the user explicitly reloads Agent settings; a
+normal Turn uses its saved configuration snapshot and does not rediscover
+settings.
 
 Existing users of `MobiusProjectAuthenticationClient.applications` and
 `.applicationCredentials` should migrate to `MobiusPlatformDeveloperClient`.

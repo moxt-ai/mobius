@@ -2,7 +2,6 @@ import type { SessionConfigOption, SessionConfigValue } from "@moxt-ai/mobius-pr
 
 import {
     AGENT_DEFAULT_REASONING_EFFORT,
-    ensureReasoningEffortOption,
     isRecord,
     normalizeConfigOptions,
     readString,
@@ -161,7 +160,7 @@ function normalizeGrokLifecycle(response: unknown): readonly SessionConfigOption
             normalized.splice(modelIndex < 0 ? normalized.length : modelIndex + 1, 0, ...efforts);
         }
     }
-    return ensureReasoningEffortOption(normalized.slice(0, 100));
+    return normalized.slice(0, 100);
 }
 
 function updateCurrentValue(

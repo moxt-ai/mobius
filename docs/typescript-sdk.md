@@ -174,10 +174,23 @@ runbook. App registration and AppCredential lifecycle belong exclusively to
 ## Session turn configuration
 
 Before submitting a configurable Turn, discover the selected local Agent's
-settings through `client.runtimes.discoverAgentSettings(...)`. Pass the chosen
-values as the complete `sessionConfigurations` snapshot on the Turn request.
-The Relay persists that snapshot with the Turn, and the local daemon validates
-and applies it before starting the Agent process.
+settings through `client.runtimes.discoverAgentSettings(runtimeId, agentId, {},
+signal)`. Settings are Runtime-and-Agent scoped: directory IDs are neither sent
+nor used for discovery. The response contains only settings that Agent exposes
+or that its dedicated adapter owns; Mobius does not synthesize a common
+permission, model, or reasoning-effort setting.
+
+The `modelEffort` metadata states how effort choices are available. When its
+`resolution` is `complete`, `valuesByModel` contains every model mapping. When
+it is `on_model_selection`, fetch the one selected model with
+`client.runtimes.discoverAgentSettings(runtimeId, agentId, { model }, signal)`.
+When it is `unavailable`, do not render or submit an effort setting. Cache the
+base response and any selected-model response after the user opens or reloads
+Agent settings; ordinary conversation turns must reuse that cached state.
+
+Pass the chosen values as the complete `sessionConfigurations` snapshot on the
+Turn request. The Relay persists that snapshot with the Turn, and the local
+daemon validates and applies it before starting the Agent process.
 
 The SDK does not loop on authentication failures. `credential_expired` and
 `credential_revoked` are returned immediately. After obtaining a replacement,

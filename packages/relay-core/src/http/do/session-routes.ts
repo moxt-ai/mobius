@@ -1,4 +1,5 @@
 import {
+    type AgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionCommand,
     decodePromptImagesValue,
@@ -122,6 +123,27 @@ function readFileMaxBytes(value: string | undefined): number {
     return result;
 }
 
+function legacyAgentSettingsResponse(result: AgentSettingsDiscoveredEvent, directoryId: string) {
+    return {
+        agentId: result.agentId,
+        agentName: result.agentName,
+        agentVersion: result.agentVersion,
+        configOptions: result.settings.map((setting) => ({
+            booleanValue: setting.booleanValue,
+            category: setting.category,
+            currentValue: setting.defaultValue,
+            description: setting.description,
+            id: setting.id,
+            name: setting.name,
+            type: setting.type,
+            values: setting.values,
+        })),
+        directoryId,
+        kind: "agent.settings.discovered",
+        requestId: result.requestId,
+    };
+}
+
 export function createSessionRoutes() {
     return new Hono<RelayHttpEnvironment>()
         .onError(rethrowHonoError)
@@ -136,17 +158,38 @@ export function createSessionRoutes() {
             async (context) => {
                 const body = context.req.valid("json");
                 assertExactKeys(body, ["agentId", "directoryId", "additionalDirectoryIds"]);
+                readIdentifierArray(body, "additionalDirectoryIds", 16, "additional_directory_id");
                 const command = decodeAgentSettingsDiscoverCommand(
                     JSON.stringify({
-                        additionalDirectoryIds: readIdentifierArray(
-                            body,
-                            "additionalDirectoryIds",
-                            16,
-                            "additional_directory_id",
-                        ),
                         agentId: readString(body, "agentId", 128),
-                        directoryId: readString(body, "directoryId", 2_048),
                         kind: "agent.settings.discover",
+                        requestId: crypto.randomUUID(),
+                    }),
+                );
+                const result = await context.env.services.runtimePairings.discoverAgentSettings(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                context.header("Deprecation", "true");
+                return context.json(legacyAgentSettingsResponse(result, readString(body, "directoryId", 2_048)));
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/agents/:agentId/settings",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = context.req.valid("json");
+                assertExactKeys(body, ["model"]);
+                const requestedModel = body["model"] === undefined ? undefined : readString(body, "model", 500);
+                const command = decodeAgentSettingsDiscoverCommand(
+                    JSON.stringify({
+                        agentId: validateIdentifier(context.req.param("agentId"), "agent_id"),
+                        kind: "agent.settings.discover",
+                        ...(requestedModel === undefined ? {} : { model: requestedModel }),
                         requestId: crypto.randomUUID(),
                     }),
                 );

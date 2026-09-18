@@ -196,6 +196,15 @@ with capability booleans observed during each ready Agent's bounded ACP probe.
 The page does not expose provider credentials or offer a remote Agent uninstall
 action.
 
+Agent settings are Runtime-and-Agent scoped rather than workspace-scoped. The
+Runtime settings endpoint returns only controls that the Agent exposes or that
+its dedicated adapter owns; it never invents a shared permission, model, or
+reasoning-effort control. Its `modelEffort` metadata identifies whether all
+model-to-effort values are included, a selected model requires a follow-up
+lookup, or effort is unavailable. A client caches the response after opening or
+explicitly reloading settings and reuses the saved Turn configuration during
+normal conversation execution.
+
 The pairing browser stores an owner host credential for the channel. The normal
 URL contains only the channel address, so opening it in another browser without
 a credential cannot submit work or read persisted history. On the Access from
