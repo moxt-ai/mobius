@@ -2,9 +2,9 @@ import type {
     PairingChannelRow,
     ProjectOwnerRow,
     RevocableRuntimeRow,
+    RuntimeDirectoryRow,
     RuntimePairingAudit,
     RuntimePairingRow,
-    RuntimeScopeRow,
 } from "../entity/pairing/pairing-records.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
@@ -128,10 +128,10 @@ export class PairingStorage {
     readonly readRuntime = (projectId: string, runtimeId: string, signal: AbortSignal) =>
         this.#database
             .prepare(`
-        SELECT channel_id, runtime_id, project_id, status FROM pairing_channels
+        SELECT channel_id, runtime_id, project_id, status, agents_json FROM pairing_channels
         WHERE project_id = ? AND runtime_id = ?`)
             .bind(projectId, runtimeId)
-            .first<RuntimeScopeRow>(signal);
+            .first<RuntimeDirectoryRow>(signal);
 
     readonly claim = (
         codeHash: string,

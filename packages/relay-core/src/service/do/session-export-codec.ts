@@ -361,6 +361,8 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
             !bindingIds.has(turn.bindingId) ||
             turn.request.kind !== "prompt" ||
             turn.request.content !== command.prompt ||
+            JSON.stringify(turn.request.sessionConfigurations) !==
+                JSON.stringify(command.sessionConfigurations ?? []) ||
             commandIds.has(command.commandId) ||
             !isRecord(stateValue)
         ) {

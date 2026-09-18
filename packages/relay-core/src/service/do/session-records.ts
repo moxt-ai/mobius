@@ -334,7 +334,11 @@ export function turnFromRow(row: TurnRecord): Turn {
         acceptedAt: new Date(rowNumber(row, "created_at")).toISOString(),
         bindingId: rowString(row, "binding_id"),
         idempotencyKey: rowString(row, "idempotency_key"),
-        request: { content: command.prompt, kind: "prompt" },
+        request: {
+            content: command.prompt,
+            kind: "prompt",
+            sessionConfigurations: command.sessionConfigurations ?? [],
+        },
         sessionId: command.sessionId,
         state: turnState,
         turnId: rowString(row, "turn_id"),

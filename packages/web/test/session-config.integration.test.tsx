@@ -1,11 +1,13 @@
 import {
     decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
+    decodeSessionPromptCommand,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
+    SESSION_PROMPT_KIND,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { App } from "@/app";
@@ -104,6 +106,38 @@ describe.sequential("Session configuration", () => {
                 sessionId: prepare.sessionId,
                 value: "custom-provider/gpt-5.6-sol",
             });
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a configuration-capable Runtime has prepared a Session, When the user sends a prompt, Then the public Turn carries every current setting as an immutable snapshot", async () => {
+        const paired = await pairDaemon({ sessionTurnConfiguration: true });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        render(<App />);
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare, groupedModelConfig());
+            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(input, { target: { value: "Use the selected configuration" } });
+            const send = screen.getByRole("button", { name: "Send message" });
+            await waitFor(() => expect(send).toHaveProperty("disabled", false));
+            fireEvent.click(send);
+
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.sessionConfigurations).toEqual([
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "deepseek-official/deepseek-v4-flash",
+                    valueType: "select",
+                },
+            ]);
         } finally {
             cleanup();
             await closeMobiusTransport();

@@ -252,6 +252,7 @@ async function claimPairing(
         capabilities: agent.capabilities,
         id: agent.id,
         label: agent.label,
+        sessionTurnConfiguration: true,
     }));
     const endpoint =
         options.pairingId.length > 0

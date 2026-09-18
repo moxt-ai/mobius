@@ -25,6 +25,7 @@ import {
     SESSION_FAILED_KIND,
     SESSION_STARTED_KIND,
     type SessionCapabilities,
+    type SessionConfigurationSelection,
     sessionCapabilitiesSchema,
 } from "@moxt-ai/mobius-protocol";
 
@@ -403,6 +404,7 @@ export interface SubmitMobiusTurnRequest {
     readonly idempotencyKey: string;
     readonly images: readonly PromptImage[];
     readonly resources: readonly PromptResource[];
+    readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly targetCommandId?: string;
 }
 
@@ -691,6 +693,7 @@ export class MobiusAgentDescriptor {
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
+    readonly sessionTurnConfiguration?: boolean;
 
     constructor(
         agentPath: string,
@@ -700,6 +703,7 @@ export class MobiusAgentDescriptor {
         label: string,
         agentSettingsDiscovery?: boolean,
         botSessionConfiguration?: boolean,
+        sessionTurnConfiguration?: boolean,
     ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
@@ -712,6 +716,9 @@ export class MobiusAgentDescriptor {
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
+        if (sessionTurnConfiguration === true) {
+            this.sessionTurnConfiguration = true;
+        }
     }
 }
 
@@ -733,14 +740,27 @@ export function decodeMobiusAgentCapabilities(value: unknown): SessionCapabiliti
 function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
     if (
-        (Object.keys(agent).length !== 5 && Object.keys(agent).length !== 6 && Object.keys(agent).length !== 7) ||
+        Object.keys(agent).length < 5 ||
+        Object.keys(agent).length > 8 ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
         !Object.hasOwn(agent, "id") ||
         !Object.hasOwn(agent, "label") ||
+        Object.keys(agent).some(
+            (key) =>
+                key !== "agentPath" &&
+                key !== "agentVersion" &&
+                key !== "agentSettingsDiscovery" &&
+                key !== "botSessionConfiguration" &&
+                key !== "capabilities" &&
+                key !== "id" &&
+                key !== "label" &&
+                key !== "sessionTurnConfiguration",
+        ) ||
         (Object.hasOwn(agent, "botSessionConfiguration") && typeof agent["botSessionConfiguration"] !== "boolean") ||
-        (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean")
+        (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean") ||
+        (Object.hasOwn(agent, "sessionTurnConfiguration") && typeof agent["sessionTurnConfiguration"] !== "boolean")
     ) {
         throw invalidResponse("The service returned an invalid Agent descriptor");
     }
@@ -758,6 +778,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         label.trim(),
         agent["agentSettingsDiscovery"] === true,
         agent["botSessionConfiguration"] === true,
+        agent["sessionTurnConfiguration"] === true,
     );
 }
 
@@ -1356,6 +1377,7 @@ export class MobiusTurn {
     readonly content: string;
     readonly idempotencyKey: string;
     readonly sessionId: string;
+    readonly sessionConfigurations: readonly SessionConfigurationSelection[];
     readonly state: MobiusTurnState;
     readonly turnId: string;
 
@@ -1365,6 +1387,7 @@ export class MobiusTurn {
         content: string,
         idempotencyKey: string,
         sessionId: string,
+        sessionConfigurations: readonly SessionConfigurationSelection[],
         state: MobiusTurnState,
         turnId: string,
     ) {
@@ -1373,6 +1396,7 @@ export class MobiusTurn {
         this.content = content;
         this.idempotencyKey = idempotencyKey;
         this.sessionId = sessionId;
+        this.sessionConfigurations = sessionConfigurations;
         this.state = state;
         this.turnId = turnId;
     }
@@ -1415,6 +1439,7 @@ export function decodeMobiusTurn(value: unknown): MobiusTurn {
         turn.request.content,
         turn.idempotencyKey,
         turn.sessionId,
+        turn.request.sessionConfigurations,
         state,
         turn.turnId,
     );

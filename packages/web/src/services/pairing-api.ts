@@ -384,9 +384,8 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
     for (const candidate of value) {
         if (
             !isRecord(candidate) ||
-            (Object.keys(candidate).length !== 5 &&
-                Object.keys(candidate).length !== 6 &&
-                Object.keys(candidate).length !== 7) ||
+            Object.keys(candidate).length < 5 ||
+            Object.keys(candidate).length > 8 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
@@ -400,12 +399,15 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
                     key !== "botSessionConfiguration" &&
                     key !== "capabilities" &&
                     key !== "id" &&
-                    key !== "label",
+                    key !== "label" &&
+                    key !== "sessionTurnConfiguration",
             ) ||
             (Object.hasOwn(candidate, "botSessionConfiguration") &&
                 typeof candidate["botSessionConfiguration"] !== "boolean") ||
             (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
-                typeof candidate["agentSettingsDiscovery"] !== "boolean")
+                typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
+            (Object.hasOwn(candidate, "sessionTurnConfiguration") &&
+                typeof candidate["sessionTurnConfiguration"] !== "boolean")
         ) {
             throw new PairingApiError("invalid_relay_response", "The relay returned an invalid agent directory.");
         }
@@ -439,6 +441,7 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
                 agentVersion.trim(),
                 capabilities,
                 candidate["agentSettingsDiscovery"] === true,
+                candidate["sessionTurnConfiguration"] === true,
             ),
         );
     }
@@ -910,6 +913,7 @@ function runtimeConnection(
                 agent.agentVersion,
                 agent.capabilities,
                 agent.agentSettingsDiscovery,
+                agent.sessionTurnConfiguration,
             ),
     );
     const installableAgents = runtime.installableAgents.map((agent): InstallableAgentOption => {

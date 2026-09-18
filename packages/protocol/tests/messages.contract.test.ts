@@ -207,11 +207,47 @@ describe("session prompt protocol", () => {
                     uri: "mobius://upload/notes.txt",
                 },
             ],
+            sessionConfigurations: [
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "codex-1",
+                    valueType: "select",
+                },
+                {
+                    booleanValue: true,
+                    configId: "fast_mode",
+                    value: "",
+                    valueType: "boolean",
+                },
+            ],
             sessionId: "session-1",
             targetCommandId: "",
         };
 
         expect(decodeSessionPromptCommand(encodeSessionPromptCommand(command))).toEqual(command);
+    });
+
+    it("Given a persisted prompt predates Turn configuration snapshots, When a current daemon decodes it, Then the legacy command remains readable without inventing a snapshot", () => {
+        const legacy = decodeSessionPromptCommand(
+            JSON.stringify({
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: "workspace",
+                commandId: "legacy-command",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: SESSION_PROMPT_KIND,
+                prompt: "continue the existing session",
+                resources: [],
+                sessionId: "session-1",
+                targetCommandId: "",
+            }),
+        );
+
+        expect(legacy).not.toHaveProperty("sessionConfigurations");
+        expect(JSON.parse(encodeSessionPromptCommand(legacy))).not.toHaveProperty("sessionConfigurations");
     });
 
     it("Given a running Turn identity, When a follow-up crosses the protocol boundary, Then queue and steer intent remain explicit", () => {

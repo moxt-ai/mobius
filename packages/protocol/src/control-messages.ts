@@ -183,7 +183,7 @@ export const DEFAULT_AGENT_EXECUTION_CONFIGURATION: AgentExecutionConfiguration 
     reasoningEffort: agentDefaultSelection("reasoning_effort"),
 });
 
-const sessionConfigurationSelectionsSchema = z
+export const sessionConfigurationSelectionsSchema = z
     .array(sessionConfigurationSelectionSchema)
     .max(100)
     .superRefine((selections, context) => {

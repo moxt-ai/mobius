@@ -1237,25 +1237,27 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             const responseText =
                 prompt === "Report working directory"
                     ? process.cwd()
-                    : prompt === "Report Bot execution settings"
-                      ? [
-                            state.model,
-                            process.cwd(),
-                            /^ctx_[a-zA-Z0-9_-]{43}$/.test(process.env["MOBIUS_BOT_CONTEXT"] ?? "") &&
-                            (process.env["MOBIUS_BOT_SOCKET"] ?? "").length > 0
-                                ? "bot-context"
-                                : "missing-context",
-                            process.env["MOBIUS_RELAY_TOKEN"] === "" && process.env["MOBIUS_RELAY_URL"] === ""
-                                ? "relay-cleared"
-                                : "relay-exposed",
-                        ].join("|")
-                      : prompt === "Report prompt blocks"
-                        ? `${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource`
-                        : prompt === "exercise ACP controls"
-                          ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
-                          : agentName.length === 0
-                            ? "Echo from ACP: "
-                            : `${agentName} turn ${turnNumber.toString()}: `;
+                    : prompt === "Report execution settings"
+                      ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"}`
+                      : prompt === "Report Bot execution settings"
+                        ? [
+                              state.model,
+                              process.cwd(),
+                              /^ctx_[a-zA-Z0-9_-]{43}$/.test(process.env["MOBIUS_BOT_CONTEXT"] ?? "") &&
+                              (process.env["MOBIUS_BOT_SOCKET"] ?? "").length > 0
+                                  ? "bot-context"
+                                  : "missing-context",
+                              process.env["MOBIUS_RELAY_TOKEN"] === "" && process.env["MOBIUS_RELAY_URL"] === ""
+                                  ? "relay-cleared"
+                                  : "relay-exposed",
+                          ].join("|")
+                        : prompt === "Report prompt blocks"
+                          ? `${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource`
+                          : prompt === "exercise ACP controls"
+                            ? `${state.mode} ${state.model} ${state.reasoningEffort} ${state.fastMode ? "fast" : "standard"} ${selectedBranch} (${countPromptBlock(context.params.prompt, "image").toString()} image, ${countPromptBlock(context.params.prompt, "resource").toString()} resource)`
+                            : agentName.length === 0
+                              ? "Echo from ACP: "
+                              : `${agentName} turn ${turnNumber.toString()}: `;
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {
@@ -1301,6 +1303,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             if (
                 prompt !== "exercise ACP controls" &&
                 prompt !== "Report working directory" &&
+                prompt !== "Report execution settings" &&
                 prompt !== "Report Bot execution settings" &&
                 prompt !== "Report prompt blocks"
             ) {
@@ -1324,6 +1327,7 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                     responseText +
                     (prompt === "exercise ACP controls" ||
                     prompt === "Report working directory" ||
+                    prompt === "Report execution settings" ||
                     prompt === "Report Bot execution settings" ||
                     prompt === "Report prompt blocks"
                         ? ""

@@ -20,6 +20,7 @@ export class AgentOption {
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
+    readonly sessionTurnConfiguration?: boolean;
 
     constructor(
         id: string,
@@ -28,6 +29,7 @@ export class AgentOption {
         agentVersion: string,
         capabilities: SessionCapabilities,
         agentSettingsDiscovery?: boolean,
+        sessionTurnConfiguration?: boolean,
     ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
@@ -37,6 +39,9 @@ export class AgentOption {
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
         this.label = label;
+        if (sessionTurnConfiguration === true) {
+            this.sessionTurnConfiguration = true;
+        }
     }
 }
 

@@ -9,8 +9,12 @@ export interface ProjectOwnerRow {
     readonly project_id: string;
 }
 
-export interface RuntimeScopeRow extends PairingScopeRow {
+interface RuntimeScopeRow extends PairingScopeRow {
     readonly status: string;
+}
+
+export interface RuntimeDirectoryRow extends RuntimeScopeRow {
+    readonly agents_json: string;
 }
 
 export interface RevocableRuntimeRow extends RuntimeScopeRow {

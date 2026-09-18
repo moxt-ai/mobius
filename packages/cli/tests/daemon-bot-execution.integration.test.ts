@@ -13,12 +13,14 @@ import {
     decodeMessageKind,
     decodeRuntimeDeliveryReceived,
     decodeSessionEventEnvelope,
+    decodeSessionFailedEvent,
     decodeSessionOperationFailedEvent,
     encodeBotSessionPromptCommand,
     encodeRuntimeDelivery,
     encodeRuntimeDeliveryCommitted,
     encodeSessionEventAcknowledgement,
     encodeSessionPrepareCommand,
+    encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     OwnerBotReplyRoute,
     RUNTIME_DELIVERY_COMMITTED_KIND,
@@ -28,8 +30,10 @@ import {
     SESSION_CONFIG_UPDATED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
+    SESSION_FAILED_KIND,
     SESSION_PREPARE_KIND,
     SESSION_STARTED_KIND,
+    type SessionPromptCommand,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -328,6 +332,81 @@ describe("daemon Bot execution boundary", () => {
                     valueType: "select",
                 },
             };
+            const directPrompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                commandId: "command_direct_configuration",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "Report execution settings",
+                resources: [],
+                sessionConfigurations: [
+                    {
+                        booleanValue: false,
+                        configId: "permission_mode",
+                        value: "agent_default",
+                        valueType: "select",
+                    },
+                    {
+                        booleanValue: false,
+                        configId: "model",
+                        value: "test-large",
+                        valueType: "select",
+                    },
+                    {
+                        booleanValue: false,
+                        configId: "reasoning_effort",
+                        value: "high",
+                        valueType: "select",
+                    },
+                    {
+                        booleanValue: true,
+                        configId: "fast_mode",
+                        value: "",
+                        valueType: "boolean",
+                    },
+                    {
+                        booleanValue: false,
+                        configId: "mode",
+                        value: "code",
+                        valueType: "select",
+                    },
+                ],
+                sessionId: "session_direct_configuration",
+                targetCommandId: "",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(directPrompt));
+            expect(await readCompletedText(frames)).toContain("code test-large high fast");
+
+            const incompletePrompt: SessionPromptCommand = {
+                ...directPrompt,
+                commandId: "command_incomplete_configuration",
+                sessionConfigurations:
+                    directPrompt.sessionConfigurations === undefined
+                        ? []
+                        : directPrompt.sessionConfigurations.slice(0, 1),
+                sessionId: "session_incomplete_configuration",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(incompletePrompt));
+            let receivedIncompleteFailure = false;
+            const incompleteKinds: string[] = [];
+            while (!receivedIncompleteFailure) {
+                const failedEnvelope = decodeSessionEventEnvelope(await frames.next());
+                const failedKind = decodeMessageKind(failedEnvelope.payload);
+                incompleteKinds.push(failedKind);
+                if (failedKind !== SESSION_FAILED_KIND) {
+                    continue;
+                }
+                expect(decodeSessionFailedEvent(failedEnvelope.payload)).toMatchObject({
+                    code: "invalid_session_configuration",
+                    commandId: incompletePrompt.commandId,
+                });
+                receivedIncompleteFailure = true;
+            }
+            expect(incompleteKinds).not.toContain(SESSION_STARTED_KIND);
             const binding = {
                 behaviorDigest: "a".repeat(64),
                 behaviorInstructions: "Follow the Bot behavior.",

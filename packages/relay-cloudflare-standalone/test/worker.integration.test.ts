@@ -52,6 +52,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    type SessionConfigurationSelection,
     type SessionEventEnvelope,
     SessionEventRejectionCode,
     type SessionPrepareCommand,
@@ -62,6 +63,7 @@ import {
     MobiusArtifactUploadRequest,
     MobiusClient,
     MobiusExpiredRuntimePairingStatus,
+    MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
     MobiusPendingRuntimePairingStatus,
     MobiusRecordingPolicy,
@@ -102,6 +104,7 @@ const readyAgents = [
         capabilities: verifiedAgentCapabilities,
         id: "codex",
         label: "Codex",
+        sessionTurnConfiguration: true,
     },
 ];
 const installableAgents = [
@@ -767,6 +770,167 @@ describe.sequential("Cloudflare session deployment", () => {
             client.close();
             daemon.socket.close(1000, "Agent settings discovery test complete");
         }
+    });
+
+    it("Given a configuration-capable Session has no new events, When a client submits a snapshotted Turn and waits, Then Relay persists the snapshot and wakes the bounded event read", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const signal = new AbortController().signal;
+        const client = new MobiusClient({
+            credentialProvider: {
+                credential: async (credentialSignal) => {
+                    credentialSignal.throwIfAborted();
+                    return pairing.created.hostToken;
+                },
+            },
+            endpoint: relayOrigin,
+            projectId: pairing.created.projectId,
+            transport: { fetch: async (request) => await app.request(request) },
+        });
+        const fastModeConfiguration: SessionConfigurationSelection = {
+            booleanValue: true,
+            configId: "fast_mode",
+            value: "",
+            valueType: "boolean",
+        };
+        const modelConfiguration: SessionConfigurationSelection = {
+            booleanValue: false,
+            configId: "model",
+            value: "test-large",
+            valueType: "select",
+        };
+        const sessionConfigurations: readonly SessionConfigurationSelection[] = [
+            fastModeConfiguration,
+            modelConfiguration,
+        ];
+
+        try {
+            const session = await client.sessions.create(
+                {
+                    agentId: "codex",
+                    bindingId: "workspace",
+                    directoryId: "root",
+                    policy: new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000),
+                    runtimeId: pairing.created.runtimeId,
+                    sessionId: "snapshotted-session",
+                    title: "Snapshotted Session",
+                },
+                signal,
+            );
+            const turn = await client.turns.submit(
+                session.sessionId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Run with this exact model",
+                    idempotencyKey: "snapshotted-turn",
+                    images: [],
+                    resources: [],
+                    sessionConfigurations,
+                },
+                signal,
+            );
+            expect(turn.sessionConfigurations).toEqual(sessionConfigurations);
+            const command = decodeSessionPromptCommand(await daemon.messages.next());
+            expect(command.sessionConfigurations).toEqual(sessionConfigurations);
+            await expect(client.turns.read(session.sessionId, turn.turnId, signal)).resolves.toMatchObject({
+                sessionConfigurations,
+            });
+
+            const waiting = client.events.wait(session.sessionId, new MobiusPageRequest(10, ""), 10_000, signal);
+            const started = envelope(session.sessionId, "snapshotted-turn-started", {
+                attemptId: "snapshotted-attempt",
+                commandId: command.commandId,
+                kind: SESSION_STARTED_KIND,
+                sessionId: session.sessionId,
+            });
+            daemon.socket.send(encodeSessionEventEnvelope(started));
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                eventId: started.eventId,
+            });
+            await expect(waiting).resolves.toMatchObject({
+                events: [expect.objectContaining({ eventId: started.eventId })],
+            });
+
+            await expect(
+                client.turns.submit(
+                    session.sessionId,
+                    {
+                        additionalDirectoryIds: [],
+                        artifactIds: [],
+                        content: "Run with this exact model",
+                        idempotencyKey: "snapshotted-turn",
+                        images: [],
+                        resources: [],
+                        sessionConfigurations: sessionConfigurations.toReversed(),
+                    },
+                    signal,
+                ),
+            ).resolves.toMatchObject({ turnId: turn.turnId });
+
+            await expect(
+                client.turns.submit(
+                    session.sessionId,
+                    {
+                        additionalDirectoryIds: [],
+                        artifactIds: [],
+                        content: "Run with this exact model",
+                        idempotencyKey: "snapshotted-turn",
+                        images: [],
+                        resources: [],
+                        sessionConfigurations: [
+                            fastModeConfiguration,
+                            {
+                                ...modelConfiguration,
+                                value: "test-small",
+                            },
+                        ],
+                    },
+                    signal,
+                ),
+            ).rejects.toMatchObject({ code: "idempotency_conflict", status: 409 });
+        } finally {
+            client.close();
+            daemon.socket.close(1000, "Snapshot integration complete");
+        }
+    });
+
+    it("Given a Runtime predates Session Turn configuration, When a client submits a snapshot, Then Relay rejects it before dispatch", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { createPairing, claimPairing, createSession } = createSessionRequests(app);
+        const created = await createPairing();
+        await claimPairing(
+            created,
+            readyAgents.map(({ sessionTurnConfiguration: _unsupported, ...agent }) => agent),
+            [],
+        );
+        expect((await createSession(created, "legacy-runtime-session")).status).toBe(201);
+
+        const response = await app.request(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${created.projectId}/sessions/legacy-runtime-session/turns`,
+            {
+                body: JSON.stringify({
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Require a snapshot",
+                    idempotencyKey: "unsupported-snapshot",
+                    images: [],
+                    resources: [],
+                    sessionConfigurations: [],
+                }),
+                headers: { ...createSessionRequests(app).authorization(created), "content-type": "application/json" },
+                method: "POST",
+            },
+        );
+
+        expect(response.status).toBe(409);
+        await expect(response.json()).resolves.toMatchObject({
+            error: { code: "session_turn_configuration_unsupported" },
+        });
     });
 
     it("Given a ready Session with no recorded events, When a browser opens its event stream, Then the Relay immediately sends a connection frame before the first Turn", async () => {

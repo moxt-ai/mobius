@@ -33,6 +33,7 @@ import {
     type PromptResource,
     type SessionConfigOption,
     type SessionConfigUpdatedEvent,
+    type SessionConfigurationSelection,
     SessionPromptDisposition,
     type SessionReadyEvent,
     StaticMobiusCredentialProvider,
@@ -721,6 +722,9 @@ class ConnectedTransport extends TransportConnection {
                         idempotencyKey: commandId,
                         images: [],
                         resources: attachments.resources ?? [],
+                        ...(request.sessionConfigurations === undefined
+                            ? {}
+                            : { sessionConfigurations: request.sessionConfigurations }),
                         targetCommandId: request.targetCommandId ?? "",
                     },
                     signal,
@@ -1190,6 +1194,10 @@ async function sendObservedPrompt(
             ? initialStore.beginQueuedTurn(prompt)
             : initialStore.beginTurn(prompt);
     let attemptId = "Pending";
+    const configurationSupported = initialStore.agents.some(
+        (agent) => agent.id === conversation.agentId && agent.sessionTurnConfiguration === true,
+    );
+    const sessionConfigurations = snapshotSessionConfiguration(conversation.session.configOptions);
 
     try {
         const result = await transport.prompt({
@@ -1233,6 +1241,7 @@ async function sendObservedPrompt(
             },
             prompt,
             resources: conversation.draftResources,
+            ...(configurationSupported ? { sessionConfigurations } : {}),
             sessionId: turn.sessionId,
             targetCommandId,
         });
@@ -1243,7 +1252,12 @@ async function sendObservedPrompt(
 }
 
 async function sendSteeringPrompt(conversation: Conversation, prompt: string, targetCommandId: string): Promise<void> {
-    const turn = useChatStore.getState().beginSteering(prompt);
+    const initialStore = useChatStore.getState();
+    const turn = initialStore.beginSteering(prompt);
+    const configurationSupported = initialStore.agents.some(
+        (agent) => agent.id === conversation.agentId && agent.sessionTurnConfiguration === true,
+    );
+    const sessionConfigurations = snapshotSessionConfiguration(conversation.session.configOptions);
     try {
         await transport.prompt({
             additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
@@ -1255,6 +1269,7 @@ async function sendSteeringPrompt(conversation: Conversation, prompt: string, ta
             images: conversation.draftImages,
             prompt,
             resources: conversation.draftResources,
+            ...(configurationSupported ? { sessionConfigurations } : {}),
             sessionId: turn.sessionId,
             targetCommandId,
         });
@@ -1262,6 +1277,17 @@ async function sendSteeringPrompt(conversation: Conversation, prompt: string, ta
     } catch (error) {
         useChatStore.getState().failSteering(turn, failureMessage(error));
     }
+}
+
+function snapshotSessionConfiguration(
+    options: readonly SessionConfigOption[],
+): readonly SessionConfigurationSelection[] {
+    return options.map((option) => ({
+        booleanValue: option.type === "boolean" ? option.booleanValue : false,
+        configId: option.id,
+        value: option.type === "select" ? option.currentValue : "",
+        valueType: option.type,
+    }));
 }
 
 export async function sendPrompt(prompt: string, disposition: string = SessionPromptDisposition.Reject): Promise<void> {

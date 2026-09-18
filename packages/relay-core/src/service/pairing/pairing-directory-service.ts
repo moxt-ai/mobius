@@ -242,7 +242,7 @@ export class PairingDirectoryService implements PairingOperations {
         if (row.status !== "paired") {
             throw new PairingDirectoryError("runtime_unavailable", "The selected Runtime is unavailable");
         }
-        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id);
+        return new VerifiedChannelAccess(row.channel_id, row.runtime_id, row.project_id, parseAgents(row.agents_json));
     };
 
     private readonly decodeCreatedRuntimePairing = async (

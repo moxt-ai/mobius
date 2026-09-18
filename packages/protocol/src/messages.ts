@@ -1,3 +1,5 @@
+import type { SessionConfigurationSelection } from "./control-messages.ts";
+
 export const SESSION_PROMPT_KIND = "session.prompt";
 export const SESSION_CANCEL_KIND = "session.cancel";
 export const RUNTIME_STATUS_KIND = "runtime.status";
@@ -35,6 +37,7 @@ export interface SessionPromptCommand {
     readonly kind: typeof SESSION_PROMPT_KIND;
     readonly prompt: string;
     readonly resources: readonly PromptResource[];
+    readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly sessionId: string;
     readonly targetCommandId: string;
 }

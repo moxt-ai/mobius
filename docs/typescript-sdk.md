@@ -281,6 +281,14 @@ to its original binding.
 Submit a Turn with a stable business request identifier:
 
 ```ts
+const prepared = await client.sessions.prepare(session.sessionId, signal);
+const sessionConfigurations = prepared.configOptions.map((option) => ({
+  booleanValue: option.type === "boolean" ? option.booleanValue : false,
+  configId: option.id,
+  value: option.type === "select" ? option.currentValue : "",
+  valueType: option.type,
+}));
+
 const accepted = await client.turns.submit(
   session.sessionId,
   {
@@ -290,6 +298,7 @@ const accepted = await client.turns.submit(
     idempotencyKey: businessRequestId,
     images: [],
     resources: [],
+    sessionConfigurations,
   },
   signal,
 );
@@ -300,6 +309,22 @@ const outcome = await client.turns.read(
   signal,
 );
 ```
+
+`sessionConfigurations` is the complete normalized selection snapshot for that
+Turn, not a copy of the option catalog. A current Runtime advertises
+`sessionTurnConfiguration: true` on its Agent descriptor. Relay rejects an
+explicit snapshot when the selected Agent does not advertise that capability.
+The daemon prepares the Session, validates that every current option appears
+exactly once, applies the selections, verifies the final state, and only then
+emits `session.started`. A queued Turn keeps its own snapshot; steering may only
+carry the active Turn's already-applied snapshot and cannot reconfigure a
+running Agent. `MobiusTurn.sessionConfigurations` exposes the accepted snapshot
+on submit and read responses.
+
+Omitting the field retains the legacy execution behavior for rolling upgrades
+and previously persisted commands. New integrations that depend on deterministic
+configuration should require the advertised capability and always send the
+complete snapshot, including boolean options and fixed `agent_default` choices.
 
 Turn is the accepted logical request. Attempt is one concrete execution of that
 Turn. Query an Attempt separately with `client.attempts.read(sessionId,
@@ -344,6 +369,21 @@ server registers the live subscriber before reading catch-up data and merges
 both sources by committed Session sequence. Each server subscriber is capped at
 256 queued events; a slow consumer is disconnected instead of growing memory
 without bound. Heartbeats keep an otherwise idle connection live.
+
+For pull-based workers, use the bounded event wait instead of polling an empty
+page repeatedly:
+
+```ts
+const page = await client.events.wait(
+  session.sessionId,
+  new MobiusPageRequest(100, previousCursor),
+  10_000,
+  signal,
+);
+```
+
+The wait is limited to 1–10,000 milliseconds and returns immediately when the
+page already contains events. Aborting `signal` cancels only this HTTP wait.
 
 If recovery is no longer possible, read the original Turn to determine its
 current or terminal state and request a fresh history page. Client caches never

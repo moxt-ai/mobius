@@ -46,6 +46,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
                     capabilities: agent.capabilities,
                     id: agent.id,
                     label: agent.label,
+                    sessionTurnConfiguration: true,
                 })),
                 installableAgents: catalog.installableAgents,
             }),

@@ -10,6 +10,7 @@ import {
     type PromptResource,
     SESSION_CONFIGURE_KIND,
     SESSION_PROMPT_KIND,
+    type SessionConfigurationSelection,
     type SessionElicitationRespondCommand,
     type SessionPermissionRespondCommand,
 } from "@moxt-ai/mobius-protocol";
@@ -26,7 +27,7 @@ import {
     type CreateSessionRequest,
     ProjectScope,
 } from "../../entity/do/session.ts";
-import { VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
+import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
 import type {
     ChannelGateway,
     SessionArtifactGateway,
@@ -201,6 +202,7 @@ export class SessionService {
         artifactIds: readonly string[],
         now: number,
         signal: AbortSignal,
+        sessionConfigurations?: readonly SessionConfigurationSelection[],
     ) => {
         const scope = await this.projectScope(projectId, token, ProjectPermission.ConversationTurnCreate, signal);
         const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
@@ -210,6 +212,18 @@ export class SessionService {
             token,
             ProjectPermission.ConversationTurnCreate,
             signal,
+        );
+        if (sessionConfigurations !== undefined) {
+            const agent = access.agents.find((candidate) => candidate.id === session.defaultBinding.agentRef);
+            if (agent?.sessionTurnConfiguration !== true) {
+                throw new PairingDirectoryError(
+                    "session_turn_configuration_unsupported",
+                    "Update the local Mobius CLI before submitting a Turn configuration snapshot",
+                );
+            }
+        }
+        const normalizedSessionConfigurations = sessionConfigurations?.toSorted((left, right) =>
+            left.configId.localeCompare(right.configId),
         );
         const artifactResources = await this.#sessionArtifacts.resolveArtifactResources(
             scope,
@@ -231,6 +245,9 @@ export class SessionService {
                 kind: SESSION_PROMPT_KIND,
                 prompt: content,
                 resources: [...resources, ...artifactResources],
+                ...(normalizedSessionConfigurations === undefined
+                    ? {}
+                    : { sessionConfigurations: normalizedSessionConfigurations }),
                 sessionId,
                 targetCommandId,
             },
@@ -561,6 +578,24 @@ export class SessionService {
             sessionId,
             cursor,
             limit,
+            signal,
+        );
+
+    readonly waitForEvents = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        cursor: string,
+        limit: number,
+        waitMilliseconds: number,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionEventStreams.waitForEvents(
+            await this.projectScope(projectId, token, ProjectPermission.ProjectEventsRead, signal),
+            sessionId,
+            cursor,
+            limit,
+            waitMilliseconds,
             signal,
         );
 

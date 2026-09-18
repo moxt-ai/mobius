@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 import { ProtocolMessageError } from "./codecs/messages.ts";
-import { elicitationFieldSchema, permissionOptionSchema } from "./control-messages.ts";
+import {
+    elicitationFieldSchema,
+    permissionOptionSchema,
+    sessionConfigurationSelectionsSchema,
+} from "./control-messages.ts";
 
 export const MAX_LOCAL_AGENT_DIRECTORY_ENTRIES = 32;
 
@@ -221,6 +225,7 @@ const turnRequestSchema = z.discriminatedUnion("kind", [
         .strictObject({
             content: z.string().max(100_000),
             kind: z.literal("prompt"),
+            sessionConfigurations: sessionConfigurationSelectionsSchema.default([]),
         })
         .readonly(),
 ]);

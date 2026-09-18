@@ -1159,6 +1159,39 @@ async function executePrompt(
             signal,
         );
         const agent = config.catalog.find(command.agentId);
+        if (
+            command.disposition === SessionPromptDisposition.Queue &&
+            !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
+        ) {
+            throw new AcpExecutionError(
+                "The queued prompt target is unavailable",
+                {},
+                "prompt_queue_target_unavailable",
+            );
+        }
+        if (command.sessionConfigurations !== undefined) {
+            const prepared = await sessions.prepareExecutionSession({
+                additionalDirectories: resolved.additionalDirectories,
+                agent,
+                cwd: resolved.cwd,
+                sessionId: command.sessionId,
+                signal,
+            });
+            if (command.disposition === SessionPromptDisposition.Steer) {
+                assertCompleteSessionConfiguration(prepared.configOptions, command.sessionConfigurations);
+            } else {
+                await applyCompleteSessionConfiguration(
+                    sessions,
+                    prepared.configOptions,
+                    command.sessionConfigurations,
+                    agent,
+                    resolved.cwd,
+                    resolved.additionalDirectories,
+                    command.sessionId,
+                    signal,
+                );
+            }
+        }
         audit.record({
             commandId: command.commandId,
             event: "session_authorized",
@@ -1193,16 +1226,6 @@ async function executePrompt(
             });
             stopReason = "steered";
         } else {
-            if (
-                command.disposition === SessionPromptDisposition.Queue &&
-                !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
-            ) {
-                throw new AcpExecutionError(
-                    "The queued prompt target is unavailable",
-                    {},
-                    "prompt_queue_target_unavailable",
-                );
-            }
             const result = await sessions.runPrompt({
                 additionalDirectories: resolved.additionalDirectories,
                 agent,
@@ -1271,6 +1294,159 @@ async function executePrompt(
         outbox.transitionExecution(command.commandId, "failed");
         console.error("Mobius daemon command failed", error);
     }
+}
+
+function invalidSessionConfiguration(message: string): AcpExecutionError {
+    return new AcpExecutionError(message, {}, "invalid_session_configuration");
+}
+
+function validateSessionConfigurationSelection(
+    option: SessionConfigOption,
+    selection: SessionConfigurationSelection,
+): void {
+    if (option.type !== selection.valueType) {
+        throw invalidSessionConfiguration(`The Agent setting ${selection.configId} changed type`);
+    }
+    if (option.type === "boolean") {
+        if (selection.value.length > 0) {
+            throw invalidSessionConfiguration(`The Agent setting ${selection.configId} has an invalid value`);
+        }
+        return;
+    }
+    if (selection.booleanValue) {
+        throw invalidSessionConfiguration(`The Agent setting ${selection.configId} has an invalid value`);
+    }
+    if (!option.values.some((value) => value.value === selection.value)) {
+        throw invalidSessionConfiguration(`The Agent setting ${selection.configId} has an unavailable value`);
+    }
+}
+
+function assertSessionConfigurationSchema(
+    options: readonly SessionConfigOption[],
+    selections: readonly SessionConfigurationSelection[],
+): void {
+    if (options.length !== selections.length) {
+        throw invalidSessionConfiguration("The Turn configuration does not match the Agent settings schema");
+    }
+    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
+    if (selectionsById.size !== selections.length) {
+        throw invalidSessionConfiguration("The Turn configuration contains duplicate Agent settings");
+    }
+    for (const option of options) {
+        const selection = selectionsById.get(option.id);
+        if (
+            selection === undefined ||
+            selection.valueType !== option.type ||
+            (option.type === "boolean" && selection.value.length > 0) ||
+            (option.type === "select" && selection.booleanValue)
+        ) {
+            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
+        }
+    }
+}
+
+function sessionConfigurationMatches(option: SessionConfigOption, selection: SessionConfigurationSelection): boolean {
+    validateSessionConfigurationSelection(option, selection);
+    return option.type === "boolean"
+        ? option.booleanValue === selection.booleanValue
+        : option.currentValue === selection.value;
+}
+
+function sessionConfigurationPriority(
+    selection: SessionConfigurationSelection,
+    options: readonly SessionConfigOption[],
+): number {
+    if (selection.configId === "permission_mode") {
+        return 0;
+    }
+    const option = options.find((candidate) => candidate.id === selection.configId);
+    if (selection.configId === "model" || option?.category === "model") {
+        return 1;
+    }
+    if (selection.configId === "reasoning_effort" || option?.category === "thought_level") {
+        return 2;
+    }
+    if (option?.category === "model_config") {
+        return 3;
+    }
+    return 4;
+}
+
+function assertCompleteSessionConfiguration(
+    options: readonly SessionConfigOption[],
+    selections: readonly SessionConfigurationSelection[],
+): void {
+    assertSessionConfigurationSchema(options, selections);
+    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
+    for (const option of options) {
+        const selection = selectionsById.get(option.id);
+        if (selection === undefined || !sessionConfigurationMatches(option, selection)) {
+            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
+        }
+    }
+}
+
+async function applySessionConfigurationSelection(
+    sessions: AcpSessionManager,
+    options: readonly SessionConfigOption[],
+    selection: SessionConfigurationSelection,
+    agent: LocalAgentDefinition,
+    cwd: string,
+    additionalDirectories: readonly string[],
+    sessionId: string,
+    signal: AbortSignal,
+): Promise<readonly SessionConfigOption[]> {
+    const option = options.find((candidate) => candidate.id === selection.configId);
+    if (option === undefined) {
+        throw invalidSessionConfiguration(`The Agent setting ${selection.configId} is unavailable`);
+    }
+    if (sessionConfigurationMatches(option, selection)) {
+        return options;
+    }
+    return await sessions.configureSession({
+        additionalDirectories,
+        agent,
+        booleanValue: selection.booleanValue,
+        configId: selection.configId,
+        cwd,
+        requestId: `cfg_${randomUUID()}`,
+        sessionId,
+        signal,
+        value: selection.value,
+        valueType: selection.valueType,
+    });
+}
+
+async function applyCompleteSessionConfiguration(
+    sessions: AcpSessionManager,
+    initialOptions: readonly SessionConfigOption[],
+    selections: readonly SessionConfigurationSelection[],
+    agent: LocalAgentDefinition,
+    cwd: string,
+    additionalDirectories: readonly string[],
+    sessionId: string,
+    signal: AbortSignal,
+): Promise<void> {
+    assertSessionConfigurationSchema(initialOptions, selections);
+    let options = initialOptions;
+    const orderedSelections = selections.toSorted((left, right) => {
+        const priority =
+            sessionConfigurationPriority(left, initialOptions) - sessionConfigurationPriority(right, initialOptions);
+        return priority === 0 ? left.configId.localeCompare(right.configId) : priority;
+    });
+    for (const selection of orderedSelections) {
+        options = await applySessionConfigurationSelection(
+            sessions,
+            options,
+            selection,
+            agent,
+            cwd,
+            additionalDirectories,
+            sessionId,
+            signal,
+        );
+    }
+    assertCompleteSessionConfiguration(options, selections);
 }
 
 function botExecutionAgent(

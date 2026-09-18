@@ -99,6 +99,7 @@ import {
     SESSION_USAGE_UPDATED_KIND,
     type SessionCommandsUpdatedEvent,
     type SessionConfigUpdatedEvent,
+    type SessionConfigurationSelection,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
     type SessionElicitationRespondCommand,
@@ -193,6 +194,7 @@ export interface PromptRequest {
     readonly observer?: PromptObserver;
     readonly prompt: string;
     readonly resources?: readonly PromptResource[];
+    readonly sessionConfigurations?: readonly SessionConfigurationSelection[];
     readonly sessionId?: string;
     readonly targetCommandId?: string;
 }
@@ -697,6 +699,9 @@ export class MobiusClient {
                 kind: SESSION_PROMPT_KIND,
                 prompt: request.prompt,
                 resources: request.resources ?? [],
+                ...(request.sessionConfigurations === undefined
+                    ? {}
+                    : { sessionConfigurations: request.sessionConfigurations }),
                 sessionId,
                 targetCommandId: request.targetCommandId ?? "",
             }),

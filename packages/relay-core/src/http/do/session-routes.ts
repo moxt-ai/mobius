@@ -3,6 +3,7 @@ import {
     decodeNativeSessionCommand,
     decodePromptImagesValue,
     decodePromptResourcesValue,
+    decodeSessionConfigurationSelections,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
     decodeSessionPermissionRespondCommand,
@@ -97,6 +98,13 @@ function readTargetCommandId(body: Readonly<Record<string, unknown>>, dispositio
         throw new PairingDirectoryError("invalid_request", "The targetCommandId field is invalid");
     }
     return targetCommandId;
+}
+
+function readEventWaitMilliseconds(value: string): number {
+    if (!/^(?:0|[1-9][0-9]{0,4})$/.test(value) || Number(value) > 10_000) {
+        throw new PairingDirectoryError("invalid_request", "The Session event wait is invalid");
+    }
+    return Number(value);
 }
 
 export function createSessionRoutes() {
@@ -425,12 +433,18 @@ export function createSessionRoutes() {
             ];
             const hasDisposition = body["disposition"] !== undefined;
             const hasTargetCommandId = body["targetCommandId"] !== undefined;
-            assertExactKeys(
-                body,
-                hasDisposition && hasTargetCommandId
-                    ? [...legacyFields, "disposition", "targetCommandId"]
-                    : legacyFields,
-            );
+            const hasSessionConfigurations = Object.hasOwn(body, "sessionConfigurations");
+            const fields = [...legacyFields];
+            if (hasDisposition) {
+                fields.push("disposition");
+            }
+            if (hasTargetCommandId) {
+                fields.push("targetCommandId");
+            }
+            if (hasSessionConfigurations) {
+                fields.push("sessionConfigurations");
+            }
+            assertExactKeys(body, fields);
             const additionalDirectoryIds = readIdentifierArray(body, "additionalDirectoryIds", 16, "directory_id");
             const artifactIds = readIdentifierArray(body, "artifactIds", 16, "artifact_id");
             const disposition = readPromptDisposition(body);
@@ -450,6 +464,9 @@ export function createSessionRoutes() {
                     artifactIds,
                     context.env.gateways.nowEpochMilliseconds(),
                     context.req.raw.signal,
+                    hasSessionConfigurations
+                        ? decodeSessionConfigurationSelections(body["sessionConfigurations"])
+                        : undefined,
                 ),
                 202,
             );
@@ -731,6 +748,20 @@ export function createSessionRoutes() {
                     validateIdentifier(context.req.param("sessionId"), "session_id"),
                     context.req.query("cursor") ?? "",
                     context.req.raw.signal,
+                );
+            }
+            const waitMilliseconds = readEventWaitMilliseconds(context.req.query("wait") ?? "0");
+            if (waitMilliseconds > 0) {
+                return context.json(
+                    await useCases.waitForEvents(
+                        validateIdentifier(context.req.param("projectId"), "project_id"),
+                        bearerToken(context.req.raw),
+                        validateIdentifier(context.req.param("sessionId"), "session_id"),
+                        context.req.query("cursor") ?? "",
+                        pageLimit(context.req.query("limit")),
+                        waitMilliseconds,
+                        context.req.raw.signal,
+                    ),
                 );
             }
             return context.json(

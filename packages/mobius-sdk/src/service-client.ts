@@ -1554,6 +1554,24 @@ export class MobiusEventResources {
         return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
+    readonly wait = async (
+        sessionId: string,
+        page: MobiusPageRequest,
+        waitMilliseconds: number,
+        signal: AbortSignal,
+    ): Promise<MobiusEventPage> => {
+        if (!Number.isSafeInteger(waitMilliseconds) || waitMilliseconds < 1 || waitMilliseconds > 10_000) {
+            throw new MobiusValidationError("The Session event wait is invalid");
+        }
+        const path = requestUrl(new URL("https://mobius.invalid/"), sessionPath(this.#projectId, sessionId, "events"));
+        path.searchParams.set("limit", page.limit.toString());
+        path.searchParams.set("wait", waitMilliseconds.toString());
+        if (page.cursor.length > 0) {
+            path.searchParams.set("cursor", page.cursor);
+        }
+        return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
+    };
+
     readonly close = (): void => {
         for (const subscription of this.#subscriptions) {
             subscription.close();

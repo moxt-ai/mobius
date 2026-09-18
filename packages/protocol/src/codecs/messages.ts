@@ -3,6 +3,7 @@ import {
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeRecordedAgentContentValue,
+    decodeSessionConfigurationSelections,
 } from "../control-messages.ts";
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
@@ -289,6 +290,7 @@ export function decodeMessageKind(encoded: string): string {
 
 export function decodeSessionPromptCommand(encoded: string): SessionPromptCommand {
     const value = parseJson(encoded);
+    const hasSessionConfigurations = Object.hasOwn(value, "sessionConfigurations");
     assertExactKeys(value, [
         "additionalDirectoryIds",
         "agentId",
@@ -300,6 +302,7 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         "kind",
         "prompt",
         "resources",
+        ...(hasSessionConfigurations ? ["sessionConfigurations"] : []),
         "sessionId",
         "targetCommandId",
     ]);
@@ -328,6 +331,13 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         throw new ProtocolMessageError("Prompt disposition has an invalid target command");
     }
 
+    const sessionConfigurations = hasSessionConfigurations
+        ? decodeSessionConfigurationSelections(value["sessionConfigurations"])
+        : [];
+    if (new Set(sessionConfigurations.map((selection) => selection.configId)).size !== sessionConfigurations.length) {
+        throw new ProtocolMessageError("Session configuration identifiers must be unique");
+    }
+
     return {
         additionalDirectoryIds: readDirectoryIdentifiers(value, "additionalDirectoryIds", 16),
         agentId: readIdentifier(value, "agentId"),
@@ -339,6 +349,7 @@ export function decodeSessionPromptCommand(encoded: string): SessionPromptComman
         kind: SESSION_PROMPT_KIND,
         prompt,
         resources,
+        ...(hasSessionConfigurations ? { sessionConfigurations } : {}),
         sessionId: readIdentifier(value, "sessionId"),
         targetCommandId,
     };

@@ -22,6 +22,7 @@ export type {
     SessionCommandsUpdatedEvent,
     SessionConfigOption,
     SessionConfigUpdatedEvent,
+    SessionConfigurationSelection,
     SessionContextUsageUpdatedEvent,
     SessionElicitationField,
     SessionElicitationRequestedEvent,
