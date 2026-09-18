@@ -45,7 +45,7 @@ import {
 } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
-import { TestDeveloperAuthenticator as DeveloperAuthenticator } from "../../../tests/infra/identity.ts";
+import { FakeClerk } from "../../../tests/infra/clerk.ts";
 import configuredPlatformWorker, {
     createPlatformGateways,
     PlatformAuthenticationConfiguration,
@@ -56,6 +56,7 @@ type PlatformWorker = ReturnType<typeof createTestMobiusPlatformApp>;
 
 const relayOrigin = "https://platform.test";
 const thirdPartyBrowserOrigin = "https://app.example.test";
+const clerk = new FakeClerk();
 const readyAgents = [
     {
         agentPath: "/usr/local/bin/codex",
@@ -198,7 +199,7 @@ function bindings(): PlatformRelayBindings {
 
 function developerHeaders(): HeadersInit {
     return {
-        authorization: "Bearer developer-token",
+        authorization: `Bearer ${clerk.session("developer-1", clerk.defaultOrganizationId)}`,
         "content-type": "application/json",
         "x-mobius-oidc-provider": "clerk",
     };
@@ -265,7 +266,7 @@ it("Given cached active and revoked App credentials, When credential storage is 
     const fixture = await provisionPlatformProject("kv-app-secrets");
     const developer = new MobiusPlatformDeveloperClient({
         authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
         endpoint: relayOrigin,
         transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
     });
@@ -302,12 +303,18 @@ it("Given cached active and revoked App credentials, When credential storage is 
             "ALTER TABLE unavailable_app_credentials RENAME TO platform_app_credentials",
         ).run();
     }
-    const beforeRefresh = await developer.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
+    const refreshedDeveloper = new MobiusPlatformDeveloperClient({
+        authenticationProviderId: "clerk",
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
+        endpoint: relayOrigin,
+        transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+    });
+    const beforeRefresh = await refreshedDeveloper.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
     expect(beforeRefresh.find((credential) => credential.credentialId !== issued.credentialId)?.lastUsedAt).toBe(
         "2026-09-10T00:00:00.000Z",
     );
     expect((await read(fixture.appCredential)).status).toBe(200);
-    const afterRefresh = await developer.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
+    const afterRefresh = await refreshedDeveloper.listAppCredentials(fixture.appId, AbortSignal.timeout(5_000));
     expect(afterRefresh.find((credential) => credential.credentialId !== issued.credentialId)?.lastUsedAt).toBe(
         "2026-09-10T02:00:00.000Z",
     );
@@ -321,7 +328,7 @@ it("Given a cached scoped App credential, When it is rotated, Then its shard sto
     const fixture = await provisionPlatformProject("kv-rotation");
     const developer = new MobiusPlatformDeveloperClient({
         authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
         endpoint: relayOrigin,
         transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
     });
@@ -360,7 +367,7 @@ it("Given a cached App credential, When its App is deleted, Then the old secret 
     const fixture = await provisionPlatformProject("kv-delete-App");
     const developer = new MobiusPlatformDeveloperClient({
         authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
         endpoint: relayOrigin,
         transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
     });
@@ -421,7 +428,7 @@ async function json(response: Response, expectedStatus: number): Promise<Readonl
 async function provisionPlatformProject(label: string, locationHint = "apac"): Promise<PlatformProjectFixture> {
     const worker = createTestMobiusPlatformApp(
         new PlatformAuthenticationConfiguration(
-            new DeveloperAuthenticator(),
+            clerk.authenticator,
             new Set(["developer-1"]),
             new Set([thirdPartyBrowserOrigin]),
         ),
@@ -564,7 +571,7 @@ it("Given existing App keys with past expiration dates, When storage is migrated
     const fixture = await provisionPlatformProject("legacy-app-keys");
     const developer = new MobiusPlatformDeveloperClient({
         authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
         endpoint: relayOrigin,
         transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
     });
@@ -836,7 +843,7 @@ it.each([[thirdPartyBrowserOrigin], ["*"]])(
     "Given a permitted Platform browser origin %j, When a developer preflights and manages tenants and apps, Then CORS permits the requests while authentication remains required",
     async (allowedOrigin) => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(), new Set([allowedOrigin])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(), new Set([allowedOrigin])),
             createPlatformGateways,
         );
         const environment = bindings();
@@ -911,11 +918,7 @@ it.each([[thirdPartyBrowserOrigin], ["*"]])(
 
 it("Given a Platform origin allowlist, When a browser requests an untrusted origin or unsupported preflight, Then the control API rejects it without CORS permission", async () => {
     const worker = createTestMobiusPlatformApp(
-        new PlatformAuthenticationConfiguration(
-            new DeveloperAuthenticator(),
-            new Set(),
-            new Set([thirdPartyBrowserOrigin]),
-        ),
+        new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(), new Set([thirdPartyBrowserOrigin])),
         createPlatformGateways,
     );
     const cases: readonly (readonly [string, string, string, string])[] = [
@@ -1328,6 +1331,7 @@ it("Given a paired local Runtime, When the App backend browses its workspace, Th
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-09-10T00:00:00.000Z"));
+    clerk.reset();
 });
 
 afterEach(() => {
@@ -1336,7 +1340,7 @@ afterEach(() => {
 
 describe.sequential("Platform hosting boundary", () => {
     it("Given unavailable Platform storage, When a signed-in developer lists organizations, Then the API returns a sanitized internal error with browser access headers", async () => {
-        const identity = new DeveloperAuthenticator();
+        const identity = clerk.authenticator;
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(identity, new Set(), new Set([thirdPartyBrowserOrigin])),
             createPlatformGateways,
@@ -1344,7 +1348,7 @@ describe.sequential("Platform hosting boundary", () => {
         const response = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
                 headers: {
-                    authorization: `Bearer ${identity.session("user_owner", "org_team", "org:admin")}`,
+                    authorization: `Bearer ${clerk.session("user_owner", "org_team", "org:admin")}`,
                     "x-mobius-oidc-provider": "clerk",
                     origin: thirdPartyBrowserOrigin,
                 },
@@ -1359,7 +1363,7 @@ describe.sequential("Platform hosting boundary", () => {
     });
 
     it("Given developers in Clerk organizations, When they create and list apps, Then teammates share the organization tenant and other organizations are denied", async () => {
-        const identity = new DeveloperAuthenticator();
+        const identity = clerk.authenticator;
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(identity, new Set()),
             createPlatformGateways,
@@ -1368,7 +1372,7 @@ describe.sequential("Platform hosting boundary", () => {
         const client = (subject: string, organizationId: string, role = "org:admin") =>
             new MobiusPlatformDeveloperClient({
                 authenticationProviderId: "clerk",
-                credentialProvider: new MobiusOidcCredentialProvider(identity.session(subject, organizationId, role)),
+                credentialProvider: new MobiusOidcCredentialProvider(clerk.session(subject, organizationId, role)),
                 endpoint: relayOrigin,
                 transport,
             });
@@ -1399,7 +1403,7 @@ describe.sequential("Platform hosting boundary", () => {
         async (code, location) => {
             const worker = createTestMobiusPlatformApp(
                 new PlatformAuthenticationConfiguration(
-                    new DeveloperAuthenticator(),
+                    clerk.authenticator,
                     new Set(["developer-1"]),
                     new Set([thirdPartyBrowserOrigin]),
                 ),
@@ -1648,7 +1652,7 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given invalid or oversized JSON, When a client posts to a Platform route, Then the request is rejected with a bounded body error", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         for (const path of [
@@ -1683,7 +1687,7 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given malformed Platform request fields, When a client submits JSON, Then the route rejects the body before authorizing an operation", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         for (const [path, body] of [
@@ -1724,7 +1728,7 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given a Platform deployment, When health, capabilities, and developer authentication are requested, Then Platform is discoverable and developer authentication is enforced", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         const health = await json(
@@ -1769,14 +1773,16 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given the split SDK entry points, When a backend provisions and pairs a Project, Then OIDC, AppCredential, idempotency, and server capabilities remain separated", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         const environment = bindings();
         const transport = new PlatformWorkerTransport(worker, environment);
         const developer = new MobiusPlatformDeveloperClient({
             authenticationProviderId: "clerk",
-            credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+            credentialProvider: new MobiusOidcCredentialProvider(
+                clerk.session("developer-1", clerk.defaultOrganizationId),
+            ),
             endpoint: relayOrigin,
             transport,
         });
@@ -1834,12 +1840,14 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given an authenticated organization member, When they manage Apps and keys, Then only their active resources and secret-on-create credentials are exposed", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         const developer = new MobiusPlatformDeveloperClient({
             authenticationProviderId: "clerk",
-            credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+            credentialProvider: new MobiusOidcCredentialProvider(
+                clerk.session("developer-1", clerk.defaultOrganizationId),
+            ),
             endpoint: relayOrigin,
             transport: new PlatformWorkerTransport(worker, bindings()),
         });
@@ -2776,7 +2784,7 @@ describe.sequential("Platform hosting boundary", () => {
     it("Given an organization with bounded capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(
-                new DeveloperAuthenticator(),
+                clerk.authenticator,
                 new Set(["developer-1"]),
                 new Set([thirdPartyBrowserOrigin]),
             ),
@@ -2976,7 +2984,7 @@ describe.sequential("Platform hosting boundary", () => {
                 }),
             ]),
         );
-        const identity = new DeveloperAuthenticator();
+        const identity = clerk.authenticator;
         const otherOrganizationWorker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(identity, new Set()),
             createPlatformGateways,
@@ -2984,7 +2992,7 @@ describe.sequential("Platform hosting boundary", () => {
         const deniedAudit = await otherOrganizationWorker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/projects/${projectId}/audit-events`, {
                 headers: {
-                    authorization: `Bearer ${identity.session("user_outsider", "org_other", "org:admin")}`,
+                    authorization: `Bearer ${clerk.session("user_outsider", "org_other", "org:admin")}`,
                     "x-mobius-oidc-provider": "clerk",
                 },
             }),
@@ -3003,7 +3011,7 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given an OIDC-authorized Platform developer, When one App provisions two Projects, Then its default AppCredential reaches both Projects and another App cannot reach either", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         const environment = bindings();
@@ -3100,7 +3108,7 @@ describe.sequential("Platform hosting boundary", () => {
 
     it("Given a non-expiring App key with one Project and read-only permission, When years pass and it is rotated and revoked, Then access persists while scope, permission, overlap, and revocation are enforced", async () => {
         const worker = createTestMobiusPlatformApp(
-            new PlatformAuthenticationConfiguration(new DeveloperAuthenticator(), new Set(["developer-1"])),
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
         );
         const environment = bindings();
@@ -3389,11 +3397,7 @@ describe.sequential("Platform hosting boundary", () => {
             ).toEqual([{ project_id: fixture.projectId }]);
             // Given wildcard browser access, unrelated origins still need a scoped credential and permission.
             const publicBrowserWorker = createTestMobiusPlatformApp(
-                new PlatformAuthenticationConfiguration(
-                    new DeveloperAuthenticator(),
-                    new Set(["developer-1"]),
-                    new Set(["*"]),
-                ),
+                new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"]), new Set(["*"])),
                 createPlatformGateways,
             );
             const readOnly = await issue("public-browser", fixture.conversationId, ["conversation:read"]);

@@ -1,9 +1,8 @@
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
+import { FakeClerk } from "../../../tests/infra/clerk.ts";
 import { createTestMobiusPlatformBindings } from "../../../tests/infra/cloudflare.ts";
-import { TestDeveloperAuthenticator } from "../../../tests/infra/identity.ts";
-import { TestClerkOrganizations } from "../../../tests/infra/organizations.ts";
 import { serveTestApp } from "../../../tests/infra/server.ts";
 import { OrganizationInviteDialog } from "../../platform-app/src/components/organization-invite-dialog.tsx";
 import { createPlatformClient } from "../../platform-app/src/services/platform-client.ts";
@@ -50,12 +49,14 @@ it("Given an organization admin, When they share an invite link and a new user a
         flushSync(() => button.click());
     };
     try {
-        const identity = new TestDeveloperAuthenticator();
-        const clerk = new TestClerkOrganizations();
+        const clerk = new FakeClerk();
+        clerk.createOrganization("org_invites", "Invite team");
+        clerk.setMembership("org_invites", "user_admin", "org:admin");
+        const identity = clerk.authenticator;
         const app = createPlatformApplication(
             new PlatformAuthenticationConfiguration(identity, new Set(), new Set(["*"])),
             createPlatformGateways,
-            () => clerk,
+            () => clerk.organizationGateway,
         );
         await using server = await serveTestApp({
             app: { request: (request) => app.fetch(request, env) },
@@ -64,8 +65,8 @@ it("Given an organization admin, When they share an invite link and a new user a
         });
         setHappyDomUrl(new URL(server.origin));
         try {
-            const admin = identity.session("user_admin", "org_invites");
-            const visitor = identity.session("user_visitor", "");
+            const admin = clerk.session("user_admin", "org_invites");
+            const visitor = clerk.session("user_visitor", "");
             const organization = { id: "org_invites", name: "Invite team" };
             const adminToken = async () => admin;
             const visitorToken = async () => visitor;
@@ -103,12 +104,12 @@ it("Given an organization admin, When they share an invite link and a new user a
                         getToken={visitorToken}
                         token={token}
                         onJoined={async (id, signal) => {
-                            const role = await clerk.role(id, "user_visitor", signal);
+                            const role = await clerk.organizationGateway.role(id, "user_visitor", signal);
                             expect(role).toBe("org:member");
                             if (role === null) {
                                 throw new Error("Membership was not created");
                             }
-                            const session = identity.session("user_visitor", id, role);
+                            const session = clerk.session("user_visitor", id, role);
                             flushSync(() =>
                                 root.render(
                                     <PlatformApp

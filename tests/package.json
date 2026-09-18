@@ -8,7 +8,7 @@
     },
     "exports": {
         "./app": "./infra/app.ts",
-        "./identity": "./infra/identity.ts",
+        "./clerk": "./infra/clerk.ts",
         "./agent": "./infra/agent.ts",
         "./cloudflare": "./infra/cloudflare.ts",
         "./gateways": "./infra/gateways.ts",

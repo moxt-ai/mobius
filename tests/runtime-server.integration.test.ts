@@ -3,8 +3,8 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPlatformGateways } from "../packages/relay-cloudflare-platform/src/worker.ts";
 import { createTestAgent } from "./infra/agent.ts";
 import { createTestMobiusPlatformApp } from "./infra/app.ts";
+import { FakeClerk } from "./infra/clerk.ts";
 import { createTestMobiusPlatformBindings } from "./infra/cloudflare.ts";
-import { TestDeveloperAuthenticator } from "./infra/identity.ts";
 import { createTestRuntime } from "./infra/runtime.ts";
 
 beforeEach(() => {
@@ -15,10 +15,11 @@ beforeEach(() => {
 it("Given a Platform Project, When its owner pairs a local Runtime, Then that Project exposes the connected Runtime and Agent", async () => {
     const signal = AbortSignal.timeout(10_000);
     await using bindings = await createTestMobiusPlatformBindings();
+    const clerk = new FakeClerk();
     const app = createTestMobiusPlatformApp(
         {
             bindings: bindings.env,
-            developerAuthenticator: new TestDeveloperAuthenticator(),
+            developerAuthenticator: clerk.authenticator,
             operatorSubjects: new Set(["developer-1"]),
             allowedOrigins: new Set(),
         },
@@ -27,7 +28,7 @@ it("Given a Platform Project, When its owner pairs a local Runtime, Then that Pr
     const developer = new MobiusPlatformDeveloperClient({
         endpoint: "http://platform.test",
         authenticationProviderId: "clerk",
-        credentialProvider: new MobiusOidcCredentialProvider("developer-token"),
+        credentialProvider: new MobiusOidcCredentialProvider(clerk.session("developer-1", clerk.defaultOrganizationId)),
         transport: { fetch: async (request) => await app.request(request) },
     });
     const tenant = (await developer.listTenants(signal))[0];
