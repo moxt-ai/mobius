@@ -15,18 +15,20 @@ import {
 } from "@/components/ui/select";
 import { ReadySessionState, SessionPreparationFailedState } from "@/domain/chat";
 import { cn } from "@/lib/utils";
-import { configureSessionOption, prepareActiveSession } from "@/services/mobius-transport";
+import type { CachedAgentSettings } from "@/services/agent-settings-cache";
+import {
+    configureSessionOption,
+    loadActiveAgentSettings,
+    prepareActiveSession,
+    selectActiveAgentSetting,
+} from "@/services/mobius-transport";
 import { sessionConfigPanelKeyAction } from "@/services/session-config-panel-keyboard";
 import {
     placeSessionConfigPanel,
     type SessionConfigPanelPlacement,
     sessionConfigPanelMode,
 } from "@/services/session-config-panel-placement";
-import {
-    groupSessionConfigOptions,
-    isRequiredSessionConfigOption,
-    summarizeSessionConfig,
-} from "@/services/session-config-presentation";
+import { groupSessionConfigOptions, summarizeSessionConfig } from "@/services/session-config-presentation";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 const FOCUSABLE_CONTROL_SELECTOR = [
@@ -41,6 +43,30 @@ const FOCUSABLE_CONTROL_SELECTOR = [
 type SessionConfigPanelLayout = { readonly kind: "pending" } | { readonly kind: "sheet" } | SessionConfigPanelPlacement;
 
 const PENDING_PANEL_LAYOUT: SessionConfigPanelLayout = { kind: "pending" };
+
+abstract class AgentSettingsLoadState {}
+
+class IdleAgentSettingsLoadState extends AgentSettingsLoadState {}
+
+class LoadingAgentSettingsLoadState extends AgentSettingsLoadState {}
+
+class LoadedAgentSettingsLoadState extends AgentSettingsLoadState {
+    readonly settings: CachedAgentSettings;
+
+    constructor(settings: CachedAgentSettings) {
+        super();
+        this.settings = settings;
+    }
+}
+
+class FailedAgentSettingsLoadState extends AgentSettingsLoadState {
+    readonly message: string;
+
+    constructor(message: string) {
+        super();
+        this.message = message;
+    }
+}
 
 function panelStyle(layout: SessionConfigPanelLayout): CSSProperties | undefined {
     if (layout.kind === "pending" || layout.kind === "sheet") {
@@ -119,14 +145,6 @@ function SelectConfigControl({
                 <p className="text-xs font-semibold text-foreground" id={labelId}>
                     {option.name}
                 </p>
-                {isRequiredSessionConfigOption(option) && (
-                    <span
-                        aria-hidden="true"
-                        className="mt-1 inline-flex rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold tracking-[0.04em] text-primary uppercase"
-                    >
-                        Required
-                    </span>
-                )}
                 {option.description.length > 0 && (
                     <p className="mt-0.5 text-[11px] leading-[17px] text-muted-foreground" id={descriptionId}>
                         {option.description}
@@ -268,27 +286,33 @@ function BooleanConfigControl({
 
 interface SessionConfigControlsViewProps {
     readonly agentLabel: string;
+    readonly canReloadSettings: boolean;
     readonly directoryLabel: string;
     readonly failure: string;
     readonly isPreparing: boolean;
     readonly isReady: boolean;
     readonly isRunning: boolean;
     readonly onConfigure: (option: SessionConfigOption, value: string, booleanValue: boolean) => Promise<string>;
+    readonly onReloadSettings: () => void;
     readonly onRetry: () => void;
     readonly options: readonly SessionConfigOption[];
+    readonly settingsLoading: boolean;
     readonly statusLabel: string;
 }
 
 function SessionConfigControlsView({
     agentLabel,
+    canReloadSettings,
     directoryLabel,
     failure,
     isPreparing,
     isReady,
     isRunning,
     onConfigure,
+    onReloadSettings,
     onRetry,
     options,
+    settingsLoading,
     statusLabel,
 }: SessionConfigControlsViewProps) {
     const [open, setOpen] = useState(false);
@@ -428,7 +452,7 @@ function SessionConfigControlsView({
                 variant="ghost"
             >
                 <span className="flex h-9 min-w-0 max-w-full items-center gap-1.5 rounded-full border-[0.5px] border-black/8 bg-black/[0.025] px-2.5 transition-colors duration-150 group-hover:border-black/12 group-hover:bg-black/[0.05] motion-reduce:transition-none max-[360px]:w-9 max-[360px]:justify-center max-[360px]:gap-0 max-[360px]:border-transparent max-[360px]:bg-transparent max-[360px]:px-0 max-[360px]:group-hover:bg-black/[0.04]">
-                    {isPreparing ? (
+                    {isPreparing || settingsLoading ? (
                         <LoaderCircle className="size-4 shrink-0 animate-spin motion-reduce:animate-none" />
                     ) : (
                         <Settings2 className="size-4 shrink-0" />
@@ -480,6 +504,18 @@ function SessionConfigControlsView({
                                     {agentLabel} · {directoryLabel}
                                 </span>
                             </span>
+                            {canReloadSettings && (
+                                <Button
+                                    aria-label="Reload settings"
+                                    className="size-11 lg:size-9"
+                                    disabled={isPreparing || isRunning || settingsLoading}
+                                    onClick={onReloadSettings}
+                                    size="icon"
+                                    variant="ghost"
+                                >
+                                    <RefreshCw className="size-4" />
+                                </Button>
+                            )}
                             <Button
                                 aria-label="Close run settings"
                                 className="size-11 lg:size-9"
@@ -508,7 +544,7 @@ function SessionConfigControlsView({
                                         variant="outline"
                                     >
                                         <RefreshCw className="size-3.5" />
-                                        Retry agent
+                                        Retry settings
                                     </Button>
                                 </div>
                             ) : isReady ? (
@@ -569,16 +605,89 @@ function SessionConfigControlsView({
 
 export function SessionConfigControls() {
     const conversation = useChatStore(selectActiveConversation);
+    const agent = useChatStore((state) => state.agents.find((candidate) => candidate.id === conversation.agentId));
     const ready = conversation.session instanceof ReadySessionState;
+    const settingsSupported = agent?.agentSettingsDiscovery === true && agent.sessionTurnConfiguration === true;
+    const [settingsState, setSettingsState] = useState<AgentSettingsLoadState>(() => new IdleAgentSettingsLoadState());
+    const settingsRequestId = useRef(0);
+
+    const loadSettings = useCallback(
+        (force: boolean): void => {
+            if (!settingsSupported) {
+                return;
+            }
+            const agentId = conversation.agentId;
+            const requestId = settingsRequestId.current + 1;
+            settingsRequestId.current = requestId;
+            setSettingsState(new LoadingAgentSettingsLoadState());
+            void loadActiveAgentSettings(agentId, force)
+                .then((loaded) => {
+                    if (loaded.agentId === agentId && settingsRequestId.current === requestId) {
+                        setSettingsState(new LoadedAgentSettingsLoadState(loaded));
+                    }
+                })
+                .catch((error: unknown) => {
+                    if (settingsRequestId.current !== requestId) {
+                        return;
+                    }
+                    if (error instanceof Error) {
+                        setSettingsState(new FailedAgentSettingsLoadState(error.message));
+                        return;
+                    }
+                    setSettingsState(new FailedAgentSettingsLoadState("Agent settings could not be loaded."));
+                });
+        },
+        [conversation.agentId, settingsSupported],
+    );
+
+    useEffect(() => {
+        if (!settingsSupported) {
+            settingsRequestId.current += 1;
+            setSettingsState(new IdleAgentSettingsLoadState());
+            return;
+        }
+        loadSettings(false);
+    }, [loadSettings, settingsSupported]);
+
+    const loadedSettings =
+        settingsState instanceof LoadedAgentSettingsLoadState && settingsState.settings.agentId === conversation.agentId
+            ? settingsState.settings
+            : undefined;
+    const options =
+        loadedSettings === undefined ? (ready ? conversation.session.configOptions : []) : loadedSettings.options;
+    const cacheReady = !settingsSupported || loadedSettings !== undefined;
+    const settingsLoading = settingsState instanceof LoadingAgentSettingsLoadState;
+    const settingsFailure = settingsState instanceof FailedAgentSettingsLoadState ? settingsState.message : "";
+    const failure =
+        settingsFailure.length > 0
+            ? settingsFailure
+            : conversation.session instanceof SessionPreparationFailedState
+              ? conversation.session.error
+              : "";
     return (
         <SessionConfigControlsView
             agentLabel={conversation.agentLabel}
+            canReloadSettings={settingsSupported}
             directoryLabel={conversation.directoryLabel}
-            failure={conversation.session instanceof SessionPreparationFailedState ? conversation.session.error : ""}
+            failure={failure}
             isPreparing={conversation.session.isPreparing}
-            isReady={ready}
+            isReady={ready && cacheReady}
             isRunning={conversation.isRunning}
             onConfigure={async (option, value, booleanValue) => {
+                if (settingsSupported && loadedSettings !== undefined) {
+                    try {
+                        setSettingsState(
+                            new LoadedAgentSettingsLoadState(
+                                await selectActiveAgentSetting(conversation.agentId, option.id, value, booleanValue),
+                            ),
+                        );
+                        return "";
+                    } catch (error) {
+                        return error instanceof Error
+                            ? error.message
+                            : "The selected Agent setting could not be saved.";
+                    }
+                }
                 const result = await configureSessionOption(
                     conversation.agentId,
                     conversation.sessionId,
@@ -590,11 +699,18 @@ export function SessionConfigControls() {
                 );
                 return result.kind === "failed" ? `${result.code}: ${result.message}` : "";
             }}
-            onRetry={() => {
-                void prepareActiveSession(conversation.sessionId);
+            onReloadSettings={() => {
+                loadSettings(true);
             }}
-            options={ready ? conversation.session.configOptions : []}
-            statusLabel={conversation.session.label}
+            onRetry={() => {
+                if (!ready) {
+                    void prepareActiveSession(conversation.sessionId);
+                }
+                loadSettings(true);
+            }}
+            options={options}
+            settingsLoading={settingsLoading}
+            statusLabel={settingsLoading ? "Loading agent settings" : conversation.session.label}
         />
     );
 }

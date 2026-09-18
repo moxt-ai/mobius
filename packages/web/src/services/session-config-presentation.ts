@@ -11,16 +11,6 @@ export interface SessionConfigSection {
     readonly options: readonly SessionConfigOption[];
 }
 
-export function isRequiredSessionConfigOption(option: SessionConfigOption): boolean {
-    return (
-        option.id === "permission_mode" ||
-        option.id === "model" ||
-        option.id === "reasoning_effort" ||
-        option.category === "model" ||
-        option.category === "thought_level"
-    );
-}
-
 function currentOptionLabel(option: SessionConfigOption): string {
     if (option.type === "boolean") {
         return option.booleanValue ? "On" : "Off";

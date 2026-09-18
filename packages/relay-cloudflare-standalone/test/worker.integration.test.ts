@@ -708,6 +708,56 @@ describe.sequential("Cloudflare session deployment", () => {
         });
         const signal = new AbortController().signal;
         try {
+            const baseDiscovery = client.runtimes.discoverAgentSettings(pairing.created.runtimeId, "codex", {}, signal);
+            const baseCommand = decodeAgentSettingsDiscoverCommand(await daemon.messages.next());
+            expect(baseCommand).toMatchObject({
+                agentId: "codex",
+                kind: AGENT_SETTINGS_DISCOVER_KIND,
+            });
+            expect(baseCommand).not.toHaveProperty("model");
+            daemon.socket.send(
+                encodeAgentSettingsDiscoveredEvent({
+                    agentId: "codex",
+                    agentName: "Codex",
+                    agentVersion: "codex 0.153.0",
+                    kind: "agent.settings.discovered",
+                    modelEffort: {
+                        effortSettingId: "reasoning_effort",
+                        modelSettingId: "model",
+                        resolution: "complete",
+                        valuesByModel: {
+                            "codex-mini": [],
+                        },
+                    },
+                    requestId: baseCommand.requestId,
+                    settings: [
+                        {
+                            booleanValue: false,
+                            category: "model",
+                            defaultValue: "codex-mini",
+                            description: "Select a coding model.",
+                            id: "model",
+                            name: "Model",
+                            type: "select",
+                            values: [
+                                {
+                                    description: "Fast coding model.",
+                                    groupId: "",
+                                    groupName: "",
+                                    name: "Codex Mini",
+                                    value: "codex-mini",
+                                },
+                            ],
+                        },
+                    ],
+                    settingsRevision: "a".repeat(64),
+                }),
+            );
+            await expect(baseDiscovery).resolves.toMatchObject({
+                agentId: "codex",
+                settings: [expect.objectContaining({ defaultValue: "codex-mini", id: "model" })],
+            });
+
             const discovery = client.runtimes.discoverAgentSettings(
                 pairing.created.runtimeId,
                 "codex",

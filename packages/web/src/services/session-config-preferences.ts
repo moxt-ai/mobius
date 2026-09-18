@@ -2,7 +2,7 @@ import type { SessionConfigOption } from "@moxt-ai/mobius-sdk";
 
 const SESSION_CONFIG_PREFERENCE_PREFIX = "mobius:session-config-preferences:";
 const LEGACY_SESSION_MODEL_PREFERENCE_PREFIX = "mobius:session-model-preferences:";
-const MAXIMUM_PREFERENCES = 100;
+const MAXIMUM_PREFERENCES = 128;
 
 abstract class SessionConfigPreference {
     abstract readonly booleanValue: boolean;
@@ -111,11 +111,19 @@ export function saveSessionConfigPreferences(
     agentId: string,
     options: readonly SessionConfigOption[],
 ): void {
-    const preferences = options.map(preferenceFromOption);
-    if (preferences.length === 0) {
+    const updated = options.map(preferenceFromOption);
+    if (updated.length === 0) {
         return;
     }
     try {
+        const identifiers = new Set(updated.map((preference) => preference.configId));
+        const preserved = readSessionConfigPreferences(channelId, agentId).filter(
+            (preference) => !identifiers.has(preference.configId),
+        );
+        const preferences = [...preserved, ...updated];
+        if (preferences.length > MAXIMUM_PREFERENCES) {
+            return;
+        }
         window.localStorage.setItem(
             storageKey(SESSION_CONFIG_PREFERENCE_PREFIX, channelId, agentId),
             JSON.stringify(preferences),

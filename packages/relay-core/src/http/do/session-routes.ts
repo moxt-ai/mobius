@@ -52,6 +52,12 @@ import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 const MAXIMUM_FILE_BYTES = 128 * 1024 * 1024;
 const turnBodyParser = bodyParser<RelayHttpEnvironment>(undefined, MAX_TURN_REQUEST_BODY_LENGTH);
 
+function assertAllowedKeys(value: Readonly<Record<string, unknown>>, allowed: readonly string[]): void {
+    if (Object.keys(value).some((key) => !allowed.includes(key))) {
+        throw new PairingDirectoryError("invalid_request", "The request fields are invalid");
+    }
+}
+
 function readIdentifierArray(
     value: Readonly<Record<string, unknown>>,
     key: string,
@@ -183,7 +189,7 @@ export function createSessionRoutes() {
             bodyParser<RelayHttpEnvironment>(),
             async (context) => {
                 const body = context.req.valid("json");
-                assertExactKeys(body, ["model"]);
+                assertAllowedKeys(body, ["model"]);
                 const requestedModel = body["model"] === undefined ? undefined : readString(body, "model", 500);
                 const command = decodeAgentSettingsDiscoverCommand(
                     JSON.stringify({

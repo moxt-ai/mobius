@@ -71,6 +71,7 @@ import {
     ReconnectingRuntimeState,
     UnavailableRuntimeState,
 } from "@/domain/chat";
+import { AgentSettingsCache, type CachedAgentSettings } from "@/services/agent-settings-cache";
 import { readChannelConnection, readProjectRuntimeConnection } from "@/services/pairing-api";
 import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
@@ -259,6 +260,11 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
 }
 
 abstract class TransportConnection {
+    abstract readonly agentSettings: (
+        agentId: string,
+        force: boolean,
+        signal: AbortSignal,
+    ) => Promise<CachedAgentSettings>;
     abstract readonly readFile: (sessionId: string, path: string, signal: AbortSignal) => Promise<FileReadResult>;
     abstract readonly forkSessionTurn: (
         command: NativeSessionTurnForkRequest,
@@ -285,9 +291,21 @@ abstract class TransportConnection {
     abstract readonly prompt: (request: PromptRequest) => Promise<PromptResult>;
     abstract readonly steerQueuedTurn: (request: CancelRequest) => Promise<void>;
     abstract readonly installAgent: (request: AgentInstallRequest) => Promise<void>;
+    abstract readonly selectAgentSetting: (
+        agentId: string,
+        configId: string,
+        value: string,
+        booleanValue: boolean,
+        signal: AbortSignal,
+    ) => Promise<CachedAgentSettings>;
+    abstract readonly settingsSelections: (
+        agentId: string,
+        signal: AbortSignal,
+    ) => Promise<readonly SessionConfigurationSelection[]>;
 }
 
 class DisconnectedTransport extends TransportConnection {
+    readonly agentSettings = (): Promise<CachedAgentSettings> => this.notInitialized();
     readonly readFile = (): Promise<FileReadResult> => this.notInitialized();
     readonly forkSessionTurn = (): Promise<NativeSessionResult> => this.notInitialized();
     readonly nativeSession = (): Promise<NativeSessionResult> => this.notInitialized();
@@ -313,11 +331,16 @@ class DisconnectedTransport extends TransportConnection {
 
     readonly steerQueuedTurn = (): Promise<void> => this.notInitialized();
 
+    readonly selectAgentSetting = (): Promise<CachedAgentSettings> => this.notInitialized();
+
+    readonly settingsSelections = (): Promise<readonly SessionConfigurationSelection[]> => this.notInitialized();
+
     private readonly notInitialized = <T>(): Promise<T> =>
         Promise.reject(new MobiusChannelError("transport_not_initialized", "The channel transport is not initialized"));
 }
 
 class ConnectedTransport extends TransportConnection {
+    readonly #agentSettings: AgentSettingsCache;
     readonly #channelId: string;
     readonly #client: Promise<MobiusChannelClient>;
     readonly #connection: ChannelConnection;
@@ -333,6 +356,17 @@ class ConnectedTransport extends TransportConnection {
         this.#channelId = connection.channelId;
         this.#connection = connection;
         this.#serviceClients = connectBrowserServiceClients(connection);
+        this.#agentSettings = new AgentSettingsCache(connection.channelId, {
+            discover: async (agentId, model, signal) => {
+                const clients = await this.#serviceClients;
+                return await clients.scoped.runtimes.discoverAgentSettings(
+                    connection.runtimeId,
+                    agentId,
+                    model.length === 0 ? {} : { model },
+                    signal,
+                );
+            },
+        });
         this.#client = connectMobiusChannelClient({
             onHistoryChanged,
             onCommands: (event) => {
@@ -421,9 +455,14 @@ class ConnectedTransport extends TransportConnection {
         void this.#serviceClients.catch((error: unknown) => {
             useChatStore.getState().setErrorMessage(failureMessage(error));
         });
+        void this.#agentSettings.preload(
+            connection.agents.filter((agent) => agent.agentSettingsDiscovery === true).map((agent) => agent.id),
+            AbortSignal.timeout(90_000),
+        );
     }
 
     readonly close = async (): Promise<void> => {
+        this.#agentSettings.close();
         for (const controller of this.#promptControllers) {
             controller.abort(new Error("The Mobius transport closed"));
         }
@@ -438,6 +477,12 @@ class ConnectedTransport extends TransportConnection {
         );
         await Promise.all([channelClose, serviceClose]);
     };
+
+    readonly agentSettings = async (
+        agentId: string,
+        force: boolean,
+        signal: AbortSignal,
+    ): Promise<CachedAgentSettings> => await this.#agentSettings.load(agentId, force, signal);
 
     readonly readFile = async (sessionId: string, path: string, signal: AbortSignal): Promise<FileReadResult> => {
         const client = await this.#client;
@@ -478,6 +523,20 @@ class ConnectedTransport extends TransportConnection {
             AbortSignal.timeout(20_000),
         );
     };
+
+    readonly selectAgentSetting = async (
+        agentId: string,
+        configId: string,
+        value: string,
+        booleanValue: boolean,
+        signal: AbortSignal,
+    ): Promise<CachedAgentSettings> => await this.#agentSettings.select(agentId, configId, value, booleanValue, signal);
+
+    readonly settingsSelections = async (
+        agentId: string,
+        signal: AbortSignal,
+    ): Promise<readonly SessionConfigurationSelection[]> =>
+        (await this.#agentSettings.load(agentId, false, signal)).selections();
 
     readonly steerQueuedTurn = async (request: CancelRequest): Promise<void> => {
         const clients = await this.#serviceClients;
@@ -911,6 +970,10 @@ class ConnectedTransport extends TransportConnection {
                     ? await readProjectRuntimeConnection(this.#connection.projectId, this.#connection.runtimeId)
                     : await readChannelConnection(this.#channelId);
             useChatStore.getState().refreshChannelConnection(connection);
+            void this.#agentSettings.preload(
+                connection.agents.filter((agent) => agent.agentSettingsDiscovery === true).map((agent) => agent.id),
+                AbortSignal.timeout(90_000),
+            );
         } catch (error) {
             useChatStore.getState().setErrorMessage(failureMessage(error));
         }
@@ -922,6 +985,19 @@ let transport: TransportConnection = new DisconnectedTransport();
 export function initializeMobiusTransport(connection: ChannelConnection, onHistoryChanged: () => void): void {
     void transport.close();
     transport = new ConnectedTransport(connection, onHistoryChanged);
+}
+
+export async function loadActiveAgentSettings(agentId: string, force: boolean = false): Promise<CachedAgentSettings> {
+    return await transport.agentSettings(agentId, force, AbortSignal.timeout(120_000));
+}
+
+export async function selectActiveAgentSetting(
+    agentId: string,
+    configId: string,
+    value: string,
+    booleanValue: boolean,
+): Promise<CachedAgentSettings> {
+    return await transport.selectAgentSetting(agentId, configId, value, booleanValue, AbortSignal.timeout(120_000));
 }
 
 export async function prepareActiveSession(expectedSessionId = ""): Promise<void> {
@@ -1192,12 +1268,14 @@ async function sendObservedPrompt(
             ? initialStore.beginQueuedTurn(prompt)
             : initialStore.beginTurn(prompt);
     let attemptId = "Pending";
-    const configurationSupported = initialStore.agents.some(
-        (agent) => agent.id === conversation.agentId && agent.sessionTurnConfiguration === true,
-    );
-    const sessionConfigurations = snapshotSessionConfiguration(conversation.session.configOptions);
+    const agent = initialStore.agents.find((candidate) => candidate.id === conversation.agentId);
+    const configurationSupported = agent?.sessionTurnConfiguration === true;
+    const cachedAgentSettings = configurationSupported && agent?.agentSettingsDiscovery === true;
 
     try {
+        const sessionConfigurations = cachedAgentSettings
+            ? await transport.settingsSelections(conversation.agentId, AbortSignal.timeout(120_000))
+            : snapshotSessionConfiguration(conversation.session.configOptions);
         const result = await transport.prompt({
             additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
             agentId: turn.agentId,
@@ -1252,11 +1330,13 @@ async function sendObservedPrompt(
 async function sendSteeringPrompt(conversation: Conversation, prompt: string, targetCommandId: string): Promise<void> {
     const initialStore = useChatStore.getState();
     const turn = initialStore.beginSteering(prompt);
-    const configurationSupported = initialStore.agents.some(
-        (agent) => agent.id === conversation.agentId && agent.sessionTurnConfiguration === true,
-    );
-    const sessionConfigurations = snapshotSessionConfiguration(conversation.session.configOptions);
+    const agent = initialStore.agents.find((candidate) => candidate.id === conversation.agentId);
+    const configurationSupported = agent?.sessionTurnConfiguration === true;
+    const cachedAgentSettings = configurationSupported && agent?.agentSettingsDiscovery === true;
     try {
+        const sessionConfigurations = cachedAgentSettings
+            ? await transport.settingsSelections(conversation.agentId, AbortSignal.timeout(120_000))
+            : snapshotSessionConfiguration(conversation.session.configOptions);
         await transport.prompt({
             additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
             agentId: turn.agentId,
