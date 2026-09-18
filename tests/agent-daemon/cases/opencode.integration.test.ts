@@ -1,11 +1,5 @@
-import { expect, it } from "vitest";
-import { startProductionMobiusCli, startStandaloneDeployment } from "../../../e2e/support/standalone.ts";
-import {
-    MobiusClient,
-    MobiusRecordingPolicy,
-    MobiusTurnCompletedEvent,
-    StaticMobiusCredentialProvider,
-} from "../../../packages/mobius-sdk/src/server.ts";
+import { it } from "vitest";
+import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { OpenCodeFixture } from "../infra/opencode.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
@@ -18,98 +12,15 @@ it("Given real OpenCode configured with a local provider, When a prompt causes a
         "Response from OpenCode through the local fake provider",
     );
     await using openCode = await OpenCodeFixture.create(provider);
-    await using deployment = await startStandaloneDeployment();
-    const pairing = await deployment.createPairing(signal);
-    await using daemon = await startProductionMobiusCli(deployment, pairing, {
+    await using journey = await startAgentDaemonJourney({
         agentEnvironment: openCode.environment,
+        agentId: "opencode",
+        agentPath: openCode.executable,
+        sessionId: "real-opencode-local-provider",
+        signal,
+        title: "Real OpenCode local provider",
     });
-    expect(daemon.channelId).toBe(pairing.channelId);
 
-    const client = new MobiusClient({
-        credentialProvider: new StaticMobiusCredentialProvider(pairing.hostToken),
-        endpoint: deployment.origin,
-        projectId: pairing.projectId,
-    });
-    try {
-        await expect(client.runtimes.list(signal)).resolves.toEqual([
-            expect.objectContaining({
-                agents: [
-                    expect.objectContaining({
-                        agentPath: openCode.executable,
-                        agentVersion: expect.any(String),
-                        id: "opencode",
-                    }),
-                ],
-                online: true,
-                runtimeId: pairing.runtimeId,
-            }),
-        ]);
-        const session = await client.sessions.create(
-            {
-                agentId: "opencode",
-                bindingId: "workspace",
-                directoryId: "default",
-                policy: new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000),
-                runtimeId: pairing.runtimeId,
-                sessionId: "real-opencode-local-provider",
-                title: "Real OpenCode local provider",
-            },
-            signal,
-        );
-        const completed = Promise.withResolvers<MobiusTurnCompletedEvent>();
-        const subscription = await client.events.subscribe(
-            session.sessionId,
-            "",
-            {
-                receive: (event) => {
-                    if (event.payload instanceof MobiusTurnCompletedEvent) {
-                        completed.resolve(event.payload);
-                    }
-                    return Promise.resolve(true);
-                },
-            },
-            signal,
-        );
-        try {
-            await client.turns.submit(
-                session.sessionId,
-                {
-                    additionalDirectoryIds: [],
-                    artifactIds: [],
-                    content: "Reply using the configured model",
-                    idempotencyKey: "real-opencode-local-provider",
-                    images: [],
-                    resources: [],
-                },
-                signal,
-            );
-            await completed.promise;
-        } finally {
-            subscription.close();
-            await subscription.completed;
-        }
-
-        await expect
-            .poll(
-                async () =>
-                    (await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 10 }, signal)).messages,
-                { timeout: 10_000 },
-            )
-            .toMatchObject([
-                {
-                    attempt: { kind: "succeeded" },
-                    activities: [
-                        expect.objectContaining({
-                            activityType: "tool",
-                            status: "completed",
-                            toolCallId: expect.any(String),
-                        }),
-                    ],
-                    prompt: "Reply using the configured model",
-                    response: provider.response,
-                },
-            ]);
-    } finally {
-        client.close();
-    }
+    await runAgentDaemonTurn(journey);
+    await expectPersistedToolTurn(journey, provider.response, { exactResponse: true });
 });

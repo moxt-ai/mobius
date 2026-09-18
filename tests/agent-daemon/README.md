@@ -68,6 +68,7 @@ tests/agent-daemon/
     pi.integration.test.ts
     workbuddy.integration.test.ts
   infra/
+    journey.ts
     claude.ts
     codex.ts
     copilot.ts
@@ -87,10 +88,12 @@ tests/agent-daemon/
     openai.ts
 ```
 
-The case file is the control surface: it shows the whole scenario in order.
-Infrastructure files hide only Agent setup and provider mechanics. Add another
-Agent as one new readable case, plus only the infrastructure or provider
-protocol it actually needs.
+The case file is the control surface: it names the real Agent, provider, and
+Agent-specific behavior. `infra/journey.ts` keeps the common production path
+(pairing, daemon, SDK session, turn, and persisted-history assertion) identical
+between cases. Other infrastructure files hide only Agent setup and provider
+mechanics. Add another Agent as one new readable case, plus only the
+infrastructure or provider protocol it actually needs.
 
 Each Agent receives an isolated home and XDG directories. Configure it through
 the same mechanism available to users, with an inert credential and a loopback
