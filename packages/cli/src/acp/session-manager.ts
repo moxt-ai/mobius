@@ -825,7 +825,7 @@ class AcpProcessSession implements AcpClientHandler {
     #preSessionUpdateBytes = 0;
     #agentName = "";
     #agentVersion = "";
-    #bufferedAgentText: { readonly chunks: readonly string[]; readonly messageId: string } | null = null;
+    #bufferedAgentText: readonly { readonly chunks: readonly string[]; readonly messageId: string }[] = [];
     #capabilities: SessionCapabilities = {
         additionalDirectories: false,
         audioPrompt: false,
@@ -1067,21 +1067,32 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     private readonly bufferAgentText = async (text: string, messageId: string): Promise<void> => {
-        if (this.#bufferedAgentText !== null && this.#bufferedAgentText.messageId !== messageId) {
-            await this.emitAgentMessage(this.#bufferedAgentText.chunks, this.#bufferedAgentText.messageId);
-            this.#bufferedAgentText = null;
+        const previous = this.#bufferedAgentText.at(-1);
+        if (previous?.messageId === messageId) {
+            this.#bufferedAgentText = [
+                ...this.#bufferedAgentText.slice(0, -1),
+                { chunks: [...previous.chunks, text], messageId },
+            ];
+            return;
         }
-        this.#bufferedAgentText = {
-            chunks: [...(this.#bufferedAgentText?.chunks ?? []), text],
-            messageId,
-        };
+        this.#bufferedAgentText = [...this.#bufferedAgentText, { chunks: [text], messageId }];
     };
 
     private readonly flushAgentText = async (): Promise<void> => {
         const buffered = this.#bufferedAgentText;
-        this.#bufferedAgentText = null;
-        if (buffered !== null) {
-            await this.emitAgentMessage(buffered.chunks, buffered.messageId);
+        this.#bufferedAgentText = [];
+        for (const message of buffered) {
+            await this.emitAgentMessage(message.chunks, message.messageId);
+        }
+    };
+
+    private readonly recordBufferedAgentTextAsProgress = async (): Promise<void> => {
+        const buffered = this.#bufferedAgentText;
+        this.#bufferedAgentText = [];
+        for (const message of buffered) {
+            for (const chunk of message.chunks) {
+                await this.#turn.activities.recordNarrative("progress", message.messageId, chunk);
+            }
         }
     };
 
@@ -1639,7 +1650,7 @@ class AcpProcessSession implements AcpClientHandler {
                 cause: error,
             });
         } finally {
-            this.#bufferedAgentText = null;
+            this.#bufferedAgentText = [];
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -1988,6 +1999,7 @@ class AcpProcessSession implements AcpClientHandler {
             return;
         }
         if (update.sessionUpdate === "tool_call") {
+            await this.recordBufferedAgentTextAsProgress();
             await this.#turn.activities.recordToolCall(update);
             return;
         }

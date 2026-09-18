@@ -1035,6 +1035,31 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 });
             }
 
+            if (prompt === "interleave untagged progress") {
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            text: "Checking the workspace",
+                            type: "text",
+                        },
+                        messageId: `intermediate-${turnNumber.toString()}-1`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: {
+                            text: "Preparing the next tool call",
+                            type: "text",
+                        },
+                        messageId: `intermediate-${turnNumber.toString()}-2`,
+                        sessionUpdate: "agent_message_chunk",
+                    },
+                });
+            }
+
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {

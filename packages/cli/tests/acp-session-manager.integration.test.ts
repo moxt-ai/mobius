@@ -461,6 +461,62 @@ child.once("exit", (code) => process.exit(code ?? 84));
         expect(secondChunks.join("")).toBe("Codex turn 2: second");
     });
 
+    it("Given OpenCode emits untagged messages before a tool call, When its turn completes, Then Mobius preserves their progress and final-answer boundary", async () => {
+        const manager = new AcpSessionManager();
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "OpenCode",
+        ]);
+        const activityUpdates: Array<{
+            readonly activityId: string;
+            readonly activityType: string;
+            readonly output: string;
+            readonly sequence: number;
+        }> = [];
+        const responseChunks: string[] = [];
+
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent,
+                commandId: "opencode-interleaved-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: (activity) => {
+                    activityUpdates.push(activity);
+                    return Promise.resolve();
+                },
+                onText: (text) => {
+                    responseChunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "interleave untagged progress",
+                resources: [],
+                sessionId: "opencode-interleaved-conversation",
+                signal: new AbortController().signal,
+            });
+        } finally {
+            await manager.close();
+        }
+
+        const activitiesById = new Map(activityUpdates.map((activity) => [activity.activityId, activity]));
+        const timeline = [...activitiesById.values()]
+            .sort((left, right) => left.sequence - right.sequence)
+            .map((activity) => ({ activityType: activity.activityType, output: activity.output }));
+        expect(timeline).toEqual([
+            { activityType: "progress", output: "Gathering context" },
+            { activityType: "reasoning", output: "Inspecting the workspace" },
+            {
+                activityType: "progress",
+                output: "Checking the workspace",
+            },
+            { activityType: "progress", output: "Preparing the next tool call" },
+            { activityType: "tool", output: '{\n  "name": "mobius-workspace"\n}' },
+        ]);
+        expect(responseChunks.join("")).toBe("OpenCode turn 1: interleave untagged progress");
+    });
+
     it("Given ten retained Agent conversations, When an eleventh starts, Then the least recently used process is released and its conversation can resume", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-process-lru-"));
         const databasePath = join(temporaryDirectory, "sessions.sqlite");

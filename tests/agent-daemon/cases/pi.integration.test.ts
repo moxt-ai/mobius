@@ -102,13 +102,13 @@ it("Given real Pi and pi-acp use a local OpenAI upstream, When a prompt causes a
             .toMatchObject([
                 {
                     attempt: { kind: "succeeded" },
-                    activities: [
+                    activities: expect.arrayContaining([
                         expect.objectContaining({
                             activityType: "tool",
                             status: "completed",
                             toolCallId: expect.any(String),
                         }),
-                    ],
+                    ]),
                     prompt: "Reply using the configured model",
                     response: expect.stringContaining(provider.response),
                 },
