@@ -217,7 +217,7 @@ describe("daemon Bot execution boundary", () => {
         vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
     });
     afterEach(() => vi.useRealTimers());
-    it("Given a paired Runtime root, When Bot commands include an expired start and supported or stale settings, Then the daemon rejects late work and executes valid work", async () => {
+    it("Given a paired Runtime root, When direct and Bot commands include an expired start and supported or stale settings, Then the daemon rejects late work and executes valid work", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -384,6 +384,122 @@ describe("daemon Bot execution boundary", () => {
             };
             writeServerTextFrame(socket, encodeSessionPromptCommand(directPrompt));
             expect(await readCompletedText(frames)).toContain("code test-large high fast");
+
+            if (directPrompt.sessionConfigurations === undefined) {
+                throw new Error("Expected the direct prompt to contain a complete Agent configuration");
+            }
+            const staleDirectPrompt: SessionPromptCommand = {
+                ...directPrompt,
+                commandId: "command_stale_direct_configuration",
+                sessionConfigurations: directPrompt.sessionConfigurations.map((selection) =>
+                    selection.configId === "reasoning_effort"
+                        ? {
+                              ...selection,
+                              value: "retired-effort",
+                          }
+                        : selection,
+                ),
+                sessionId: "session_stale_direct_configuration",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(staleDirectPrompt));
+            expect(await readCompletedText(frames)).toContain("code test-large medium fast");
+            const directWarningDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const warning = directWarningDatabase
+                    .prepare(
+                        `SELECT command_id, details_json, event, session_id
+                         FROM audit_events
+                         WHERE command_id = ? AND event = 'session_configuration_setting_ignored'`,
+                    )
+                    .get(staleDirectPrompt.commandId);
+                if (warning === undefined) {
+                    throw new Error("Expected an audit warning for the ignored Turn configuration setting");
+                }
+                expect(warning).toMatchObject({
+                    command_id: staleDirectPrompt.commandId,
+                    event: "session_configuration_setting_ignored",
+                    session_id: staleDirectPrompt.sessionId,
+                });
+                expect(JSON.parse(String(Reflect.get(warning, "details_json")))).toEqual({
+                    agentId: "codex",
+                    category: "thought_level",
+                    configId: "reasoning_effort",
+                    reason: "value_unavailable",
+                    requestedValue: "retired-effort",
+                });
+            } finally {
+                directWarningDatabase.close();
+            }
+
+            const extraDirectPrompt: SessionPromptCommand = {
+                ...directPrompt,
+                commandId: "command_extra_direct_configuration",
+                sessionConfigurations: [
+                    ...directPrompt.sessionConfigurations,
+                    {
+                        booleanValue: false,
+                        configId: "retired_setting",
+                        value: "legacy-value",
+                        valueType: "select",
+                    },
+                ],
+                sessionId: "session_extra_direct_configuration",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(extraDirectPrompt));
+            expect(await readCompletedText(frames)).toContain("code test-large high fast");
+            const extraWarningDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const warning = extraWarningDatabase
+                    .prepare(
+                        `SELECT command_id, details_json, event, session_id
+                         FROM audit_events
+                         WHERE command_id = ? AND event = 'session_configuration_setting_ignored'`,
+                    )
+                    .get(extraDirectPrompt.commandId);
+                if (warning === undefined) {
+                    throw new Error("Expected an audit warning for the removed Turn configuration setting");
+                }
+                expect(JSON.parse(String(Reflect.get(warning, "details_json")))).toEqual({
+                    agentId: "codex",
+                    category: "unknown",
+                    configId: "retired_setting",
+                    reason: "setting_unavailable",
+                    requestedValue: "legacy-value",
+                });
+            } finally {
+                extraWarningDatabase.close();
+            }
+
+            const invalidPermissionPrompt: SessionPromptCommand = {
+                ...directPrompt,
+                commandId: "command_invalid_permission_configuration",
+                sessionConfigurations: directPrompt.sessionConfigurations.map((selection) =>
+                    selection.configId === "permission_mode"
+                        ? {
+                              ...selection,
+                              value: "retired-permission",
+                          }
+                        : selection,
+                ),
+                sessionId: "session_invalid_permission_configuration",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(invalidPermissionPrompt));
+            let receivedPermissionFailure = false;
+            const permissionKinds: string[] = [];
+            while (!receivedPermissionFailure) {
+                const failedEnvelope = decodeSessionEventEnvelope(await frames.next());
+                const failedKind = decodeMessageKind(failedEnvelope.payload);
+                permissionKinds.push(failedKind);
+                if (failedKind !== SESSION_FAILED_KIND) {
+                    continue;
+                }
+                expect(decodeSessionFailedEvent(failedEnvelope.payload)).toMatchObject({
+                    code: "invalid_session_configuration",
+                    commandId: invalidPermissionPrompt.commandId,
+                });
+                receivedPermissionFailure = true;
+            }
+            expect(permissionKinds).not.toContain(SESSION_STARTED_KIND);
 
             const incompletePrompt: SessionPromptCommand = {
                 ...directPrompt,

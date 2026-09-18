@@ -13,6 +13,7 @@ import {
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_INSTALL_STARTED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
+    AGENT_PERMISSION_MODE_CONFIG_ID,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
@@ -1172,11 +1173,13 @@ async function executePrompt(
             } else {
                 await applyCompleteSessionConfiguration(
                     sessions,
+                    audit,
                     prepared.configOptions,
                     command.sessionConfigurations,
                     agent,
                     resolved.cwd,
                     resolved.additionalDirectories,
+                    command.commandId,
                     command.sessionId,
                     signal,
                 );
@@ -1335,6 +1338,34 @@ function assertSessionConfigurationSchema(
     }
 }
 
+function assertSessionConfigurationCoverage(
+    options: readonly SessionConfigOption[],
+    selections: readonly SessionConfigurationSelection[],
+): void {
+    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
+    if (selectionsById.size !== selections.length) {
+        throw invalidSessionConfiguration("The Turn configuration contains duplicate Agent settings");
+    }
+    for (const option of options) {
+        if (!selectionsById.has(option.id)) {
+            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
+        }
+    }
+}
+
+function sessionConfigurationSelectionIsAvailable(
+    option: SessionConfigOption,
+    selection: SessionConfigurationSelection,
+): boolean {
+    if (option.type !== selection.valueType) {
+        return false;
+    }
+    if (option.type === "boolean") {
+        return selection.value.length === 0;
+    }
+    return !selection.booleanValue && option.values.some((value) => value.value === selection.value);
+}
+
 function sessionConfigurationMatches(option: SessionConfigOption, selection: SessionConfigurationSelection): boolean {
     validateSessionConfigurationSelection(option, selection);
     return option.type === "boolean"
@@ -1376,19 +1407,110 @@ function assertCompleteSessionConfiguration(
     }
 }
 
+function assertAppliedSessionConfiguration(
+    options: readonly SessionConfigOption[],
+    selections: readonly SessionConfigurationSelection[],
+): void {
+    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
+    for (const option of options) {
+        const selection = selectionsById.get(option.id);
+        if (option.id === AGENT_PERMISSION_MODE_CONFIG_ID) {
+            if (selection === undefined || !sessionConfigurationMatches(option, selection)) {
+                throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
+            }
+            continue;
+        }
+        if (selection === undefined || !sessionConfigurationSelectionIsAvailable(option, selection)) {
+            continue;
+        }
+        if (!sessionConfigurationMatches(option, selection)) {
+            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
+        }
+    }
+}
+
+function unavailableSessionConfigurationCategory(selection: SessionConfigurationSelection): string {
+    if (selection.configId === "model") {
+        return "model";
+    }
+    if (selection.configId === "reasoning_effort") {
+        return "thought_level";
+    }
+    return "unknown";
+}
+
 async function applySessionConfigurationSelection(
     sessions: AcpSessionManager,
+    audit: AuditStore,
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
     agent: LocalAgentDefinition,
     cwd: string,
     additionalDirectories: readonly string[],
+    commandId: string,
     sessionId: string,
     signal: AbortSignal,
 ): Promise<readonly SessionConfigOption[]> {
     const option = options.find((candidate) => candidate.id === selection.configId);
     if (option === undefined) {
+        if (selection.configId !== AGENT_PERMISSION_MODE_CONFIG_ID) {
+            warnIgnoredSetting(
+                audit,
+                "session_configuration_setting_ignored",
+                commandId,
+                sessionId,
+                agent.id,
+                selection,
+                unavailableSessionConfigurationCategory(selection),
+                "setting_unavailable",
+            );
+            return options;
+        }
         throw invalidSessionConfiguration(`The Agent setting ${selection.configId} is unavailable`);
+    }
+    if (selection.configId !== AGENT_PERMISSION_MODE_CONFIG_ID) {
+        if (option.type !== selection.valueType) {
+            warnIgnoredSetting(
+                audit,
+                "session_configuration_setting_ignored",
+                commandId,
+                sessionId,
+                agent.id,
+                selection,
+                option.category,
+                "setting_schema_mismatch",
+            );
+            return options;
+        }
+        if (
+            (option.type === "boolean" && selection.value.length > 0) ||
+            (option.type === "select" && selection.booleanValue)
+        ) {
+            warnIgnoredSetting(
+                audit,
+                "session_configuration_setting_ignored",
+                commandId,
+                sessionId,
+                agent.id,
+                selection,
+                option.category,
+                "selection_schema_mismatch",
+            );
+            return options;
+        }
+        if (option.type === "select" && !option.values.some((value) => value.value === selection.value)) {
+            warnIgnoredSetting(
+                audit,
+                "session_configuration_setting_ignored",
+                commandId,
+                sessionId,
+                agent.id,
+                selection,
+                option.category,
+                "value_unavailable",
+            );
+            return options;
+        }
     }
     if (sessionConfigurationMatches(option, selection)) {
         return options;
@@ -1409,15 +1531,17 @@ async function applySessionConfigurationSelection(
 
 async function applyCompleteSessionConfiguration(
     sessions: AcpSessionManager,
+    audit: AuditStore,
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
     agent: LocalAgentDefinition,
     cwd: string,
     additionalDirectories: readonly string[],
+    commandId: string,
     sessionId: string,
     signal: AbortSignal,
 ): Promise<void> {
-    assertSessionConfigurationSchema(initialOptions, selections);
+    assertSessionConfigurationCoverage(initialOptions, selections);
     let options = initialOptions;
     const orderedSelections = selections.toSorted((left, right) => {
         const priority =
@@ -1427,16 +1551,18 @@ async function applyCompleteSessionConfiguration(
     for (const selection of orderedSelections) {
         options = await applySessionConfigurationSelection(
             sessions,
+            audit,
             options,
             selection,
             agent,
             cwd,
             additionalDirectories,
+            commandId,
             sessionId,
             signal,
         );
     }
-    assertCompleteSessionConfiguration(options, selections);
+    assertAppliedSessionConfiguration(options, selections);
 }
 
 function botExecutionAgent(
@@ -1480,8 +1606,9 @@ function assertPreparedPermission(configOptions: readonly SessionConfigOption[],
     }
 }
 
-function warnIgnoredExecutionSetting(
+function warnIgnoredSetting(
     audit: AuditStore,
+    event: string,
     commandId: string,
     sessionId: string,
     agentId: string,
@@ -1496,7 +1623,6 @@ function warnIgnoredExecutionSetting(
         reason,
         requestedValue: selection.value,
     };
-    const event = "bot_execution_setting_ignored";
     audit.record({ commandId, details, event, sessionId });
     process.stderr.write(`Mobius daemon warning ${JSON.stringify({ commandId, event, sessionId, ...details })}\n`);
 }
@@ -1519,12 +1645,22 @@ async function applySupportedExecutionSelection(
     }
     const option = configOptions.find((candidate) => candidate.id === selection.configId);
     if (option === undefined) {
-        warnIgnoredExecutionSetting(audit, commandId, sessionId, agent.id, selection, category, "setting_unavailable");
+        warnIgnoredSetting(
+            audit,
+            "bot_execution_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            category,
+            "setting_unavailable",
+        );
         return configOptions;
     }
     if (option.type !== "select" || option.category !== category) {
-        warnIgnoredExecutionSetting(
+        warnIgnoredSetting(
             audit,
+            "bot_execution_setting_ignored",
             commandId,
             sessionId,
             agent.id,
@@ -1535,8 +1671,9 @@ async function applySupportedExecutionSelection(
         return configOptions;
     }
     if (selection.valueType !== "select" || selection.booleanValue) {
-        warnIgnoredExecutionSetting(
+        warnIgnoredSetting(
             audit,
+            "bot_execution_setting_ignored",
             commandId,
             sessionId,
             agent.id,
@@ -1547,7 +1684,16 @@ async function applySupportedExecutionSelection(
         return configOptions;
     }
     if (!option.values.some((value) => value.value === selection.value)) {
-        warnIgnoredExecutionSetting(audit, commandId, sessionId, agent.id, selection, category, "value_unavailable");
+        warnIgnoredSetting(
+            audit,
+            "bot_execution_setting_ignored",
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            category,
+            "value_unavailable",
+        );
         return configOptions;
     }
     if (option.currentValue === selection.value) {
