@@ -17,19 +17,18 @@ conversation event, or Mobius database.
 
 ### Project discovery
 
-`CloudflareBotApi` uses the host's existing `PairingTenantResolver`, shared with
-pairing creation, to resolve the request's tenant:
+`CloudflareBotApi` authorizes each request against its Project:
 
-- `GET /mobius/api/v1/projects` lists the tenant's projects from completed pairings.
+- `GET /mobius/api/v1/projects` lists Projects from completed pairings.
 - `GET /mobius/api/v1/projects/:projectId/bots` lists Bots only when that project
-  belongs to the resolved tenant.
-- `GET /mobius/api/v1/projects/:projectId/status` resolves the same tenant-owned
+  is authorized for the caller.
+- `GET /mobius/api/v1/projects/:projectId/status` resolves the same authorized
   project and returns `connected` or `offline` from the Runtime's live connection
   state. Completing a pairing alone does not imply that the Runtime is online.
 
-Standalone uses `MOBIUS_TENANT_ID` and accepts these reads without a login token.
-Authenticated hosts supply their existing tenant resolver and enforce their own
-authentication. Client-supplied tenant IDs never determine access.
+Standalone accepts these reads without a login token. Authenticated hosts enforce
+their own Project authorization. Client-supplied organization identifiers never
+determine access.
 Listing does not grant mutation rights. An authenticated read requires
 `bot:read`; creating a Bot requires `bot:profile:write` at
 `POST /mobius/api/v1/projects/:projectId/bots`. Either permission may come from

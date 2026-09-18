@@ -37,7 +37,6 @@ const credentialSelection = {
     public_credential_id: conversationAccessCredential.publicCredentialId,
     parent_credential_id: conversationAccessCredential.parentCredentialId,
     parent_credential_revision: conversationAccessCredential.parentCredentialRevision,
-    tenant_id: conversationAccessCredential.tenantId,
     app_id: conversationAccessCredential.appId,
     project_id: conversationAccessCredential.projectId,
     conversation_id: conversationAccessCredential.conversationId,
@@ -250,9 +249,7 @@ export class ConversationAccessStorage {
             parent === null ||
             project === null ||
             parent.app_id !== row.app_id ||
-            parent.tenant_id !== row.tenant_id ||
             project.app_id !== row.app_id ||
-            project.tenant_id !== row.tenant_id ||
             (parent.all_projects !== 1 &&
                 !(await this.#control.credentialHasProject(parent.credential_id, row.project_id, signal)))
         ) {
@@ -420,7 +417,6 @@ export class ConversationAccessStorage {
         publicCredentialId: credential.publicCredentialId,
         parentCredentialId: credential.parentCredentialId,
         parentCredentialRevision: credential.parentCredentialRevision,
-        tenantId: credential.tenantId,
         appId: credential.appId,
         projectId: credential.projectId,
         conversationId: credential.conversationId,

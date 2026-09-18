@@ -20,17 +20,13 @@ The bootstrap owner credential is also stored in
 `project_owner_credentials`. Project-scoped Runtime pairing and revocation
 resolve this explicit credential rather than depending on a particular paired
 Channel remaining online or active. New Runtime pairings retain the already
-authorized tenant and Project and create no new owner credential. Pairing-code,
+authorized Project and create no new owner credential. Pairing-code,
 daemon, Runtime, and Channel authority remain independent per machine.
 
-An authenticated embedding host creates a workspace pairing with
-`createRelayDependencies({ databases, tenants, identityDatabases }).services.pairings.createPairing(tenantId, signal)`.
-This direct-host composition builds pairing services without HTTP dependencies. The tenant ID must come
-from the host's verified identity context. Standalone deployment uses the upstream
-`ConfiguredPairingTenantResolver` with an explicit `MOBIUS_TENANT_ID` and rejects
-pairing when it is missing. Pairing never generates tenant identities. Standalone
-storage composition supplies a tenant directory returning `{ hasShard: false }`
-and single-binding storage resolvers.
+An authenticated embedding host creates a workspace pairing through the Project
+pairing service. This direct-host composition builds pairing services without HTTP
+dependencies. Standalone storage uses single-binding storage resolvers; Platform
+resolves storage from the globally unique Project ID.
 
 Bot owner, connector, execution, and grant credentials are authenticated against
 the configured identity databases before placement is resolved. Bot storage is

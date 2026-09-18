@@ -5,16 +5,11 @@ export const publicProjectBootstrapEvent = sqliteTable(
     "public_project_bootstrap_events",
     {
         eventId: text("event_id").primaryKey(),
-        tenantId: text("tenant_id").notNull(),
         clientFingerprint: text("client_fingerprint").notNull(),
         createdAt: integer("created_at").notNull(),
     },
     (table) => [
-        index("public_project_bootstrap_events_limit").on(
-            table.tenantId,
-            table.clientFingerprint,
-            desc(table.createdAt),
-        ),
-        index("public_project_bootstrap_events_retention").on(table.tenantId, table.createdAt),
+        index("public_project_bootstrap_events_limit").on(table.clientFingerprint, desc(table.createdAt)),
+        index("public_project_bootstrap_events_retention").on(table.createdAt),
     ],
 );

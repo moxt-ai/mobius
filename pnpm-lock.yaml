@@ -201,6 +201,9 @@ importers:
       '@moxt-ai/mobius-relay-core':
         specifier: workspace:*
         version: link:../relay-core
+      drizzle-orm:
+        specifier: ^0.45.2
+        version: 0.45.2(@cloudflare/workers-types@5.20260911.1)
       hono:
         specifier: ^4.13.7
         version: 4.13.7

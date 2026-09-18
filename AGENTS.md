@@ -56,6 +56,7 @@ Make illegal states unrepresentable.
 ## Abstraction
 
 - Drizzle schema modules are the authoritative typed description of current SQLite tables. Keep one table per file under the owning package's `src/schema`, preserve SQL names, indexes, defaults, enum typing, and check constraints, and do not declare foreign-key relations. Storage adapters use Drizzle's schema-backed query builder; do not use tagged or raw SQL to imitate ORM queries. Historical migrations remain the deployment mechanism.
+- Generate schema migrations with the Drizzle CLI from schema changes; do not hand-write migration SQL.
 - Storage must not import any upper layer: services, HTTP/routes, composition/DI, application gateways, or platform adapters. This includes type-only imports and re-exports through package barrels. Shared values and records belong in `entity`; execution contracts belong in `infra`. Those lower-level modules must not depend on upper layers either.
 
 - Prefer direct, local, linear code.

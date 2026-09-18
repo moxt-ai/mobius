@@ -284,7 +284,6 @@ export class ConversationAccessService {
         const permissions = decodeConversationPermissions(requestedPermissions);
         this.requirePermissions(access, permissions);
         return await this.insertCredential(
-            access.tenantId,
             access.appId,
             access.project.credentialId,
             access.credentialRevision,
@@ -325,7 +324,6 @@ export class ConversationAccessService {
             session_id: source.session_id,
         };
         const replacement = await this.createCredential(
-            parent.tenantId,
             parent.appId,
             parent.project.credentialId,
             parent.credentialRevision,
@@ -565,7 +563,6 @@ export class ConversationAccessService {
     };
 
     private readonly insertCredential = async (
-        tenantId: string,
         appId: string,
         parentCredentialId: string,
         parentCredentialRevision: number,
@@ -576,7 +573,6 @@ export class ConversationAccessService {
         signal: AbortSignal,
     ): Promise<object> => {
         const created = await this.createCredential(
-            tenantId,
             appId,
             parentCredentialId,
             parentCredentialRevision,
@@ -612,7 +608,6 @@ export class ConversationAccessService {
     };
 
     private readonly createCredential = async (
-        tenantId: string,
         appId: string,
         parentCredentialId: string,
         parentCredentialRevision: number,
@@ -641,7 +636,6 @@ export class ConversationAccessService {
             publicCredentialId,
             secretDigest: await hashSecret(credential),
             sessionId: directory.session_id,
-            tenantId,
         };
         return {
             record,
@@ -656,7 +650,6 @@ export class ConversationAccessService {
                 permissions: permissionList,
                 projectId: directory.project_id,
                 sessionId: directory.session_id,
-                tenantId,
             },
         };
     };

@@ -139,9 +139,9 @@ migrations before deployment. Standalone does not apply Platform sharding SQL.
 Placement is derived only from the encoded ID; migration
 `0006_drop_project_storage_placements.sql` removes the redundant placement table.
 
-Cloudflare adapters own a fixed tenant label used only for Durable Object naming.
-Standalone Workers configure `MOBIUS_TENANT_ID` (the supplied Wrangler profiles
-use `standalone`); the Platform entry point uses the fixed `platform` label.
+Cloudflare adapters use fixed namespace prefixes only for Durable Object naming:
+`standalone` for Standalone and `platform` for Platform. They are not tenant IDs
+and cannot be configured by remote input.
 The embedded `Pair` component requires `getPairingToken(signal)`. Authenticated
 hosts return their identity token; the standalone page explicitly returns `null`
 and relies on the server's configured bootstrap policy.

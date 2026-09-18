@@ -32,18 +32,13 @@ function authorization(token: string): HeadersInit {
     return { authorization: `Bearer ${token}` };
 }
 
-function bootstrapEnvironment(enabled: boolean, clientLimit: number, tenantLimit: number): RelayBindings {
-    const tenantId = env.MOBIUS_TENANT_ID;
-    if (tenantId === undefined) {
-        throw new Error("Expected the standalone tenant binding");
-    }
+function bootstrapEnvironment(enabled: boolean, clientLimit: number, totalLimit: number): RelayBindings {
     return {
         BOT_CONNECTIONS: env.BOT_CONNECTIONS,
         DIRECTORY_DATABASE: env.DIRECTORY_DATABASE,
-        MOBIUS_TENANT_ID: tenantId,
         PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: clientLimit.toString(),
         PUBLIC_PROJECT_BOOTSTRAP_ENABLED: enabled.toString(),
-        PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT: tenantLimit.toString(),
+        PUBLIC_PROJECT_BOOTSTRAP_TOTAL_LIMIT: totalLimit.toString(),
         PUBLIC_PROJECT_BOOTSTRAP_WINDOW_SECONDS: "60",
         RUNTIME_RELAY: env.RUNTIME_RELAY,
         SESSION_ARCHIVE_BYTES_PER_SESSION: env.SESSION_ARCHIVE_BYTES_PER_SESSION,
@@ -116,8 +111,8 @@ describe.sequential("Project authentication", () => {
             error: { code: "public_project_bootstrap_rate_limited" },
         });
         expect((await bootstrap("192.0.2.11")).status).toBe(201);
-        const tenantLimit = await bootstrap("192.0.2.12");
-        expect(tenantLimit.status).toBe(429);
+        const totalLimit = await bootstrap("192.0.2.12");
+        expect(totalLimit.status).toBe(429);
 
         vi.setSystemTime(Date.now() + 60_001);
         expect((await bootstrap("192.0.2.10")).status).toBe(201);

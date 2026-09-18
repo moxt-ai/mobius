@@ -23,7 +23,6 @@ export const ConversationCredentialRowSchema = v.object({
     revoked_at: v.nullable(timestamp),
     secret_digest: v.string(),
     session_id: v.string(),
-    tenant_id: v.string(),
     tenant_lifecycle: lifecycle,
 });
 export type ConversationCredentialRow = Readonly<v.InferOutput<typeof ConversationCredentialRowSchema>>;
@@ -42,7 +41,6 @@ export interface ConversationCredentialInsert {
     readonly publicCredentialId: string;
     readonly secretDigest: string;
     readonly sessionId: string;
-    readonly tenantId: string;
 }
 
 export const ConversationDirectoryRowSchema = v.object({

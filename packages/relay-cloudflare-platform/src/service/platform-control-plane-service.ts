@@ -964,7 +964,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         limit: number,
         signal: AbortSignal,
     ): Promise<object> => {
-        const project = await this.#projectAuthorization.read(projectId, signal);
+        const project = await this.#storage.readActiveProjectScope(projectId, signal);
         if (project === null) {
             throw new PlatformControlPlaneError("project_not_found", "The Project is unavailable", 404);
         }
@@ -1205,7 +1205,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             actorReference(actorRef),
             signal,
         );
-        return new PlatformAppCredentialAccess(row.tenant_id, row.app_id, row.revision, project);
+        return new PlatformAppCredentialAccess(row.app_id, row.revision, project);
     };
 
     private readonly authorizeCredentialForProject = async (
@@ -1216,12 +1216,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         signal: AbortSignal,
     ): Promise<ProjectAccessContext> => {
         const project = await this.#projectAuthorization.read(projectId, signal);
-        if (
-            project === null ||
-            project.lifecycle !== "active" ||
-            project.app_id !== row.app_id ||
-            project.tenant_id !== row.tenant_id
-        ) {
+        if (project === null || project.lifecycle !== "active" || project.app_id !== row.app_id) {
             throw new ProjectAuthenticationError(
                 "project_access_denied",
                 "The AppCredential is not authorized for this Project",

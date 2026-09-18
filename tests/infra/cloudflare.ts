@@ -28,7 +28,7 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
             r2Buckets: profile === "standalone" ? [] : ["R2_BUCKET_APAC", "R2_BUCKET_WNAM"],
             bindings:
                 profile === "standalone"
-                    ? { MOBIUS_TENANT_ID: "standalone", PUBLIC_PROJECT_BOOTSTRAP_ENABLED: "true" }
+                    ? { PUBLIC_PROJECT_BOOTSTRAP_ENABLED: "true" }
                     : {
                           MOBIUS_PLATFORM_ALLOWED_ORIGINS: "[]",
                           MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",

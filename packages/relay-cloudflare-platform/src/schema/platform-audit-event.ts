@@ -5,7 +5,6 @@ export const platformAuditEvent = sqliteTable(
     "platform_audit_events",
     {
         auditId: text("audit_id").primaryKey(),
-        tenantId: text("tenant_id").notNull(),
         appId: text("app_id").notNull(),
         projectId: text("project_id").notNull(),
         actorKind: text("actor_kind").notNull(),
@@ -20,12 +19,6 @@ export const platformAuditEvent = sqliteTable(
     (table) => [
         check("platform_audit_events_project_id_check", sql`${table.projectId} != ''`),
         check("platform_audit_events_outcome_check", sql`${table.outcome} in ('succeeded', 'denied')`),
-        index("platform_audit_events_tenant").on(table.tenantId, desc(table.recordedAt), desc(table.auditId)),
-        index("platform_audit_events_project").on(
-            table.tenantId,
-            table.projectId,
-            desc(table.recordedAt),
-            desc(table.auditId),
-        ),
+        index("platform_audit_events_project").on(table.projectId, desc(table.recordedAt), desc(table.auditId)),
     ],
 );

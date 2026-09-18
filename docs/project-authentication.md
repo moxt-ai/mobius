@@ -144,7 +144,7 @@ revoking the first Runtime does not remove Project administration.
 | --- | ---: | --- |
 | `PUBLIC_PROJECT_BOOTSTRAP_ENABLED` | `true` | Disable new public Projects without disabling existing capability access |
 | `PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT` | `10` | Per normalized client-address digest in the window |
-| `PUBLIC_PROJECT_BOOTSTRAP_TENANT_LIMIT` | `100` | Deployment total; must be at least the client limit |
+| `PUBLIC_PROJECT_BOOTSTRAP_TOTAL_LIMIT` | `100` | Deployment total; must be at least the client limit |
 | `PUBLIC_PROJECT_BOOTSTRAP_WINDOW_SECONDS` | `3600` | Fixed accounting window, at most 24 hours |
 
 The Relay hashes an IP-shaped `CF-Connecting-IP` for per-client accounting,

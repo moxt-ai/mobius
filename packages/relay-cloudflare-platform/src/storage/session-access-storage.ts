@@ -26,7 +26,6 @@ export class SessionAccessStorage {
             () =>
                 database
                     .select({
-                        tenantId: platformProjectAuthorization.tenantId,
                         appId: platformProjectAuthorization.appId,
                     })
                     .from(platformProjectAuthorization)
@@ -51,7 +50,6 @@ export class SessionAccessStorage {
                     }),
                     database.insert(platformAuditEvent).values({
                         auditId: `saa_${row.credential_id}`,
-                        tenantId: project.tenantId,
                         appId: project.appId,
                         projectId: row.project_id,
                         actorKind: "application",
@@ -114,7 +112,6 @@ export class SessionAccessStorage {
             project === null ||
             project.lifecycle !== "active" ||
             project.app_id !== parent.app_id ||
-            project.tenant_id !== parent.tenant_id ||
             parent.app_lifecycle !== "active" ||
             parent.tenant_lifecycle !== "active" ||
             parent.revoked_at !== null ||

@@ -8,7 +8,6 @@ export const externalIdentityProjectGrant = sqliteTable(
     {
         grantId: text("grant_id").primaryKey(),
         bindingId: text("binding_id").notNull(),
-        tenantId: text("tenant_id").notNull(),
         projectId: text("project_id").notNull(),
         permissionsJson: text("permissions_json").notNull(),
         createdByActorKind: text("created_by_actor_kind", { enum: identityActorKinds }).notNull(),
@@ -22,13 +21,8 @@ export const externalIdentityProjectGrant = sqliteTable(
             sql`${table.createdByActorKind} in ('accountless_owner', 'application', 'browser_access', 'external_identity')`,
         ),
         uniqueIndex("external_identity_project_grants_active")
-            .on(table.bindingId, table.tenantId, table.projectId)
+            .on(table.bindingId, table.projectId)
             .where(sql`${table.revokedAt} is null`),
-        index("external_identity_project_grants_project").on(
-            table.tenantId,
-            table.projectId,
-            table.revokedAt,
-            desc(table.createdAt),
-        ),
+        index("external_identity_project_grants_project").on(table.projectId, table.revokedAt, desc(table.createdAt)),
     ],
 );

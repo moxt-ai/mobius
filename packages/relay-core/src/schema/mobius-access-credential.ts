@@ -6,7 +6,6 @@ export const mobiusAccessCredential = sqliteTable(
         credentialId: text("credential_id").primaryKey(),
         publicCredentialId: text("public_credential_id").notNull().unique(),
         grantId: text("grant_id").notNull(),
-        tenantId: text("tenant_id").notNull(),
         projectId: text("project_id").notNull(),
         secretDigest: text("secret_digest").notNull().unique(),
         permissionsJson: text("permissions_json").notNull(),
@@ -17,11 +16,6 @@ export const mobiusAccessCredential = sqliteTable(
     },
     (table) => [
         index("mobius_access_credentials_active").on(table.publicCredentialId, table.revokedAt, table.expiresAt),
-        index("mobius_access_credentials_project").on(
-            table.tenantId,
-            table.projectId,
-            table.revokedAt,
-            table.expiresAt,
-        ),
+        index("mobius_access_credentials_project").on(table.projectId, table.revokedAt, table.expiresAt),
     ],
 );

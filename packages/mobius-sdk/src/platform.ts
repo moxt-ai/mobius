@@ -348,7 +348,6 @@ export class MobiusConversationAccessCredential {
     readonly permissions: readonly string[];
     readonly projectId: string;
     readonly sessionId: string;
-    readonly tenantId: string;
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.actorRef = string(value, "actorRef", 200);
@@ -364,7 +363,6 @@ export class MobiusConversationAccessCredential {
         this.permissions = strings(value, "permissions");
         this.projectId = identifier(value, "projectId");
         this.sessionId = identifier(value, "sessionId");
-        this.tenantId = identifier(value, "tenantId");
     }
 }
 

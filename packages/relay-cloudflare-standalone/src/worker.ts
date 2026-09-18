@@ -22,6 +22,7 @@ import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
 import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
+import { STANDALONE_NAMESPACE_PREFIX } from "./standalone-namespace.ts";
 
 export interface RelayBindings extends LiteSessionConfigurationEnvironment, PublicProjectBootstrapEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
@@ -104,10 +105,7 @@ export function createStandaloneApplication(
             ...context.env,
             DIRECTORY_DATABASE: instrumentD1Database(context.env.DIRECTORY_DATABASE, metrics),
         };
-        const projectAuthentication = new D1ProjectAuthentication(
-            environment.DIRECTORY_DATABASE,
-            environment.MOBIUS_TENANT_ID,
-        );
+        const projectAuthentication = new D1ProjectAuthentication(environment.DIRECTORY_DATABASE);
         const cx = createWorkerContext({
             gateways: gateways(environment),
             authorization: projectAuthentication,
@@ -130,7 +128,7 @@ export function createStandaloneWorker(): StandaloneWorker {
 export function createStandaloneGateways(environment: RelayBindings): WorkerRuntimeGateways {
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
-        sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, environment.MOBIUS_TENANT_ID),
+        sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, STANDALONE_NAMESPACE_PREFIX),
         connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }

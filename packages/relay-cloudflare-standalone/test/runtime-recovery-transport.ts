@@ -3,6 +3,7 @@ import { decodeSessionEventEnvelope, SESSION_EVENT_COMMITTED_KIND } from "@moxt-
 import { createDurableObjectContext, RuntimeRelay, type SessionTransport } from "@moxt-ai/mobius-relay-core";
 import { SingleDatabaseResolver } from "../src/database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "../src/project-storage-directory.ts";
+import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 
 // Real Session DO requests cannot be made to stall deterministically. This stateful
 // transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
@@ -10,7 +11,7 @@ export class SuspendedDisconnectTransport implements SessionTransport {
     readonly #transport: SessionTransport = {
         fetch: (scope, sessionId, request) =>
             env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${scope.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
             ).fetch(request),
     };
     readonly #suspended = Promise.withResolvers<string>();
@@ -156,7 +157,7 @@ export function runtimeWithTransport(state: DurableObjectState, sessionTransport
             environment: env,
             connections: env.BOT_CONNECTIONS,
             sessions: env.SESSION_RELAY,
-            namespacePrefix: env.MOBIUS_TENANT_ID,
+            namespacePrefix: STANDALONE_NAMESPACE_PREFIX,
             databases: new SingleDatabaseResolver(env.DIRECTORY_DATABASE),
             projects: new StandaloneProjectStorageDirectory(),
             content: { kind: "sqlite" },

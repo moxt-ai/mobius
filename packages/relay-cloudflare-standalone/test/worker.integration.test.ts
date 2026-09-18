@@ -73,6 +73,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusApp } from "../../../tests/infra/app.ts";
 import { RuntimeRelay } from "../src/durable-objects.ts";
+import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 import { createStandaloneGateways } from "../src/worker.ts";
 import { testBindings } from "./infra/bindings.ts";
 import {
@@ -142,7 +143,6 @@ interface CreatedPairingResponse {
     readonly pollToken: string;
     readonly projectId: string;
     readonly runtimeId: string;
-    readonly tenantId: string;
 }
 
 interface ClaimedPairingResponse {
@@ -190,7 +190,6 @@ interface RedeemedAccessGrantResponse {
     readonly channelId: string;
     readonly hostToken: string;
     readonly projectId: string;
-    readonly tenantId: string;
 }
 
 interface AccessGrantRecord {
@@ -208,14 +207,6 @@ function requiredString(value: Readonly<Record<string, unknown>>, key: string): 
         throw new Error(`Expected ${key}`);
     }
     return field;
-}
-
-function configuredTenantId(): string {
-    const tenantId = env.MOBIUS_TENANT_ID;
-    if (tenantId === undefined) {
-        throw new Error("Expected the Standalone tenant binding");
-    }
-    return tenantId;
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
@@ -239,7 +230,6 @@ function decodeCreatedPairing(value: unknown): CreatedPairingResponse {
         pollToken: requiredString(value, "pollToken"),
         projectId: requiredString(value, "projectId"),
         runtimeId: requiredString(value, "runtimeId"),
-        tenantId: configuredTenantId(),
     };
 }
 
@@ -291,7 +281,6 @@ function decodeRedeemedAccessGrant(value: unknown): RedeemedAccessGrantResponse 
         channelId: requiredString(value, "channelId"),
         hostToken: requiredString(value, "hostToken"),
         projectId: requiredString(value, "projectId"),
-        tenantId: configuredTenantId(),
     };
 }
 
@@ -1342,8 +1331,6 @@ describe.sequential("Cloudflare session deployment", () => {
         const { pairChannel, authorization, createSession } = createSessionRequests(app);
         const first = await pairChannel();
         const second = await pairChannel();
-        expect(first.created.tenantId).toBe("standalone");
-        expect(second.created.tenantId).toBe("standalone");
         expect(first.created.projectId).not.toBe(second.created.projectId);
         const session = await createSession(first.created, "existing-tenant-session");
         expect(session.status).toBe(201);
@@ -1796,7 +1783,6 @@ describe.sequential("Cloudflare session deployment", () => {
         expect(redeemed).toMatchObject({
             channelId: pairing.created.channelId,
             projectId: pairing.created.projectId,
-            tenantId: pairing.created.tenantId,
         });
         expect(redeemed.hostToken).not.toBe(pairing.created.hostToken);
         expect(redeemed.hostToken).not.toBe(grant.grantSecret);
@@ -1973,7 +1959,7 @@ describe.sequential("Cloudflare session deployment", () => {
 
                 const sessionStub = env.SESSION_RELAY.get(
                     env.SESSION_RELAY.idFromName(
-                        `${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`,
+                        `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
                     ),
                 );
                 await runInDurableObject(sessionStub, async (_instance, state) => {
@@ -2101,7 +2087,9 @@ describe.sequential("Cloudflare session deployment", () => {
 
         try {
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(sessionStub, async (_instance, state) => {
                 for (let index = 0; index < 20; index += 1) {
@@ -2188,7 +2176,9 @@ describe.sequential("Cloudflare session deployment", () => {
             }
 
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(sessionStub, async (_instance, state) => {
                 const rows = state.storage.sql
@@ -2275,7 +2265,9 @@ describe.sequential("Cloudflare session deployment", () => {
 
         try {
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             const backlogPayload = "x".repeat(128 * 1024);
             await runInDurableObject(sessionStub, async (_instance, state) => {
@@ -2363,7 +2355,7 @@ describe.sequential("Cloudflare session deployment", () => {
         const sessionId = "long-session-archive-drain";
         expect((await createSession(pairing.created, sessionId)).status).toBe(201);
         const sessionStub = env.SESSION_RELAY.get(
-            env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+            env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`),
         );
 
         await runInDurableObject(sessionStub, async (instance, state) => {
@@ -2452,7 +2444,9 @@ describe.sequential("Cloudflare session deployment", () => {
             await commitBatch(host, daemon, deltas);
 
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(sessionStub, async (_instance, state) => {
                 await expect(state.storage.getAlarm()).resolves.toBe(Date.now() + 1_000);
@@ -2740,7 +2734,7 @@ describe.sequential("Cloudflare session deployment", () => {
             );
 
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:session-a`),
+                env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:session-a`),
             );
             await evictDurableObject(sessionStub);
             const recovered = await app.request(
@@ -3383,7 +3377,9 @@ describe.sequential("Cloudflare session deployment", () => {
 
             const artifactId = "activity-large-activity";
             const stub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(stub, async (_instance, state) => {
                 expect(
@@ -3548,7 +3544,9 @@ describe.sequential("Cloudflare session deployment", () => {
             );
 
             const stub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(stub, async (_instance, state) => {
                 expect(
@@ -4401,7 +4399,9 @@ describe.sequential("Cloudflare session deployment", () => {
                 await commitBatch(host, daemon, deltas.slice(offset, offset + 10));
             }
             const sessionStub = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${pairing.created.tenantId}:${pairing.created.projectId}:${sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
             );
             await runInDurableObject(sessionStub, async (_instance, state) => {
                 expect(

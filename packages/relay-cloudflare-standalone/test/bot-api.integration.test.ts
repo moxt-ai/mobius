@@ -22,6 +22,7 @@ import {
 } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusApp } from "../../../tests/infra/app.ts";
+import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 import { createStandaloneGateways } from "../src/worker.ts";
 import { testBindings } from "./infra/bindings.ts";
 
@@ -1316,7 +1317,9 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             expect(conversation).toMatchObject({ botId: bot.botId });
             const session = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${pairing.projectId}:${conversation.sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.projectId}:${conversation.sessionId}`,
+                ),
             );
             const contextColumns = await runInDurableObject(session, (_instance, state) =>
                 state.storage.sql.exec("PRAGMA table_info(bot_session_context)").toArray(),
@@ -2090,7 +2093,9 @@ describe.sequential("Provider-neutral Bot API", () => {
             );
             const command = decodeBotSessionPromptCommand(await daemon.messages.next());
             const session = env.SESSION_RELAY.get(
-                env.SESSION_RELAY.idFromName(`${env.MOBIUS_TENANT_ID}:${pairing.projectId}:${command.sessionId}`),
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.projectId}:${command.sessionId}`,
+                ),
             );
             await runInDurableObject(session, (_instance, state) => {
                 state.storage.sql.exec(

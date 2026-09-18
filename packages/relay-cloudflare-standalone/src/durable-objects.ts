@@ -8,11 +8,11 @@ import {
 import { SingleBucketResolver } from "./bucket-resolver.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
 import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
+import { STANDALONE_NAMESPACE_PREFIX } from "./standalone-namespace.ts";
 
 interface RelayEnvironment extends LiteSessionConfigurationEnvironment {
     readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
-    readonly MOBIUS_TENANT_ID: string;
     readonly SESSION_RELAY: DurableObjectNamespace;
     readonly SESSION_ARCHIVES?: R2Bucket;
 }
@@ -24,7 +24,7 @@ function createContext(state: DurableObjectState, environment: RelayEnvironment)
         environment,
         connections: environment.BOT_CONNECTIONS,
         sessions: environment.SESSION_RELAY,
-        namespacePrefix: environment.MOBIUS_TENANT_ID,
+        namespacePrefix: STANDALONE_NAMESPACE_PREFIX,
         databases,
         projects: tenants,
         content:

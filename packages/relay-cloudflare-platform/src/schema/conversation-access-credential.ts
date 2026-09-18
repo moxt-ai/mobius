@@ -7,7 +7,6 @@ export const conversationAccessCredential = sqliteTable(
         publicCredentialId: text("public_credential_id").notNull().unique(),
         parentCredentialId: text("parent_credential_id").notNull(),
         parentCredentialRevision: integer("parent_credential_revision").notNull(),
-        tenantId: text("tenant_id").notNull(),
         appId: text("app_id").notNull(),
         projectId: text("project_id").notNull(),
         conversationId: text("conversation_id").notNull(),
@@ -23,7 +22,6 @@ export const conversationAccessCredential = sqliteTable(
     (table) => [
         index("conversation_access_credentials_lookup").on(table.publicCredentialId, table.revokedAt, table.expiresAt),
         index("conversation_access_credentials_session").on(
-            table.tenantId,
             table.projectId,
             table.sessionId,
             table.revokedAt,

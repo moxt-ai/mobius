@@ -1,7 +1,11 @@
 import { DatabaseError, relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
 import { platformProjectAppRevocation, platformProjectAuthorization } from "@moxt-ai/mobius-relay-core/schema";
 import { eq } from "drizzle-orm";
-import { type PlatformProjectScopeRow, PlatformProjectScopeRowSchema } from "../entity/platform-records.ts";
+import {
+    type PlatformProjectAuthorizationRow,
+    PlatformProjectAuthorizationRowSchema,
+} from "../entity/platform-project-authorization.ts";
+import type { PlatformProjectScopeRow } from "../entity/platform-records.ts";
 import { decodeOptionalStorageRecord } from "./decode-storage-record.ts";
 import { type PlatformDatabaseResolver, projectSqlDatabase } from "./platform-database-resolver.ts";
 
@@ -12,7 +16,7 @@ export class PlatformProjectAuthorizationStorage {
         this.#databases = databases;
     }
 
-    readonly read = async (projectId: string, signal: AbortSignal): Promise<PlatformProjectScopeRow | null> => {
+    readonly read = async (projectId: string, signal: AbortSignal): Promise<PlatformProjectAuthorizationRow | null> => {
         const database = relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal);
         const projects = await this.operation(
             () =>
@@ -20,7 +24,6 @@ export class PlatformProjectAuthorizationStorage {
                     .select({
                         project_id: platformProjectAuthorization.projectId,
                         app_id: platformProjectAuthorization.appId,
-                        tenant_id: platformProjectAuthorization.tenantId,
                         lifecycle: platformProjectAuthorization.lifecycle,
                     })
                     .from(platformProjectAuthorization)
@@ -42,7 +45,7 @@ export class PlatformProjectAuthorizationStorage {
             signal,
         );
         const revoked = revocations.length > 0;
-        return decodeOptionalStorageRecord(PlatformProjectScopeRowSchema, {
+        return decodeOptionalStorageRecord(PlatformProjectAuthorizationRowSchema, {
             ...project,
             lifecycle: revoked ? "deleted" : project.lifecycle,
         });
@@ -57,14 +60,13 @@ export class PlatformProjectAuthorizationStorage {
                     .values({
                         projectId: project.project_id,
                         appId: project.app_id,
-                        tenantId: project.tenant_id,
                         lifecycle: project.lifecycle,
                     })
                     .onConflictDoNothing({ target: platformProjectAuthorization.projectId }),
             signal,
         );
         const stored = await this.read(project.project_id, signal);
-        if (stored === null || stored.app_id !== project.app_id || stored.tenant_id !== project.tenant_id) {
+        if (stored === null || stored.app_id !== project.app_id) {
             throw new DatabaseError("database_unavailable", "Project authorization could not be created");
         }
     };

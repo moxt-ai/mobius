@@ -1,3 +1,5 @@
+import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
+import { and, desc, eq } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -22,9 +24,11 @@ import {
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
+import { platformAuditEvent, platformDashboardAuditEvent } from "../schema/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
-import { type PlatformDatabaseResolver, projectDatabase } from "./platform-database-resolver.ts";
+import { type PlatformDatabaseResolver, projectDatabase, projectSqlDatabase } from "./platform-database-resolver.ts";
+import { platformDrizzle } from "./platform-drizzle-database.ts";
 
 export class PlatformControlPlaneStorage {
     readonly #database: D1Database;
@@ -376,18 +380,70 @@ export class PlatformControlPlaneStorage {
         limit: number,
         signal: AbortSignal,
     ): Promise<readonly AuditRow[]> => {
-        const database = projectId === null ? this.#database : projectDatabase(this.#databases, projectId);
-        const table = projectId === null ? "platform_dashboard_audit_events" : "platform_audit_events";
+        if (projectId === null) {
+            const rows = await waitForD1(
+                () =>
+                    platformDrizzle(this.#database)
+                        .select()
+                        .from(platformDashboardAuditEvent)
+                        .where(
+                            and(
+                                eq(platformDashboardAuditEvent.tenantId, tenantId),
+                                eq(platformDashboardAuditEvent.projectId, ""),
+                            ),
+                        )
+                        .orderBy(
+                            desc(platformDashboardAuditEvent.recordedAt),
+                            desc(platformDashboardAuditEvent.auditId),
+                        )
+                        .limit(limit),
+                signal,
+            );
+            return decodeStorageRecords(
+                AuditRowSchema,
+                rows.map((row) => ({
+                    action: row.action,
+                    actor_id: row.actorId,
+                    actor_kind: row.actorKind,
+                    actor_ref: row.actorRef,
+                    app_id: row.appId,
+                    audit_id: row.auditId,
+                    details_json: row.detailsJson,
+                    outcome: row.outcome,
+                    project_id: row.projectId,
+                    recorded_at: row.recordedAt,
+                    subject_id: row.subjectId,
+                    tenant_id: row.tenantId,
+                })),
+            );
+        }
         const rows = await waitForD1(
             () =>
-                database
-                    .prepare(`SELECT * FROM ${table}
-            WHERE tenant_id = ? AND project_id = ? ORDER BY recorded_at DESC, audit_id DESC LIMIT ?`)
-                    .bind(tenantId, projectId ?? "", limit)
-                    .all(),
+                relayDrizzle(projectSqlDatabase(this.#databases, projectId), signal)
+                    .select()
+                    .from(platformAuditEvent)
+                    .where(eq(platformAuditEvent.projectId, projectId))
+                    .orderBy(desc(platformAuditEvent.recordedAt), desc(platformAuditEvent.auditId))
+                    .limit(limit),
             signal,
         );
-        return decodeStorageRecords(AuditRowSchema, rows.results);
+        return decodeStorageRecords(
+            AuditRowSchema,
+            rows.map((row) => ({
+                action: row.action,
+                actor_id: row.actorId,
+                actor_kind: row.actorKind,
+                actor_ref: row.actorRef,
+                app_id: row.appId,
+                audit_id: row.auditId,
+                details_json: row.detailsJson,
+                outcome: row.outcome,
+                project_id: row.projectId,
+                recorded_at: row.recordedAt,
+                subject_id: row.subjectId,
+                tenant_id: tenantId,
+            })),
+        );
     };
 
     readonly issueAppCredential = async (
@@ -675,12 +731,31 @@ export class PlatformControlPlaneStorage {
     };
 
     readonly recordAudit = async (audit: PlatformAuditRecord, signal: AbortSignal): Promise<boolean> => {
-        const statement =
-            audit.projectId === ""
-                ? this.dashboardAuditStatement(audit)
-                : this.projectAuditStatement(audit.projectId, audit);
-        const result = await waitForD1(() => statement.run(), signal);
-        return result.success;
+        if (audit.projectId === "") {
+            const result = await waitForD1(() => this.dashboardAuditStatement(audit).run(), signal);
+            return result.success;
+        }
+        await waitForD1(
+            () =>
+                relayDrizzle(projectSqlDatabase(this.#databases, audit.projectId), signal)
+                    .insert(platformAuditEvent)
+                    .values({
+                        auditId: audit.action === "project.created" ? `pae_created_${audit.projectId}` : audit.auditId,
+                        appId: audit.appId,
+                        projectId: audit.projectId,
+                        actorKind: audit.actorKind,
+                        actorId: audit.actorId,
+                        actorRef: audit.actorRef,
+                        action: audit.action,
+                        subjectId: audit.subjectId,
+                        outcome: audit.outcome === "succeeded" ? "succeeded" : "denied",
+                        detailsJson: audit.detailsJson,
+                        recordedAt: audit.recordedAt,
+                    })
+                    .onConflictDoNothing({ target: platformAuditEvent.auditId }),
+            signal,
+        );
+        return true;
     };
 
     private readonly credentialInsertStatement = (credential: PlatformAppCredentialInsert): D1PreparedStatement =>
@@ -734,30 +809,6 @@ export class PlatformControlPlaneStorage {
         this.#database
             .prepare(
                 `INSERT INTO platform_dashboard_audit_events (
-                   audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
-                   actor_ref, action, subject_id, outcome, details_json, recorded_at
-                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                 ON CONFLICT(audit_id) DO NOTHING`,
-            )
-            .bind(
-                audit.action === "project.created" ? `pae_created_${audit.projectId}` : audit.auditId,
-                audit.tenantId,
-                audit.appId,
-                audit.projectId,
-                audit.actorKind,
-                audit.actorId,
-                audit.actorRef,
-                audit.action,
-                audit.subjectId,
-                audit.outcome,
-                audit.detailsJson,
-                audit.recordedAt,
-            );
-
-    private readonly projectAuditStatement = (projectId: string, audit: PlatformAuditRecord) =>
-        projectDatabase(this.#databases, projectId)
-            .prepare(
-                `INSERT INTO platform_audit_events (
                    audit_id, tenant_id, app_id, project_id, actor_kind, actor_id,
                    actor_ref, action, subject_id, outcome, details_json, recorded_at
                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
