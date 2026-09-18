@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,10 +43,22 @@ function readPort(server: Server): number {
 
 describe("Mobius CLI", () => {
     it("Given a CLI installation, When pair is invoked without required arguments, Then its version is printed before pairing fails", async () => {
-        await expect(executeFile(process.execPath, [cliPath, "pair"], { timeout: 10_000 })).rejects.toMatchObject({
-            stdout: `mobius version: ${packageMetadata.version}\n`,
-            code: 1,
-        });
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-invalid-pair-cli-"));
+        const stateDirectory = join(temporaryDirectory, "state");
+        try {
+            await expect(
+                executeFile(process.execPath, [cliPath, "pair"], {
+                    env: { ...process.env, MOBIUS_STATE_DIRECTORY: stateDirectory },
+                    timeout: 10_000,
+                }),
+            ).rejects.toMatchObject({
+                stdout: `mobius version: ${packageMetadata.version}\n`,
+                code: 1,
+            });
+            await expect(stat(join(stateDirectory, "installations"))).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
     });
 
     it("Given no running daemon, When help is requested, Then the CLI lists its daemon capabilities and exits", async () => {
@@ -59,7 +71,7 @@ describe("Mobius CLI", () => {
         expect(result.stdout).toContain("local daemon");
     });
 
-    it("Given a saved channel, When its daemon connects to the relay, Then the CLI highlights the exact command that reconnects that channel", async () => {
+    it("Given a legacy saved channel, When its daemon connects to the relay, Then the CLI imports it and highlights its opaque reconnect command", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-start-cli-"));
         const stateDirectory = join(temporaryDirectory, "state");
         const connectionsDirectory = join(stateDirectory, "connections");
@@ -181,13 +193,13 @@ if (process.argv.includes("--version")) {
                 env: daemonEnvironment,
                 stdio: ["ignore", "pipe", "pipe"],
             });
+            let connectionId = "";
             try {
                 let stdout = "";
                 let stderr = "";
                 daemon.stderr?.on("data", (chunk: Buffer) => {
                     stderr += chunk.toString("utf8");
                 });
-                const expectedCommand = `npx --yes @moxt-ai/mobius start --channel ${channelId}`;
                 await new Promise<void>((resolve, reject) => {
                     daemon.once("error", reject);
                     daemon.once("exit", (code) => {
@@ -195,20 +207,54 @@ if (process.argv.includes("--version")) {
                     });
                     daemon.stdout?.on("data", (chunk: Buffer) => {
                         stdout += chunk.toString("utf8");
-                        if (stdout.includes(expectedCommand)) {
+                        if (stdout.includes("Reconnect this local connection later:")) {
                             resolve();
                         }
                     });
                 });
 
                 expect(stdout).toContain("Mobius daemon connected to the relay.");
-                expect(stdout).toContain(
-                    `\u001B[1m\u001B[33mReconnect this channel later:\n  ${expectedCommand}\u001B[39m\u001B[22m`,
-                );
+                expect(stdout).toMatch(/npx --yes @moxt-ai\/mobius start --connection mcn_[a-f0-9]{32}/);
+                const reconnect = stdout.match(/--connection (mcn_[a-f0-9]{32})/);
+                if (reconnect === null || reconnect[1] === undefined) {
+                    throw new Error("Expected an opaque local connection ID");
+                }
+                connectionId = reconnect[1];
             } finally {
                 if (daemon.exitCode === null) {
                     daemon.kill("SIGTERM");
                     await new Promise<void>((resolve) => daemon.once("exit", () => resolve()));
+                }
+            }
+            expect((await stat(join(connectionsDirectory, `${channelId}.json`))).isFile()).toBe(true);
+
+            const restarted = spawn(process.execPath, [cliPath, "start", "--connection", connectionId], {
+                env: daemonEnvironment,
+                stdio: ["ignore", "pipe", "pipe"],
+            });
+            try {
+                let stdout = "";
+                let stderr = "";
+                restarted.stderr?.on("data", (chunk: Buffer) => {
+                    stderr += chunk.toString("utf8");
+                });
+                await new Promise<void>((resolve, reject) => {
+                    restarted.once("error", reject);
+                    restarted.once("exit", (code) => {
+                        reject(new Error(`Mobius daemon exited before reconnecting: ${code}\n${stderr}`));
+                    });
+                    restarted.stdout?.on("data", (chunk: Buffer) => {
+                        stdout += chunk.toString("utf8");
+                        if (stdout.includes("Reconnect this local connection later:")) {
+                            resolve();
+                        }
+                    });
+                });
+                expect(stdout).toContain(`mobius start --connection ${connectionId}`);
+            } finally {
+                if (restarted.exitCode === null) {
+                    restarted.kill("SIGTERM");
+                    await new Promise<void>((resolve) => restarted.once("exit", () => resolve()));
                 }
             }
         } finally {
@@ -390,9 +436,17 @@ chmodSync(adapterPath, 0o700);
                 expect(catalogBodies.some((body) => body.includes('"status":"integration_not_installed"'))).toBe(true);
                 expect(catalogBodies.at(-1)).toContain('"id":"codex"');
                 expect(catalogBodies.at(-1)).not.toContain('"status":"integration_not_installed"');
+                const applicationDirectory = join(stateDirectory, "installations", "dev.mobius.cli");
+                const installation = (await readdir(applicationDirectory, { withFileTypes: true })).find((entry) =>
+                    entry.isDirectory(),
+                );
+                if (installation === undefined) {
+                    throw new Error("Expected a Mobius CLI installation directory");
+                }
                 const adapterMetadata = await stat(
                     join(
-                        stateDirectory,
+                        applicationDirectory,
+                        installation.name,
                         "adapters",
                         "codex",
                         "1.8.0",

@@ -1,25 +1,34 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, open, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { hostname } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, resolve } from "node:path";
 
 import { mobiusApiUrl } from "@moxt-ai/mobius-protocol";
 import { fetch, type Response } from "undici";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
-import { createDaemonConfig, type DaemonConfig, type LocalAgentDefinition, loadDefaultWorkspace } from "../config.ts";
+import {
+    createDaemonConfig,
+    type DaemonConfig,
+    DaemonLocalContext,
+    type LocalAgentDefinition,
+    loadDefaultWorkspace,
+    OpaqueDaemonReconnectTarget,
+} from "../config.ts";
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
+import {
+    openRuntimeInstallationStore,
+    type RuntimeInstallationStore,
+    type StoredRuntimeConnection,
+} from "../storage/runtime-installation-store.ts";
 import { readStateDirectory } from "../storage/state-directory.ts";
 
 const PAIRING_TIMEOUT_MILLISECONDS = 20_000;
 const PAIRING_CODE_PATTERN = /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){4}$/;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const TOKEN_PATTERN = /^[a-zA-Z0-9_-]{32,256}$/;
-const MAX_CONNECTION_FILE_LENGTH = 16 * 1024;
 const CLAIM_RESPONSE_KEYS: readonly string[] = ["channelId", "daemonToken", "runtimeId"];
 const REDEEM_RESPONSE_KEYS: readonly string[] = ["channelId", "runtimeCredential", "runtimeId"];
-const LEGACY_SAVED_CONNECTION_KEYS: readonly string[] = ["defaultWorkspace", "channelId", "daemonToken", "relayOrigin"];
-const SAVED_CONNECTION_KEYS: readonly string[] = ["defaultWorkspace", "channelId", "relayOrigin", "runtimeCredential"];
+const MOBIUS_CLI_APPLICATION_ID = "dev.mobius.cli";
 
 interface PairCommandOptions {
     readonly code: string;
@@ -34,13 +43,6 @@ interface ClaimPairingResponse {
     readonly runtimeId: string;
 }
 
-interface SavedConnection {
-    readonly defaultWorkspace: string;
-    readonly channelId: string;
-    readonly relayOrigin: URL;
-    readonly runtimeCredential: string;
-}
-
 export interface MobiusRuntimePairingOptions {
     readonly defaultWorkspace: string;
     readonly pairingCode: string;
@@ -50,6 +52,7 @@ export interface MobiusRuntimePairingOptions {
 
 export interface PairedDaemon {
     readonly channelUrl: string;
+    readonly connectionId: string;
     readonly config: DaemonConfig;
     readonly connectionPath: string;
 }
@@ -134,15 +137,13 @@ function parsePairingCode(value: string): string {
     return code;
 }
 
-function parsePairCommand(arguments_: readonly string[]): PairCommandOptions {
+function parsePairCommand(arguments_: readonly string[], defaultWorkspace: string): PairCommandOptions {
     assertKnownArguments(arguments_);
     return {
         code: parsePairingCode(readSingleOption(arguments_, "--code")),
         pairingId: arguments_.includes("--pairing") ? validatePairingId(readSingleOption(arguments_, "--pairing")) : "",
         relayOrigin: parseRelayOrigin(readSingleOption(arguments_, "--url")),
-        workspace: arguments_.includes("--workspace")
-            ? readSingleOption(arguments_, "--workspace")
-            : loadDefaultWorkspace(),
+        workspace: arguments_.includes("--workspace") ? readSingleOption(arguments_, "--workspace") : defaultWorkspace,
     };
 }
 
@@ -153,15 +154,68 @@ function validatePairingId(value: string): string {
     return value;
 }
 
-function parseChannelArgument(arguments_: readonly string[]): string {
-    if (arguments_.length !== 2 || arguments_[0] !== "--channel") {
-        throw new PairingClientError("invalid_arguments", "Usage: mobius start --channel <channel-id>");
+abstract class ResumeCommandTarget {
+    abstract readonly resume: (
+        installation: RuntimeInstallationStore,
+        signal: AbortSignal,
+        environment: Readonly<NodeJS.ProcessEnv>,
+    ) => Promise<PairedDaemon>;
+}
+
+class ConnectionResumeCommandTarget extends ResumeCommandTarget {
+    readonly connectionId: string;
+
+    constructor(connectionId: string) {
+        super();
+        this.connectionId = connectionId;
     }
-    const channelId = arguments_[1] ?? "";
-    if (!IDENTIFIER_PATTERN.test(channelId)) {
-        throw new PairingClientError("invalid_channel_id", "The saved channel ID is invalid");
+
+    readonly resume = async (
+        installation: RuntimeInstallationStore,
+        signal: AbortSignal,
+        environment: Readonly<NodeJS.ProcessEnv>,
+    ): Promise<PairedDaemon> => await resumeMobiusRuntime(installation, this.connectionId, signal, environment);
+}
+
+class LegacyChannelResumeCommandTarget extends ResumeCommandTarget {
+    readonly channelId: string;
+
+    constructor(channelId: string) {
+        super();
+        this.channelId = channelId;
     }
-    return channelId;
+
+    readonly resume = async (
+        installation: RuntimeInstallationStore,
+        signal: AbortSignal,
+        environment: Readonly<NodeJS.ProcessEnv>,
+    ): Promise<PairedDaemon> => await resumeLegacyChannel(installation, this.channelId, signal, environment);
+}
+
+function parseResumeArgument(arguments_: readonly string[]): ResumeCommandTarget {
+    if (arguments_.length !== 2) {
+        throw new PairingClientError(
+            "invalid_arguments",
+            "Usage: mobius start --connection <connection-id> or mobius start --channel <legacy-channel-id>",
+        );
+    }
+    const value = arguments_[1] ?? "";
+    if (arguments_[0] === "--connection") {
+        if (!/^mcn_[a-f0-9]{32}$/.test(value)) {
+            throw new PairingClientError("invalid_connection_id", "The saved Runtime connection ID is invalid");
+        }
+        return new ConnectionResumeCommandTarget(value);
+    }
+    if (arguments_[0] === "--channel") {
+        if (!IDENTIFIER_PATTERN.test(value)) {
+            throw new PairingClientError("invalid_channel_id", "The saved channel ID is invalid");
+        }
+        return new LegacyChannelResumeCommandTarget(value);
+    }
+    throw new PairingClientError(
+        "invalid_arguments",
+        "Usage: mobius start --connection <connection-id> or mobius start --channel <legacy-channel-id>",
+    );
 }
 
 async function resolveDefaultWorkspace(path: string): Promise<string> {
@@ -285,97 +339,6 @@ async function claimPairing(
         : decodePairingResponse(value, "daemonToken", CLAIM_RESPONSE_KEYS);
 }
 
-async function persistConnection(
-    channelId: string,
-    relayOrigin: URL,
-    runtimeCredential: string,
-    defaultWorkspace: string,
-    environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<string> {
-    const connectionsDirectory = join(readStateDirectory(environment), "connections");
-    await mkdir(connectionsDirectory, { mode: 0o700, recursive: true });
-    const connectionPath = join(connectionsDirectory, `${channelId}.json`);
-    const temporaryPath = join(connectionsDirectory, `.${channelId}.${randomUUID()}.tmp`);
-    await writeFile(
-        temporaryPath,
-        `${JSON.stringify(
-            {
-                defaultWorkspace,
-                channelId,
-                relayOrigin: relayOrigin.toString(),
-                runtimeCredential,
-            },
-            null,
-            2,
-        )}\n`,
-        { flag: "wx", mode: 0o600 },
-    );
-    await rename(temporaryPath, connectionPath);
-    return connectionPath;
-}
-
-function decodeSavedConnection(value: unknown, expectedChannelId: string): SavedConnection {
-    if (
-        !isRecord(value) ||
-        (!hasExactKeys(value, SAVED_CONNECTION_KEYS) && !hasExactKeys(value, LEGACY_SAVED_CONNECTION_KEYS))
-    ) {
-        throw new PairingClientError("invalid_connection", "The saved connection is invalid");
-    }
-    const defaultWorkspace = value["defaultWorkspace"];
-    const channelId = value["channelId"];
-    const runtimeCredential = value["runtimeCredential"] ?? value["daemonToken"];
-    const relayOrigin = value["relayOrigin"];
-    if (
-        typeof defaultWorkspace !== "string" ||
-        typeof channelId !== "string" ||
-        channelId !== expectedChannelId ||
-        !IDENTIFIER_PATTERN.test(channelId) ||
-        typeof runtimeCredential !== "string" ||
-        !TOKEN_PATTERN.test(runtimeCredential) ||
-        typeof relayOrigin !== "string"
-    ) {
-        throw new PairingClientError("invalid_connection", "The saved connection is invalid");
-    }
-    return {
-        defaultWorkspace,
-        channelId,
-        relayOrigin: parseRelayOrigin(relayOrigin),
-        runtimeCredential,
-    };
-}
-
-async function readSavedConnection(
-    channelId: string,
-    environment: Readonly<NodeJS.ProcessEnv>,
-): Promise<SavedConnection> {
-    const connectionPath = join(readStateDirectory(environment), "connections", `${channelId}.json`);
-    let encoded = "";
-    const handle = await open(connectionPath, "r");
-    try {
-        const metadata = await handle.stat();
-        if (!metadata.isFile() || metadata.size > MAX_CONNECTION_FILE_LENGTH) {
-            throw new PairingClientError("invalid_connection", "The saved connection is invalid");
-        }
-        encoded = await handle.readFile({ encoding: "utf8" });
-    } finally {
-        await handle.close();
-    }
-
-    let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (error) {
-        throw new PairingClientError("invalid_connection", "The saved connection is invalid", { cause: error });
-    }
-    const connection = decodeSavedConnection(value, channelId);
-    return {
-        defaultWorkspace: await resolveDefaultWorkspace(connection.defaultWorkspace),
-        channelId: connection.channelId,
-        relayOrigin: connection.relayOrigin,
-        runtimeCredential: connection.runtimeCredential,
-    };
-}
-
 function assertInventoryUsable(inventory: LocalAgentInventory): void {
     if (inventory.available.length + inventory.installable.length === 0) {
         throw new PairingClientError("no_supported_agent", "No supported Agent is available for local discovery");
@@ -383,73 +346,73 @@ function assertInventoryUsable(inventory: LocalAgentInventory): void {
 }
 
 function buildPairedDaemon(
-    connection: SavedConnection,
-    connectionPath: string,
+    installation: RuntimeInstallationStore,
+    connection: StoredRuntimeConnection,
+    defaultWorkspace: string,
     inventory: LocalAgentInventory,
-    environment: Readonly<NodeJS.ProcessEnv>,
+    localContext: DaemonLocalContext,
 ): PairedDaemon {
     assertInventoryUsable(inventory);
     const relayUrl = mobiusApiUrl(connection.relayOrigin, "/v1/runtimes/connect");
     relayUrl.protocol = relayUrl.protocol === "https:" ? "wss:" : "ws:";
     relayUrl.searchParams.set("token", connection.runtimeCredential);
-    const auditDatabasePath = join(readStateDirectory(environment), "audit", `${connection.channelId}.sqlite`);
 
     return {
         channelUrl: new URL(`/channels/${encodeURIComponent(connection.channelId)}`, connection.relayOrigin).toString(),
+        connectionId: connection.connectionId,
         config: createDaemonConfig(
             {
-                defaultWorkspace: connection.defaultWorkspace,
-                auditDatabasePath,
+                defaultWorkspace,
+                auditDatabasePath: installation.auditDatabasePath(connection.connectionId),
                 channelId: connection.channelId,
                 relayUrl,
             },
             inventory.readyAgents(),
             inventory.installable,
+            localContext,
+            new OpaqueDaemonReconnectTarget(connection.connectionId),
         ),
-        connectionPath,
+        connectionPath: installation.connectionPath(connection.connectionId),
     };
 }
 
 async function pairRuntime(
+    installation: RuntimeInstallationStore,
     options: PairCommandOptions,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv>,
 ): Promise<PairedDaemon> {
+    const localContext = new DaemonLocalContext(installation.stateDirectory, environment);
     const defaultWorkspace = await resolveDefaultWorkspace(options.workspace);
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
-        environment,
+        environment: localContext.environment,
         signal,
     });
     assertInventoryUsable(inventory);
     const agents = inventory.readyAgents();
     const claim = await claimPairing(options, defaultWorkspace, agents, inventory.installable, signal);
-    const connectionPath = await persistConnection(
-        claim.channelId,
-        options.relayOrigin,
-        claim.runtimeCredential,
-        defaultWorkspace,
-        environment,
-    );
-    return buildPairedDaemon(
+    const connection = await installation.saveConnection(
         {
-            defaultWorkspace,
             channelId: claim.channelId,
+            defaultWorkspace,
             relayOrigin: options.relayOrigin,
             runtimeCredential: claim.runtimeCredential,
+            runtimeId: claim.runtimeId,
         },
-        connectionPath,
-        inventory,
-        environment,
+        signal,
     );
+    return buildPairedDaemon(installation, connection, defaultWorkspace, inventory, localContext);
 }
 
 export async function pairMobiusRuntime(
+    installation: RuntimeInstallationStore,
     options: MobiusRuntimePairingOptions,
     signal: AbortSignal,
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): Promise<PairedDaemon> {
     return await pairRuntime(
+        installation,
         {
             code: parsePairingCode(options.pairingCode),
             pairingId: validatePairingId(options.pairingId),
@@ -461,32 +424,82 @@ export async function pairMobiusRuntime(
     );
 }
 
+async function resumeRuntimeConnection(
+    installation: RuntimeInstallationStore,
+    connection: StoredRuntimeConnection,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<PairedDaemon> {
+    const localContext = new DaemonLocalContext(installation.stateDirectory, environment);
+    const defaultWorkspace = await resolveDefaultWorkspace(connection.defaultWorkspace);
+    const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace,
+        environment: localContext.environment,
+        signal,
+    });
+    return buildPairedDaemon(installation, connection, defaultWorkspace, inventory, localContext);
+}
+
+export async function resumeMobiusRuntime(
+    installation: RuntimeInstallationStore,
+    connectionId: string,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv> = process.env,
+): Promise<PairedDaemon> {
+    const connection = await installation.readConnection(connectionId, signal);
+    return await resumeRuntimeConnection(installation, connection, signal, environment);
+}
+
+async function resumeLegacyChannel(
+    installation: RuntimeInstallationStore,
+    channelId: string,
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<PairedDaemon> {
+    const connection = await installation.migrateLegacyConnection(readStateDirectory(environment), channelId, signal);
+    return await resumeRuntimeConnection(installation, connection, signal, environment);
+}
+
+export async function openMobiusCliInstallation(
+    signal: AbortSignal,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): Promise<RuntimeInstallationStore> {
+    return await openRuntimeInstallationStore(
+        {
+            applicationId: MOBIUS_CLI_APPLICATION_ID,
+            stateDirectory: readStateDirectory(environment),
+        },
+        signal,
+    );
+}
+
 export async function pairLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
-    return await pairRuntime(parsePairCommand(arguments_), signal, process.env);
-}
-
-export async function resumeMobiusRuntime(
-    channelId: string,
-    signal: AbortSignal,
-    environment: Readonly<NodeJS.ProcessEnv> = process.env,
-): Promise<PairedDaemon> {
-    const normalizedChannelId = validatePairingId(channelId);
-    const connectionPath = join(readStateDirectory(environment), "connections", `${normalizedChannelId}.json`);
-    const connection = await readSavedConnection(normalizedChannelId, environment);
-    const inventory = await discoverLocalAgentInventory({
-        defaultWorkspace: connection.defaultWorkspace,
-        environment,
+    const requested = parsePairCommand(arguments_, "");
+    const installation = await openMobiusCliInstallation(signal, process.env);
+    const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
+    return await pairRuntime(
+        installation,
+        {
+            code: requested.code,
+            pairingId: requested.pairingId,
+            relayOrigin: requested.relayOrigin,
+            workspace: arguments_.includes("--workspace")
+                ? requested.workspace
+                : loadDefaultWorkspace(localContext.environment),
+        },
         signal,
-    });
-    return buildPairedDaemon(connection, connectionPath, inventory, environment);
+        process.env,
+    );
 }
 
 export async function resumeLocalMachine(
     arguments_: readonly string[],
     signal: AbortSignal = new AbortController().signal,
 ): Promise<PairedDaemon> {
-    return await resumeMobiusRuntime(parseChannelArgument(arguments_), signal, process.env);
+    const target = parseResumeArgument(arguments_);
+    const installation = await openMobiusCliInstallation(signal, process.env);
+    return await target.resume(installation, signal, process.env);
 }

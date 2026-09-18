@@ -3,7 +3,7 @@ import { dirname, join, resolve } from "node:path";
 
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
 import { AuditStore } from "./audit/audit-store.ts";
-import { createDaemonConfig, type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
+import { createDaemonConfig, type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
 import { runDaemon } from "./run-daemon.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
@@ -114,13 +114,14 @@ export async function createMobiusRuntimeEngine(
     environment: Readonly<NodeJS.ProcessEnv> = process.env,
 ): Promise<MobiusRuntimeEngine> {
     signal.throwIfAborted();
+    const localContext = new DaemonLocalContext(readStateDirectory(environment), environment);
     const relayUrl = relayUrlFromConnection(connection);
     const defaultWorkspace = await resolveWorkspace(connection.defaultWorkspace);
     const auditDatabasePath = resolve(connection.auditDatabasePath);
     await mkdir(dirname(auditDatabasePath), { recursive: true, mode: 0o700 });
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace,
-        environment,
+        environment: localContext.environment,
         signal,
     });
     if (inventory.available.length + inventory.installable.length === 0) {
@@ -136,6 +137,7 @@ export async function createMobiusRuntimeEngine(
             },
             inventory.readyAgents(),
             inventory.installable,
+            localContext,
         ),
     );
 }
@@ -166,7 +168,13 @@ export class MobiusRuntimeEngine {
 }
 
 export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";
-export { createDaemonConfig } from "./config.ts";
+export {
+    ChannelDaemonReconnectTarget,
+    createDaemonConfig,
+    DaemonLocalContext,
+    DaemonReconnectTarget,
+    OpaqueDaemonReconnectTarget,
+} from "./config.ts";
 export {
     type MobiusRuntimePairingOptions,
     type PairedDaemon,
@@ -174,3 +182,13 @@ export {
     pairMobiusRuntime,
     resumeMobiusRuntime,
 } from "./pairing/pair-local-machine.ts";
+export {
+    ImportedLegacyRuntimeConnection,
+    openRuntimeInstallationStore,
+    type RuntimeConnectionInput,
+    RuntimeInstallationStore,
+    RuntimeInstallationStoreError,
+    type RuntimeInstallationStoreOptions,
+    StoredRuntimeConnection,
+    VerifiedRuntimeConnection,
+} from "./storage/runtime-installation-store.ts";

@@ -174,14 +174,22 @@ describe("CLI environment proxy", () => {
         process.env["PATH"] = "";
 
         try {
-            const { pairMobiusRuntime } = await import("../src/runtime.ts");
+            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../src/runtime.ts");
             const { connectRelay } = await import("../src/relay-connection/connect.ts");
             const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
                 "../src/network/environment-proxy.ts"
             );
 
             const pairingPort = readPort(pairingServer);
-            await pairMobiusRuntime(
+            const installation = await openRuntimeInstallationStore(
+                {
+                    applicationId: "dev.mobius.proxy-test",
+                    stateDirectory,
+                },
+                AbortSignal.timeout(2_000),
+            );
+            const paired = await pairMobiusRuntime(
+                installation,
                 {
                     defaultWorkspace: process.cwd(),
                     pairingCode: "ABCD-EFGH-JKLM-NPQR-STUV",
@@ -190,6 +198,9 @@ describe("CLI environment proxy", () => {
                 },
                 AbortSignal.timeout(2_000),
             );
+            expect(paired.connectionPath).toBe(installation.connectionPath(paired.connectionId));
+            expect(paired.config.auditDatabasePath).toBe(installation.auditDatabasePath(paired.connectionId));
+            expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
 
             const relayPort = readPort(relayServer);
             expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({

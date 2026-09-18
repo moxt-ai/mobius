@@ -152,7 +152,6 @@ import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
-import { readStateDirectory } from "./storage/state-directory.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const AGENT_ACTIVITY_COALESCING_MILLISECONDS = 100;
@@ -2557,13 +2556,13 @@ export async function runDaemon(
     timer: DaemonTimer = systemDaemonTimer,
 ): Promise<void> {
     const installationAudit = new AuditInstallationEvents(audit);
-    const stateDirectory = readStateDirectory();
+    const stateDirectory = config.localContext.stateDirectory;
     const specifications = supportedLocalAgentSpecifications();
     const installationExecutor = new FixedInstallationExecutor({
         defaultWorkspace: config.defaultWorkspace,
         audit: installationAudit,
         catalog: config.catalog,
-        environment: process.env,
+        environment: config.localContext.environment,
         publishCatalog: async (installationSignal) => await publishAgentCatalog(config, installationSignal),
         stateDirectory,
     });
@@ -2622,10 +2621,10 @@ export async function runDaemon(
             return;
         }
         connectionAnnounced = true;
-        const reconnectCommand = `npx --yes @moxt-ai/mobius start --channel ${config.channelId}`;
+        const reconnectCommand = `npx --yes @moxt-ai/mobius start ${config.reconnectTarget.commandArgument}`;
         process.stdout.write("Mobius daemon connected to the relay.\n\n");
         process.stdout.write(
-            `${styleText(["bold", "yellow"], `Reconnect this channel later:\n  ${reconnectCommand}`)}\n\n`,
+            `${styleText(["bold", "yellow"], `Reconnect this local connection later:\n  ${reconnectCommand}`)}\n\n`,
         );
         announceReadiness();
         startAutomaticIntegrationProvisioning();

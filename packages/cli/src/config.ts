@@ -1,4 +1,4 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import {
@@ -15,6 +15,42 @@ export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = 
     return configuredWorkspace ?? join(readStateDirectory(environment), "workspace");
 }
 
+export class DaemonLocalContext {
+    readonly environment: Readonly<NodeJS.ProcessEnv>;
+    readonly stateDirectory: string;
+
+    constructor(stateDirectory: string, environment: Readonly<NodeJS.ProcessEnv> = process.env) {
+        this.stateDirectory = resolve(stateDirectory);
+        this.environment = Object.freeze({ ...environment, MOBIUS_STATE_DIRECTORY: this.stateDirectory });
+    }
+}
+
+export abstract class DaemonReconnectTarget {
+    abstract readonly commandArgument: string;
+}
+
+export class OpaqueDaemonReconnectTarget extends DaemonReconnectTarget {
+    readonly connectionId: string;
+    readonly commandArgument: string;
+
+    constructor(connectionId: string) {
+        super();
+        this.connectionId = connectionId;
+        this.commandArgument = `--connection ${connectionId}`;
+    }
+}
+
+export class ChannelDaemonReconnectTarget extends DaemonReconnectTarget {
+    readonly channelId: string;
+    readonly commandArgument: string;
+
+    constructor(channelId: string) {
+        super();
+        this.channelId = channelId;
+        this.commandArgument = `--channel ${channelId}`;
+    }
+}
+
 export interface DaemonConfig {
     readonly agents: readonly LocalAgentDefinition[];
     readonly defaultWorkspace: string;
@@ -23,6 +59,8 @@ export interface DaemonConfig {
     readonly catalog: LocalAgentCatalog;
     readonly channelId: string;
     readonly installableAgents: readonly InstallableAgentDefinition[];
+    readonly localContext: DaemonLocalContext;
+    readonly reconnectTarget: DaemonReconnectTarget;
     readonly relayUrl: URL;
 }
 
@@ -37,6 +75,8 @@ export function createDaemonConfig(
     connection: DaemonConnectionConfig,
     agents: readonly LocalAgentDefinition[] = [],
     installableAgents: readonly InstallableAgentDefinition[] = [],
+    localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
+    reconnectTarget: DaemonReconnectTarget = new ChannelDaemonReconnectTarget(connection.channelId),
 ): DaemonConfig {
     return {
         agents,
@@ -46,6 +86,8 @@ export function createDaemonConfig(
         catalog: new LocalAgentCatalog(agents, installableAgents),
         channelId: connection.channelId,
         installableAgents,
+        localContext,
+        reconnectTarget,
         relayUrl: connection.relayUrl,
     };
 }

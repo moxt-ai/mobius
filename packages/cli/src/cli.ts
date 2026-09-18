@@ -5,8 +5,8 @@ import packageMetadata from "../package.json" with { type: "json" };
 
 import { formatAgentDiagnostics } from "./agent-catalog/agent-diagnostics.ts";
 import { discoverLocalAgentInventory } from "./agent-catalog/discover-local-agents.ts";
-import { type DaemonConfig, loadDefaultWorkspace } from "./config.ts";
-import { pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
+import { type DaemonConfig, DaemonLocalContext, loadDefaultWorkspace } from "./config.ts";
+import { openMobiusCliInstallation, pairLocalMachine, resumeLocalMachine } from "./pairing/pair-local-machine.ts";
 import { MobiusRuntimeEngine } from "./runtime.ts";
 
 const shutdown = new AbortController();
@@ -18,17 +18,18 @@ const USAGE = `Mobius CLI
 Usage:
   mobius --version
   mobius pair --url <relay-url> --pairing <runtime-pairing-id> --code <pairing-code> [--workspace <directory>]
-  mobius start --channel <channel-id>
+  mobius start --connection <connection-id>
+  mobius start --channel <legacy-channel-id>
   mobius agents [--json]
 
 Commands:
   --version  Print the installed Mobius CLI version
   pair   Pair this machine and start its local daemon
-  start  Start the local daemon for a saved channel
+  start  Start the local daemon for a saved connection
   agents Show detected, missing, and integration-ready Agents
 
 Pairing grants this browser access to the machine with your user account's permissions.
-New conversations default to ~/.mobius/workspace; choose other directories in the browser.
+New conversations default to this Mobius installation's private workspace; choose other directories in the browser.
 `;
 
 async function main(): Promise<void> {
@@ -48,10 +49,13 @@ async function main(): Promise<void> {
         if (arguments_.length > 1 || (arguments_.length === 1 && arguments_[0] !== "--json")) {
             throw new Error("Usage: mobius agents [--json]");
         }
-        await mkdir(loadDefaultWorkspace(), { recursive: true, mode: 0o700 });
+        const installation = await openMobiusCliInstallation(shutdown.signal, process.env);
+        const localContext = new DaemonLocalContext(installation.stateDirectory, process.env);
+        const defaultWorkspace = loadDefaultWorkspace(localContext.environment);
+        await mkdir(defaultWorkspace, { recursive: true, mode: 0o700 });
         const inventory = await discoverLocalAgentInventory({
-            defaultWorkspace: loadDefaultWorkspace(),
-            environment: process.env,
+            defaultWorkspace,
+            environment: localContext.environment,
             signal: shutdown.signal,
         });
         process.stdout.write(formatAgentDiagnostics(inventory, arguments_[0] === "--json"));
@@ -65,12 +69,14 @@ async function main(): Promise<void> {
         config = paired.config;
         process.stdout.write("\nLocal machine paired.\n");
         process.stdout.write(`Channel: ${paired.channelUrl}\n`);
+        process.stdout.write(`Connection ID: ${paired.connectionId}\n`);
+        process.stdout.write(`Restart: mobius start --connection ${paired.connectionId}\n`);
         process.stdout.write("Open this channel in any browser while the daemon is running.\n");
         process.stdout.write(`Connection saved to ${paired.connectionPath}\n`);
     } else if (command === "start") {
         const paired = await resumeLocalMachine(process.argv.slice(3), shutdown.signal);
         config = paired.config;
-        process.stdout.write("\nSaved local machine channel loaded.\n");
+        process.stdout.write("\nSaved local Runtime connection loaded.\n");
         process.stdout.write(`Channel: ${paired.channelUrl}\n`);
         process.stdout.write("Open this channel in any browser while the daemon is running.\n");
     } else {

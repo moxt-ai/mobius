@@ -215,12 +215,18 @@ revoke one without disconnecting the others, and pinned work never
 silently fails over. See [Project Runtime pairing](docs/runtime-pairing.md) for
 the HTTP contract, SDK workflow, quota, audit, and revocation semantics.
 
-Pairing writes a mode-`0600` connection file under `~/.mobius/connections`. To
-restart a previously paired daemon, use the channel identifier shown in its URL:
+Pairing writes mode-`0600` connection data below
+`~/.mobius/installations/dev.mobius.cli/<installation-id>/connections` for the
+standalone CLI. To restart a previously paired daemon, use the opaque Connection
+ID printed by `mobius pair`:
 
 ```bash
-npx --yes @moxt-ai/mobius start --channel <channel-id>
+npx --yes @moxt-ai/mobius start --connection <connection-id>
 ```
+
+`mobius start --channel <channel-id>` remains a compatibility path: it first
+looks up the standalone CLI's own index, then imports only that exact legacy
+flat-file record if necessary.
 
 Every daemon WebSocket attempt has a process-local, monotonically increasing
 connection epoch. The CLI prints structured `Mobius relay diagnostic` records
