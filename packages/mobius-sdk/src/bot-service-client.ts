@@ -60,7 +60,8 @@ import {
     type MobiusToolCallDetail,
     type MobiusTurn,
 } from "./resources.ts";
-import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
+import type { MobiusCredentialProvider } from "./service-client.ts";
+import type { MobiusHttpTransport } from "./transport/http-transport.ts";
 
 export const MOBIUS_BOT_API_VERSION = "v1";
 

@@ -29,6 +29,7 @@ import {
 import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
+import { acceptWebSocketHttpTransport } from "./http/websocket-http-transport.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
 import { PlatformProjectStorageDirectory } from "./infra/platform-project-storage-directory.ts";
@@ -269,16 +270,27 @@ export function createPlatformApplication(
         })
         .route(MOBIUS_API_PREFIX, new Hono<DispatchEnvironment>().route("/v1", versionedRoutes))
         .all("*", (context) => projectApplication.fetch(context.req.raw, context.var.relay));
-    return new Hono<{ Bindings: PlatformApplicationBindings }>()
+    const platformApplication: Hono<{ Bindings: PlatformApplicationBindings }> = new Hono<{
+        Bindings: PlatformApplicationBindings;
+    }>()
         .onError((error) => {
             throw error;
         })
+        .get(
+            `${MOBIUS_API_PREFIX}/v1/transport`,
+            (context): Response =>
+                acceptWebSocketHttpTransport(
+                    context.req.raw,
+                    async (request): Promise<Response> => await platformApplication.fetch(request, context.env),
+                ),
+        )
         .all("*", async (context) => {
             const metrics = new RequestAccessMetrics();
             return metrics.appendServerTiming(
                 await application.fetch(context.req.raw, instrumentPlatformDatabases(context.env, metrics)),
             );
         });
+    return platformApplication;
 }
 
 function instrumentPlatformDatabases(

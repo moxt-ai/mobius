@@ -28,6 +28,19 @@ then uses Project-scoped clients for Runtime and Bot management, conversation
 work, and event projection. App lifecycle and AppCredentials belong to the
 Platform SDK entry point only.
 
+SDK clients use `HttpTransport` by default. Supply one shared `WsTransport`
+instance to a client's `transport` option to tunnel repeated request/response
+operations over a persistent Platform WebSocket at `/mobius/api/v1/transport`:
+
+```ts
+const transport = new WsTransport();
+const client = new MobiusClient({ endpoint, projectId, credentialProvider, transport });
+```
+
+Call `transport.close()` when its owner releases the client. The WebSocket
+transport preserves each request's authorization headers and supports JSON and
+binary request/response bodies. Session event streams remain on `HttpTransport`.
+
 Bot execution bindings require an `AgentExecutionConfiguration` containing a
 permission mode, model selection, and reasoning-effort selection. Discover the
 authoritative choices with `client.runtimes.discoverAgentSettings(...)`, then

@@ -11,3 +11,13 @@ export interface HttpError extends Error {
 export function isHttpError(error: unknown): error is Error & HttpError {
     return error instanceof Error && "toHttpJson" in error && typeof error.toHttpJson === "function";
 }
+
+export function toHttpError(error: unknown): HttpErrorJson {
+    return isHttpError(error)
+        ? error.toHttpJson()
+        : {
+              body: { error: { code: "internal_error", message: "The request could not be completed" } },
+              status: 500,
+              headers: {},
+          };
+}

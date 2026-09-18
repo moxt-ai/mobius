@@ -19,7 +19,11 @@ export {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
-export type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
+export type { MobiusCredentialProvider } from "./service-client.ts";
+export type { MobiusHttpTransport } from "./transport/http-transport.ts";
+export { HttpTransport } from "./transport/http-transport.ts";
+export type { MobiusWebSocketConnector, WsTransportOptions } from "./transport/ws-transport.ts";
+export { WsTransport } from "./transport/ws-transport.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const APP_CREDENTIAL_PATTERN = /^mapp_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;

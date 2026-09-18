@@ -8,7 +8,8 @@ import {
     MobiusTimeoutError,
     MobiusValidationError,
 } from "./errors.ts";
-import type { MobiusCredentialProvider, MobiusHttpTransport } from "./service-client.ts";
+import type { MobiusCredentialProvider } from "./service-client.ts";
+import type { MobiusHttpTransport } from "./transport/http-transport.ts";
 
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const MAXIMUM_RESPONSE_LENGTH = 8 * 1024 * 1024;

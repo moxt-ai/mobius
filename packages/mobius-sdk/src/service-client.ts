@@ -82,6 +82,7 @@ import {
     type MobiusTurn,
     type SubmitMobiusTurnRequest,
 } from "./resources.ts";
+import { HttpTransport, type MobiusHttpTransport } from "./transport/http-transport.ts";
 
 const DEFAULT_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 const DEFAULT_STREAM_CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
@@ -125,17 +126,9 @@ function validateCredential(value: unknown): string {
     return value;
 }
 
-export interface MobiusHttpTransport {
-    readonly fetch: (request: Request) => Promise<Response>;
-}
-
 export interface MobiusResponseMetadata {
     readonly serverTiming: string | null;
     readonly status: number;
-}
-
-class PlatformMobiusHttpTransport implements MobiusHttpTransport {
-    readonly fetch = async (request: Request): Promise<Response> => await globalThis.fetch(request);
 }
 
 export interface MobiusEndpointOptions {
@@ -391,7 +384,7 @@ export class MobiusRequestExecutor {
             options.streamLivenessTimeoutMilliseconds ?? DEFAULT_STREAM_LIVENESS_TIMEOUT_MILLISECONDS,
             "stream liveness timeout",
         );
-        this.#transport = options.transport ?? new PlatformMobiusHttpTransport();
+        this.#transport = options.transport ?? new HttpTransport();
     }
 
     readonly get = async (path: string, signal: AbortSignal): Promise<unknown> =>

@@ -68,7 +68,7 @@ export {
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
 } from "./entity/do/session.ts";
-export { type HttpError, type HttpErrorJson, isHttpError } from "./entity/http-error.ts";
+export { type HttpError, type HttpErrorJson, isHttpError, toHttpError } from "./entity/http-error.ts";
 export {
     ACCESS_GRANT_LIFETIME_MILLISECONDS,
     type AgentDescriptor,
@@ -147,6 +147,7 @@ export {
 } from "./infra/content-store.ts";
 export { D1DatabaseAdapter } from "./infra/d1-database.ts";
 export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
+export { logger } from "./infra/logger.ts";
 export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";
 export type {
     ProjectStorageContext,

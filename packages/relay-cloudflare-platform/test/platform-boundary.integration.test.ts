@@ -39,7 +39,9 @@ import {
     MobiusClient,
     MobiusRuntimePairingRequest,
     MobiusRuntimePairingWaitOptions,
+    type MobiusWebSocketConnector,
     StaticMobiusCredentialProvider,
+    WsTransport,
 } from "@moxt-ai/mobius-sdk/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -152,6 +154,32 @@ class PlatformWorkerTransport {
 
     readonly fetch = async (request: Request): Promise<Response> =>
         await this.#worker.fetch(request, this.#environment);
+}
+
+class PlatformWorkerWebSocketConnector implements MobiusWebSocketConnector {
+    readonly #environment: PlatformRelayBindings;
+    readonly #worker: PlatformWorker;
+    connections = 0;
+
+    constructor(worker: PlatformWorker, environment: PlatformRelayBindings) {
+        this.#environment = environment;
+        this.#worker = worker;
+    }
+
+    readonly connect = async (endpoint: URL, signal: AbortSignal): Promise<WebSocket> => {
+        this.connections += 1;
+        const requestEndpoint = new URL(endpoint);
+        requestEndpoint.protocol = requestEndpoint.protocol === "wss:" ? "https:" : "http:";
+        const response = await this.#worker.fetch(
+            new Request(requestEndpoint, { headers: { Upgrade: "websocket" }, signal }),
+            this.#environment,
+        );
+        if (response.status !== 101 || response.webSocket === null) {
+            throw new Error(`Expected the Platform transport WebSocket, received ${response.status}`);
+        }
+        response.webSocket.accept();
+        return response.webSocket;
+    };
 }
 
 function bindings(): PlatformRelayBindings {
@@ -479,6 +507,58 @@ async function provisionPlatformProject(label: string, locationHint = "apac"): P
         worker,
     };
 }
+
+it("Given a Platform Project and WebSocket SDK transport, When a backend sends repeated SDK requests, Then one socket carries authenticated HTTP responses", async () => {
+    const fixture = await provisionPlatformProject("websocket-transport");
+    const connector = new PlatformWorkerWebSocketConnector(fixture.worker, fixture.environment);
+    const transport = new WsTransport({ connector });
+    const client = new MobiusClient({
+        endpoint: relayOrigin,
+        projectId: fixture.projectId,
+        credentialProvider: new MobiusAppCredentialProvider(fixture.appCredential),
+        transport,
+    });
+    try {
+        const first = await client.runtimes.list(AbortSignal.timeout(5_000));
+        const second = await client.runtimes.list(AbortSignal.timeout(5_000));
+        expect(first.map((runtime) => runtime.runtimeId)).toEqual([fixture.runtimeId]);
+        expect(second.map((runtime) => runtime.runtimeId)).toEqual([fixture.runtimeId]);
+        expect(connector.connections).toBe(1);
+    } finally {
+        transport.close();
+    }
+});
+
+it("Given an invalid WebSocket transport request, When Platform rejects it, Then the typed HTTP error is returned", async () => {
+    const fixture = await provisionPlatformProject("websocket-transport-error");
+    const connector = new PlatformWorkerWebSocketConnector(fixture.worker, fixture.environment);
+    const socket = await connector.connect(
+        new URL(`wss://relay.test${MOBIUS_API_PREFIX}/v1/transport`),
+        AbortSignal.timeout(5_000),
+    );
+    const messages = new SocketMessages(socket);
+    try {
+        socket.send(
+            JSON.stringify({
+                body: "",
+                headers: [],
+                kind: "http.request",
+                method: "TRACE",
+                path: `${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/runtimes`,
+                requestId: "invalid-method",
+            }),
+        );
+        expect(JSON.parse(await messages.next())).toEqual({
+            code: "invalid_method",
+            kind: "http.error",
+            message: "The WebSocket transport method is invalid",
+            requestId: "invalid-method",
+            status: 400,
+        });
+    } finally {
+        socket.close();
+    }
+});
 
 it("Given existing App keys with past expiration dates, When storage is migrated and the keys are used, Then the active key authenticates and the revoked key stays rejected", async () => {
     const fixture = await provisionPlatformProject("legacy-app-keys");
