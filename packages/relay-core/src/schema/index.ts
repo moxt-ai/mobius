@@ -1,17 +1,4 @@
 export { authenticationAuditEvent } from "./authentication-audit-event.ts";
-export { bot } from "./bot.ts";
-export { botAuditEvent } from "./bot-audit-event.ts";
-export { botBehaviorRevision } from "./bot-behavior-revision.ts";
-export { botConnection } from "./bot-connection.ts";
-export { botConnectionCredential } from "./bot-connection-credential.ts";
-export { botConnectionGrant } from "./bot-connection-grant.ts";
-export { botControlOutbox } from "./bot-control-outbox.ts";
-export { botConversation } from "./bot-conversation.ts";
-export { botDeliveryTarget } from "./bot-delivery-target.ts";
-export { botExecutionBinding } from "./bot-execution-binding.ts";
-export { botExecutionDirectory } from "./bot-execution-directory.ts";
-export { botOwnerConversationDraft } from "./bot-owner-conversation-draft.ts";
-export { botProfileRevision } from "./bot-profile-revision.ts";
 export { channelAccessGrant } from "./channel-access-grant.ts";
 export { channelHostCredential } from "./channel-host-credential.ts";
 export { externalIdentityBinding } from "./external-identity-binding.ts";

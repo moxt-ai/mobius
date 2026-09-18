@@ -2,32 +2,9 @@ export { createMobiusApplication, createPlatformMobiusApplication } from "./app.
 export { createDurableObjectContext } from "./di/create-durable-object-context.ts";
 export type { RelayContext } from "./di/create-relay-dependencies.ts";
 export { createWorkerContext, type WorkerRuntimeGateways } from "./di/create-worker-context.ts";
-export { BotConnectionActor } from "./durable-objects/bot-connection-actor.ts";
 export { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
 export { SessionRelay } from "./durable-objects/session-relay.ts";
-export * from "./entity/authentication/conversation-access.ts";
 export * from "./entity/authentication/project-authentication.ts";
-export { BotApiError, type BotErrorCode, type BotFailureKind } from "./entity/bot/bot-error.ts";
-export {
-    BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
-    BOT_EXECUTION_START_WINDOW_MILLISECONDS,
-    BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS,
-    BotConversationEvent,
-    BotConversationEventPage,
-    BotExecutionRecord,
-    BotOutboundAcceptance,
-    BotOutboundSubmission,
-    BotSessionProvisioning,
-    type BotSessionRuntime,
-    BotSessionRuntimeError,
-    BotTurnAcceptance,
-    BotTurnSubmission,
-    PendingBotOutbound,
-} from "./entity/bot/bot-session.ts";
-export {
-    decodeBotSessionProvisioning,
-    encodeBotSessionProvisioning,
-} from "./entity/bot/bot-session-provisioning-codec.ts";
 export {
     type AcceptedTurn,
     type ActivityDetail,
@@ -111,8 +88,6 @@ export {
     validatePairingCode,
     validateToken,
 } from "./entity/pairing/pairing.ts";
-export type { BotConnectionGateway } from "./gateway/bot-connection-gateway.ts";
-export { CloudflareBotConnectionRuntime } from "./gateway/cloudflare-bot-connection-runtime.ts";
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
 export { CloudflareSessionTransport } from "./gateway/cloudflare-session-transport.ts";
 export type {
@@ -125,7 +100,6 @@ export type {
 } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
-export { createBotApplication } from "./http/bot/bot-routes.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
 export { requestTimeoutMiddleware } from "./http/middleware/request-timeout-middleware.ts";
 export {
@@ -161,7 +135,6 @@ export {
     sessionQuotaFromEnvironment,
 } from "./infra/session-configuration.ts";
 export * from "./service/authentication/oidc-authentication.ts";
-export { BotService } from "./service/bot/bot-service.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {
     type ChannelPeers,

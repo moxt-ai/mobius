@@ -8,7 +8,6 @@ import {
 } from "@moxt-ai/mobius-sdk";
 import {
     ArrowLeft,
-    Bot,
     Check,
     CircleCheck,
     Copy,
@@ -434,7 +433,7 @@ function RuntimeList({
                                                 {runtime.agents.length > 0 ? (
                                                     <MessageSquarePlus aria-hidden="true" className="size-4" />
                                                 ) : (
-                                                    <Bot aria-hidden="true" className="size-4" />
+                                                    <Terminal aria-hidden="true" className="size-4" />
                                                 )}
                                                 {runtime.agents.length > 0 ? "Open chat" : "Set up Agent"}
                                             </Button>

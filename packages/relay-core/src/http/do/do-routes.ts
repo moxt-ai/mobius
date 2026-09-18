@@ -1,16 +1,11 @@
 import {
     decodeInteractionResponse,
     decodeNativeSessionHistory,
-    decodePromptImagesValue,
-    decodePromptResourcesValue,
     decodeSessionConfigureCommand,
     decodeSessionEventEnvelope,
     decodeSessionPromptCommand,
-    SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
-import { BotOutboundSubmission, BotTurnSubmission } from "../../entity/bot/bot-session.ts";
-import { decodeBotSessionProvisioning } from "../../entity/bot/bot-session-provisioning-codec.ts";
 import {
     ArtifactUploadLease,
     type AttemptReconciliationOutcome,
@@ -24,8 +19,6 @@ import {
 } from "../../entity/do/session.ts";
 import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
-import { createOperationTimingCollector, encodeOperationTiming } from "../../infra/operation-timing.ts";
-import type { BotSessionService } from "../../service/do/bot-session-service.ts";
 import type { DoService } from "../../service/do/do-service.ts";
 import type { SqliteSessionRuntime } from "../../service/do/sqlite-session-runtime.ts";
 
@@ -83,64 +76,6 @@ function readCreateArtifactUploadRequest(value: Readonly<Record<string, unknown>
         readString(request, "mediaType", 255),
         readInteger(request, "byteLength"),
         readString(request, "sha256", 64),
-    );
-}
-
-function readStringList(value: unknown, maximumCount: number): readonly string[] {
-    if (!Array.isArray(value) || value.length > maximumCount || value.some((entry) => typeof entry !== "string")) {
-        throw new InternalRequestError("invalid_session_operation", "The Bot identifier list is invalid");
-    }
-    return value.filter((entry) => typeof entry === "string");
-}
-
-function readBotTurnSubmission(value: Readonly<Record<string, unknown>>): BotTurnSubmission {
-    const submission = value["submission"];
-    if (!isRecord(submission)) {
-        throw new InternalRequestError("invalid_session_operation", "The Bot turn submission is invalid");
-    }
-    assertExactKeys(submission, [
-        "actorRef",
-        "additionalDirectoryIds",
-        "clientMessageId",
-        "disposition",
-        "images",
-        "prompt",
-        "resources",
-        "targetTurnId",
-    ]);
-    const disposition = readString(submission, "disposition", 16);
-    const targetTurnId = readString(submission, "targetTurnId", 128, true);
-    if (
-        (disposition !== SessionPromptDisposition.Reject &&
-            disposition !== SessionPromptDisposition.Queue &&
-            disposition !== SessionPromptDisposition.Steer) ||
-        (disposition === SessionPromptDisposition.Reject && targetTurnId.length > 0) ||
-        (disposition !== SessionPromptDisposition.Reject && targetTurnId.length === 0)
-    ) {
-        throw new InternalRequestError("invalid_session_operation", "The Bot Turn disposition is invalid");
-    }
-    return new BotTurnSubmission(
-        readString(submission, "clientMessageId"),
-        readString(submission, "actorRef", 500),
-        readString(submission, "prompt", 100_000, true),
-        readStringList(submission["additionalDirectoryIds"], 16),
-        decodePromptImagesValue(submission["images"]),
-        decodePromptResourcesValue(submission["resources"]),
-        disposition,
-        targetTurnId,
-    );
-}
-
-function readBotOutboundSubmission(value: Readonly<Record<string, unknown>>): BotOutboundSubmission {
-    const submission = value["submission"];
-    if (!isRecord(submission)) {
-        throw new InternalRequestError("invalid_session_operation", "The Bot outbound request is invalid");
-    }
-    assertExactKeys(submission, ["deliveryTargetId", "idempotencyKey", "text"]);
-    return new BotOutboundSubmission(
-        readString(submission, "idempotencyKey"),
-        readString(submission, "deliveryTargetId"),
-        readString(submission, "text", 10_000),
     );
 }
 
@@ -359,13 +294,11 @@ function errorResponse(error: Error & HttpError): Response {
 }
 
 class DoRoutes {
-    readonly #bots: BotSessionService;
     readonly #runtime: SqliteSessionRuntime;
     readonly #operations: DoService;
 
-    constructor(runtime: SqliteSessionRuntime, bots: BotSessionService, operations: DoService) {
+    constructor(runtime: SqliteSessionRuntime, operations: DoService) {
         this.#runtime = runtime;
-        this.#bots = bots;
         this.#operations = operations;
     }
 
@@ -377,157 +310,6 @@ class DoRoutes {
             const operation = operationFromPath(new URL(request.url).pathname);
             const body = await readBody(request);
             const scope = readScope(body);
-            if (operation === "bot-provision") {
-                assertExactKeys(body, ["now", "provisioning", "scope"]);
-                const collector = createOperationTimingCollector();
-                return Response.json(
-                    await this.#bots.provisionConversation(
-                        scope,
-                        decodeBotSessionProvisioning(body["provisioning"]),
-                        readInteger(body, "now"),
-                        request.signal,
-                        collector.timing,
-                    ),
-                    { headers: { "Server-Timing": encodeOperationTiming(collector.snapshot()) } },
-                );
-            }
-            if (operation === "bot-accept") {
-                assertExactKeys(body, ["now", "scope", "sessionId", "submission"]);
-                return Response.json(
-                    await this.#bots.acceptTurn(
-                        scope,
-                        readString(body, "sessionId"),
-                        readBotTurnSubmission(body),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "bot-execution-authorize") {
-                assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId"]);
-                const permit = await this.#bots.authorizeExecutionCapability(
-                    scope,
-                    readString(body, "sessionId"),
-                    readString(body, "executionId"),
-                    readString(body, "capabilitySecret", 256),
-                    readInteger(body, "now"),
-                    request.signal,
-                );
-                return Response.json({
-                    allowedTargetIds: [...permit.allowedTargetIds],
-                    behaviorRevisionId: permit.behaviorRevisionId,
-                    bindingId: permit.bindingId,
-                    bindingRevision: permit.bindingRevision,
-                    botId: permit.botId,
-                    capabilityId: permit.capabilityId,
-                    conversationId: permit.conversationId,
-                    executionId: permit.executionId,
-                    operation: permit.operation,
-                    projectId: permit.scope.projectId,
-                    remainingUses: permit.remainingUses,
-                    runtimeId: permit.runtimeId,
-                    sessionId: permit.sessionId,
-                    turnId: permit.turnId,
-                });
-            }
-            if (operation === "bot-outbound-accept") {
-                assertExactKeys(body, ["capabilitySecret", "executionId", "now", "scope", "sessionId", "submission"]);
-                const accepted = await this.#operations.acceptOutbound(
-                    scope,
-                    readString(body, "sessionId"),
-                    readString(body, "executionId"),
-                    readString(body, "capabilitySecret", 256),
-                    readBotOutboundSubmission(body),
-                    readInteger(body, "now"),
-                    request.signal,
-                );
-                return Response.json(accepted);
-            }
-            if (operation === "bot-outbound-pending") {
-                assertExactKeys(body, ["limit", "now", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#bots.listPendingOutbound(
-                        scope,
-                        readString(body, "sessionId"),
-                        readInteger(body, "limit"),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "bot-turn-promote") {
-                assertExactKeys(body, ["now", "scope", "sessionId", "turnId"]);
-                return Response.json(
-                    await this.#bots.promoteQueuedTurnToSteering(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "turnId"),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "bot-conversation-events") {
-                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId", "waitMilliseconds"]);
-                return Response.json(
-                    await this.#bots.readConversationEvents(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "cursor", 512, true),
-                        readInteger(body, "limit"),
-                        readInteger(body, "waitMilliseconds"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "bot-conversation-messages") {
-                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#bots.readConversationMessages(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "cursor", 512, true),
-                        readInteger(body, "limit"),
-                        request.signal,
-                    ),
-                );
-            }
-            if (operation === "bot-outbound-forwarded") {
-                assertExactKeys(body, ["now", "outboundMessageId", "scope", "sessionId"]);
-                await this.#bots.markOutboundForwarded(
-                    scope,
-                    readString(body, "sessionId"),
-                    readString(body, "outboundMessageId"),
-                    readInteger(body, "now"),
-                    request.signal,
-                );
-                return Response.json({ forwarded: true });
-            }
-            if (operation === "bot-outbound-terminal-failure") {
-                assertExactKeys(body, ["failureCode", "now", "outboundMessageId", "scope", "sessionId"]);
-                await this.#bots.markOutboundTerminalFailure(
-                    scope,
-                    readString(body, "sessionId"),
-                    readString(body, "outboundMessageId"),
-                    readString(body, "failureCode"),
-                    readInteger(body, "now"),
-                    request.signal,
-                );
-                return Response.json({ terminal: true });
-            }
-            if (operation === "bot-execution-settle") {
-                assertExactKeys(body, ["commandId", "now", "outcome", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#bots.settleExecution(
-                        scope,
-                        readString(body, "sessionId"),
-                        readString(body, "commandId"),
-                        readString(body, "outcome"),
-                        readInteger(body, "now"),
-                        request.signal,
-                    ),
-                );
-            }
             if (operation === "event-stream") {
                 assertExactKeys(body, ["cursor", "scope", "sessionId"]);
                 return await this.#runtime.openEventStream(
@@ -981,7 +763,7 @@ class DoRoutes {
     }
 }
 
-export function createDoRoutes(runtime: SqliteSessionRuntime, bots: BotSessionService, operations: DoService) {
-    const routes = new DoRoutes(runtime, bots, operations);
+export function createDoRoutes(runtime: SqliteSessionRuntime, operations: DoService) {
+    const routes = new DoRoutes(runtime, operations);
     return new Hono().all("*", (c) => routes.fetch(c.req.raw));
 }

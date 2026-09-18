@@ -13,17 +13,11 @@ import {
 } from "react-router";
 import { AgentInstallationPage } from "@/components/agent-installation-panel";
 import { AgentSettingsPage } from "@/components/agent-settings-page";
-import { BotConnectionsPage } from "@/components/bots/bot-connections-page";
-import { BotConversationPage, BotConversationsPage } from "@/components/bots/bot-conversations-page";
-import { BotDirectoryPage } from "@/components/bots/bot-directory-page";
-import { BotOverviewPage } from "@/components/bots/bot-overview-page";
-import { BotWorkspace } from "@/components/bots/bot-workspace";
 import { ChannelAccessPage } from "@/components/channel-access-panel";
 import { ChatComposer } from "@/components/chat-composer";
 import { ChatHeader } from "@/components/chat-header";
 import { ChatMessageList } from "@/components/chat-message-list";
 import { ConversationSidebar } from "@/components/conversation-sidebar";
-import { ConversationTargetProvider } from "@/components/conversation-target-provider";
 import { PairingPage } from "@/components/pairing-page";
 import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
@@ -147,8 +141,7 @@ function ChannelWorkspace({
     const accessOpen = location.pathname === routes.accessPath;
     const runtimesOpen = location.pathname === routes.runtimesPath;
     const settingsOpen = location.pathname === routes.settingsPath || routes.isSessionSettingsPath(location.pathname);
-    const botsOpen = routes.isBotsPath(location.pathname);
-    const managementPageOpen = accessOpen || runtimesOpen || settingsOpen || botsOpen;
+    const managementPageOpen = accessOpen || runtimesOpen || settingsOpen;
     const [sidebarLayout, setSidebarLayout] = useState<DesktopSidebarLayoutState>(initialSidebarLayout);
 
     useEffect(() => {
@@ -247,9 +240,7 @@ function ChannelWorkspace({
                       ? "Skip to device access"
                       : settingsOpen
                         ? "Skip to Agent settings"
-                        : botsOpen
-                          ? "Skip to Bot management"
-                          : "Skip to conversation"}
+                        : "Skip to conversation"}
             </a>
             <div className="flex h-dvh w-full bg-background">
                 <ConversationSidebar
@@ -515,18 +506,7 @@ export function Chat({ connection, desktopSidebarCollapsed, onCreateConversation
 
 function ConversationRoutePage() {
     const context = useOutletContext<ChatProps>();
-    const navigate = useNavigate();
-    const openBotConversation = useCallback(
-        (botId: string, conversationId: string): void => {
-            void navigate(context.routes.botConversationPath(botId, conversationId));
-        },
-        [context.routes, navigate],
-    );
-    return (
-        <ConversationTargetProvider connection={context.connection} onOpenBotConversation={openBotConversation}>
-            <Chat {...context} />
-        </ConversationTargetProvider>
-    );
+    return <Chat {...context} />;
 }
 
 function AgentSettingsRoutePage() {
@@ -563,31 +543,6 @@ function RuntimeManagementRoutePage() {
     );
 }
 
-function BotDirectoryRoutePage() {
-    const context = useOutletContext<ChatProps>();
-    return (
-        <BotDirectoryPage
-            connection={context.connection}
-            desktopSidebarCollapsed={context.desktopSidebarCollapsed}
-            key={context.channelId}
-            onToggleDesktopSidebar={context.onToggleDesktopSidebar}
-        />
-    );
-}
-
-function BotWorkspaceRoutePage() {
-    const context = useOutletContext<ChatProps>();
-    const params = useParams<"botId">();
-    return (
-        <BotWorkspace
-            connection={context.connection}
-            desktopSidebarCollapsed={context.desktopSidebarCollapsed}
-            key={`${context.channelId}:${params.botId ?? ""}`}
-            onToggleDesktopSidebar={context.onToggleDesktopSidebar}
-        />
-    );
-}
-
 function ChannelRouteNotFound() {
     return (
         <ChannelContentError
@@ -605,13 +560,6 @@ function AppRoutes() {
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<ChannelAccessRoutePage />} path="access" />
                 <Route element={<RuntimeManagementRoutePage />} path="runtimes" />
-                <Route element={<BotDirectoryRoutePage />} path="bots" />
-                <Route element={<BotWorkspaceRoutePage />} path="bots/:botId">
-                    <Route element={<BotOverviewPage />} index />
-                    <Route element={<BotConversationsPage />} path="conversations" />
-                    <Route element={<BotConversationPage />} path="conversations/:conversationId" />
-                    <Route element={<BotConnectionsPage />} path="connections" />
-                </Route>
                 <Route element={<LegacyAgentSettingsRoute />} path="settings" />
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />
@@ -622,13 +570,6 @@ function AppRoutes() {
             <Route element={<ProjectRuntimeRoute />} path="/projects/:projectId/runtimes/:runtimeId">
                 <Route element={<ChannelIndexRoute />} index />
                 <Route element={<RuntimeManagementRoutePage />} path="machines" />
-                <Route element={<BotDirectoryRoutePage />} path="bots" />
-                <Route element={<BotWorkspaceRoutePage />} path="bots/:botId">
-                    <Route element={<BotOverviewPage />} index />
-                    <Route element={<BotConversationsPage />} path="conversations" />
-                    <Route element={<BotConversationPage />} path="conversations/:conversationId" />
-                    <Route element={<BotConnectionsPage />} path="connections" />
-                </Route>
                 <Route element={<LegacyAgentSettingsRoute />} path="settings" />
                 <Route element={<SessionRoute />} path="sessions/:sessionId">
                     <Route element={<ConversationRoutePage />} index />

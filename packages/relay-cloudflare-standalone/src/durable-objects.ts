@@ -1,5 +1,4 @@
 import {
-    BotConnectionActor as BotConnectionImplementation,
     createDurableObjectContext,
     type LiteSessionConfigurationEnvironment,
     RuntimeRelay as RuntimeRelayImplementation,
@@ -11,7 +10,6 @@ import { StandaloneProjectStorageDirectory } from "./project-storage-directory.t
 import { STANDALONE_NAMESPACE_PREFIX } from "./standalone-namespace.ts";
 
 interface RelayEnvironment extends LiteSessionConfigurationEnvironment {
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
     readonly SESSION_RELAY: DurableObjectNamespace;
     readonly SESSION_ARCHIVES?: R2Bucket;
@@ -22,7 +20,6 @@ function createContext(state: DurableObjectState, environment: RelayEnvironment)
     const tenants = new StandaloneProjectStorageDirectory();
     return createDurableObjectContext(state, {
         environment,
-        connections: environment.BOT_CONNECTIONS,
         sessions: environment.SESSION_RELAY,
         namespacePrefix: STANDALONE_NAMESPACE_PREFIX,
         databases,
@@ -35,12 +32,6 @@ function createContext(state: DurableObjectState, environment: RelayEnvironment)
 }
 
 export class RuntimeRelay extends RuntimeRelayImplementation {
-    constructor(state: DurableObjectState, environment: RelayEnvironment) {
-        super(createContext(state, environment));
-    }
-}
-
-export class BotConnectionActor extends BotConnectionImplementation {
     constructor(state: DurableObjectState, environment: RelayEnvironment) {
         super(createContext(state, environment));
     }

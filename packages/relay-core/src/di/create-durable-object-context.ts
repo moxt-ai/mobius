@@ -1,4 +1,3 @@
-import { CloudflareBotConnectionRuntime } from "../gateway/cloudflare-bot-connection-runtime.ts";
 import { CloudflareChannelPeers } from "../gateway/cloudflare-channel-peers.ts";
 import { CloudflareSessionTransport } from "../gateway/cloudflare-session-transport.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
@@ -18,7 +17,6 @@ export function createDurableObjectContext(
     state: DurableObjectState,
     options: {
         readonly environment: LiteSessionConfigurationEnvironment;
-        readonly connections: DurableObjectNamespace;
         readonly sessions: DurableObjectNamespace;
         readonly namespacePrefix: string;
         readonly databases: ProjectDatabaseBindings;
@@ -39,7 +37,6 @@ export function createDurableObjectContext(
             projectStorageDirectory: options.projects,
             sessionTransport:
                 options.sessionTransport ?? new CloudflareSessionTransport(options.sessions, options.namespacePrefix),
-            connections: new CloudflareBotConnectionRuntime(options.connections),
             peers: new CloudflareChannelPeers(state),
             schedule: async (timestamp, signal) => {
                 signal.throwIfAborted();

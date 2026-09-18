@@ -248,7 +248,6 @@ async function claimPairing(
         agentPath: agent.agentIdentity.requestedPath,
         agentVersion: agent.agentVersion,
         agentSettingsDiscovery: true,
-        botSessionConfiguration: true,
         capabilities: agent.capabilities,
         id: agent.id,
         label: agent.label,

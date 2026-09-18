@@ -21,7 +21,6 @@ export class SessionDeletionStorage {
         this.deleteTurnContentViews(input);
         this.deletePendingWork(input);
         this.deleteInteractions(input);
-        this.deleteBotClientCursors(input);
         this.deleteStreamEventRefs(input);
         this.deleteStreamBlocks(input);
         this.deleteStreams(input);
@@ -88,11 +87,6 @@ export class SessionDeletionStorage {
         ]);
     private readonly deleteInteractions = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM interactions WHERE scope_key = ? AND session_id = ?", [
-            input.scopeKey,
-            input.sessionId,
-        ]);
-    private readonly deleteBotClientCursors = (input: DeleteSessionRecords): { readonly changes: number } =>
-        this.#database.run("DELETE FROM bot_client_cursors WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
             input.sessionId,
         ]);

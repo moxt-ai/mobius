@@ -9,16 +9,13 @@ Use the entry point that matches the caller's trust boundary:
 
 | Entry | Caller | Exposed resources |
 | --- | --- | --- |
-| `@moxt-ai/mobius-sdk/server` | trusted Standalone or Platform backend | shared Project, Runtime, Bot, Conversation, Session, Turn, Event, Interaction, and Artifact clients |
-| `@moxt-ai/mobius-sdk/platform` | Platform developer or trusted App backend | OIDC Tenant/App provisioning, AppCredential lifecycle, Project provisioning, and Conversation credential lifecycle |
-| `@moxt-ai/mobius-sdk/browser` | third-party browser holding one short-lived credential | only the fixed Session's messages, turns, events, interactions, and artifacts |
-| `@moxt-ai/mobius-sdk` | compatibility import | current combined legacy root surface |
+| `@moxt-ai/mobius-sdk/server` | trusted Standalone or Platform backend | shared Project, Runtime, Conversation, Session, Turn, Event, Interaction, and Artifact clients |
+| `@moxt-ai/mobius-sdk/platform` | Platform developer or trusted App backend | OIDC Tenant/App provisioning, AppCredential lifecycle, Project provisioning, and Session access credential lifecycle |
+| `@moxt-ai/mobius-sdk` | browser-compatible root import | Session and Project resource client |
 
-The browser entry does not export Project, Runtime, Bot, Tenant, App, or
-credential-management clients. Its requests target only
-`/mobius/api/v1/projects/:projectId/client/session/*`; the server derives Conversation and Session
-identity from the credential record rather than a URL, query, body, or custom
-header target.
+An application may construct the root client in a browser with a short-lived
+Session access credential. The Relay derives the fixed Session identity from the
+credential record and rejects attempts to target another Project or Session.
 
 The package root exposes Session, Turn, Attempt, Event, Interaction, Artifact,
 Runtime pairing, Runtime, credential, and portability resources. It has no React or Zustand
@@ -129,8 +126,8 @@ state bag.
 
 The Relay caps one Project at eight active pending or paired Runtimes. A retry
 after an ambiguous create response must reuse the same idempotency key.
-Revocation closes only the selected Runtime and does not fail over Sessions or
-Bot conversations. Capability discovery reports this resource as
+Revocation closes only the selected Runtime and does not fail over Sessions.
+Capability discovery reports this resource as
 `capabilities.resources.runtimePairings`. The full HTTP and authority contract
 is in [Project Runtime pairing](runtime-pairing.md).
 
@@ -174,67 +171,13 @@ for the permission matrix, Platform backend example, and recovery/rotation
 runbook. App registration and AppCredential lifecycle belong exclusively to
 `@moxt-ai/mobius-sdk/platform`.
 
-## Required Bot execution settings
+## Session turn configuration
 
-Before creating a Bot execution binding, a server-side Platform consumer such
-as Moxt discovers the selected local Agent's settings through the ordinary
-Project client:
-
-```ts
-const settings = await client.runtimes.discoverAgentSettings(
-  runtimeId,
-  {
-    additionalDirectoryIds: [],
-    agentId,
-    directoryId: workspaceRef,
-  },
-  signal,
-);
-```
-
-`settings.configOptions` always contains **Permissions**, **Model**, and
-**Reasoning effort**. A field that the Agent cannot adjust has one explicit
-fixed choice: normally `agent_default`, or the effective mode when Mobius can
-identify it safely, such as Pi's `danger-full-access`. Use the selected option
-IDs and values to construct the required `AgentExecutionConfiguration`, then pass it to
-`MobiusBotOwnerClient.createBinding`:
-
-```ts
-await bots.createBinding(
-  botId,
-  {
-    agentConfigRevision: 1,
-    agentRef: agentId,
-    allowedDeliveryTargetIds: [],
-    behaviorRevisionId,
-    completionPolicy,
-    executionConfiguration: {
-      model: {
-        booleanValue: false,
-        configId: selectedModel.id,
-        value: selectedModelValue,
-        valueType: "select",
-      },
-      permissionMode: selectedPermissionMode,
-      reasoningEffort: {
-        booleanValue: false,
-        configId: selectedEffort.id,
-        value: selectedEffortValue,
-        valueType: "select",
-      },
-    },
-    expectedRevision,
-    runtimeId,
-    workspaceRef,
-  },
-  signal,
-);
-```
-
-The SDK validates the complete shape before sending it. The Relay persists and
-returns the configuration on `MobiusBotExecutionBinding`, while the local
-daemon remains the authority that validates support and applies it to the
-Agent process.
+Before submitting a configurable Turn, discover the selected local Agent's
+settings through `client.runtimes.discoverAgentSettings(...)`. Pass the chosen
+values as the complete `sessionConfigurations` snapshot on the Turn request.
+The Relay persists that snapshot with the Turn, and the local daemon validates
+and applies it before starting the Agent process.
 
 The SDK does not loop on authentication failures. `credential_expired` and
 `credential_revoked` are returned immediately. After obtaining a replacement,
@@ -332,7 +275,7 @@ attemptId, signal)`. Retrying the same Turn request with the same idempotency ke
 returns the original Turn; reusing the key with different input fails with
 `idempotency_conflict`.
 
-Turn submission does not accept Runtime, Agent, workspace, or Bot fields. The
+Turn submission does not accept Runtime, Agent, or workspace fields. The
 Relay reads the server-owned Session binding and reauthorizes that exact Runtime
 before dispatch.
 
@@ -564,16 +507,11 @@ Project. A client-supplied `tenantId` is never accepted as authority. The same
 authorization applies to execution, history, Interactions, uploads, downloads,
 exports, imports, and deletion.
 
-## Reference Node and browser workflow
+## Reference Node workflow
 
-The repository reference implementations use one shared workflow in
-[`workflow.ts`](../packages/mobius-sdk/examples/workflow.ts). The
-[`Node example`](../packages/mobius-sdk/examples/node.ts) reads its endpoint and
-application credential from environment variables. The
-[`browser example`](../packages/mobius-sdk/examples/browser.ts) receives a
-short-lived credential provider from its host application. These files are not
-published as `@moxt-ai/mobius-sdk` entry points; copy or adapt them from the
-repository when useful.
+The repository [Node example](../packages/mobius-sdk/examples/node.ts) reads its
+endpoint and application credential from environment variables. It is not a
+published SDK entry point; copy or adapt it from the repository when useful.
 
 The Node reference expects these six environment values:
 
@@ -587,37 +525,7 @@ MOBIUS_WORKSPACE_REF=workspace-ref
 ```
 
 It is a Node.js client for an existing Relay deployment; it does not provide a
-Node Relay implementation. Neither reference implementation imports D1, R2,
-Durable Object, SQLite, filesystem, or deployment-specific types. The Node
-example's 120-second signal is an application-level local wait deadline; it does
-not request remote cancellation if it expires.
-
-## Bot connector API
-
-The package also exports `redeemMobiusBotConnectionGrant` and
-`createMobiusBotConnectorClient` for provider-neutral external connectors. The
-client supports independently rotatable connection credentials, opaque delivery
-targets, idempotent connected conversations and messages, resumable conversation
-events, outbound claim pages, delivery acknowledgement, and connection
-revocation. It never accepts local Runtime, Agent, executable, workspace,
-permission, provider credential, or provider destination fields.
-
-Bot is the stable project identity. A BotConversation pins immutable behavior
-and active binding revisions in a one-to-one Session extension, while Session
-remains the execution-history aggregate. Existing direct-Agent Sessions keep
-their original model and receive no invented Bot identity.
-
-Server-side owner applications use `MobiusBotOwnerClient` for canonical Bot
-Conversation history. `readConversationMessages` returns the same message
-content as Session `readMessages`, augmented with Bot-facing identifiers;
-`readConversationToolCallDetail` resolves complete activity detail without
-exposing Session or archive identities. `waitForConversationEvents` performs a
-bounded durable-cursor long poll, so callers resume after Relay restarts by
-retrying the same opaque cursor. Targeted follow-ups are submitted with
-`queueProjectConversationTurn` or `steerProjectConversationTurn`, and an
-accepted queued Turn can be changed atomically with
-`promoteProjectConversationTurnToSteering` while its target remains active.
-
-See [Bots and external connectors](bots.md) for the full authorization model,
-HTTP route contract, credential lifecycle, offline guarantees, SDK example, and
-local outbound CLI.
+Node Relay implementation. The example does not import D1, R2, Durable Object,
+SQLite, filesystem, or deployment-specific types. Its 120-second signal is an
+application-level local wait deadline; it does not request remote cancellation
+if it expires.

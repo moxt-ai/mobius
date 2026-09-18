@@ -69,9 +69,6 @@ export {
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
-export * from "./bot-owner-resources.ts";
-export * from "./bot-resources.ts";
-export * from "./bot-service-client.ts";
 export * from "./errors.ts";
 export * from "./project-authentication.ts";
 export * from "./resources.ts";

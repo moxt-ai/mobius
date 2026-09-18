@@ -1,4 +1,4 @@
-import { Bot, Laptop, LoaderCircle, MessageSquare, Plus, Settings, Smartphone, X } from "lucide-react";
+import { Laptop, LoaderCircle, MessageSquare, Plus, Settings, Smartphone, X } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useRef } from "react";
 import { Link, NavLink } from "react-router";
 
@@ -83,7 +83,6 @@ export function ConversationSidebar({
     const displayWidth = sidebarDisplayWidth(layout);
     const accessPath = routes.accessPath;
     const runtimesPath = routes.runtimesPath;
-    const botsPath = routes.botDirectoryPath;
     const activeSessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
     const settingsPath =
         activeSessionId === undefined ? routes.settingsPath : routes.sessionSettingsPath(activeSessionId);
@@ -286,21 +285,6 @@ export function ConversationSidebar({
                     </nav>
 
                     <nav aria-label="Channel navigation" className="border-t-[0.5px] border-black/6 px-3 py-2.5">
-                        <NavLink
-                            className={({ isActive }) =>
-                                cn(
-                                    "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-                                    isActive && "bg-black/8 hover:bg-black/8",
-                                )
-                            }
-                            onClick={closeSidebar}
-                            to={botsPath}
-                        >
-                            <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
-                                <Bot aria-hidden="true" className="size-3.5" />
-                            </span>
-                            Bots
-                        </NavLink>
                         <NavLink
                             className={({ isActive }) =>
                                 cn(

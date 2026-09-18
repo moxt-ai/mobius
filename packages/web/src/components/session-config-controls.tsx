@@ -279,7 +279,7 @@ interface SessionConfigControlsViewProps {
     readonly statusLabel: string;
 }
 
-export function SessionConfigControlsView({
+function SessionConfigControlsView({
     agentLabel,
     directoryLabel,
     failure,

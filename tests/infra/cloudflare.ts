@@ -40,7 +40,6 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
                     className: profile === "standalone" ? "LiteSessionRelay" : "PlatformSessionRelay",
                     useSQLite: true,
                 },
-                BOT_CONNECTIONS: { className: "BotConnectionActor", useSQLite: true },
                 ...(profile === "platform" ? { PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true } } : {}),
             },
         }),

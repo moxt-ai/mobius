@@ -25,16 +25,4 @@ export class SessionRecoveryStorage {
                 sessionId: text(row, "session_id"),
                 lifecycle: text(row, "lifecycle"),
             }));
-
-    readonly readExecutionBinding = (scope: ProjectScope, sessionId: string, executionId: string): string => {
-        const row = this.#database.query(
-            `SELECT binding_id FROM bot_executions
-            WHERE scope_key = ? AND session_id = ? AND execution_id = ?`,
-            [scope.projectId, sessionId, executionId],
-        )[0];
-        if (row === undefined) {
-            throw new SessionRuntimeError("session_storage_unavailable", "The Bot outbound execution is unavailable");
-        }
-        return text(row, "binding_id");
-    };
 }

@@ -28,12 +28,6 @@ pairing service. This direct-host composition builds pairing services without HT
 dependencies. Standalone storage uses single-binding storage resolvers; Platform
 resolves storage from the globally unique Project ID.
 
-Bot owner, connector, execution, and grant credentials are authenticated against
-the configured identity databases before placement is resolved. Bot storage is
-constructed from the resulting `TenantContext` and `DatabaseResolver`; there is no
-fixed Bot database option. Invalid credentials are rejected before placement lookup,
-and unavailable placement is reported as a service failure rather than a credential
-failure.
 Pairing storage also receives a resolved `TenantContext`. The pairing identity
 service authenticates before placement, then requires the resolved database to
 match the credential's identity source. Composition constructs these services and

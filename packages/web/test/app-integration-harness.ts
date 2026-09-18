@@ -345,7 +345,6 @@ export class StatefulDaemon {
 
 export interface PairDaemonOptions {
     readonly agents?: readonly AgentOption[];
-    readonly botSessionConfiguration?: boolean;
     readonly installableAgents?: readonly InstallableAgentOption[];
     readonly sessionTurnConfiguration?: boolean;
 }
@@ -365,13 +364,11 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
         body: JSON.stringify({
             agents: options.agents?.map((agent) => ({
                 ...agent,
-                ...(options.botSessionConfiguration === true ? { botSessionConfiguration: true } : {}),
                 ...(options.sessionTurnConfiguration === true ? { sessionTurnConfiguration: true } : {}),
             })) ?? [
                 {
                     agentPath: "/usr/local/bin/codex",
                     agentVersion: "codex 0.153.0",
-                    ...(options.botSessionConfiguration === true ? { botSessionConfiguration: true } : {}),
                     ...(options.sessionTurnConfiguration === true ? { sessionTurnConfiguration: true } : {}),
                     capabilities: {
                         additionalDirectories: true,

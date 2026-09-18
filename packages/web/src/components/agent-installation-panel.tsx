@@ -1,4 +1,4 @@
-import { Bot, Cable, CheckCircle2, CircleAlert, LoaderCircle, RefreshCw, Settings } from "lucide-react";
+import { Cable, CheckCircle2, CircleAlert, LoaderCircle, RefreshCw, Settings, Terminal } from "lucide-react";
 import { Link } from "react-router";
 
 import { Button } from "@/components/ui/button";
@@ -141,7 +141,7 @@ export function AgentInstallationPage() {
         <main className="flex min-h-dvh overflow-y-auto bg-background p-4 sm:p-6">
             <section className="pairing-card mx-auto my-auto w-full max-w-[720px] rounded-2xl bg-white px-5 py-7 text-center sm:px-10 sm:py-9">
                 <span className="mx-auto inline-flex size-12 items-center justify-center rounded-2xl bg-[#eefaf3] text-[#218854]">
-                    <Bot aria-hidden="true" className="size-5" />
+                    <Terminal aria-hidden="true" className="size-5" />
                 </span>
                 <h1 className="mt-5 text-2xl font-semibold tracking-[-0.03em]">Local Agents</h1>
                 <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">

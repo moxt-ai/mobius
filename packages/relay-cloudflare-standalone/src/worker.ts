@@ -1,9 +1,7 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
-    CloudflareBotConnectionRuntime,
     CloudflareChannelRuntime,
     CloudflareSessionTransport,
-    createBotApplication,
     createMobiusApplication,
     createWorkerContext,
     D1DatabaseAdapter,
@@ -20,18 +18,16 @@ import {
 import { type Handler, Hono } from "hono";
 import { D1ProjectAuthentication } from "./d1-project-authentication.ts";
 import { SingleDatabaseResolver } from "./database-resolver.ts";
-import { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
+import { LiteSessionRelay, RuntimeRelay, SessionRelay } from "./durable-objects.ts";
 import { StandaloneProjectStorageDirectory } from "./project-storage-directory.ts";
 import { STANDALONE_NAMESPACE_PREFIX } from "./standalone-namespace.ts";
 
 export interface RelayBindings extends LiteSessionConfigurationEnvironment, PublicProjectBootstrapEnvironment {
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly DIRECTORY_DATABASE: D1Database;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }
 const application = createMobiusApplication();
-const botApplication = createBotApplication();
 
 export interface StandaloneWorker {
     readonly fetch: (request: Request, environment: RelayBindings) => Promise<Response>;
@@ -81,12 +77,7 @@ const versionedRoutes = new Hono<DispatchEnvironment>()
     .route("/projects/:projectId", projectRoutes)
     .all("/runtime-pairings/*", sharedProjectHandler)
     .all("/runtimes/connect", sharedProjectHandler)
-    .all("/*", (context) => {
-        const bots = context.env.services.bots;
-        return bots === null
-            ? application.fetch(context.req.raw, context.env)
-            : botApplication.fetch(context.req.raw, { services: { bots } });
-    });
+    .all("/*", sharedProjectHandler);
 
 const dispatchApplication = new Hono<DispatchEnvironment>()
     .onError((error) => {
@@ -129,11 +120,10 @@ export function createStandaloneGateways(environment: RelayBindings): WorkerRunt
     return {
         channel: new CloudflareChannelRuntime({ gateways: { runtimeRelay: environment.RUNTIME_RELAY } }),
         sessions: new CloudflareSessionTransport(environment.SESSION_RELAY, STANDALONE_NAMESPACE_PREFIX),
-        connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }
 
 const worker: ExportedHandler<RelayBindings> = createStandaloneWorker();
 
-export { BotConnectionActor, LiteSessionRelay, RuntimeRelay, SessionRelay };
+export { LiteSessionRelay, RuntimeRelay, SessionRelay };
 export default worker;

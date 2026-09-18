@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MobiusBotOwnerClient, MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
+import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 import * as v from "valibot";
 import { createDaemonConfig, MobiusRuntimeEngine } from "../../packages/cli/src/runtime.ts";
 import type { createTestAgent } from "./agent.ts";
@@ -165,11 +165,9 @@ export async function createTestRuntime(options: {
         };
         const client = new MobiusClient(clientOptions);
         resources.defer(() => client.close());
-        const owner = new MobiusBotOwnerClient({ ...clientOptions, actorReference: "test-owner" });
         const owned = resources.move();
         return {
             client,
-            owner,
             runtimeId: pairing.runtimeId,
             [Symbol.asyncDispose]: () => owned.disposeAsync(),
         };

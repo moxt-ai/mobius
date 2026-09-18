@@ -6,22 +6,6 @@ export type ParsedBodyInput = {
     readonly out: { readonly json: Readonly<Record<string, unknown>> };
 };
 
-export interface BodyParserEnvironment extends Env {
-    readonly Variables: { readonly body: Readonly<Record<string, unknown>> };
-}
-
-export function contextBodyParser<TEnvironment extends BodyParserEnvironment>(
-    parse: (request: Request) => Promise<Readonly<Record<string, unknown>>>,
-    shouldParse: (request: Request) => boolean = () => true,
-): MiddlewareHandler<TEnvironment> {
-    return async (context, next) => {
-        if (shouldParse(context.req.raw)) {
-            context.set("body", await parse(context.req.raw));
-        }
-        await next();
-    };
-}
-
 function parsedBodyParser<TEnvironment extends Env, TPath extends string = string>(
     parse: (request: Request) => Promise<Readonly<Record<string, unknown>>>,
     shouldParse: (request: Request) => boolean = () => true,

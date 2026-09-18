@@ -70,11 +70,11 @@ describe.sequential("Agent interaction boundaries", () => {
             await sendReadySession(paired.daemon, prepare);
             fireEvent.click(
                 await screen.findByRole("button", {
-                    name: "Agent or Bot for this conversation",
+                    name: "Agent for this conversation",
                 }),
             );
 
-            const localAgents = screen.getByRole("tabpanel", { name: "Local Agents" });
+            const localAgents = screen.getByRole("dialog", { name: "Choose local Agent" });
             for (const agent of completeReadyAgentDirectory) {
                 expect(within(localAgents).getByRole("button", { name: agent.label })).toBeTruthy();
             }
@@ -85,8 +85,8 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given a paired Agent advertises local Bot session configuration, When Web opens its conversation, Then the extended Agent directory remains usable", async () => {
-        const paired = await pairDaemon({ botSessionConfiguration: true });
+    it("Given a paired Agent advertises Session turn configuration, When Web opens its conversation, Then the extended Agent directory remains usable", async () => {
+        const paired = await pairDaemon({ sessionTurnConfiguration: true });
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
@@ -223,7 +223,7 @@ describe.sequential("Agent interaction boundaries", () => {
 
             expect(
                 await screen.findByRole("button", {
-                    name: "Agent or Bot for this conversation",
+                    name: "Agent for this conversation",
                 }),
             ).toBeTruthy();
 
@@ -231,7 +231,7 @@ describe.sequential("Agent interaction boundaries", () => {
 
             expect(
                 screen.queryByRole("button", {
-                    name: "Agent or Bot for this conversation",
+                    name: "Agent for this conversation",
                 }),
             ).toBeNull();
             expect(

@@ -450,7 +450,7 @@ const sessionPrepareCommandSchema = z
         kind: z.literal(SESSION_PREPARE_KIND),
         requestId: IDENTIFIER,
         sessionState: z.literal("provisioned").optional(),
-        /** @deprecated Reserved for the legacy Bot Agent-configuration endpoint. */
+        /** Marks an inspection-only Session preparation. */
         transient: z.boolean().optional(),
     })
     .superRefine((command, context) => {

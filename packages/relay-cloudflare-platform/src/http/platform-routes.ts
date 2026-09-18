@@ -13,7 +13,6 @@ import {
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
-import { requestedProjectId } from "./conversation-request.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -101,7 +100,6 @@ export function createPlatformControlApplication() {
                 resources: {
                     apps: true,
                     appCredentials: true,
-                    conversationAccessCredentials: true,
                     projects: true,
                     tenants: true,
                 },
@@ -195,7 +193,7 @@ export function createPlatformControlApplication() {
             );
         })
         .get("/v1/projects/:projectId/audit-events", async (context) => {
-            const projectId = requestedProjectId(context.req.raw);
+            const projectId = path(context.req.param("projectId"));
             const identity = await authenticateDeveloper(context);
             return context.json(
                 await context.env.control.listProjectAuditEvents(

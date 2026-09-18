@@ -27,7 +27,6 @@ export { WsTransport } from "./transport/ws-transport.ts";
 
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const APP_CREDENTIAL_PATTERN = /^mapp_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;
-const CONVERSATION_CREDENTIAL_PATTERN = /^mconv_[a-zA-Z0-9_-]{22}_[a-zA-Z0-9_-]{43}$/;
 
 function record(value: unknown, name: string): Readonly<Record<string, unknown>> {
     if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -91,13 +90,6 @@ function requestedDisplayName(value: string): string {
     return normalized;
 }
 
-function requestedLifetime(value: number, maximumSeconds: number, name: string): number {
-    if (!Number.isSafeInteger(value) || value < 60 || value > maximumSeconds) {
-        throw new MobiusValidationError(`The ${name} lifetime is invalid`);
-    }
-    return value;
-}
-
 function requestedPermissions(value: readonly string[]): readonly string[] {
     if (
         value.length === 0 ||
@@ -116,15 +108,6 @@ export class MobiusAppCredentialProvider extends StaticMobiusCredentialProvider 
     constructor(credential: string) {
         if (!APP_CREDENTIAL_PATTERN.test(credential)) {
             throw new MobiusValidationError("The AppCredential is invalid");
-        }
-        super(credential);
-    }
-}
-
-export class MobiusConversationCredentialProvider extends StaticMobiusCredentialProvider {
-    constructor(credential: string) {
-        if (!CONVERSATION_CREDENTIAL_PATTERN.test(credential)) {
-            throw new MobiusValidationError("The ConversationAccessCredential is invalid");
         }
         super(credential);
     }
@@ -341,44 +324,6 @@ export class MobiusPlatformProject {
     }
 }
 
-export class MobiusConversationAccessCredential {
-    readonly actorRef: string;
-    readonly appId: string;
-    readonly conversationId: string;
-    readonly credential: string;
-    readonly credentialId: string;
-    readonly expiresAt: string;
-    readonly issuedAt: string;
-    readonly permissions: readonly string[];
-    readonly projectId: string;
-    readonly sessionId: string;
-
-    constructor(value: Readonly<Record<string, unknown>>) {
-        this.actorRef = string(value, "actorRef", 200);
-        this.appId = identifier(value, "appId");
-        this.conversationId = identifier(value, "conversationId");
-        this.credential = string(value, "credential");
-        if (!CONVERSATION_CREDENTIAL_PATTERN.test(this.credential)) {
-            throw new MobiusProtocolError("The Platform returned an invalid ConversationAccessCredential");
-        }
-        this.credentialId = identifier(value, "credentialId");
-        this.expiresAt = timestamp(value, "expiresAt");
-        this.issuedAt = timestamp(value, "issuedAt");
-        this.permissions = strings(value, "permissions");
-        this.projectId = identifier(value, "projectId");
-        this.sessionId = identifier(value, "sessionId");
-    }
-}
-
-export class MobiusRotatedConversationAccessCredential extends MobiusConversationAccessCredential {
-    readonly replacedCredentialId: string;
-
-    constructor(value: Readonly<Record<string, unknown>>) {
-        super(value);
-        this.replacedCredentialId = identifier(value, "replacedCredentialId");
-    }
-}
-
 export class MobiusCredentialRevocation {
     readonly credentialId: string;
     readonly revokedAt: string;
@@ -399,12 +344,6 @@ export interface MobiusCreatePlatformProjectRequest {
 export interface MobiusIssueAppCredentialRequest {
     readonly permissions: readonly string[];
     readonly projectIds: readonly string[];
-}
-
-export interface MobiusIssueConversationAccessCredentialRequest {
-    readonly actorRef: string;
-    readonly expiresInSeconds: number;
-    readonly permissions: readonly string[];
 }
 
 export interface MobiusPlatformDeveloperClientOptions extends MobiusEndpointOptions {
@@ -747,64 +686,6 @@ export class MobiusPlatformAppClient {
                     signal,
                 ),
                 "Project",
-            ),
-        );
-
-    readonly issueConversationAccessCredential = async (
-        projectId: string,
-        conversationId: string,
-        request: MobiusIssueConversationAccessCredentialRequest,
-        signal: AbortSignal,
-    ): Promise<MobiusConversationAccessCredential> =>
-        new MobiusConversationAccessCredential(
-            record(
-                await this.#executor.post(
-                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversations/${encodeURIComponent(requestedIdentifier(conversationId, "Conversation identifier"))}/access-credentials`,
-                    {
-                        actorRef: request.actorRef,
-                        expiresInSeconds: requestedLifetime(
-                            request.expiresInSeconds,
-                            3_600,
-                            "ConversationAccessCredential",
-                        ),
-                        permissions: requestedPermissions(request.permissions),
-                    },
-                    signal,
-                ),
-                "ConversationAccessCredential",
-            ),
-        );
-
-    readonly rotateConversationAccessCredential = async (
-        projectId: string,
-        credentialId: string,
-        expiresInSeconds: number,
-        signal: AbortSignal,
-    ): Promise<MobiusRotatedConversationAccessCredential> =>
-        new MobiusRotatedConversationAccessCredential(
-            record(
-                await this.#executor.post(
-                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/rotate`,
-                    { expiresInSeconds: requestedLifetime(expiresInSeconds, 3_600, "ConversationAccessCredential") },
-                    signal,
-                ),
-                "rotated ConversationAccessCredential",
-            ),
-        );
-
-    readonly revokeConversationAccessCredential = async (
-        projectId: string,
-        credentialId: string,
-        signal: AbortSignal,
-    ): Promise<MobiusCredentialRevocation> =>
-        new MobiusCredentialRevocation(
-            record(
-                await this.#executor.post(
-                    `v1/projects/${encodeURIComponent(requestedIdentifier(projectId, "Project identifier"))}/conversation-access-credentials/${encodeURIComponent(requestedIdentifier(credentialId, "ConversationAccessCredential identifier"))}/revoke`,
-                    {},
-                    signal,
-                ),
-                "ConversationAccessCredential revocation",
             ),
         );
 }

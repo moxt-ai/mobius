@@ -262,7 +262,7 @@ describe("ACP session control protocol contract", () => {
         expect(decodeAgentInstallRequestCommand(encodeAgentInstallRequestCommand(command))).toEqual(command);
     });
 
-    it("Given a paired local Agent, When its settings are discovered, Then the protocol contains neither Bot nor Mobius Session identity", () => {
+    it("Given a paired local Agent, When its settings are discovered, Then the protocol contains no Session identity", () => {
         const command: AgentSettingsDiscoverCommand = {
             additionalDirectoryIds: [],
             agentId: "codex",
@@ -285,9 +285,9 @@ describe("ACP session control protocol contract", () => {
         expect(() =>
             decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, sessionId: "session-1" })),
         ).toThrowError(ProtocolMessageError);
-        expect(() => decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, botId: "bot-1" }))).toThrowError(
-            ProtocolMessageError,
-        );
+        expect(() =>
+            decodeAgentSettingsDiscoverCommand(JSON.stringify({ ...command, retiredId: "retired-1" })),
+        ).toThrowError(ProtocolMessageError);
     });
 
     it("Given a legacy Agent installation command, When the integration-only boundary decodes it, Then the command is rejected before reaching an older installation workflow", () => {

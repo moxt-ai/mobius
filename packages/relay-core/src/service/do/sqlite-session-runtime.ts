@@ -76,9 +76,6 @@ export class SqliteSessionRuntime
 
     readonly listRecoverySessions = () => this.#recovery.list();
 
-    readonly readExecutionBinding = (scope: ProjectScope, sessionId: string, executionId: string): string =>
-        this.#recovery.readExecutionBinding(scope, sessionId, executionId);
-
     readonly acceptTurn: SessionCommandGateway["acceptTurn"] = (...parameters) =>
         this.#commands.acceptTurn(...parameters);
 

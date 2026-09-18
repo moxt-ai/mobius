@@ -6,7 +6,6 @@
     "types": "./src/index.ts",
     "exports": {
         ".": "./src/index.ts",
-        "./browser": "./src/browser.ts",
         "./channel": "./src/channel.ts",
         "./platform": "./src/platform.ts",
         "./server": "./src/server.ts"
@@ -25,10 +24,6 @@
             ".": {
                 "types": "./dist/index.d.ts",
                 "import": "./dist/index.js"
-            },
-            "./browser": {
-                "types": "./dist/browser.d.ts",
-                "import": "./dist/browser.js"
             },
             "./channel": {
                 "types": "./dist/channel.d.ts",

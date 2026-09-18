@@ -15,8 +15,8 @@ Each Runtime has its own generated Runtime ID, Channel ID, one-time pairing
 code, Runtime Credential, connection lease, machine metadata, and Agent catalog.
 Project credentials are a separate authority. Accountless owner and scoped
 application credentials may pair Runtimes when their server-owned permissions
-include `runtime:pair`; browser, linked-device, Runtime daemon, and Bot
-Connection credentials cannot do so. Reading and revoking use `runtime:read`
+include `runtime:pair`; browser, linked-device, and Runtime daemon credentials
+cannot do so. Reading and revoking use `runtime:read`
 and `runtime:revoke` independently.
 
 ## Web workflow
@@ -116,8 +116,8 @@ returns `runtime_quota_exceeded` with HTTP 429 while the quota is full.
 
 `GET /v1/projects/{projectId}/runtimes` returns all paired Runtimes in the Project.
 Online state comes from each Runtime's own Durable Object and is not shared.
-Session creation, Session rebinding, import, Turn dispatch, and Bot execution
-binding reauthorize the selected `runtimeId` against the authenticated Project.
+Session creation, Session rebinding, import, and Turn dispatch reauthorize the
+selected `runtimeId` against the authenticated Project.
 A Runtime from another Project fails with `runtime_access_denied` or
 `binding_incompatible` before work is accepted. Binding creation never sends a
 local approval request.
@@ -131,9 +131,8 @@ Authorization: Bearer <project-owner-credential>
 
 Revocation is idempotent. It invalidates that Runtime's daemon credential,
 closes its active daemon and Channel host sockets, expires Channel access
-grants, and makes its active Bot bindings unavailable. Other Runtimes,
-Sessions, Bot connections, and daemon connections are unchanged. Work remains
-pinned to its recorded Runtime and binding revision; Mobius does not fail over
+grants. Other Runtimes, Sessions, and daemon connections are unchanged. Work
+remains pinned to its recorded Runtime and binding revision; Mobius does not fail over
 or migrate work to another machine.
 
 The first Runtime can be revoked without losing Project administration because

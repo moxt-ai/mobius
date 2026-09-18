@@ -1,9 +1,7 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import {
-    CloudflareBotConnectionRuntime,
     CloudflareChannelRuntime,
     CloudflareSessionTransport,
-    createBotApplication,
     createPlatformMobiusApplication,
     createWorkerContext,
     instrumentD1Database,
@@ -18,7 +16,7 @@ import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
 } from "./composition/platform-authentication-environment.ts";
-import { BotConnectionActor, PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
+import { PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
 import {
@@ -26,9 +24,9 @@ import {
     type ProjectWorkerRoutingBindings,
     routeProjectDurableObject,
 } from "./gateway/project-durable-object-routing.ts";
-import { createConversationApplication } from "./http/conversation-routes.ts";
 import { createPlatformControlApplication } from "./http/platform-routes.ts";
 import { createProjectApplication } from "./http/project-routes.ts";
+import { createSessionCredentialRoutes } from "./http/session-credential-routes.ts";
 import { acceptWebSocketHttpTransport } from "./http/websocket-http-transport.ts";
 import { ClerkOrganizationGateway } from "./infra/clerk-organization-gateway.ts";
 import type { OrganizationMembershipGateway } from "./infra/organization-membership-gateway.ts";
@@ -38,13 +36,10 @@ import {
     sessionAccessTargetMiddleware,
 } from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
-import { ConversationAccessService } from "./service/conversation-access-service.ts";
-import { ConversationStreamRegistry } from "./service/conversation-stream-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
 import { AppCredentialCacheStorage } from "./storage/app-credential-cache-storage.ts";
-import { ConversationAccessStorage } from "./storage/conversation-access-storage.ts";
 import { OrganizationInviteStorage } from "./storage/organization-invite-storage.ts";
 import { PlatformControlPlaneStorage } from "./storage/platform-control-plane-storage.ts";
 import {
@@ -61,7 +56,6 @@ export interface PlatformRelayBindings
         ProjectWorkerRoutingBindings {
     readonly CLERK_SECRET_KEY?: string;
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
@@ -89,9 +83,7 @@ class DisabledPublicProjectBootstrap {
 
 const projectApplication = createPlatformMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
-const botApplication = createBotApplication();
 const controlApplication = createPlatformControlApplication();
-const conversationApplication = createConversationApplication();
 
 type DispatchEnvironment = {
     readonly Bindings: PlatformApplicationBindings;
@@ -113,7 +105,6 @@ export function createPlatformApplication(
     organizations: (environment: PlatformRelayBindings) => OrganizationMembershipGateway = (environment) =>
         new ClerkOrganizationGateway(environment.CLERK_SECRET_KEY),
 ): Hono<{ Bindings: PlatformApplicationBindings }> {
-    const conversationStreams = new ConversationStreamRegistry();
     const controlHandler: Handler<DispatchEnvironment> = (context) =>
         controlApplication.fetch(context.req.raw, {
             control: context.var.control,
@@ -124,24 +115,6 @@ export function createPlatformApplication(
                 organizations(context.env),
             ),
         });
-    const conversationHandler: Handler<DispatchEnvironment> = (context) => {
-        const { relay, sessionAccess, control } = context.var;
-        if (relay.services.bots === null) {
-            throw new Error("Platform Bot services are unavailable");
-        }
-        return conversationApplication.fetch(context.req.raw, {
-            sessionAccess,
-            access: new ConversationAccessService(
-                new ConversationAccessStorage(context.env.PLATFORM_DIRECTORY_DATABASE, context.var.databases),
-                control,
-            ),
-            allowedOrigins: authentication.allowedOrigins,
-            bots: relay.services.bots,
-            nowEpochMilliseconds: () => Date.now(),
-            sessions: relay.services.sessions,
-            streams: conversationStreams,
-        });
-    };
     const projectHandler: Handler<DispatchEnvironment> = (context) =>
         scopedProjectApplication.fetch(context.req.raw, {
             relay: context.var.relay,
@@ -166,7 +139,7 @@ export function createPlatformApplication(
                 ),
         );
     const sessionRoutes = new Hono<DispatchEnvironment>()
-        .all("/:sessionId/access-credentials", conversationHandler)
+        .route("/", createSessionCredentialRoutes())
         .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
@@ -189,22 +162,12 @@ export function createPlatformApplication(
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/*", projectHandler)
         .all("/session-imports/*", projectHandler)
-        .all("/client/session/*", conversationHandler)
-        .all("/conversations/:conversationId/access-credentials", conversationHandler)
-        .route(
-            "/conversation-access-credentials/:credentialId",
-            new Hono<DispatchEnvironment>().all("/rotate", conversationHandler).all("/revoke", conversationHandler),
-        );
+        .all("/*", projectHandler);
     const versionedRoutes = new Hono<DispatchEnvironment>()
         .route("/projects/:projectId", projectRoutes)
         .all("/runtime-pairings/*", projectHandler)
         .all("/runtimes/connect", projectHandler)
-        .all("/*", (context) => {
-            const bots = context.var.relay.services.bots;
-            return bots === null
-                ? projectApplication.fetch(context.req.raw, context.var.relay)
-                : botApplication.fetch(context.req.raw, { services: { bots } });
-        });
+        .all("/*", projectHandler);
 
     const application = new Hono<DispatchEnvironment>()
         .use("*", async (context, next) => {
@@ -317,7 +280,6 @@ export function createPlatformGateways(environment: PlatformRelayBindings): Work
             "platform",
             (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
         ),
-        connections: new CloudflareBotConnectionRuntime(environment.BOT_CONNECTIONS),
     };
 }
 
@@ -338,5 +300,5 @@ const worker = {
 
 export { platformAuthenticationFromEnvironment } from "./composition/platform-authentication-environment.ts";
 export { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
-export { BotConnectionActor, PlatformSessionRelay, RuntimeRelay };
+export { PlatformSessionRelay, RuntimeRelay };
 export default worker;

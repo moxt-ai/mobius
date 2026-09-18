@@ -399,11 +399,11 @@ describe.sequential("Session persistence boundaries", () => {
             await sendReadySession(paired.daemon, directoryPreparation);
 
             const agentPicker = screen.getByRole("button", {
-                name: "Agent or Bot for this conversation",
+                name: "Agent for this conversation",
             });
             fireEvent.click(agentPicker);
             fireEvent.click(
-                within(screen.getByRole("tabpanel", { name: "Local Agents" })).getByRole("button", {
+                within(screen.getByRole("dialog", { name: "Choose local Agent" })).getByRole("button", {
                     name: "Claude",
                 }),
             );
@@ -477,7 +477,7 @@ describe.sequential("Session persistence boundaries", () => {
             );
             expect(
                 screen.getByRole("button", {
-                    name: "Agent or Bot for this conversation",
+                    name: "Agent for this conversation",
                 }).textContent,
             ).toContain("Claude");
             await screen.findByRole("button", { name: /Run settings: Plan/ });

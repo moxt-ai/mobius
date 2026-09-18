@@ -1,5 +1,5 @@
 import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
-import { MobiusBotOwnerClient, MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
+import { MobiusClient, StaticMobiusCredentialProvider } from "@moxt-ai/mobius-sdk/server";
 
 export interface MoxtAppCredentialVault {
     readonly put: (credential: string, signal: AbortSignal) => Promise<void>;
@@ -81,29 +81,15 @@ export async function provisionMoxtPlatformProject(
  * boundaries. No Mobius credential from this object belongs in a browser.
  */
 export class MoxtPlatformServerClients {
-    readonly #credential: string;
-    readonly #endpoint: string;
-    readonly #projectId: string;
     readonly project: MobiusClient;
 
     constructor(endpoint: string, projectId: string, appCredential: string) {
-        this.#credential = appCredential;
-        this.#endpoint = endpoint;
-        this.#projectId = projectId;
         this.project = new MobiusClient({
             credentialProvider: new StaticMobiusCredentialProvider(appCredential),
             endpoint,
             projectId,
         });
     }
-
-    readonly botsForActor = (actorReference: string): MobiusBotOwnerClient =>
-        new MobiusBotOwnerClient({
-            actorReference,
-            credentialProvider: new StaticMobiusCredentialProvider(this.#credential),
-            endpoint: this.#endpoint,
-            projectId: this.#projectId,
-        });
 
     readonly close = (): void => {
         this.project.close();

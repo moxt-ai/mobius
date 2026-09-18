@@ -46,7 +46,7 @@ points. Platform uses Clerk organizations as tenants (`tenantId = org_...`) and
 verified active-organization claims for developer membership. Clerk owns
 organization selection, creation, naming, and membership; Platform retains local
 quota, lifecycle, and audit records. Platform owns OIDC, App, AppCredential, and
-ConversationAccessCredential. Standalone owns accountless Project bootstrap and
+Session access credentials. Standalone owns accountless Project bootstrap and
 Owner Capability. Shared Relay services consume normalized access contexts and
 an opaque storage locator; they do not decide which hosting credential is valid.
 
@@ -58,7 +58,7 @@ the default Standalone entry point.
 
 The reusable local daemon entry is `@moxt-ai/mobius/runtime`. Keep CLI parsing
 and host signal handling outside the engine, and keep AppCredential, OIDC, and
-Conversation credential values out of its configuration. See [Embedded Mobius
+Session credential values out of its configuration. See [Embedded Mobius
 Runtime](./docs/runtime-sdk.md).
 
 ## Pairing scope ownership
@@ -66,7 +66,7 @@ Runtime](./docs/runtime-sdk.md).
 Pairing is scoped to a Project only. Relay services never see a tenant: storage
 placement is resolved per Project by the host's `ProjectStorageDirectory`, and
 scoping keys are derived from `projectId` alone. Embedding applications supply
-the directory and required Runtime, Session, and connection gateways to
+the directory and required Runtime and Session gateways to
 `createWorkerContext`, which assembles the pairing service. Hosting entrypoints
 construct their Cloudflare gateways explicitly. Durable Object hosts use
 `createDurableObjectContext` with bindings and content placement; they do not
@@ -100,7 +100,7 @@ shard-local App tombstones, including protection against late provisioning.
 Migration `0011_platform_project_authorizations.sql` assumes a clean data reset;
 existing central Project rows are not backfilled.
 Platform-owned SQL is grouped under `packages/relay-cloudflare-platform/migrations`:
-`sharding/` stores Project credential scopes, Session and Conversation credentials,
+`sharding/` stores Project credential scopes and Session credentials,
 and Project audit events; `dashboard/` stores the administrative directory and
 `platform_dashboard_audit_events` for events without a Project. Project rows route
 by their encoded Project ID. Tenant audit reads return dashboard events;

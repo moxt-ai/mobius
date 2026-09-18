@@ -95,31 +95,18 @@ The dependency direction is from the application to Mobius:
 As a result, `app-slack` and other `app-*` services can be added or removed
 without changing Mobius itself.
 
-### First-class Bots and channel-neutral connectors
+### Session-only agent execution
 
-Mobius also provides a provider-neutral Bot API for durable, project-scoped Bot
-identities. A Bot owns immutable profile and behavior revisions, an active
-local execution binding, pinned conversations, and independently revocable
-external connections. External connectors can submit inbound messages and
-consume durable outbound deliveries without receiving authority over the local
-Agent, Runtime, workspace, executable, or permission decisions.
-
-Provider installations, credentials, webhook verification, provider account
-and destination mappings, and physical delivery remain outside this repository.
-Runtime pairing is the only local trust-establishment step. After pairing, Bot
-bindings become active immediately when the owner selects an advertised Agent
-and directory; the daemon performs automatic executable, directory, and
-capability validation before every execution without a local approval or grant.
-A short-lived `BotExecutionCapability` authorizes one running Bot to use only
-its owner-approved outbound targets. See [Bots and external
-connectors](docs/bots.md) for the API, SDK, CLI, offline semantics, and security
-model.
+Mobius stores and runs work as project-scoped Sessions. A Session pins its
+Runtime, local Agent, workspace, and per-Turn configuration snapshot before
+dispatch. The paired daemon remains the authority for executable, directory,
+and side-effect decisions.
 
 Standalone and Platform expose separate hosting trust planes. Standalone keeps
 accountless Project ownership; Platform adds OIDC developers, Tenant/App
 provisioning, AppCredentials, and exact-Session browser credentials. Both
-normalize authorized work into the shared Project services while Runtime,
-Connector, and execution-capability authority remain independent.
+normalize authorized work into the shared Project and Session services while
+Runtime authority remains independent.
 See [Cloudflare Platform hosting](docs/platform-hosting.md) and [Project
 authentication and credential operations](docs/project-authentication.md).
 
@@ -223,8 +210,8 @@ capabilities for trusted device transfer, not user or team identity.
 An embedding application that holds the Project owner credential can add more
 independent machines to the same Project through the Project-scoped Runtime
 pairing API. Each new Runtime has a separate Channel, daemon credential, online
-state, and Agent catalog. Sessions and Bots select one authorized Runtime; an
-owner can revoke one without disconnecting the others, and pinned work never
+state, and Agent catalog. Sessions select one authorized Runtime; an owner can
+revoke one without disconnecting the others, and pinned work never
 silently fails over. See [Project Runtime pairing](docs/runtime-pairing.md) for
 the HTTP contract, SDK workflow, quota, audit, and revocation semantics.
 

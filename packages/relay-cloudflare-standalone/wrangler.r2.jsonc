@@ -13,10 +13,6 @@
             {
                 "name": "SESSION_RELAY",
                 "class_name": "SessionRelay"
-            },
-            {
-                "name": "BOT_CONNECTIONS",
-                "class_name": "BotConnectionActor"
             }
         ]
     },
@@ -32,6 +28,10 @@
         {
             "tag": "bot-connections",
             "new_sqlite_classes": ["BotConnectionActor"]
+        },
+        {
+            "tag": "remove-bot-connections",
+            "deleted_classes": ["BotConnectionActor"]
         }
     ],
     "d1_databases": [

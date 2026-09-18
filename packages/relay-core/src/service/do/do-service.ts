@@ -7,15 +7,12 @@ import {
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
-import type { BotOutboundSubmission } from "../../entity/bot/bot-session.ts";
 import { type CreateSessionBindingRequest, type ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
-import type { BotSessionService } from "./bot-session-service.ts";
 import type { SessionRecoveryService } from "./session-recovery-service.ts";
 import type { SqliteSessionRuntime } from "./sqlite-session-runtime.ts";
 
 interface DoServices {
     readonly runtime: SqliteSessionRuntime;
-    readonly bots: BotSessionService;
     readonly recovery: SessionRecoveryService;
 }
 
@@ -39,28 +36,6 @@ export class DoService {
         this.#services = cx.services;
     }
 
-    readonly acceptOutbound = async (
-        scope: ProjectScope,
-        sessionId: string,
-        executionId: string,
-        capabilitySecret: string,
-        submission: BotOutboundSubmission,
-        now: number,
-        signal: AbortSignal,
-    ) => {
-        const accepted = await this.#services.bots.acceptOutbound(
-            scope,
-            sessionId,
-            executionId,
-            capabilitySecret,
-            submission,
-            now,
-            signal,
-        );
-        await this.#services.recovery.schedule(signal);
-        return accepted;
-    };
-
     readonly commitEvent = async (
         scope: ProjectScope,
         runtimeId: string,
@@ -78,29 +53,6 @@ export class DoService {
             throw error;
         }
         const kind = decodeMessageKind(envelope.payload);
-        if (!result.duplicate) {
-            if (isTerminalSessionEvent(kind)) {
-                const payload: unknown = JSON.parse(envelope.payload);
-                const record =
-                    typeof payload === "object" && payload !== null && !Array.isArray(payload) ? payload : {};
-                const commandId = "commandId" in record && typeof record.commandId === "string" ? record.commandId : "";
-                const outcome =
-                    kind === SESSION_FAILED_KIND
-                        ? "failed"
-                        : "stopReason" in record && record.stopReason === "cancelled"
-                          ? "cancelled"
-                          : "completed";
-                const pending = await this.#services.bots.settleExecution(
-                    scope,
-                    envelope.sessionId,
-                    commandId,
-                    outcome,
-                    now,
-                    signal,
-                );
-                await this.#services.recovery.reconcile(scope, envelope.sessionId, pending, signal);
-            }
-        }
         if (isTerminalSessionEvent(kind)) {
             await this.#services.recovery.schedule(signal);
         } else {

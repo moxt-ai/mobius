@@ -2826,7 +2826,7 @@ export class AcpSessionManager {
         );
 
     /**
-     * @deprecated Retained for the Bot-scoped legacy Agent-configuration API.
+     * Retained for Agents that expose a separate persisted configuration channel.
      * Use inspectAgentSettings for Agent-scoped settings discovery.
      */
     readonly inspectSession = async (

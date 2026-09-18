@@ -66,26 +66,6 @@ async function projectIdFromUnscopedRequest(request: Request): Promise<string | 
     if (credentialProject !== null) {
         return credentialProject;
     }
-    if (pathname === `${MOBIUS_API_PREFIX}/v1/bot-connection-grants/redeem`) {
-        try {
-            const body: unknown = await request.clone().json();
-            if (typeof body === "object" && body !== null) {
-                const grantId: unknown = "grantId" in body ? body.grantId : null;
-                const grantSecret: unknown = "grantSecret" in body ? body.grantSecret : null;
-                for (const value of [grantId, grantSecret]) {
-                    if (typeof value !== "string") {
-                        continue;
-                    }
-                    const projectId = projectIdFromPrefixedValue(value);
-                    if (projectId !== null) {
-                        return projectId;
-                    }
-                }
-            }
-        } catch {
-            return null;
-        }
-    }
     return null;
 }
 

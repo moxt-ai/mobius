@@ -151,7 +151,7 @@ function decodeLifecycle(value: unknown): SessionLifecycle {
     throw new SessionRuntimeError("session_storage_unavailable", "The session lifecycle is invalid");
 }
 
-export function decodeSessionSummary(value: unknown): SessionSummary {
+function decodeSessionSummary(value: unknown): SessionSummary {
     if (!isRecord(value) || !isRecord(value["policy"]) || !isRecord(value["defaultBinding"])) {
         throw new SessionRuntimeError("session_storage_unavailable", "The session summary is invalid");
     }
@@ -220,7 +220,7 @@ function decodeConfiguration(value: unknown): SessionConfigurationSnapshot {
     }
 }
 
-export function decodeRemoteAttemptSummary(value: unknown): SessionMessage["attempt"] {
+function decodeRemoteAttemptSummary(value: unknown): SessionMessage["attempt"] {
     if (value === null) {
         return null;
     }
@@ -304,7 +304,7 @@ export function decodeRemoteAttemptSummary(value: unknown): SessionMessage["atte
     throw new SessionRuntimeError("session_storage_unavailable", "The session attempt state is invalid");
 }
 
-export function decodeRemoteActivitySummaries(value: unknown): SessionMessage["activities"] {
+function decodeRemoteActivitySummaries(value: unknown): SessionMessage["activities"] {
     if (!Array.isArray(value)) {
         throw new SessionRuntimeError("session_storage_unavailable", "The session activities are invalid");
     }

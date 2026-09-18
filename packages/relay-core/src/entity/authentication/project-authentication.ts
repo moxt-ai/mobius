@@ -5,15 +5,6 @@ import { VerifiedChannelAccess } from "../pairing/pairing.ts";
 export class ProjectPermission {
     static readonly ArtifactRead = new ProjectPermission("artifact:read");
     static readonly ArtifactWrite = new ProjectPermission("artifact:write");
-    static readonly BotBehaviorWrite = new ProjectPermission("bot:behavior:write");
-    static readonly BotBindingWrite = new ProjectPermission("bot:binding:write");
-    static readonly BotConnectionManage = new ProjectPermission("bot:connection:manage");
-    static readonly BotProfileWrite = new ProjectPermission("bot:profile:write");
-    static readonly BotRead = new ProjectPermission("bot:read");
-    static readonly ConversationCreate = new ProjectPermission("conversation:create");
-    static readonly ConversationRead = new ProjectPermission("conversation:read");
-    static readonly ConversationTurnCancel = new ProjectPermission("conversation:turn:cancel");
-    static readonly ConversationTurnCreate = new ProjectPermission("conversation:turn:create");
     static readonly IdentityBindingsManage = new ProjectPermission("identity-binding:manage");
     static readonly InteractionRespond = new ProjectPermission("interaction:respond");
     static readonly OwnerCredentialsManage = new ProjectPermission("owner-credential:manage");
@@ -38,15 +29,6 @@ export class ProjectPermission {
 export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
     ProjectPermission.ArtifactRead,
     ProjectPermission.ArtifactWrite,
-    ProjectPermission.BotBehaviorWrite,
-    ProjectPermission.BotBindingWrite,
-    ProjectPermission.BotConnectionManage,
-    ProjectPermission.BotProfileWrite,
-    ProjectPermission.BotRead,
-    ProjectPermission.ConversationCreate,
-    ProjectPermission.ConversationRead,
-    ProjectPermission.ConversationTurnCancel,
-    ProjectPermission.ConversationTurnCreate,
     ProjectPermission.IdentityBindingsManage,
     ProjectPermission.InteractionRespond,
     ProjectPermission.OwnerCredentialsManage,
@@ -63,11 +45,6 @@ export const PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
 export const INTERACTIVE_PROJECT_PERMISSIONS: readonly ProjectPermission[] = Object.freeze([
     ProjectPermission.ArtifactRead,
     ProjectPermission.ArtifactWrite,
-    ProjectPermission.BotRead,
-    ProjectPermission.ConversationCreate,
-    ProjectPermission.ConversationRead,
-    ProjectPermission.ConversationTurnCancel,
-    ProjectPermission.ConversationTurnCreate,
     ProjectPermission.InteractionRespond,
     ProjectPermission.ProjectEventsRead,
     ProjectPermission.ProjectRead,
@@ -105,7 +82,6 @@ export function decodeProjectPermissions(value: unknown): ReadonlySet<ProjectPer
 
 export class AuditActorKind {
     static readonly AccountlessOwner = new AuditActorKind("accountless_owner");
-    static readonly BotConnection = new AuditActorKind("bot_connection");
     static readonly BrowserAccess = new AuditActorKind("browser_access");
     static readonly ExternalIdentity = new AuditActorKind("external_identity");
 
@@ -466,82 +442,5 @@ export class RuntimeAccessContext extends VerifiedChannelAccess {
         this.scope = scope;
         this.credentialId = credentialId;
         this.leaseId = leaseId;
-    }
-}
-
-export class BotConnectionAccessContext {
-    readonly audience: string;
-    readonly botId: string;
-    readonly connectionId: string;
-    readonly connectorActor: AuditActor;
-    readonly credentialId: string;
-    readonly scope: ProjectScope;
-    readonly scopes: ReadonlySet<string>;
-
-    constructor(
-        scope: ProjectScope,
-        botId: string,
-        connectionId: string,
-        credentialId: string,
-        connectorActor: AuditActor,
-        audience: string,
-        scopes: ReadonlySet<string>,
-    ) {
-        this.scope = scope;
-        this.botId = botId;
-        this.connectionId = connectionId;
-        this.credentialId = credentialId;
-        this.connectorActor = connectorActor;
-        this.audience = audience;
-        this.scopes = new Set(scopes);
-    }
-}
-
-export class ExecutionPermit {
-    readonly allowedTargetIds: ReadonlySet<string>;
-    readonly behaviorRevisionId: string;
-    readonly bindingId: string;
-    readonly bindingRevision: number;
-    readonly botId: string;
-    readonly capabilityId: string;
-    readonly conversationId: string;
-    readonly executionId: string;
-    readonly operation: string;
-    readonly remainingUses: number;
-    readonly runtimeId: string;
-    readonly scope: ProjectScope;
-    readonly sessionId: string;
-    readonly turnId: string;
-
-    constructor(
-        scope: ProjectScope,
-        capabilityId: string,
-        executionId: string,
-        botId: string,
-        conversationId: string,
-        sessionId: string,
-        turnId: string,
-        behaviorRevisionId: string,
-        bindingId: string,
-        bindingRevision: number,
-        runtimeId: string,
-        operation: string,
-        allowedTargetIds: ReadonlySet<string>,
-        remainingUses: number,
-    ) {
-        this.scope = scope;
-        this.capabilityId = capabilityId;
-        this.executionId = executionId;
-        this.botId = botId;
-        this.conversationId = conversationId;
-        this.sessionId = sessionId;
-        this.turnId = turnId;
-        this.behaviorRevisionId = behaviorRevisionId;
-        this.bindingId = bindingId;
-        this.bindingRevision = bindingRevision;
-        this.runtimeId = runtimeId;
-        this.operation = operation;
-        this.allowedTargetIds = new Set(allowedTargetIds);
-        this.remainingUses = remainingUses;
     }
 }

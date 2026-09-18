@@ -396,14 +396,11 @@ function decodeAgents(value: unknown): readonly AgentOption[] {
                     key !== "agentPath" &&
                     key !== "agentVersion" &&
                     key !== "agentSettingsDiscovery" &&
-                    key !== "botSessionConfiguration" &&
                     key !== "capabilities" &&
                     key !== "id" &&
                     key !== "label" &&
                     key !== "sessionTurnConfiguration",
             ) ||
-            (Object.hasOwn(candidate, "botSessionConfiguration") &&
-                typeof candidate["botSessionConfiguration"] !== "boolean") ||
             (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
                 typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
             (Object.hasOwn(candidate, "sessionTurnConfiguration") &&

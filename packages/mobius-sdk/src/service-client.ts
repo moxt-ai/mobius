@@ -1300,7 +1300,6 @@ export class MobiusEventSubscription {
     readonly #maximumReconnectAttempts: number;
     readonly #observer: MobiusSessionEventObserver;
     readonly #path: string;
-    readonly #cursorParameter: string;
     #closed = false;
     #cursor: string;
     #hasSequence = false;
@@ -1316,7 +1315,6 @@ export class MobiusEventSubscription {
         controller: AbortController,
         firstConnection: StreamConnection,
         maximumReconnectAttempts: number,
-        cursorParameter = "cursor",
     ) {
         this.#cursor = cursor;
         this.#controller = controller;
@@ -1325,7 +1323,6 @@ export class MobiusEventSubscription {
         this.#maximumReconnectAttempts = maximumReconnectAttempts;
         this.#observer = observer;
         this.#path = path;
-        this.#cursorParameter = cursorParameter;
         if (this.#externalSignal.aborted) {
             this.abortFromExternal();
         } else {
@@ -1501,7 +1498,7 @@ export class MobiusEventSubscription {
         if (this.#cursor.length === 0) {
             return this.#path;
         }
-        return `${this.#path}${this.#path.includes("?") ? "&" : "?"}${this.#cursorParameter}=${encodeURIComponent(this.#cursor)}`;
+        return `${this.#path}${this.#path.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(this.#cursor)}`;
     };
 
     private readonly recover = async (
@@ -1652,91 +1649,6 @@ export class MobiusEventResources {
             path.searchParams.set("cursor", page.cursor);
         }
         return decodeMobiusEventPage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
-    };
-
-    readonly close = (): void => {
-        for (const subscription of this.#subscriptions) {
-            subscription.close();
-        }
-        this.#subscriptions.clear();
-    };
-}
-
-export class MobiusFixedSessionEventResources {
-    readonly #projectId: string;
-    readonly #executor: MobiusRequestExecutor;
-    readonly #maximumReconnectAttempts: number;
-    readonly #subscriptions = new Set<MobiusEventSubscription>();
-
-    constructor(
-        executor: MobiusRequestExecutor,
-        projectId: string,
-        maximumReconnectAttempts = DEFAULT_STREAM_RECONNECT_ATTEMPTS,
-    ) {
-        if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(projectId)) {
-            throw new MobiusValidationError("The Mobius project identifier is invalid");
-        }
-        this.#projectId = projectId;
-        this.#executor = executor;
-        this.#maximumReconnectAttempts = validatePositiveInteger(
-            maximumReconnectAttempts,
-            "stream reconnect attempt limit",
-        );
-    }
-
-    readonly subscribe = async (
-        cursor: string,
-        observer: MobiusSessionEventObserver,
-        signal: AbortSignal,
-    ): Promise<MobiusEventSubscription> => {
-        if (cursor.length > 512) {
-            throw new MobiusValidationError("The Session event cursor is invalid");
-        }
-        const path = `v1/projects/${encodeURIComponent(this.#projectId)}/client/session/events`;
-        const streamPath = cursor.length === 0 ? path : `${path}?after=${encodeURIComponent(cursor)}`;
-        const controller = new AbortController();
-        const abortFromExternal = (): void => controller.abort(signal.reason);
-        if (signal.aborted) {
-            abortFromExternal();
-        } else {
-            signal.addEventListener("abort", abortFromExternal, { once: true });
-        }
-        let firstConnection: StreamConnection;
-        try {
-            firstConnection = await this.#executor.openEventStream(streamPath, controller.signal);
-        } finally {
-            signal.removeEventListener("abort", abortFromExternal);
-        }
-        const subscription = new MobiusEventSubscription(
-            this.#executor,
-            path,
-            cursor,
-            observer,
-            signal,
-            controller,
-            firstConnection,
-            this.#maximumReconnectAttempts,
-            "after",
-        );
-        this.#subscriptions.add(subscription);
-        const remove = subscription.completed.finally(() => {
-            this.#subscriptions.delete(subscription);
-        });
-        void remove.catch(() => {});
-        return subscription;
-    };
-
-    readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusEventPage> => {
-        const query = new URLSearchParams({ limit: page.limit.toString() });
-        if (page.cursor.length > 0) {
-            query.set("after", page.cursor);
-        }
-        return decodeMobiusEventPage(
-            await this.#executor.get(
-                `v1/projects/${encodeURIComponent(this.#projectId)}/client/session/events?${query.toString()}`,
-                signal,
-            ),
-        );
     };
 
     readonly close = (): void => {

@@ -1,5 +1,4 @@
 import {
-    BotConnectionActor as BotConnectionImplementation,
     CloudflareSessionTransport,
     createDurableObjectContext,
     type LiteSessionConfigurationEnvironment,
@@ -16,7 +15,6 @@ import {
 } from "./storage/platform-database-resolver.ts";
 
 interface PlatformDurableObjectEnvironment extends LiteSessionConfigurationEnvironment, PlatformStorageBindings {
-    readonly BOT_CONNECTIONS: DurableObjectNamespace;
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }
@@ -27,7 +25,6 @@ function createContext(state: DurableObjectState, environment: PlatformDurableOb
     const projects = new PlatformProjectStorageDirectory(registry);
     return createDurableObjectContext(state, {
         environment,
-        connections: environment.BOT_CONNECTIONS,
         sessions: environment.SESSION_RELAY,
         sessionTransport: new CloudflareSessionTransport(
             environment.SESSION_RELAY,
@@ -42,12 +39,6 @@ function createContext(state: DurableObjectState, environment: PlatformDurableOb
 }
 
 export class RuntimeRelay extends RuntimeRelayImplementation {
-    constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
-        super(createContext(state, environment));
-    }
-}
-
-export class BotConnectionActor extends BotConnectionImplementation {
     constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
         super(createContext(state, environment));
     }

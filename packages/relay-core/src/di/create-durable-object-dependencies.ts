@@ -1,31 +1,21 @@
-import type { BotSessionRuntime } from "../entity/bot/bot-session.ts";
 import {
     DEFAULT_SESSION_QUOTA_POLICY,
     ProjectScope,
     type SessionQuotaPolicy,
     StaticSessionQuotaPolicyProvider,
 } from "../entity/do/session.ts";
-import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { SessionCommandGateway, SessionQueryGateway } from "../gateway/index.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
-import { createBotDeliveryRoutes } from "../http/bot/bot-delivery-routes.ts";
 import { createDoRoutes } from "../http/do/do-routes.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
 import type { ContentPersistence, ImmutableContentStore } from "../infra/content-store.ts";
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
-import type { ProjectStorageContext, ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
-import { BotConversationService } from "../service/bot/bot-conversation-service.ts";
-import { BotDeliveryService } from "../service/bot/bot-delivery-service.ts";
-import { BotRuntimeService } from "../service/bot/bot-runtime-service.ts";
-import { BotTargetService } from "../service/bot/bot-target-service.ts";
-import { RemoteBotSessionRuntime } from "../service/bot/remote-bot-session-runtime.ts";
+import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
-import { RuntimeRecoveryService } from "../service/channel/runtime-recovery-service.ts";
 import { type RuntimePeers, RuntimeService } from "../service/channel/runtime-service.ts";
-import { BotSessionService } from "../service/do/bot-session-service.ts";
 import { ContentService } from "../service/do/content-service.ts";
 import { DoService } from "../service/do/do-service.ts";
 import { RemoteSessionRuntime } from "../service/do/remote-session-runtime.ts";
@@ -41,11 +31,7 @@ import { SessionRecoveryService } from "../service/do/session-recovery-service.t
 import { SessionStateService } from "../service/do/session-state-service.ts";
 import { SessionTransferService } from "../service/do/session-transfer-service.ts";
 import { SqliteSessionRuntime } from "../service/do/sqlite-session-runtime.ts";
-import { BotConnectionStorage } from "../storage/bot-connection-storage.ts";
-import { BotConversationStorage } from "../storage/bot-conversation-storage.ts";
-import { BotDeliveryStorage } from "../storage/bot-delivery-storage.ts";
 import { ChannelCredentialStorage } from "../storage/channel-credential-storage.ts";
-import { BotSessionStorage } from "../storage/do/bot-session-storage.ts";
 import { SessionArchiveStorage } from "../storage/do/session-archive-storage.ts";
 import { SessionArtifactStorage } from "../storage/do/session-artifact-storage.ts";
 import { SessionCommandsStorage } from "../storage/do/session-commands-storage.ts";
@@ -139,21 +125,12 @@ function createSessionRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
-    readonly databases: DatabaseResolver;
-    readonly projects: ProjectStorageDirectory;
-    readonly connections: BotConnectionGateway;
     readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
 }) {
     const runtime = createSessionRuntime(cx);
-    const bots = new BotSessionService(new BotSessionStorage(cx.database), runtime);
-    const services = {
-        forProject: (project: ProjectStorageContext) => {
-            return { targets: new BotTargetService(new BotConnectionStorage(project, cx.databases)) };
-        },
-    };
-    const recovery = new SessionRecoveryService({ ...cx, runtime, bots, services });
-    const operations = new DoService({ services: { runtime, bots, recovery } });
-    return { application: createDoRoutes(runtime, bots, operations), services: { recovery, operations } };
+    const recovery = new SessionRecoveryService({ ...cx, runtime });
+    const operations = new DoService({ services: { runtime, recovery } });
+    return { application: createDoRoutes(runtime, operations), services: { recovery, operations } };
 }
 
 function createRuntimeRelayDependencies(cx: {
@@ -164,57 +141,27 @@ function createRuntimeRelayDependencies(cx: {
         readonly sessions: SessionCommandGateway &
             SessionQueryGateway &
             Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
-        readonly botSessions: BotSessionRuntime;
         readonly peers: RuntimePeers;
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
     };
 }) {
-    const forProject = async (scope: ProjectScope, signal: AbortSignal) => {
+    const credentialService = async (scope: ProjectScope, signal: AbortSignal) => {
         const project = await cx.gateways.projectStorageDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
         if (project.projectId !== scope.projectId) {
             throw new Error("The Project placement is invalid");
         }
         const database = cx.gateways.databaseResolver.resolve(project.storagePlacement);
-        const conversations = new BotConversationStorage(project, cx.gateways.databaseResolver);
-        const context = {
-            bots: new BotRuntimeService({
-                services: {
-                    targets: new BotTargetService(new BotConnectionStorage(project, cx.gateways.databaseResolver)),
-                    conversations: new BotConversationService(conversations),
-                },
-            }),
-            credentials: new ChannelCredentialService(new ChannelCredentialStorage(database)),
-        };
-        return context;
-    };
-    const bots: Pick<
-        BotRuntimeService,
-        "listPendingProvisioning" | "activateConversation" | "failConversationProvisioning"
-    > = {
-        listPendingProvisioning: async (scope, runtimeId, limit, signal) =>
-            (await forProject(scope, signal)).bots.listPendingProvisioning(scope, runtimeId, limit, signal),
-        activateConversation: async (scope, conversationId, now, signal) =>
-            (await forProject(scope, signal)).bots.activateConversation(scope, conversationId, now, signal),
-        failConversationProvisioning: async (scope, conversationId, code, now, signal) =>
-            (await forProject(scope, signal)).bots.failConversationProvisioning(
-                scope,
-                conversationId,
-                code,
-                now,
-                signal,
-            ),
+        return new ChannelCredentialService(new ChannelCredentialStorage(database));
     };
     const credentials: Pick<ChannelCredentialService, "isActive"> = {
         isActive: async (identity, signal) => {
             const scope = new ProjectScope(identity.projectId);
-            return (await forProject(scope, signal)).credentials.isActive(identity, signal);
+            return (await credentialService(scope, signal)).isActive(identity, signal);
         },
     };
     const services = {
-        bots,
         credentials,
-        recovery: new RuntimeRecoveryService({ services: { bots }, gateways: cx.gateways }),
         connections: new RuntimeConnectionService(new RuntimeConnectionStorage(cx.database)),
         channel: (runtimeId: string, scope: ProjectScope) =>
             new ChannelActor({
@@ -224,22 +171,12 @@ function createRuntimeRelayDependencies(cx: {
     };
     return {
         services: {
-            bots,
             credentials,
-            recovery: services.recovery,
             connections: services.connections,
             runtime: new RuntimeService({ services, gateways: cx.gateways }),
         },
         gateways: cx.gateways,
     };
-}
-
-function createBotDeliveryDependencies(cx: {
-    readonly database: DoSqlDatabase;
-    readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
-}) {
-    const deliveries = new BotDeliveryService(new BotDeliveryStorage(cx.database), cx.schedule);
-    return { services: { deliveries }, application: createBotDeliveryRoutes(deliveries) };
 }
 
 export type DurableObjectContext = ReturnType<typeof createDurableObjectDependencies>;
@@ -248,12 +185,12 @@ export function createDurableObjectDependencies(cx: {
     readonly doDatabase: DoSqlDatabase;
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
-    readonly gateways: Omit<
-        Parameters<typeof createRuntimeRelayDependencies>[0]["gateways"],
-        "sessions" | "botSessions"
-    > & {
+    readonly gateways: {
+        readonly databaseResolver: DatabaseResolver;
+        readonly projectStorageDirectory: ProjectStorageDirectory;
+        readonly peers: RuntimePeers;
+        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
         readonly sessionTransport: SessionTransport;
-        readonly connections: BotConnectionGateway;
     };
 }) {
     const sessions = new RemoteSessionRuntime({
@@ -268,19 +205,14 @@ export function createDurableObjectDependencies(cx: {
     const gateways = {
         ...cx.gateways,
         sessions,
-        botSessions: new RemoteBotSessionRuntime(cx.gateways.sessionTransport, sessions, sessions),
     };
     const runtime = createRuntimeRelayDependencies({ database: cx.doDatabase, gateways });
     const session = createSessionRelayDependencies({
         database: cx.doDatabase,
         content: cx.content,
         quota: cx.quota,
-        databases: cx.gateways.databaseResolver,
-        projects: cx.gateways.projectStorageDirectory,
-        connections: cx.gateways.connections,
         schedule: cx.gateways.schedule,
     });
-    const delivery = createBotDeliveryDependencies({ database: cx.doDatabase, schedule: cx.gateways.schedule });
     return {
         doDatabase: cx.doDatabase,
         gateways,
@@ -288,12 +220,10 @@ export function createDurableObjectDependencies(cx: {
             ...runtime.services,
             sessionRecovery: session.services.recovery,
             operations: session.services.operations,
-            ...delivery.services,
         },
         applications: {
             runtime: createRuntimeRoutes(runtime.services.runtime),
             session: session.application,
-            delivery: delivery.application,
         },
     };
 }

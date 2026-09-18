@@ -1,5 +1,4 @@
 import type { SessionQuotaPolicyProvider } from "../entity/do/session.ts";
-import type { BotConnectionGateway } from "../gateway/bot-connection-gateway.ts";
 import type { ChannelGateway } from "../gateway/channel-gateway.ts";
 import type { ProjectAccessAuthorizer } from "../gateway/project-access-authorizer.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
@@ -12,7 +11,6 @@ import { createRelayDependencies } from "./create-relay-dependencies.ts";
 export interface WorkerRuntimeGateways {
     readonly channel: ChannelGateway;
     readonly sessions: SessionTransport;
-    readonly connections: BotConnectionGateway;
 }
 
 export function createWorkerContext(options: {
@@ -27,7 +25,6 @@ export function createWorkerContext(options: {
 }) {
     return createRelayDependencies({
         authentication: { projects: options.authorization },
-        bots: { connections: options.gateways.connections },
         config: { apiPrefix: options.apiPrefix, quotaPolicy: options.quotaPolicy },
         databases: options.databases,
         identityDatabases: options.identityDatabases,

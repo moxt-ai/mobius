@@ -985,22 +985,8 @@ export async function listWorkspace(
     );
 }
 
-export async function prepareConversationSession(
-    request: SessionPrepareRequest,
-    signal: AbortSignal,
-): Promise<SessionReadyEvent> {
-    return await transport.prepare(request, signal);
-}
-
 export async function readFile(sessionId: string, path: string, signal: AbortSignal): Promise<FileReadResult> {
     return await transport.readFile(sessionId, path, signal);
-}
-
-export async function configureConversationSession(
-    request: SessionConfigureRequest,
-    signal: AbortSignal,
-): Promise<SessionConfigUpdatedEvent> {
-    return await transport.configure(request, signal);
 }
 
 type NativeSessionAction =

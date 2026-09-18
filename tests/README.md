@@ -11,7 +11,7 @@ application.
   `() => gateways`. Shared composition never selects an adapter implicitly.
 - `./agent` exposes a stateful local ACP process. It requires no provider account.
 - `./runtime` starts the production Runtime and exposes `client` (Session SDK),
-  `owner` (Bot owner SDK), `runtimeId`, and cancellable `waitForBinding`.
+  `runtimeId`, and cancellable `waitForBinding`.
   SDK HTTP requests go directly through the supplied Hono application. The
   Runtime's WebSocket transport uses an ephemeral loopback server owned by the
   helper.
@@ -25,12 +25,11 @@ Use `await using` for bindings, gateways, Agent, and Runtime, in that order, so
 the Runtime and its SDK streams stop before storage is released. Pass an
 `AbortSignal` to Runtime creation and every SDK operation.
 
-See `bot-runtime.integration.test.ts` for direct Bot owner SDK setup, and
-`runtime-server.integration.test.ts` for Platform pairing and a complete Session
-prompt/event-stream exchange. Run these scenarios from the Mobius repository:
+See `runtime-server.integration.test.ts` for Platform pairing and a complete
+Session prompt/event-stream exchange. Run this scenario from the Mobius repository:
 
 ```sh
-pnpm exec vitest run tests/bot-runtime.integration.test.ts tests/runtime-server.integration.test.ts
+pnpm exec vitest run tests/runtime-server.integration.test.ts
 ```
 
 Migration status: the legacy Cloudflare HTTP suites still contain manual

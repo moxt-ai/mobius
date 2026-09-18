@@ -1,10 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { styleText } from "node:util";
 
 import {
     AGENT_ACTIVITY_KIND,
-    AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -20,12 +19,9 @@ import {
     type AgentContentEvent,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    BOT_SESSION_PROMPT_KIND,
-    type BotSessionPromptCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
-    decodeBotSessionPromptCommand,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
@@ -124,7 +120,7 @@ import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-loca
 import {
     AgentIntegrationDefinition,
     LocalAgentCatalogError,
-    LocalAgentDefinition,
+    type LocalAgentDefinition,
 } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import {
@@ -145,10 +141,6 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { LocalArtifact } from "./authorization/local-artifact.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import { EmbeddedBotContextApplicator } from "./bots/bot-context-applicator.ts";
-import { BotExecutionContextRegistry } from "./bots/bot-execution-context.ts";
-import { BotOutboundIpcServer } from "./bots/bot-outbound-ipc.ts";
-import { LocalBotAuthorizationError, LocalBotExecutionAuthorizer } from "./bots/local-bot-execution-authorizer.ts";
 import type { DaemonConfig } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
@@ -166,13 +158,6 @@ const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const AGENT_ACTIVITY_COALESCING_MILLISECONDS = 100;
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
-
-function botIpcSocketPath(): string {
-    if (process.platform === "win32") {
-        return `\\\\.\\pipe\\mobius-bot-${randomUUID()}`;
-    }
-    return join("/tmp", `mobius-bot-${randomUUID()}.sock`);
-}
 
 class DaemonAcpObserver implements AcpSessionObserver {
     readonly #config: DaemonConfig;
@@ -823,7 +808,6 @@ function operationErrorCode(error: unknown): string {
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
-        error instanceof LocalBotAuthorizationError ||
         error instanceof PromptArtifactError
     ) {
         return error.code;
@@ -836,7 +820,6 @@ function operationErrorMessage(error: unknown): string {
         error instanceof AcpExecutionError ||
         error instanceof LocalAuthorizationError ||
         error instanceof LocalAgentCatalogError ||
-        error instanceof LocalBotAuthorizationError ||
         error instanceof PromptArtifactError
     ) {
         return error.message;
@@ -1570,47 +1553,6 @@ async function applyCompleteSessionConfiguration(
     assertAppliedSessionConfiguration(options, selections);
 }
 
-function botExecutionAgent(
-    agent: LocalAgentDefinition,
-    contextHandle: string,
-    socketPath: string,
-): LocalAgentDefinition {
-    return new LocalAgentDefinition(
-        agent.id,
-        agent.label,
-        agent.command,
-        agent.arguments,
-        {
-            ...agent.environment,
-            MOBIUS_BOT_CONTEXT: contextHandle,
-            MOBIUS_BOT_SOCKET: socketPath,
-            MOBIUS_RELAY_TOKEN: "",
-            MOBIUS_RELAY_URL: "",
-        },
-        agent.adapterVersion,
-        agent.agentVersion,
-        agent.adapterIdentity,
-        agent.agentIdentity,
-        agent.capabilities,
-        agent.permissionProfile,
-    );
-}
-
-function assertPreparedPermission(configOptions: readonly SessionConfigOption[], permissionMode: string): void {
-    const permission = configOptions.find((option) => option.id === "permission_mode");
-    if (
-        permission === undefined ||
-        permission.type !== "select" ||
-        (permissionMode !== AGENT_DEFAULT_EXECUTION_SETTING && permission.currentValue !== permissionMode)
-    ) {
-        throw new AcpExecutionError(
-            "The required Agent permission mode is unavailable",
-            {},
-            "invalid_session_configuration",
-        );
-    }
-}
-
 function warnIgnoredSetting(
     audit: AuditStore,
     event: string,
@@ -1630,309 +1572,6 @@ function warnIgnoredSetting(
     };
     audit.record({ commandId, details, event, sessionId });
     process.stderr.write(`Mobius daemon warning ${JSON.stringify({ commandId, event, sessionId, ...details })}\n`);
-}
-
-async function applySupportedExecutionSelection(
-    sessions: AcpSessionManager,
-    audit: AuditStore,
-    configOptions: readonly SessionConfigOption[],
-    selection: SessionConfigurationSelection,
-    category: string,
-    agent: LocalAgentDefinition,
-    cwd: string,
-    additionalDirectories: readonly string[],
-    commandId: string,
-    sessionId: string,
-    signal: AbortSignal,
-): Promise<readonly SessionConfigOption[]> {
-    if (selection.value === AGENT_DEFAULT_EXECUTION_SETTING) {
-        return configOptions;
-    }
-    const option = configOptions.find((candidate) => candidate.id === selection.configId);
-    if (option === undefined) {
-        warnIgnoredSetting(
-            audit,
-            "bot_execution_setting_ignored",
-            commandId,
-            sessionId,
-            agent.id,
-            selection,
-            category,
-            "setting_unavailable",
-        );
-        return configOptions;
-    }
-    if (option.type !== "select" || option.category !== category) {
-        warnIgnoredSetting(
-            audit,
-            "bot_execution_setting_ignored",
-            commandId,
-            sessionId,
-            agent.id,
-            selection,
-            category,
-            "setting_schema_mismatch",
-        );
-        return configOptions;
-    }
-    if (selection.valueType !== "select" || selection.booleanValue) {
-        warnIgnoredSetting(
-            audit,
-            "bot_execution_setting_ignored",
-            commandId,
-            sessionId,
-            agent.id,
-            selection,
-            category,
-            "selection_schema_mismatch",
-        );
-        return configOptions;
-    }
-    if (!option.values.some((value) => value.value === selection.value)) {
-        warnIgnoredSetting(
-            audit,
-            "bot_execution_setting_ignored",
-            commandId,
-            sessionId,
-            agent.id,
-            selection,
-            category,
-            "value_unavailable",
-        );
-        return configOptions;
-    }
-    if (option.currentValue === selection.value) {
-        return configOptions;
-    }
-    return await sessions.configureSession({
-        additionalDirectories,
-        agent,
-        booleanValue: false,
-        configId: selection.configId,
-        cwd,
-        requestId: `cfg_${randomUUID()}`,
-        sessionId,
-        signal,
-        value: selection.value,
-        valueType: "select",
-    });
-}
-
-async function executeBotPrompt(
-    outbox: SessionEventOutbox,
-    publisher: DaemonSessionEventPublisher,
-    command: BotSessionPromptCommand,
-    config: DaemonConfig,
-    directories: WorkspaceDirectoryService,
-    audit: AuditStore,
-    sessions: AcpSessionManager,
-    authorizer: LocalBotExecutionAuthorizer,
-    contexts: BotExecutionContextRegistry,
-    applicator: EmbeddedBotContextApplicator,
-    ipc: BotOutboundIpcServer,
-    attemptId: string,
-    activateAttempt: () => void,
-    timer: DaemonTimer,
-    signal: AbortSignal,
-): Promise<void> {
-    const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
-    });
-    try {
-        const startDeadline = Date.parse(command.executionDeadlineAt);
-        if (!Number.isSafeInteger(startDeadline) || startDeadline <= Date.now()) {
-            throw new LocalBotAuthorizationError("turn_expired", "The Bot execution start deadline has expired");
-        }
-        const execution = await authorizer.authorize(command, config.catalog, directories, config.bindingId, signal);
-        const resolved = await resolveSessionDirectories(
-            directories,
-            config.bindingId,
-            command.directoryId,
-            command.additionalDirectoryIds,
-            signal,
-        );
-        const attachments = await resolvePromptArtifacts(config, command, signal);
-        const applied = await applicator.apply(command, execution, attachments.resources, signal);
-        const startExecution = (): void => {
-            audit.record({
-                commandId: command.commandId,
-                details: {
-                    behaviorRevisionId: command.behaviorRevisionId,
-                    bindingId: command.bindingId,
-                    botId: command.botId,
-                    executionId: command.executionId,
-                },
-                event: "bot_session_authorized",
-                sessionId: command.sessionId,
-            });
-            outbox.transitionExecution(command.commandId, "running");
-            publisher.recordAttempt(
-                command.sessionId,
-                encodeSessionStartedEvent({
-                    attemptId,
-                    commandId: command.commandId,
-                    kind: SESSION_STARTED_KIND,
-                    sessionId: command.sessionId,
-                }),
-                attemptId,
-            );
-            activateAttempt();
-        };
-        let stopReason = "steered";
-        if (command.disposition === SessionPromptDisposition.Steer) {
-            startExecution();
-            await sessions.steerPrompt({
-                additionalDirectories: resolved.additionalDirectories,
-                agent: execution.agent,
-                commandId: command.commandId,
-                cwd: resolved.cwd,
-                images: attachments.images,
-                prompt: command.prompt,
-                resources: applied.resources,
-                sessionId: command.sessionId,
-                signal,
-                targetCommandId: command.targetCommandId,
-            });
-        } else {
-            if (
-                command.disposition === SessionPromptDisposition.Queue &&
-                !outbox.isTerminalExecution(command.targetCommandId, command.sessionId)
-            ) {
-                throw new AcpExecutionError(
-                    "The queued Bot prompt target is unavailable",
-                    {},
-                    "prompt_queue_target_unavailable",
-                );
-            }
-            const lease = contexts.activate(command);
-            try {
-                const agent = botExecutionAgent(execution.agent, lease.context.contextHandle, ipc.socketPath);
-                const prepared = await sessions.prepareExecutionSession({
-                    additionalDirectories: resolved.additionalDirectories,
-                    agent,
-                    cwd: resolved.cwd,
-                    sessionId: command.sessionId,
-                    signal,
-                });
-                assertPreparedPermission(prepared.configOptions, execution.executionConfiguration.permissionMode);
-                let configOptions = await applySupportedExecutionSelection(
-                    sessions,
-                    audit,
-                    prepared.configOptions,
-                    execution.executionConfiguration.model,
-                    "model",
-                    agent,
-                    resolved.cwd,
-                    resolved.additionalDirectories,
-                    command.commandId,
-                    command.sessionId,
-                    signal,
-                );
-                configOptions = await applySupportedExecutionSelection(
-                    sessions,
-                    audit,
-                    configOptions,
-                    execution.executionConfiguration.reasoningEffort,
-                    "thought_level",
-                    agent,
-                    resolved.cwd,
-                    resolved.additionalDirectories,
-                    command.commandId,
-                    command.sessionId,
-                    signal,
-                );
-                for (const selection of command.sessionConfigurations) {
-                    await sessions.configureSession({
-                        additionalDirectories: resolved.additionalDirectories,
-                        agent,
-                        booleanValue: selection.booleanValue,
-                        configId: selection.configId,
-                        cwd: resolved.cwd,
-                        requestId: `cfg_${randomUUID()}`,
-                        sessionId: command.sessionId,
-                        signal,
-                        value: selection.value,
-                        valueType: selection.valueType,
-                    });
-                }
-                startExecution();
-                const result = await sessions.runPrompt({
-                    additionalDirectories: resolved.additionalDirectories,
-                    agent,
-                    commandId: command.commandId,
-                    cwd: resolved.cwd,
-                    disposition: command.disposition,
-                    images: attachments.images,
-                    onActivity: activities.record,
-                    onText: (text, messageId) => {
-                        publisher.recordAttempt(
-                            command.sessionId,
-                            encodeAgentMessageDeltaEvent({
-                                commandId: command.commandId,
-                                kind: AGENT_MESSAGE_DELTA_KIND,
-                                messageId,
-                                sessionId: command.sessionId,
-                                text,
-                            }),
-                            attemptId,
-                        );
-                        return Promise.resolve();
-                    },
-                    prompt: command.prompt,
-                    resources: applied.resources,
-                    sessionId: command.sessionId,
-                    signal,
-                    targetCommandId: command.targetCommandId,
-                });
-                stopReason = result.stopReason;
-            } finally {
-                lease.release();
-            }
-        }
-        activities.flush();
-        publisher.recordAttempt(
-            command.sessionId,
-            encodeSessionCompletedEvent({
-                commandId: command.commandId,
-                kind: SESSION_COMPLETED_KIND,
-                sessionId: command.sessionId,
-                stopReason,
-            }),
-            attemptId,
-        );
-        outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
-        audit.record({
-            commandId: command.commandId,
-            details: { botId: command.botId, executionId: command.executionId },
-            event: stopReason === "cancelled" ? "bot_session_cancelled" : "bot_session_completed",
-            sessionId: command.sessionId,
-        });
-    } catch (error) {
-        activities.flush();
-        const failure = error;
-        audit.record({
-            commandId: command.commandId,
-            details: {
-                botId: command.botId,
-                code: operationErrorCode(failure),
-                executionId: command.executionId,
-            },
-            event: "bot_session_failed",
-            sessionId: command.sessionId,
-        });
-        const code = operationErrorCode(failure);
-        reportFailure(
-            publisher,
-            command,
-            code === "session_operation_failed" ? "agent_execution_failed" : code,
-            code === "session_operation_failed"
-                ? "The local agent could not complete the Bot request"
-                : operationErrorMessage(failure),
-            attemptId,
-        );
-        outbox.transitionExecution(command.commandId, "failed");
-        console.error("Mobius daemon Bot command failed", failure);
-    }
 }
 
 function waitForRelayRetry(signal: AbortSignal, timer: DaemonTimer): Promise<void> {
@@ -2013,10 +1652,6 @@ async function runRelayConnection(
     nativeSessions: NativeSessionService,
     outbox: SessionEventOutbox,
     publisher: DaemonSessionEventPublisher,
-    authorizer: LocalBotExecutionAuthorizer,
-    contexts: BotExecutionContextRegistry,
-    applicator: EmbeddedBotContextApplicator,
-    ipc: BotOutboundIpcServer,
     activeTurns: Map<string, ActiveDaemonTurn>,
     activeAttemptIds: Map<string, string>,
     connectionEpoch: number,
@@ -2220,33 +1855,6 @@ async function runRelayConnection(
                     }
                     return;
                 }
-                if (kind === BOT_SESSION_PROMPT_KIND) {
-                    const command = decodeBotSessionPromptCommand(delivery.payload);
-                    await processDeliveredPrompt(
-                        delivery,
-                        command,
-                        command.disposition !== SessionPromptDisposition.Steer,
-                        (attemptId, activateAttempt, executionSignal) =>
-                            executeBotPrompt(
-                                outbox,
-                                publisher,
-                                command,
-                                config,
-                                directories,
-                                audit,
-                                sessions,
-                                authorizer,
-                                contexts,
-                                applicator,
-                                ipc,
-                                attemptId,
-                                activateAttempt,
-                                timer,
-                                executionSignal,
-                            ),
-                    );
-                    return;
-                }
                 if (kind === SESSION_PROMPT_KIND) {
                     const command = decodeSessionPromptCommand(delivery.payload);
                     await processDeliveredPrompt(
@@ -2310,8 +1918,6 @@ async function runRelayConnection(
                     payloadSessionId = decodeSessionElicitationRespondCommand(delivery.payload).sessionId;
                 } else if (payloadKind === SESSION_PROMPT_KIND) {
                     payloadSessionId = decodeSessionPromptCommand(delivery.payload).sessionId;
-                } else if (payloadKind === BOT_SESSION_PROMPT_KIND) {
-                    payloadSessionId = decodeBotSessionPromptCommand(delivery.payload).sessionId;
                 } else {
                     throw new Error("Runtime delivery contains an unsupported protocol message");
                 }
@@ -2850,50 +2456,6 @@ async function runRelayConnection(
                         });
                         return;
                     }
-                    if (kind === BOT_SESSION_PROMPT_KIND) {
-                        const command = decodeBotSessionPromptCommand(encoded);
-                        if (activeTurns.has(command.commandId)) {
-                            return;
-                        }
-                        const receipt = outbox.claimExecution(command.commandId, command.sessionId, encoded);
-                        if (receipt.kind === "duplicate") {
-                            return;
-                        }
-                        const turn = new ActiveDaemonTurn(command, receipt.attemptId);
-                        activeTurns.set(command.commandId, turn);
-                        void executeBotPrompt(
-                            outbox,
-                            publisher,
-                            command,
-                            config,
-                            directories,
-                            audit,
-                            sessions,
-                            authorizer,
-                            contexts,
-                            applicator,
-                            ipc,
-                            receipt.attemptId,
-                            () => {
-                                if (command.disposition !== SessionPromptDisposition.Steer) {
-                                    activeAttemptIds.set(command.sessionId, receipt.attemptId);
-                                }
-                            },
-                            timer,
-                            turn.signal,
-                        )
-                            .catch((error: unknown) => {
-                                console.error("Mobius daemon Bot turn failed", error);
-                            })
-                            .finally(() => {
-                                activeTurns.delete(command.commandId);
-                                if (activeAttemptIds.get(command.sessionId) === receipt.attemptId) {
-                                    activeAttemptIds.delete(command.sessionId);
-                                }
-                                turn.finish();
-                            });
-                        return;
-                    }
                     if (kind !== SESSION_PROMPT_KIND) {
                         throw new Error("Unsupported protocol message");
                     }
@@ -3008,10 +2570,6 @@ export async function runDaemon(
     const sessionStore = new SqliteAcpSessionStore(config.auditDatabasePath);
     const outbox = new SessionEventOutbox(config.auditDatabasePath);
     const publisher = new DaemonSessionEventPublisher(outbox, timer);
-    const authorizer = new LocalBotExecutionAuthorizer();
-    const contexts = new BotExecutionContextRegistry();
-    const applicator = new EmbeddedBotContextApplicator();
-    const ipc = new BotOutboundIpcServer(botIpcSocketPath(), config.relayUrl, contexts);
     const activeTurns = new Map<string, ActiveDaemonTurn>();
     const activeAttemptIds = new Map<string, string>();
     const recordSessionEvent = (sessionId: string, payload: string): void => {
@@ -3083,7 +2641,6 @@ export async function runDaemon(
     });
 
     try {
-        await ipc.listen(signal);
         while (!signal.aborted) {
             connectionEpoch += 1;
             try {
@@ -3097,10 +2654,6 @@ export async function runDaemon(
                     nativeSessions,
                     outbox,
                     publisher,
-                    authorizer,
-                    contexts,
-                    applicator,
-                    ipc,
                     activeTurns,
                     activeAttemptIds,
                     connectionEpoch,
@@ -3134,19 +2687,15 @@ export async function runDaemon(
                     await installations.close();
                 } finally {
                     try {
-                        await ipc.close();
+                        await sessions.close();
                     } finally {
                         try {
-                            await sessions.close();
+                            sessionStore.close();
                         } finally {
                             try {
-                                sessionStore.close();
+                                publisher.close();
                             } finally {
-                                try {
-                                    publisher.close();
-                                } finally {
-                                    outbox.close();
-                                }
+                                outbox.close();
                             }
                         }
                     }

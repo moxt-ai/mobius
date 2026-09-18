@@ -15,10 +15,6 @@
                 "class_name": "PlatformSessionRelay"
             },
             {
-                "name": "BOT_CONNECTIONS",
-                "class_name": "BotConnectionActor"
-            },
-            {
                 "name": "PROJECT_RELAY",
                 "class_name": "ProjectRelay"
             }
@@ -32,6 +28,10 @@
         {
             "tag": "platform-project-relay",
             "new_sqlite_classes": ["ProjectRelay"]
+        },
+        {
+            "tag": "platform-remove-bot-connections",
+            "deleted_classes": ["BotConnectionActor"]
         }
     ],
     "d1_databases": [
@@ -70,7 +70,6 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
-                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },
@@ -98,7 +97,6 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
-                    { "name": "BOT_CONNECTIONS", "class_name": "BotConnectionActor" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },

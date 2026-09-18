@@ -1,6 +1,5 @@
 import {
     ArrowLeft,
-    Bot,
     CheckCircle2,
     LoaderCircle,
     Menu,
@@ -9,6 +8,7 @@ import {
     RefreshCw,
     Settings,
     ShieldCheck,
+    Terminal,
 } from "lucide-react";
 import { Link } from "react-router";
 
@@ -162,7 +162,7 @@ function AgentSettingsView({
                                     >
                                         <div className="flex items-start gap-3">
                                             <span className="inline-flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-[#eefaf3] text-[#218854]">
-                                                <Bot aria-hidden="true" className="size-[18px]" />
+                                                <Terminal aria-hidden="true" className="size-[18px]" />
                                             </span>
                                             <span className="min-w-0 flex-1">
                                                 <strong className="block truncate text-sm font-semibold">

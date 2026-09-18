@@ -34,7 +34,6 @@ function authorization(token: string): HeadersInit {
 
 function bootstrapEnvironment(enabled: boolean, clientLimit: number, totalLimit: number): RelayBindings {
     return {
-        BOT_CONNECTIONS: env.BOT_CONNECTIONS,
         DIRECTORY_DATABASE: env.DIRECTORY_DATABASE,
         PUBLIC_PROJECT_BOOTSTRAP_CLIENT_LIMIT: clientLimit.toString(),
         PUBLIC_PROJECT_BOOTSTRAP_ENABLED: enabled.toString(),
@@ -68,7 +67,7 @@ describe.sequential("Project authentication", () => {
         const application = await app.request(
             `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/applications`,
             {
-                body: JSON.stringify({ name: "must-not-exist", permissions: ["bot:read"] }),
+                body: JSON.stringify({ name: "must-not-exist", permissions: ["session:read"] }),
                 headers: { ...authorization(ownerCredential), "content-type": "application/json" },
                 method: "POST",
             },

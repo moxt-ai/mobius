@@ -689,7 +689,6 @@ export class MobiusAgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
     readonly agentSettingsDiscovery?: boolean;
-    readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
@@ -702,16 +701,12 @@ export class MobiusAgentDescriptor {
         id: string,
         label: string,
         agentSettingsDiscovery?: boolean,
-        botSessionConfiguration?: boolean,
         sessionTurnConfiguration?: boolean,
     ) {
         this.agentPath = agentPath;
         this.agentVersion = agentVersion;
         if (agentSettingsDiscovery === true) {
             this.agentSettingsDiscovery = true;
-        }
-        if (botSessionConfiguration === true) {
-            this.botSessionConfiguration = true;
         }
         this.capabilities = Object.freeze({ ...capabilities });
         this.id = id;
@@ -741,7 +736,7 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
     const agent = record(value, "Agent descriptor");
     if (
         Object.keys(agent).length < 5 ||
-        Object.keys(agent).length > 8 ||
+        Object.keys(agent).length > 7 ||
         !Object.hasOwn(agent, "agentPath") ||
         !Object.hasOwn(agent, "agentVersion") ||
         !Object.hasOwn(agent, "capabilities") ||
@@ -752,13 +747,11 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
                 key !== "agentPath" &&
                 key !== "agentVersion" &&
                 key !== "agentSettingsDiscovery" &&
-                key !== "botSessionConfiguration" &&
                 key !== "capabilities" &&
                 key !== "id" &&
                 key !== "label" &&
                 key !== "sessionTurnConfiguration",
         ) ||
-        (Object.hasOwn(agent, "botSessionConfiguration") && typeof agent["botSessionConfiguration"] !== "boolean") ||
         (Object.hasOwn(agent, "agentSettingsDiscovery") && typeof agent["agentSettingsDiscovery"] !== "boolean") ||
         (Object.hasOwn(agent, "sessionTurnConfiguration") && typeof agent["sessionTurnConfiguration"] !== "boolean")
     ) {
@@ -777,7 +770,6 @@ function decodeAgentDescriptor(value: unknown): MobiusAgentDescriptor {
         identifierField(agent, "id"),
         label.trim(),
         agent["agentSettingsDiscovery"] === true,
-        agent["botSessionConfiguration"] === true,
         agent["sessionTurnConfiguration"] === true,
     );
 }

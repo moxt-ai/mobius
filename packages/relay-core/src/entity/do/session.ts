@@ -364,7 +364,7 @@ export type AttemptSummary =
           readonly startedAt: string;
       };
 
-export interface SessionMessageContent {
+interface SessionMessageContent {
     readonly activities: readonly {
         readonly activityId: string;
         readonly attemptId: string;

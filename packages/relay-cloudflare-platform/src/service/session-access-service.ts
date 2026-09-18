@@ -19,8 +19,6 @@ const permissions = new Set([
     ProjectPermission.ArtifactRead,
     ProjectPermission.SessionRead,
     ProjectPermission.SessionWrite,
-    ProjectPermission.ConversationTurnCreate,
-    ProjectPermission.ConversationTurnCancel,
     ProjectPermission.InteractionRespond,
     ProjectPermission.ProjectEventsRead,
 ]);

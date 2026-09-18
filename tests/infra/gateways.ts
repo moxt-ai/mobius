@@ -36,7 +36,6 @@ export function createTestGateways(options: {
                 projectStorageDirectory: options.projects,
                 peers,
                 sessionTransport: gateways.sessions,
-                connections: gateways.connections,
                 schedule: async (timestamp, signal) => {
                     signal.throwIfAborted();
                     alarms.set(key, timestamp);
@@ -102,59 +101,6 @@ export function createTestGateways(options: {
                 );
             },
         },
-        connections: {
-            enqueue: async (route, message, signal) =>
-                await actor(`connection:${route.connectionId}`).services.deliveries.enqueue(
-                    { ...message, connectionId: route.connectionId },
-                    signal,
-                ),
-            read: async (connectionId, after, limit, now, targets, signal) => {
-                signal.throwIfAborted();
-                return actor(`connection:${connectionId}`).services.deliveries.read(
-                    connectionId,
-                    after,
-                    limit,
-                    now,
-                    targets,
-                );
-            },
-            delivered: async (connectionId, messageId, claimId, now, signal) => {
-                signal.throwIfAborted();
-                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
-                    connectionId,
-                    messageId,
-                    claimId,
-                    "delivered",
-                    "",
-                    now,
-                    now,
-                );
-            },
-            retryableFailure: async (connectionId, messageId, claimId, code, retryAt, now, signal) => {
-                signal.throwIfAborted();
-                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
-                    connectionId,
-                    messageId,
-                    claimId,
-                    "retryable_failed",
-                    code,
-                    now,
-                    retryAt,
-                );
-            },
-            terminalFailure: async (connectionId, messageId, claimId, code, now, signal) => {
-                signal.throwIfAborted();
-                return actor(`connection:${connectionId}`).services.deliveries.acknowledge(
-                    connectionId,
-                    messageId,
-                    claimId,
-                    "terminal_failed",
-                    code,
-                    now,
-                    now,
-                );
-            },
-        },
     };
     return {
         ...gateways,
@@ -167,10 +113,8 @@ export function createTestGateways(options: {
                 const context = actor(key);
                 if (key.startsWith("runtime:")) {
                     await context.services.runtime.alarm(options.signal);
-                } else if (key.startsWith("session:")) {
-                    await context.services.sessionRecovery.recover(options.signal);
                 } else {
-                    await context.services.deliveries.recover(Date.now(), options.signal);
+                    await context.services.sessionRecovery.recover(options.signal);
                 }
             }
         },

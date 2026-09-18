@@ -4,9 +4,9 @@ Mobius is a remotely accessible ACP client runtime with a portable Relay core,
 a Cloudflare deployment profile, and a locally enforced security boundary.
 
 ```text
-Pairing page / channel Web app / external connector
-  -> TypeScript SDK (HTTP resources + Session SSE + Bot API)
-  -> Relay API + ChannelActor + Bot control/data planes
+Pairing page / channel Web app
+  -> TypeScript SDK (HTTP resources + Session SSE)
+  -> Relay API + ChannelActor + Session control/data plane
   -> verified Tenant / Project scope
   -> Runtime / Channel connection owner
   -> independent Session runtime and query directory
@@ -20,7 +20,7 @@ Pairing page / channel Web app / external connector
 `packages/relay-core` owns inferred Hono feature route factories, orchestration services,
 gateway contracts, input validation, pairing and channel contracts, the
 platform-independent `ChannelActor`, and ports for content storage and peers.
-Pairing, channel, session, and Bot logic is grouped by feature under `service/`.
+Pairing, channel, and Session logic is grouped by feature under `service/`.
 Shared values, credentials, records, and codecs live under `entity/`; SQL and
 content persistence contracts live under `infra/`. Storage must not import services,
 HTTP routes, DI, application gateways, or platform adapters, including through
@@ -29,16 +29,10 @@ dependency direction.
 Storage methods expose semantic persistence operations, including atomic SQL
 batches and transactions. Services own authorization, lifecycle decisions,
 revision planning, credential lifetimes, replay handling, and orchestration.
-Bot target authorization is shared by HTTP submission and runtime recovery;
-conversation provisioning and recovery use the same core conversation service.
-Bot credential authentication searches the configured identity databases before
-resolving tenant placement. Composition supplies Bot storage with the resolved
-`TenantContext` and database resolver; HTTP Bot configuration has no fixed database.
-Bot session storage atomically commits turn/execution/capability records, outbound
-requests with usage accounting, and settlement with capability revocation and
-completion delivery. Services prepare these operations and interpret persistence
-results. Archive publication and session creation/deletion likewise have dedicated
-atomic storage operations.
+Session storage atomically commits Turn, Attempt, interaction, and event
+projections. Services prepare these operations and interpret persistence results.
+Archive publication and Session creation/deletion likewise have dedicated atomic
+storage operations.
 Session imports use a typed import plan: services validate terminal interactions
 and artifact ownership, while storage serializes and restores the records and
 archive work in one transaction. Failed imports use a dedicated atomic rollback.
@@ -46,10 +40,9 @@ Event projection services likewise prepare typed changes without writing SQL.
 Event storage rechecks the planned session/source sequence, then commits the
 projection, active raw event or terminal receipt/reclaim, and sequence advance together. Core DO services
 do not receive SQL executors; the core service tree has no transaction callbacks.
-Bot failures carry typed domain codes and failure categories. HTTP boundaries
+Session failures carry typed domain codes and failure categories. HTTP boundaries
 own the status mappings, including distinctions between missing and inaccessible
-resources. Bot delivery failures likewise expose typed codes without HTTP status
-fields in the service layer.
+resources.
 Portable SQLite persistence lives under `storage/`, while shared HTTP boundary
 code lives under `infra/`.
 The core content service verifies digests and handles immutable-write conflicts
@@ -66,7 +59,7 @@ a plain readonly context. Constructors declare only their required `services`,
 `storages`, `gateways`, or `config` subset; HTTP routes read the request's context.
 `src/di/` exposes two composition functions: `createRelayDependencies()` for HTTP
 services and direct host pairing, and `createDurableObjectDependencies()` for the
-shared runtime, session, and Bot delivery context. Helpers are private. Both
+shared runtime and Session context. Helpers are private. Both
 factories construct core storage and services from platform ports; the DO context
 has a top-level `doDatabase` and no DO-kind selector. Pairing routes call
 pairing services. Project-scoped revocation composes atomic directory lifecycle
@@ -146,11 +139,8 @@ claims never select a Tenant or Project by themselves.
 
 Project-facing owner, browser, exchanged external, and application credentials
 all produce the same readonly `ProjectAccessContext` with exact scope,
-permissions, lifetime, credential ID, and audit actor. Runtime daemon and Bot
-Connection requests instead produce `RuntimeAccessContext` and
-`BotConnectionAccessContext`. A Bot outbound action additionally requires an
-`ExecutionPermit` derived from the authenticated Runtime and the matching
-server-backed execution capability. See [Project authentication and credential
+permissions, lifetime, credential ID, and audit actor. Runtime daemon requests
+produce `RuntimeAccessContext`. See [Project authentication and credential
 operations](project-authentication.md) for the complete trust-plane and threat
 model.
 
@@ -194,21 +184,9 @@ send-compatible behavior during a rolling upgrade.
 
 Public Turn submission names a Session, content, and an idempotency key. Relay
 loads the server-owned Session binding, reauthorizes its exact Runtime, commits
-the Turn, and only then requests dispatch. BotConversation uses this boundary as
-a one-to-one Session extension: its immutable behavior and active binding
-revisions are pinned before a turn is accepted, while Session remains the
-execution-history aggregate. Bot is the durable identity; Channel and
-BotConnection are access paths, and Agent remains a local execution capability.
-
-Bot directory and connection metadata live in D1. Each Session Durable Object
-is the single writer for one Bot conversation's turns, executions, capability
-records, and accepted outbound requests. Each BotConnectionActor is the single
-writer for its ordered outbound delivery stream. Interrupted conversation
-provisioning and outbound forwarding are idempotent sagas with reconciliation,
-so valid inbound work may wait for a disconnected Runtime and accepted outbound
-work may wait for a disconnected connector. See [Bots and external
-connectors](bots.md) for the identity, authorization, API, and threat-model
-contract.
+the Turn, and only then requests dispatch. Session is the durable execution and
+history aggregate; Channel is an access path, and Agent remains a local
+execution capability.
 
 The Session Durable Object keeps raw events only for the current active Turn and
 the latest detail for each in-progress activity. Text deltas use an event index
@@ -370,8 +348,7 @@ events use bounded stages and sanitized stable codes.
   execution boundary, and ACP client integration.
 - `packages/protocol` owns messages shared across process and network
   boundaries.
-- `packages/mobius-sdk` owns the public provider-neutral Bot connector client as
-  well as the Session resource client.
+- `packages/mobius-sdk` owns the public Session resource client.
 - `packages/web` owns the Vite application shell, runtime dependencies,
   Tailwind CSS entrypoint, and reusable React agent experience, including chat
   and integration components.

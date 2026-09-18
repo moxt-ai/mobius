@@ -19,7 +19,6 @@ import type { ChannelActor, ChannelPeers, ChannelSocket } from "./channel-actor.
 import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
 import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
-import type { RuntimeRecoveryService } from "./runtime-recovery-service.ts";
 
 export type RuntimeSocketIdentity =
     | {
@@ -54,7 +53,6 @@ interface RuntimeContext {
     readonly services: {
         readonly connections: RuntimeConnectionService;
         readonly credentials: Pick<ChannelCredentialService, "isActive">;
-        readonly recovery: RuntimeRecoveryService;
         readonly channel: (runtimeId: string, scope: ProjectScope) => ChannelActor;
     };
     readonly gateways: {
@@ -281,7 +279,6 @@ export class RuntimeService {
         const channel = this.channel(runtimeId, scope);
         channel.configureDaemonDelivery(deliveryReceipts);
         await channel.dispatchPending(signal);
-        await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
 
     readonly attachDaemon = async (
@@ -294,21 +291,13 @@ export class RuntimeService {
         const channel = this.channel(runtimeId, scope);
         channel.configureDaemonDelivery(deliveryReceipts);
         await channel.attachDaemon(replaced, signal);
-        await this.#cx.services.recovery.reconcile(runtimeId, scope, signal);
     };
 
     readonly attachHost = (runtimeId: string, scope: ProjectScope, socket: ChannelSocket, signal: AbortSignal) =>
         this.channel(runtimeId, scope).attachHost(socket, signal);
 
-    readonly recover = async (identity: RuntimeSocketIdentity, signal: AbortSignal): Promise<void> => {
+    readonly recover = async (_identity: RuntimeSocketIdentity, signal: AbortSignal): Promise<void> => {
         signal.throwIfAborted();
-        if (identity.role === "daemon" && this.#cx.services.connections.isCurrent(identity)) {
-            await this.#cx.services.recovery.reconcile(
-                identity.runtimeId,
-                new ProjectScope(identity.projectId),
-                signal,
-            );
-        }
     };
 
     readonly receiveMessage = async (

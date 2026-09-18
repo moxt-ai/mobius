@@ -155,7 +155,6 @@ export function runtimeWithTransport(state: DurableObjectState, sessionTransport
     return new RuntimeRelay(
         createDurableObjectContext(state, {
             environment: env,
-            connections: env.BOT_CONNECTIONS,
             sessions: env.SESSION_RELAY,
             namespacePrefix: STANDALONE_NAMESPACE_PREFIX,
             databases: new SingleDatabaseResolver(env.DIRECTORY_DATABASE),

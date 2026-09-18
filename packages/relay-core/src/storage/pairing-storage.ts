@@ -343,25 +343,6 @@ export class PairingStorage {
                     .prepare(`UPDATE channel_access_grants SET expires_at = MIN(expires_at, ?)
             WHERE channel_id = ?`)
                     .bind(value.revokedAt, value.channelId),
-                this.#database
-                    .prepare(`UPDATE bot_conversations SET lifecycle = 'closed', closed_at = COALESCE(closed_at, ?),
-            failure_code = COALESCE(failure_code, 'runtime_revoked') WHERE lifecycle = 'provisioning' AND conversation_id IN (
-                SELECT outbox.subject_id FROM bot_control_outbox AS outbox INNER JOIN bots ON bots.bot_id = outbox.bot_id
-                WHERE bots.project_id = ? AND outbox.runtime_id = ?
-                AND outbox.message_kind = 'conversation_provisioning' AND outbox.state = 'pending')`)
-                    .bind(value.revokedAt, value.projectId, value.runtimeId),
-                this.#database
-                    .prepare(`UPDATE bot_execution_bindings SET lifecycle = 'unavailable',
-            unavailable_at = COALESCE(unavailable_at, ?), unavailable_code = COALESCE(unavailable_code, 'runtime_revoked'),
-            unavailable_message = COALESCE(unavailable_message, 'The bound Runtime was revoked')
-            WHERE runtime_id = ? AND lifecycle = 'active' AND EXISTS (
-                SELECT 1 FROM bots WHERE bots.bot_id = bot_execution_bindings.bot_id AND bots.project_id = ?)`)
-                    .bind(value.revokedAt, value.runtimeId, value.projectId),
-                this.#database
-                    .prepare(`UPDATE bot_control_outbox SET state = 'failed', completed_at = COALESCE(completed_at, ?),
-            failure_code = COALESCE(failure_code, 'runtime_revoked') WHERE runtime_id = ? AND state = 'pending' AND EXISTS (
-                SELECT 1 FROM bots WHERE bots.bot_id = bot_control_outbox.bot_id AND bots.project_id = ?)`)
-                    .bind(value.revokedAt, value.runtimeId, value.projectId),
                 this.auditStatement(value.audit),
             ],
             signal,

@@ -6,8 +6,8 @@ browser credentials from separate trust planes.
 
 `@moxt-ai/mobius-relay-cloudflare-platform` is a Worker entry point independent
 from `@moxt-ai/mobius-relay-cloudflare-standalone`. Both compose the shared
-Project, Runtime, Bot, Conversation, and Session services. Platform adds its own
-Tenant, App, AppCredential, developer authentication, and browser Conversation
+Project, Runtime, Conversation, and Session services. Platform adds its own
+Tenant, App, AppCredential, developer authentication, and Session access
 credential control plane. It does not serve the accountless public bootstrap.
 Standalone does not mount Platform routes unless a host explicitly constructs
 the legacy compatibility entry while migrating an older deployment.
@@ -23,7 +23,7 @@ Create the directory database and R2 buckets before the first remote deployment:
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
   and dashboard audit records and uses
   `packages/relay-cloudflare-platform/migrations/dashboard`.
-  Session/Conversation access credentials, App credential Project scopes, and
+  Session access credentials, App credential Project scopes, and
   Project audit events belong to the Project Durable Object.
 - `mobius-platform-<environment>-web-assets` stores append-only,
   content-addressed dashboard JavaScript and CSS. Its custom domain serves those
@@ -32,8 +32,8 @@ Create the directory database and R2 buckets before the first remote deployment:
 
 Copy `packages/relay-cloudflare-platform/wrangler.jsonc` into deployment-owned
 configuration and add the directory database's `database_name` and `database_id`.
-The Worker also creates independent Project, Runtime Relay, Session Relay, and Bot
-Connection Durable Object namespaces.
+The Worker also creates independent Project, Runtime Relay, and Session Relay
+Durable Object namespaces.
 
 Bind a separate Workers KV namespace as `APP_CREDENTIAL_CACHE` for each
 environment. The checked-in staging and production configurations include their
@@ -127,8 +127,8 @@ other Platform operations continue to use OIDC authentication.
 
 Allowed browser origins are exact `http` or `https` origins. Wildcards, URL
 paths, credentials, query strings, and fragments are rejected. The allowlist is
-applied to `/mobius/api/v1/projects/:projectId/client/session/*`; CORS is a browser hardening
-layer and never substitutes for the Conversation credential check.
+applied to Session access routes; CORS is a browser hardening layer and never
+substitutes for credential checks.
 
 Build either profile independently:
 
@@ -193,18 +193,18 @@ credential:
 | Caller | Credential | Routes and authority |
 | --- | --- | --- |
 | Platform developer | verified Clerk token with active organization plus `x-mobius-oidc-provider: clerk` | Organization-scoped App, Project, and AppCredential provisioning |
-| trusted App backend | `mapp_...` AppCredential | explicitly scoped shared Project/Runtime/Bot/Conversation operations |
-| authorized browser | `mconv_...` ConversationAccessCredential | one server-bound Conversation and Session under `/v1/projects/:projectId/client/session/*` |
+| trusted App backend | `mapp_...` AppCredential | explicitly scoped shared Project/Runtime/Session operations |
+| authorized browser | `msession_...` Session access credential | one server-bound Session under `/v1/projects/:projectId/sessions/:sessionId/*` |
 | local daemon | Runtime credential | one Runtime Relay connection and its lease/fence |
 
 App keys (AppCredentials) do not expire, including previously issued keys after
 the `0005_non_expiring_app_keys.sql` migration. Issuance and rotation no longer
 accept `expiresInSeconds`, and AppCredential responses omit `expiresAt`.
-AppCredential secrets and Conversation credential secrets are returned only
+AppCredential secrets and Session access credential secrets are returned only
 when issued. D1 stores their digests. Rotation creates a new credential revision;
 the old AppCredential remains valid only for its explicit overlap. Revocation,
-Conversation credential expiry, parent AppCredential revision, App lifecycle, Project lifecycle, and
-Conversation lifecycle are rechecked for every browser request. Active browser
+Session access credential expiry, parent AppCredential revision, App lifecycle,
+Project lifecycle, and Session lifecycle are rechecked for every browser request. Active browser
 event streams close on explicit revocation and periodically reauthorize so a
 cross-isolate or parent lifecycle change also terminates the stream.
 
@@ -238,19 +238,19 @@ fails or a concurrent stale fill completes after deletion, an active snapshot
 can survive until its original two-hour expiry. That expiry is measured from
 the start of the D1 read and is checked in the Worker as well as by KV.
 
-The browser route never accepts a Project, Conversation, Session, Bot, or Runtime
-target. Query and body fields attempting to choose those resources are rejected;
+The Session access credential never authorizes another Project or Session.
+Query and body fields attempting to choose a different target are rejected;
 the server reads the exact IDs from the credential record. Turn and artifact IDs
-are subordinate resources of that already-fixed Session and are reauthorized by
-the Session service.
+are subordinate resources of that fixed Session and are reauthorized by the
+Session service.
 
 ### Project Durable Object routing
 
 After this, a backend can call the public Project API and have its request
 authorized and executed inside the Project's Durable Object. The dashboard Worker
 decodes the Project ID, selects the object with the encoded Cloudflare location
-hint, and forwards the request without a directory lookup. Runtime pairing IDs,
-Runtime credentials, and Bot connection resources carry the Project ID so
+hint, and forwards the request without a directory lookup. Runtime pairing IDs
+and Runtime credentials carry the Project ID so
 otherwise-unscoped requests route to the same object. Credentials, bodies,
 streaming responses, and WebSocket upgrades remain on the normal product
 boundary; the Project Durable Object performs authorization.
@@ -279,7 +279,7 @@ Use `@moxt-ai/mobius-sdk/platform` with a Clerk token for the selected organizat
 to create an App. Pass the Clerk organization ID as `tenantId`. App
 creation returns its default AppCredential once. The same default credential can
 provision multiple Projects and use `@moxt-ai/mobius-sdk/server` for Project,
-Runtime pairing, Bot, Conversation, Turn, Interaction, Event, and Artifact
+Runtime pairing, Conversation, Turn, Interaction, Event, and Artifact
 operations. Add another AppCredential only for a real independent deployment or
 secret boundary.
 
@@ -289,16 +289,16 @@ pairing status with the AppCredential until it is paired or terminal. Runtime
 registration and current online presence remain separate fields. No Project
 event stream or webhook is required for the initial integration.
 
-If the application allows its browser to connect directly, the backend first
-authorizes its own user and business conversation, then issues a short-lived
-ConversationAccessCredential for the existing Mobius Conversation and Session.
-It returns only that `mconv_...` value to the browser. The browser uses
-`@moxt-ai/mobius-sdk/browser`; it cannot construct Platform, Project, Runtime,
-Bot, or credential-management clients from that entry point.
+If an application allows its browser to connect directly, the backend first
+authorizes its own user and business Session, then issues a short-lived Session
+access credential through `POST /v1/projects/:projectId/sessions/:sessionId/access-credentials`.
+It returns only that `msession_...` value to the browser. The browser uses the
+standard `MobiusClient` Session resources and cannot select another Project or
+Session with that credential.
 
 Moxt uses the server-only path: the Moxt browser authenticates only to Moxt,
 while Moxt Server holds one AppCredential and translates Mobius events into its
-existing realtime protocol. No Mobius AppCredential or Conversation credential
+existing realtime protocol. No Mobius AppCredential or Session access credential
 is sent to the Moxt browser.
 
 ## Standalone boundary

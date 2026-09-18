@@ -54,5 +54,4 @@ expiry; reconnecting reauthorizes access. Runtime-local execution authorization
 continues to govern agent actions.
 
 Apply Platform `migrations/sharding/0001_platform_project_credentials.sql` before
-deployment. Existing Bot conversations continue to use their conversation-scoped
-credentials and browser SDK.
+deployment.

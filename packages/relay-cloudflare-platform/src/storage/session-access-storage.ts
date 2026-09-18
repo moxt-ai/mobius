@@ -124,13 +124,9 @@ export class SessionAccessStorage {
             return null;
         }
         const permissions = v.parse(v.array(v.string()), JSON.parse(parent.permissions_json));
-        return [
-            "session:read",
-            "session:write",
-            "conversation:turn:create",
-            "conversation:turn:cancel",
-            "project:event:read",
-        ].every((permission) => permissions.includes(permission))
+        return ["session:read", "session:write", "project:event:read"].every((permission) =>
+            permissions.includes(permission),
+        )
             ? row
             : null;
     };

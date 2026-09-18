@@ -101,18 +101,10 @@ vault-backed provisioning and backend client composition.
 | --- | --- | --- |
 | Project control | `ProjectAccessContext` | Only its Project and permission set |
 | Runtime data | `RuntimeAccessContext` | One Project, Runtime, Channel credential, and live lease/fence |
-| Connector data | `BotConnectionAccessContext` | One Bot Connection, audience, and connector scopes |
-| Bot outbound execution | `RuntimeAccessContext` plus `ExecutionPermit` | One pinned execution, operation, target set, expiry, and use limit |
-
-An `ExecutionPermit` is the result of checking an authenticated Runtime against
-the opaque, server-backed `BotExecutionCapability`. It is not an identity.
-The daemon independently resolves and validates the Agent executable, workspace,
-adapter capabilities, and outbound target scope for every command. It does not
-persist or request a separate local binding approval.
 
 Each route group selects its trust plane before verification. A Project
-credential cannot authorize Runtime, Connector, or Bot-execution endpoints.
-Runtime and Connector credentials cannot authorize Project administration.
+credential cannot authorize Runtime endpoints. Runtime credentials cannot
+authorize Project administration.
 The Runtime accepts its own 43-character base64url credential format; it does
 not interpret Platform credential types.
 
@@ -122,14 +114,12 @@ not interpret Platform credential types.
 | --- | --- |
 | Project and events | `project:read`, `project:event:read` |
 | Runtime | `runtime:read`, `runtime:pair`, `runtime:revoke` |
-| Bot | `bot:read`, `bot:profile:write`, `bot:behavior:write`, `bot:binding:write`, `bot:connection:manage` |
-| Conversation | `conversation:create`, `conversation:read`, `conversation:turn:create`, `conversation:turn:cancel`, `interaction:respond` |
-| Session and Artifact | `session:read`, `session:write`, `session:delete`, `artifact:read`, `artifact:write` |
+| Session and Artifact | `session:read`, `session:write`, `session:delete`, `interaction:respond`, `artifact:read`, `artifact:write` |
 | Authentication administration | `identity-binding:manage`, `owner-credential:manage` |
 
 Owner capabilities receive the full set. Browser credentials receive a fixed
 interactive subset and cannot administer identity bindings, owner credentials,
-Runtime pairing/revocation, or Bot configuration. Hosting entry points decide
+Runtime pairing/revocation. Hosting entry points decide
 which authentication-administration routes they expose. Standalone does not
 mount external identity or authentication-audit routes.
 
@@ -152,7 +142,7 @@ falling back to a shared `unavailable` bucket. The deployment-wide bound still
 applies. A disabled policy returns 403; an exhausted bound returns 429.
 
 Standalone's unauthenticated Project discovery is read-only. It does not grant
-mutation, Runtime, Connector, execution, or credential-management authority.
+mutation, Runtime, execution, or credential-management authority.
 
 List and rotate owner credentials with `MobiusProjectAuthenticationClient`:
 
@@ -179,7 +169,7 @@ password, email, MFA, or social-account recovery.
 
 [`moxt-server.ts`](../packages/mobius-sdk/examples/moxt-server.ts) demonstrates
 Platform provisioning with a caller-supplied credential vault, then Project-side
-Runtime, Bot, Conversation, Session, and event operations. The host keeps its
+Runtime, Conversation, Session, and event operations. The host keeps its
 own user and workspace policy. Its browser sends a host session to the backend;
 the backend resolves the Project and supplies credentials through the SDK's
 credential-provider boundary. `actorReference` is sanitized audit context, not

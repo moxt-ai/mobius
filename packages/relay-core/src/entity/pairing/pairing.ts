@@ -34,7 +34,6 @@ export interface AgentDescriptor {
     readonly agentPath: string;
     readonly agentVersion: string;
     readonly agentSettingsDiscovery?: boolean;
-    readonly botSessionConfiguration?: boolean;
     readonly capabilities: SessionCapabilities;
     readonly id: string;
     readonly label: string;
@@ -517,7 +516,7 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         if (
             !isRecord(candidate) ||
             Object.keys(candidate).length < 5 ||
-            Object.keys(candidate).length > 8 ||
+            Object.keys(candidate).length > 7 ||
             !Object.hasOwn(candidate, "agentPath") ||
             !Object.hasOwn(candidate, "agentVersion") ||
             !Object.hasOwn(candidate, "capabilities") ||
@@ -528,14 +527,11 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
                     key !== "agentPath" &&
                     key !== "agentVersion" &&
                     key !== "agentSettingsDiscovery" &&
-                    key !== "botSessionConfiguration" &&
                     key !== "capabilities" &&
                     key !== "id" &&
                     key !== "label" &&
                     key !== "sessionTurnConfiguration",
             ) ||
-            (Object.hasOwn(candidate, "botSessionConfiguration") &&
-                typeof candidate["botSessionConfiguration"] !== "boolean") ||
             (Object.hasOwn(candidate, "agentSettingsDiscovery") &&
                 typeof candidate["agentSettingsDiscovery"] !== "boolean") ||
             (Object.hasOwn(candidate, "sessionTurnConfiguration") &&
@@ -549,7 +545,6 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
         const agentPath = candidate["agentPath"];
         const agentVersion = candidate["agentVersion"];
         const agentSettingsDiscovery = candidate["agentSettingsDiscovery"];
-        const botSessionConfiguration = candidate["botSessionConfiguration"];
         const sessionTurnConfiguration = candidate["sessionTurnConfiguration"];
         if (
             typeof agentPath !== "string" ||
@@ -572,7 +567,6 @@ export function validateAgents(value: unknown): readonly AgentDescriptor[] {
             agentPath,
             agentVersion: agentVersion.trim(),
             ...(agentSettingsDiscovery === true ? { agentSettingsDiscovery } : {}),
-            ...(botSessionConfiguration === true ? { botSessionConfiguration } : {}),
             capabilities,
             id,
             label: label.trim(),
