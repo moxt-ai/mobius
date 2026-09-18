@@ -14,6 +14,7 @@ import {
     type RequestPermissionRequest,
     type RequestPermissionResponse,
     type SessionNotification,
+    type ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
 import {
     AGENT_CONTENT_KIND,
@@ -822,6 +823,7 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #permissionProfile: AgentPermissionProfile;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
+    readonly #emittedToolImages = new Set<string>();
     readonly #verifiedAgentVersion: string;
     #preSessionUpdateBytes = 0;
     #agentName = "";
@@ -1098,17 +1100,17 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
-        if (content.type === "image" && content.data.length > 0) {
-            const raster = readInlineRaster(content.data, content.name);
-            if (raster !== null) {
-                return await this.importRaster(raster, AbortSignal.timeout(20_000));
-            }
-        }
-        if (content.type === "image" && content.data.length === 0 && content.uri.length > 0) {
+        if (content.type === "image" && content.uri.length > 0) {
             const signal = AbortSignal.timeout(20_000);
             const raster = await readLocalRaster(content.uri, signal);
             if (raster !== null) {
                 return await this.importRaster(raster, signal);
+            }
+        }
+        if (content.type === "image" && content.data.length > 0) {
+            const raster = readInlineRaster(content.data, content.name);
+            if (raster !== null) {
+                return await this.importRaster(raster, AbortSignal.timeout(20_000));
             }
         }
         if (content.type === "video" && content.data.length > 0) {
@@ -1131,6 +1133,23 @@ class AcpProcessSession implements AcpClientHandler {
             messageId,
             sessionId: this.#mobiusSessionId,
         });
+    };
+
+    private readonly emitToolImages = async (update: ToolCallUpdate): Promise<void> => {
+        if (update.status !== "completed") {
+            return;
+        }
+        for (const [index, item] of (update.content ?? []).entries()) {
+            if (item.type !== "content" || item.content.type !== "image") {
+                continue;
+            }
+            const key = `${update.toolCallId}:${index.toString()}`;
+            if (this.#emittedToolImages.has(key)) {
+                continue;
+            }
+            this.#emittedToolImages.add(key);
+            await this.emitAgentContent(normalizeContentBlock(item.content), `tool-${key}`);
+        }
     };
 
     private readonly emitRaster = async (
@@ -2006,6 +2025,7 @@ class AcpProcessSession implements AcpClientHandler {
         }
         if (update.sessionUpdate === "tool_call_update") {
             await this.#turn.activities.recordToolCallUpdate(update);
+            await this.emitToolImages(update);
             return;
         }
         if (update.sessionUpdate === "plan") {
