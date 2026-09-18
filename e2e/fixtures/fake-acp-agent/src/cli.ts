@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as acp from "@agentclientprotocol/sdk";
@@ -1097,18 +1098,40 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                       type: "content",
                                   },
                               ]
-                            : prompt === "generate inline image"
-                              ? [
-                                    {
-                                        content: {
-                                            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
-                                            mimeType: "image/png",
-                                            type: "image",
+                            : prompt === "generate local image"
+                              ? (() => {
+                                    const path = join(tmpdir(), `mobius-fake-agent-${process.pid.toString()}.png`);
+                                    writeFileSync(
+                                        path,
+                                        Buffer.from(
+                                            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                            "base64",
+                                        ),
+                                    );
+                                    return [
+                                        {
+                                            content: {
+                                                data: "",
+                                                mimeType: "image/png",
+                                                type: "image",
+                                                uri: path,
+                                            },
+                                            type: "content",
                                         },
-                                        type: "content",
-                                    },
-                                ]
-                              : undefined,
+                                    ];
+                                })()
+                              : prompt === "generate inline image"
+                                ? [
+                                      {
+                                          content: {
+                                              data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+                                              mimeType: "image/png",
+                                              type: "image",
+                                          },
+                                          type: "content",
+                                      },
+                                  ]
+                                : undefined,
                     rawOutput: { name: "mobius-workspace" },
                     sessionUpdate: "tool_call_update",
                     status: "completed",

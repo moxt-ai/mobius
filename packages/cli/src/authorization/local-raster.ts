@@ -1,8 +1,9 @@
-import { readFile, realpath, stat } from "node:fs/promises";
+import { open, readFile, realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const MAX_LOCAL_RASTER_BYTES = 3_000_000;
+const MAX_LOCAL_RASTER_BYTES = 128 * 1024 * 1024;
+const MAX_INLINE_RASTER_BYTES = 3_000_000;
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47);
 const JPEG_SIGNATURE = Uint8Array.of(0xff, 0xd8, 0xff);
 const GIF87_SIGNATURE = new TextEncoder().encode("GIF87a");
@@ -13,17 +14,22 @@ const WEBP_SIGNATURE = new TextEncoder().encode("WEBP");
 export type LocalRasterMimeType = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
 
 export class LocalRasterImage {
-    readonly bytes: Uint8Array;
+    readonly bytes: Uint8Array | null;
     readonly mimeType: LocalRasterMimeType;
     readonly name: string;
+    readonly sourceUri: string;
 
-    constructor(name: string, mimeType: LocalRasterMimeType, bytes: Uint8Array) {
+    constructor(name: string, mimeType: LocalRasterMimeType, bytes: Uint8Array | null, sourceUri = "") {
         this.bytes = bytes;
         this.mimeType = mimeType;
         this.name = name;
+        this.sourceUri = sourceUri;
     }
 
-    readonly base64 = (): string => Buffer.from(this.bytes).toString("base64");
+    readonly base64 = async (): Promise<string> => {
+        const bytes = this.bytes ?? new Uint8Array(await readFile(this.sourceUri));
+        return Buffer.from(bytes).toString("base64");
+    };
 }
 
 function startsWith(bytes: Uint8Array, signature: Uint8Array, offset = 0): boolean {
@@ -50,14 +56,14 @@ function sniffRasterMime(bytes: Uint8Array): LocalRasterMimeType | null {
 }
 
 export function readInlineRaster(data: string, name = "Image"): LocalRasterImage | null {
-    if (data.length === 0 || data.length > Math.ceil(MAX_LOCAL_RASTER_BYTES / 3) * 4 || data.length % 4 !== 0) {
+    if (data.length === 0 || data.length > Math.ceil(MAX_INLINE_RASTER_BYTES / 3) * 4 || data.length % 4 !== 0) {
         return null;
     }
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data)) {
         return null;
     }
     const bytes = new Uint8Array(Buffer.from(data, "base64"));
-    if (bytes.byteLength < 1 || bytes.byteLength > MAX_LOCAL_RASTER_BYTES) {
+    if (bytes.byteLength < 1 || bytes.byteLength > MAX_INLINE_RASTER_BYTES) {
         return null;
     }
     const mimeType = sniffRasterMime(bytes);
@@ -128,14 +134,17 @@ export async function readLocalRaster(uri: string, signal: AbortSignal): Promise
     if (!targetMetadata.isFile() || targetMetadata.size < 1 || targetMetadata.size > MAX_LOCAL_RASTER_BYTES) {
         return null;
     }
-    const bytes = new Uint8Array(await readFile(target));
-    signal.throwIfAborted();
-    if (bytes.byteLength < 1 || bytes.byteLength > MAX_LOCAL_RASTER_BYTES) {
-        return null;
+    const handle = await open(target, "r");
+    const header = new Uint8Array(12);
+    try {
+        await handle.read(header, 0, header.byteLength, 0);
+    } finally {
+        await handle.close();
     }
-    const mimeType = sniffRasterMime(bytes);
+    signal.throwIfAborted();
+    const mimeType = sniffRasterMime(header);
     if (mimeType === null) {
         return null;
     }
-    return new LocalRasterImage(basename(target) || "Image", mimeType, bytes);
+    return new LocalRasterImage(basename(target) || "Image", mimeType, null, target);
 }

@@ -21,6 +21,11 @@ import type {
     VerifiedChannelAccess,
 } from "../../entity/pairing/pairing.ts";
 export interface PairingOperations {
+    readonly openProjectScopeControlHost: (
+        scope: ProjectScope,
+        runtimeId: string,
+        signal: AbortSignal,
+    ) => Promise<ChannelHostCredential>;
     readonly openControlHost: (
         projectId: string,
         runtimeId: string,

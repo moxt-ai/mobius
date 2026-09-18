@@ -11,7 +11,7 @@ function browserCorsHeaders(origin: string, methods: readonly string[], headers:
         "access-control-allow-methods": [...methods, "OPTIONS"].join(", "),
         "access-control-allow-origin": origin,
         "access-control-expose-headers":
-            "content-length, content-type, x-mobius-artifact-id, x-mobius-sha256, x-mobius-event-format",
+            "content-length, content-type, x-mobius-artifact-id, x-mobius-byte-length, x-mobius-event-format, x-mobius-file-name, x-mobius-sha256",
         "access-control-max-age": "600",
         vary: "Origin, Access-Control-Request-Method, Access-Control-Request-Headers",
     });

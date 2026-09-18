@@ -47,6 +47,8 @@ import { errorMiddleware, rethrowHonoError } from "../middleware/error-middlewar
 import { operationTimingMiddleware } from "../middleware/operation-timing-middleware.ts";
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
+const MAXIMUM_FILE_BYTES = 128 * 1024 * 1024;
+
 function readIdentifierArray(
     value: Readonly<Record<string, unknown>>,
     key: string,
@@ -105,6 +107,17 @@ function readEventWaitMilliseconds(value: string): number {
         throw new PairingDirectoryError("invalid_request", "The Session event wait is invalid");
     }
     return Number(value);
+}
+
+function readFileMaxBytes(value: string | undefined): number {
+    if (value === undefined || !/^[1-9]\d*$/.test(value)) {
+        throw new PairingDirectoryError("invalid_request", "The file size limit is invalid");
+    }
+    const result = Number(value);
+    if (!Number.isSafeInteger(result) || result > MAXIMUM_FILE_BYTES) {
+        throw new PairingDirectoryError("invalid_request", "The file size limit is invalid");
+    }
+    return result;
 }
 
 export function createSessionRoutes() {
@@ -382,6 +395,20 @@ export function createSessionRoutes() {
                     validateIdentifier(context.req.param("sessionId"), "session_id"),
                     context.req.raw.signal,
                 ),
+            );
+        })
+        .get("/projects/:projectId/sessions/:sessionId/files/content", async (context) => {
+            const path = context.req.query("path");
+            if (typeof path !== "string" || path.length === 0 || path.length > 4_096) {
+                throw new PairingDirectoryError("invalid_request", "The file path is invalid");
+            }
+            return await context.env.services.sessions.readFile(
+                validateIdentifier(context.req.param("projectId"), "project_id"),
+                bearerToken(context.req.raw),
+                validateIdentifier(context.req.param("sessionId"), "session_id"),
+                path,
+                readFileMaxBytes(context.req.query("maxBytes")),
+                context.req.raw.signal,
             );
         })
         .put(

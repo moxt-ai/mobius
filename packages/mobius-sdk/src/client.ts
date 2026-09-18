@@ -27,6 +27,10 @@ import {
     decodeAgentInstallStartedEvent,
     decodeAgentMessageDeltaEvent,
     decodeCommittedSessionEvent,
+    decodeFileBeginEvent,
+    decodeFileChunkEvent,
+    decodeFileEndEvent,
+    decodeFileFailedEvent,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
@@ -57,6 +61,7 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentInstallCancelCommand,
     encodeAgentInstallRequestCommand,
+    encodeFileReadCommand,
     encodeNativeSessionCancel,
     encodeNativeSessionCommand,
     encodeNativeSessionTurnForkRequest,
@@ -67,6 +72,11 @@ import {
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
     encodeWorkspaceListCommand,
+    FILE_BEGIN_KIND,
+    FILE_CHUNK_KIND,
+    FILE_END_KIND,
+    FILE_FAILED_KIND,
+    FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
@@ -240,6 +250,13 @@ export interface PromptResult {
     readonly stopReason: string;
 }
 
+export interface FileReadResult {
+    readonly bytes: Uint8Array;
+    readonly mediaType: string;
+    readonly modifiedAt: string;
+    readonly name: string;
+}
+
 export class MobiusClientError extends Error {
     readonly code: string;
 
@@ -374,6 +391,130 @@ export class MobiusClient {
             (event) => event.requestId,
             signal,
         );
+    };
+
+    readonly readFile = async (
+        sessionId: string,
+        path: string,
+        signal: AbortSignal,
+        maxBytes = 32 * 1024 * 1024,
+    ): Promise<FileReadResult> => {
+        signal.throwIfAborted();
+        if (this.#socket.readyState !== WebSocket.OPEN) {
+            throw new MobiusClientError("runtime_offline", "The local runtime is offline");
+        }
+        const requestId = crypto.randomUUID();
+        let cleanup = (): void => undefined;
+        const result = new Promise<FileReadResult>((resolve, reject) => {
+            let metadata: ReturnType<typeof decodeFileBeginEvent> | null = null;
+            const chunks: Uint8Array[] = [];
+            let receivedBytes = 0;
+            let nextSequence = 0;
+            const finish = (): void => {
+                this.#socket.removeEventListener("message", handleMessage);
+                this.#socket.removeEventListener("close", handleClose);
+                signal.removeEventListener("abort", handleAbort);
+            };
+            cleanup = finish;
+            const fail = (error: unknown): void => {
+                finish();
+                reject(error);
+            };
+            const handleAbort = (): void => fail(signal.reason);
+            const handleClose = (): void =>
+                fail(new MobiusClientError("connection_closed", "The connection closed while reading the file"));
+            const handleMessage = (event: MessageEvent<unknown>): void => {
+                try {
+                    const encoded = readInboundMessage(event);
+                    const kind = decodeMessageKind(encoded);
+                    if (kind === FILE_BEGIN_KIND) {
+                        const begin = decodeFileBeginEvent(encoded);
+                        if (begin.requestId !== requestId) {
+                            return;
+                        }
+                        if (begin.byteLength > maxBytes) {
+                            fail(new MobiusClientError("file_too_large", "The local file is too large"));
+                            return;
+                        }
+                        metadata = begin;
+                        return;
+                    }
+                    if (kind === FILE_CHUNK_KIND) {
+                        const chunk = decodeFileChunkEvent(encoded);
+                        if (chunk.requestId !== requestId) {
+                            return;
+                        }
+                        if (metadata === null || chunk.sequence !== nextSequence) {
+                            throw new MobiusClientError("invalid_protocol_message", "File chunks are out of order");
+                        }
+                        const binary = atob(chunk.data);
+                        const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+                        receivedBytes += bytes.byteLength;
+                        if (receivedBytes > metadata.byteLength || receivedBytes > maxBytes) {
+                            throw new MobiusClientError(
+                                "invalid_protocol_message",
+                                "File exceeded its advertised size",
+                            );
+                        }
+                        chunks.push(bytes);
+                        nextSequence += 1;
+                        return;
+                    }
+                    if (kind === FILE_END_KIND) {
+                        const end = decodeFileEndEvent(encoded);
+                        if (end.requestId !== requestId) {
+                            return;
+                        }
+                        if (metadata === null || receivedBytes !== metadata.byteLength) {
+                            throw new MobiusClientError("invalid_protocol_message", "File transfer was incomplete");
+                        }
+                        const bytes = new Uint8Array(receivedBytes);
+                        let offset = 0;
+                        for (const chunk of chunks) {
+                            bytes.set(chunk, offset);
+                            offset += chunk.byteLength;
+                        }
+                        finish();
+                        resolve({
+                            bytes,
+                            mediaType: metadata.mediaType,
+                            modifiedAt: metadata.modifiedAt,
+                            name: metadata.name,
+                        });
+                        return;
+                    }
+                    if (kind === FILE_FAILED_KIND) {
+                        const failed = decodeFileFailedEvent(encoded);
+                        if (failed.requestId === requestId) {
+                            fail(new MobiusClientError(failed.code, failed.message));
+                        }
+                    }
+                } catch (error) {
+                    fail(error);
+                }
+            };
+            this.#socket.addEventListener("message", handleMessage);
+            this.#socket.addEventListener("close", handleClose, { once: true });
+            signal.addEventListener("abort", handleAbort, { once: true });
+        });
+        try {
+            sendImmediately(
+                this.#socket,
+                encodeOutboundMessage(() =>
+                    encodeFileReadCommand({
+                        kind: FILE_READ_KIND,
+                        maxBytes,
+                        path,
+                        requestId,
+                        sessionId,
+                    }),
+                ),
+            );
+        } catch (error) {
+            cleanup();
+            throw error;
+        }
+        return await result;
     };
 
     readonly prepareSession = async (
@@ -934,6 +1075,16 @@ export class MobiusClient {
                 decodeWorkspaceListCommand(encoded);
             } else if (kind === WORKSPACE_ENTRIES_KIND) {
                 this.#options.onWorkspace?.(decodeWorkspaceEntriesEvent(encoded));
+            } else if (kind === FILE_READ_KIND) {
+                // The Relay echoes host control requests to sibling tabs.
+            } else if (kind === FILE_BEGIN_KIND) {
+                decodeFileBeginEvent(encoded);
+            } else if (kind === FILE_CHUNK_KIND) {
+                decodeFileChunkEvent(encoded);
+            } else if (kind === FILE_END_KIND) {
+                decodeFileEndEvent(encoded);
+            } else if (kind === FILE_FAILED_KIND) {
+                decodeFileFailedEvent(encoded);
             } else if (kind === SESSION_PREPARE_KIND) {
                 decodeSessionPrepareCommand(encoded);
             } else if (kind === SESSION_READY_KIND) {

@@ -26,6 +26,7 @@ import {
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeBotSessionPromptCommand,
+    decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
@@ -55,6 +56,7 @@ import {
     encodeAgentMessageDeltaEvent,
     encodeAgentSettingsDiscoveredEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
+    encodeFileFailedEvent,
     encodeNativeSessionResult,
     encodeRuntimeDeliveryReceived,
     encodeSessionCommandsUpdatedEvent,
@@ -71,6 +73,8 @@ import {
     encodeSessionStartedEvent,
     encodeSessionUsageUpdatedEvent,
     encodeWorkspaceEntriesEvent,
+    FILE_FAILED_KIND,
+    FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
@@ -135,6 +139,7 @@ import {
     SucceededInstallation,
 } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
+import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
 import { uploadRuntimeArtifact } from "./artifacts/runtime-artifact-uploader.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
 import type { LocalArtifact } from "./authorization/local-artifact.ts";
@@ -2721,6 +2726,29 @@ async function runRelayConnection(
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
                         connectionLiveness.acknowledge(decodeRuntimeHeartbeatAckEvent(encoded));
+                        return;
+                    }
+                    if (kind === FILE_READ_KIND) {
+                        const command = decodeFileReadCommand(encoded);
+                        void streamLocalFile(
+                            command,
+                            (message) => send(socket, message),
+                            connectionController.signal,
+                        ).catch((error: unknown) => {
+                            if (socket.readyState !== WebSocket.OPEN || connectionController.signal.aborted) {
+                                return;
+                            }
+                            send(
+                                socket,
+                                encodeFileFailedEvent({
+                                    code: "file_unavailable",
+                                    kind: FILE_FAILED_KIND,
+                                    message: error instanceof Error ? error.message : "The local file is unavailable",
+                                    requestId: command.requestId,
+                                    sessionId: command.sessionId,
+                                }),
+                            );
+                        });
                         return;
                     }
                     if (kind === SESSION_CANCEL_KIND) {

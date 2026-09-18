@@ -54,7 +54,7 @@ async function resolveMessageImages(
         if (local === null) {
             return "[Image unavailable]";
         }
-        const data = local.base64();
+        const data = await local.base64();
         if (usedCharacters + imageCharacters + data.length > SESSION_HISTORY_IMAGE_CHARACTER_LIMIT) {
             return "[Image unavailable]";
         }

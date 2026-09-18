@@ -19,6 +19,11 @@ import {
     decodeAgentSettingsDiscoverCommand,
     decodeAgentSettingsDiscoveredEvent,
     decodeAgentSettingsDiscoveryFailedEvent,
+    decodeFileBeginEvent,
+    decodeFileChunkEvent,
+    decodeFileEndEvent,
+    decodeFileFailedEvent,
+    decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
@@ -49,6 +54,11 @@ import {
     encodeSessionFailedEvent,
     encodeSessionOperationFailedEvent,
     encodeSessionPrepareCommand,
+    FILE_BEGIN_KIND,
+    FILE_CHUNK_KIND,
+    FILE_END_KIND,
+    FILE_FAILED_KIND,
+    FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
@@ -821,6 +831,18 @@ export class ChannelActor {
             case AGENT_SETTINGS_DISCOVERY_FAILED_KIND:
                 decodeAgentSettingsDiscoveryFailedEvent(message);
                 return;
+            case FILE_BEGIN_KIND:
+                decodeFileBeginEvent(message);
+                return;
+            case FILE_CHUNK_KIND:
+                decodeFileChunkEvent(message);
+                return;
+            case FILE_END_KIND:
+                decodeFileEndEvent(message);
+                return;
+            case FILE_FAILED_KIND:
+                decodeFileFailedEvent(message);
+                return;
             case NATIVE_SESSION_RESULT_KIND:
                 decodeNativeSessionResult(message);
                 return;
@@ -946,6 +968,10 @@ export class ChannelActor {
             case AGENT_INSTALL_CANCEL_KIND: {
                 const command = decodeAgentInstallCancelCommand(message);
                 return { requestId: command.requestId, sessionId: "" };
+            }
+            case FILE_READ_KIND: {
+                const command = decodeFileReadCommand(message);
+                return { requestId: command.requestId, sessionId: command.sessionId };
             }
             default:
                 throw new ProtocolMessageError("Unsupported host message");

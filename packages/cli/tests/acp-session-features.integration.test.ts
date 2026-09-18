@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -111,7 +111,7 @@ function fakeAgent(
 }
 
 describe("ACP session features", () => {
-    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it uploads a validated raster and references its artifact", async () => {
+    it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it keeps the validated inline raster", async () => {
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
         const activities: AcpActivity[] = [];
@@ -133,16 +133,11 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(observer.importedImages).toHaveLength(1);
-            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png" });
-            expect(observer.importedImages[0]?.bytes.subarray(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
+            expect(observer.importedImages).toHaveLength(0);
             expect(
                 activities.some((activity) =>
                     activity.content.some(
-                        (content) =>
-                            content.type === "image" &&
-                            content.artifactId === "artifact-inline-image" &&
-                            content.data.length === 0,
+                        (content) => content.type === "image" && content.artifactId === "" && content.data.length > 0,
                     ),
                 ),
             ).toBe(true);
@@ -151,7 +146,7 @@ describe("ACP session features", () => {
         }
     });
 
-    it("Given an ACP agent links an authorized local image in Markdown, When Mobius records the reply, Then it uploads the image instead of forwarding an unavailable link", async () => {
+    it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then it preserves the original path for on-demand reading", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
@@ -175,14 +170,14 @@ describe("ACP session features", () => {
             });
 
             expect(output.join("")).not.toContain("![Generated image]");
-            expect(observer.importedImages).toHaveLength(1);
-            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png", name: "generated-image.png" });
+            expect(observer.importedImages).toHaveLength(0);
             expect(observer.content).toContainEqual(
                 expect.objectContaining({
                     content: expect.objectContaining({
-                        artifactId: "artifact-inline-image",
+                        artifactId: "",
                         name: "generated-image.png",
                         type: "image",
+                        uri: await realpath(join(directory, "generated-image.png")),
                     }),
                 }),
             );
@@ -192,7 +187,7 @@ describe("ACP session features", () => {
         }
     });
 
-    it("Given an ACP Agent links an image outside its workspace, When Mobius records the reply, Then it uploads the Agent-owned artifact", async () => {
+    it("Given an ACP Agent links an image outside its workspace, When Mobius records the reply, Then it preserves the Agent path", async () => {
         const workspace = await mkdtemp(join(tmpdir(), "mobius-agent-workspace-"));
         const generatedImages = await mkdtemp(join(tmpdir(), "mobius-agent-generated-images-"));
         const observer = new RecordingObserver();
@@ -217,8 +212,17 @@ describe("ACP session features", () => {
             });
 
             expect(output.join("")).not.toContain("Image unavailable");
-            expect(observer.importedImages).toHaveLength(1);
-            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png", name: "generated-image.png" });
+            expect(observer.importedImages).toHaveLength(0);
+            expect(observer.content).toContainEqual(
+                expect.objectContaining({
+                    content: expect.objectContaining({
+                        artifactId: "",
+                        name: "generated-image.png",
+                        type: "image",
+                        uri: await realpath(join(generatedImages, "generated-image.png")),
+                    }),
+                }),
+            );
         } finally {
             await manager.close();
             await Promise.all([
@@ -247,11 +251,19 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(observer.importedArtifacts).toEqual(
-                expect.arrayContaining([
-                    expect.objectContaining({ mimeType: "image/png", name: "generated-image.png" }),
-                    expect.objectContaining({ mimeType: "video/mp4", name: "generated-video.mp4" }),
-                ]),
+            expect(observer.importedArtifacts).toEqual([
+                expect.objectContaining({ mimeType: "video/mp4", name: "generated-video.mp4" }),
+            ]);
+            expect(observer.content).toContainEqual(
+                expect.objectContaining({
+                    content: expect.objectContaining({
+                        artifactId: "",
+                        mimeType: "image/png",
+                        name: "generated-image.png",
+                        type: "image",
+                        uri: await realpath(join(directory, "generated-image.png")),
+                    }),
+                }),
             );
             expect(observer.content).toContainEqual(
                 expect.objectContaining({

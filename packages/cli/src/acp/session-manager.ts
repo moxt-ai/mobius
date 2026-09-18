@@ -1151,15 +1151,15 @@ class AcpProcessSession implements AcpClientHandler {
 
     private readonly importRaster = async (
         raster: LocalRasterImage,
-        signal: AbortSignal,
+        _signal: AbortSignal,
     ): Promise<AgentDisplayContent> => {
-        const artifactId = await this.#getObserver().importLocalArtifact(this.#mobiusSessionId, raster, signal);
-        return imageDisplayContent(
-            raster.mimeType,
-            raster.name,
-            artifactId.length > 0 ? "" : raster.base64(),
-            artifactId,
-        );
+        if (raster.sourceUri.length > 0) {
+            return {
+                ...imageDisplayContent(raster.mimeType, raster.name, "", ""),
+                uri: raster.sourceUri,
+            };
+        }
+        return imageDisplayContent(raster.mimeType, raster.name, await raster.base64(), "");
     };
 
     private readonly importVideo = async (video: LocalVideo, signal: AbortSignal): Promise<AgentDisplayContent> => {

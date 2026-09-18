@@ -66,7 +66,7 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
                 {
                     additionalDirectoryIds: [],
                     artifactIds: [],
-                    content: "generate inline image",
+                    content: "generate local image",
                     idempotencyKey: "generate-image",
                     images: [],
                     resources: [],
@@ -79,8 +79,8 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
             expect(firstPage.messages).toHaveLength(1);
             const firstMessage = firstPage.messages[0];
             expect(firstMessage).toMatchObject({
-                prompt: "generate inline image",
-                response: "Codex turn 1: generate inline image",
+                prompt: "generate local image",
+                response: "Codex turn 1: generate local image",
                 attempt: { kind: "succeeded" },
             });
             expect(firstMessage?.attempt).toBeInstanceOf(MobiusPresentAttemptSummary);
@@ -106,13 +106,18 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
                     typeof entry === "object" &&
                     entry !== null &&
                     Reflect.get(entry, "type") === "image" &&
-                    typeof Reflect.get(entry, "artifactId") === "string",
+                    typeof Reflect.get(entry, "uri") === "string",
             );
-            expect(image).toMatchObject({ type: "image", mimeType: "image/png", artifactId: expect.any(String) });
-            const artifactId = image === undefined ? "" : String(Reflect.get(image, "artifactId"));
-            const downloaded = await client.artifacts.download(session.sessionId, artifactId, signal);
-            expect(downloaded.artifact).toMatchObject({ mediaType: "image/png", state: "available" });
-            expect(downloaded.bytes.subarray(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
+            expect(image).toMatchObject({
+                type: "image",
+                mimeType: "image/png",
+                artifactId: "",
+                uri: expect.any(String),
+            });
+            const uri = image === undefined ? "" : String(Reflect.get(image, "uri"));
+            const file = await client.sessions.readFile(session.sessionId, uri, signal);
+            expect(file.mediaType).toBe("image/png");
+            expect(file.bytes.subarray(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
 
             await runtime.restartFromSavedChannel();
             completed = Promise.withResolvers<MobiusTurnCompletedEvent>();
@@ -133,7 +138,7 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
             const history = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 100 }, signal);
             expect(history.messages).toMatchObject([
                 { prompt: "continue after restart", response: "Codex turn 2: continue after restart" },
-                { prompt: "generate inline image", response: "Codex turn 1: generate inline image" },
+                { prompt: "generate local image", response: "Codex turn 1: generate local image" },
             ]);
         } finally {
             subscription.close();

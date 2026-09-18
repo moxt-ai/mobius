@@ -169,6 +169,7 @@ export function createPlatformApplication(
         .all("/:sessionId/access-credentials", conversationHandler)
         .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/native-history", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/events", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/interactions", sessionAccessTargetMiddleware, projectHandler)

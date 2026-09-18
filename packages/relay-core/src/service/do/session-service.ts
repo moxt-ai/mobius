@@ -4,6 +4,7 @@ import {
     decodeSessionPermissionRespondCommand,
     encodeSessionElicitationRespondCommand,
     encodeSessionPermissionRespondCommand,
+    type FileReadCommand,
     type InteractionResponse,
     type NativeSessionHistory,
     type PromptImage,
@@ -161,6 +162,22 @@ export class SessionService {
         this.#sessionQueries.readSession(
             await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
+            signal,
+        );
+
+    readonly readFile = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        path: string,
+        maxBytes: number,
+        signal: AbortSignal,
+    ): Promise<Response> =>
+        await this.streamFile(
+            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
+            sessionId,
+            path,
+            maxBytes,
             signal,
         );
 
@@ -668,6 +685,52 @@ export class SessionService {
         return await this.#sessionQueries.readSession(access.scope, access.sessionId, signal);
     };
 
+    private readonly streamFile = async (
+        scope: ProjectScope,
+        sessionId: string,
+        path: string,
+        maxBytes: number,
+        signal: AbortSignal,
+    ): Promise<Response> => {
+        const session = await this.#sessionQueries.readSession(scope, sessionId, signal);
+        const control = await this.#pairings.openProjectScopeControlHost(
+            scope,
+            session.defaultBinding.runtimeId,
+            signal,
+        );
+        let handedOff = false;
+        try {
+            const response = await this.#channelGateway.acceptHost(
+                control,
+                new Request("https://runtime.internal/host", { headers: { Upgrade: "websocket" } }),
+                signal,
+            );
+            const socket = response.webSocket;
+            if (socket === null) {
+                throw new PairingDirectoryError("runtime_unavailable", "The Runtime connection is unavailable");
+            }
+            const command: FileReadCommand = {
+                kind: "file.read",
+                maxBytes,
+                path,
+                requestId: crypto.randomUUID(),
+                sessionId,
+            };
+            const transfer = await requestRuntimeFile(socket, command, signal);
+            handedOff = true;
+            void transfer.finished
+                .then(async () => {
+                    await this.#pairings.closeControlHost(control, AbortSignal.timeout(15000));
+                })
+                .catch(() => undefined);
+            return transfer.response;
+        } finally {
+            if (!handedOff) {
+                await this.#pairings.closeControlHost(control, AbortSignal.timeout(15000));
+            }
+        }
+    };
+
     readonly readConversationConfiguration = async (access: ConversationAccessContext, signal: AbortSignal) => {
         access.require(ConversationPermission.Read);
         return await this.#sessionQueries.readConfiguration(access.scope, access.sessionId, signal);
@@ -1061,3 +1124,4 @@ export class SessionService {
 }
 
 import type { PairingOperations } from "../pairing/pairing-operations.ts";
+import { requestRuntimeFile } from "../pairing/runtime-control-request.ts";

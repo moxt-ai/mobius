@@ -390,6 +390,67 @@ export class MobiusRequestExecutor {
     readonly get = async (path: string, signal: AbortSignal): Promise<unknown> =>
         await this.request(path, "GET", "", false, signal);
 
+    readonly getFile = async (
+        path: string,
+        maximumBytes: number,
+        signal: AbortSignal,
+    ): Promise<{
+        readonly bytes: Uint8Array;
+        readonly mediaType: string;
+        readonly modifiedAt: string;
+        readonly name: string;
+    }> => {
+        const deadline = new RequestDeadline(signal, this.#operationTimeoutMilliseconds);
+        try {
+            const credential = validateCredential(await this.#credentialProvider.credential(deadline.signal));
+            const response = await this.#transport.fetch(
+                new Request(requestUrl(this.#endpoint, path), {
+                    headers: this.authenticationHeaders(credential, "application/octet-stream"),
+                    signal: deadline.signal,
+                }),
+            );
+            this.#observeResponse?.({
+                serverTiming: response.headers.get("server-timing"),
+                status: response.status,
+            });
+            if (!response.ok) {
+                await throwApiError(response);
+            }
+            const mediaType = response.headers.get("content-type") ?? "";
+            const modifiedAt = response.headers.get("last-modified") ?? "";
+            const encodedName = response.headers.get("x-mobius-file-name") ?? "";
+            const encodedLength = response.headers.get("x-mobius-byte-length") ?? "";
+            if (
+                mediaType.length === 0 ||
+                mediaType.length > 255 ||
+                modifiedAt.length === 0 ||
+                !/^\d+$/.test(encodedLength)
+            ) {
+                throw new MobiusProtocolError("The service returned invalid file metadata");
+            }
+            const byteLength = Number(encodedLength);
+            if (!Number.isSafeInteger(byteLength) || byteLength < 1 || byteLength > maximumBytes) {
+                throw new MobiusProtocolError("The service returned an invalid file size");
+            }
+            let name: string;
+            try {
+                name = decodeURIComponent(encodedName);
+            } catch (cause) {
+                throw new MobiusProtocolError("The service returned an invalid file name", { cause });
+            }
+            return {
+                bytes: await readExactResponseBytes(response, byteLength, deadline.signal, false),
+                mediaType,
+                modifiedAt,
+                name,
+            };
+        } catch (cause) {
+            return deadline.translate(cause);
+        } finally {
+            deadline.finish();
+        }
+    };
+
     readonly post = async (path: string, body: unknown, signal: AbortSignal): Promise<unknown> => {
         const encoded = JSON.stringify(body);
         if (typeof encoded !== "string") {
@@ -630,6 +691,7 @@ export async function readExactResponseBytes(
     response: Response,
     expectedByteLength: number,
     signal: AbortSignal,
+    verifyDigest = true,
 ): Promise<Uint8Array> {
     const declaredLength = response.headers.get("content-length");
     if (
@@ -671,11 +733,13 @@ export async function readExactResponseBytes(
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
     }
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    signal.throwIfAborted();
-    const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (sha256 !== response.headers.get("x-mobius-sha256")) {
-        throw new MobiusProtocolError("The service returned artifact content with an invalid digest");
+    if (verifyDigest) {
+        const digest = await crypto.subtle.digest("SHA-256", bytes);
+        signal.throwIfAborted();
+        const sha256 = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+        if (sha256 !== response.headers.get("x-mobius-sha256")) {
+            throw new MobiusProtocolError("The service returned artifact content with an invalid digest");
+        }
     }
     return bytes;
 }
@@ -1030,6 +1094,31 @@ export class MobiusSessionResources {
 
     readonly read = async (sessionId: string, signal: AbortSignal): Promise<MobiusSession> =>
         decodeMobiusSession(await this.#executor.get(sessionPath(this.#projectId, sessionId, "").slice(0, -1), signal));
+
+    readonly readFile = async (
+        sessionId: string,
+        path: string,
+        signal: AbortSignal,
+        maximumBytes = 32 * 1024 * 1024,
+    ): Promise<{
+        readonly bytes: Uint8Array;
+        readonly mediaType: string;
+        readonly modifiedAt: string;
+        readonly name: string;
+    }> => {
+        if (path.length === 0 || path.length > 4_096) {
+            throw new MobiusValidationError("The file path is invalid");
+        }
+        if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 128 * 1024 * 1024) {
+            throw new MobiusValidationError("The file size limit is invalid");
+        }
+        const query = new URLSearchParams({ maxBytes: maximumBytes.toString(), path });
+        return await this.#executor.getFile(
+            `${sessionPath(this.#projectId, sessionId, "files/content")}?${query.toString()}`,
+            maximumBytes,
+            signal,
+        );
+    };
 
     readonly list = async (page: MobiusPageRequest, signal: AbortSignal): Promise<MobiusSessionPage> => {
         const path = requestUrl(new URL("https://mobius.invalid/"), projectPath(this.#projectId, "sessions"));

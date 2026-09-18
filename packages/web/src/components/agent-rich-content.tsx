@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { AgentMarkdown } from "@/components/agent-markdown";
 import type { ChannelConnection } from "@/domain/channel";
+import { readFile } from "@/services/mobius-transport";
 import { readSessionArtifactBytes } from "@/services/pairing-api";
 
 const SAFE_IMAGE_MIME = /^image\/(?:gif|jpeg|png|webp)$/;
@@ -36,7 +37,7 @@ function ContentHeader({ content }: { readonly content: AgentDisplayContent }) {
     );
 }
 
-function ArtifactImage({
+function RemoteImage({
     connection,
     content,
     sessionId,
@@ -46,35 +47,54 @@ function ArtifactImage({
     readonly sessionId: string;
 }) {
     const [source, setSource] = useState("");
+    const [failed, setFailed] = useState(false);
     useEffect(() => {
         const controller = new AbortController();
         let objectUrl = "";
-        void readSessionArtifactBytes(connection, sessionId, content.artifactId, controller.signal)
-            .then((artifact) => {
-                if (controller.signal.aborted || !SAFE_IMAGE_MIME.test(artifact.mimeType)) {
+        const load = async () => {
+            try {
+                let bytes: Uint8Array;
+                let mimeType: string;
+
+                if (content.uri.length > 0) {
+                    const file = await readFile(sessionId, content.uri, controller.signal);
+                    bytes = file.bytes;
+                    mimeType = file.mediaType;
+                } else {
+                    const artifact = await readSessionArtifactBytes(
+                        connection,
+                        sessionId,
+                        content.artifactId,
+                        controller.signal,
+                    );
+                    bytes = artifact.bytes;
+                    mimeType = artifact.mimeType;
+                }
+
+                if (controller.signal.aborted || !SAFE_IMAGE_MIME.test(mimeType)) {
                     return;
                 }
-                objectUrl = URL.createObjectURL(
-                    new Blob([Uint8Array.from(artifact.bytes)], { type: artifact.mimeType }),
-                );
+                objectUrl = URL.createObjectURL(new Blob([Uint8Array.from(bytes)], { type: mimeType }));
                 setSource(objectUrl);
-            })
-            .catch(() => {
+            } catch {
                 if (!controller.signal.aborted) {
                     setSource("");
+                    setFailed(true);
                 }
-            });
+            }
+        };
+        void load();
         return () => {
             controller.abort();
             if (objectUrl.length > 0) {
                 URL.revokeObjectURL(objectUrl);
             }
         };
-    }, [connection, content.artifactId, sessionId]);
+    }, [connection, content.artifactId, content.uri, sessionId]);
     if (source.length === 0) {
         return (
-            <div className="rounded-lg border-[0.5px] border-black/8 bg-black/[0.02] p-3 text-xs text-muted-foreground">
-                Image content could not be displayed safely.
+            <div className="min-h-24 rounded-lg border-[0.5px] border-black/8 bg-black/[0.02] p-3 text-xs text-muted-foreground">
+                {failed ? "Image is unavailable on the local runtime." : "Loading image…"}
             </div>
         );
     }
@@ -101,8 +121,12 @@ function AgentRichContentItem({
     readonly sessionId?: string | undefined;
 }) {
     if (content.type === "image") {
-        if (content.artifactId.length > 0 && connection !== undefined && sessionId !== undefined) {
-            return <ArtifactImage connection={connection} content={content} sessionId={sessionId} />;
+        if (
+            (content.uri.length > 0 || content.artifactId.length > 0) &&
+            connection !== undefined &&
+            sessionId !== undefined
+        ) {
+            return <RemoteImage connection={connection} content={content} sessionId={sessionId} />;
         }
         if (!SAFE_IMAGE_MIME.test(content.mimeType) || content.data.length === 0) {
             return (
