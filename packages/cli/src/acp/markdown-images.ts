@@ -1,7 +1,7 @@
 import type { Nodes } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { visit } from "unist-util-visit";
-import { type LocalRasterImage, readAuthorizedRaster } from "../authorization/local-raster.ts";
+import { type LocalRasterImage, readLocalRaster } from "../authorization/local-raster.ts";
 
 interface MarkdownImage {
     readonly end: number;
@@ -33,22 +33,29 @@ function parseMarkdownImages(markdown: string): readonly MarkdownImage[] {
     return images.sort((left, right) => left.start - right.start);
 }
 
-export async function emitMarkdownWithLocalImages(options: {
-    readonly markdown: string;
+export async function emitMarkdownChunksWithLocalImages(options: {
+    readonly chunks: readonly string[];
     readonly onImage: (image: LocalRasterImage) => Promise<void>;
     readonly onText: (text: string) => Promise<void>;
-    readonly roots: readonly string[];
     readonly signal: AbortSignal;
 }): Promise<void> {
+    const markdown = options.chunks.join("");
+    const images = parseMarkdownImages(markdown);
+    if (images.length === 0) {
+        for (const chunk of options.chunks) {
+            await options.onText(chunk);
+        }
+        return;
+    }
     let cursor = 0;
-    for (const image of parseMarkdownImages(options.markdown)) {
+    for (const image of images) {
         if (image.start < cursor) {
             continue;
         }
         if (image.start > cursor) {
-            await options.onText(options.markdown.slice(cursor, image.start));
+            await options.onText(markdown.slice(cursor, image.start));
         }
-        const raster = await readAuthorizedRaster(image.uri, options.roots, options.signal);
+        const raster = await readLocalRaster(image.uri, options.signal);
         if (raster === null) {
             await options.onText("[Image unavailable]");
         } else {
@@ -56,7 +63,7 @@ export async function emitMarkdownWithLocalImages(options: {
         }
         cursor = image.end;
     }
-    if (cursor < options.markdown.length) {
-        await options.onText(options.markdown.slice(cursor));
+    if (cursor < markdown.length) {
+        await options.onText(markdown.slice(cursor));
     }
 }

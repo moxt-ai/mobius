@@ -54,7 +54,7 @@ import {
 } from "../agent-catalog/agent-permission-profile.ts";
 import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
-import { readAuthorizedRaster, readInlineRaster } from "../authorization/local-raster.ts";
+import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
 import type { LocalAgentDefinition } from "../config.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
@@ -73,7 +73,7 @@ import {
     normalizeContentBlock,
 } from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
-import { emitMarkdownWithLocalImages } from "./markdown-images.ts";
+import { emitMarkdownChunksWithLocalImages } from "./markdown-images.ts";
 import {
     type NativeSessionOrigin,
     type NativeSessionPage,
@@ -825,6 +825,7 @@ class AcpProcessSession implements AcpClientHandler {
     #preSessionUpdateBytes = 0;
     #agentName = "";
     #agentVersion = "";
+    #bufferedAgentText: { readonly chunks: readonly string[]; readonly messageId: string } | null = null;
     #capabilities: SessionCapabilities = {
         additionalDirectories: false,
         audioPrompt: false,
@@ -1049,27 +1050,39 @@ class AcpProcessSession implements AcpClientHandler {
             );
             await this.#updateTail;
             signal.throwIfAborted();
-            return await embedLocalHistoryImages(
-                history.snapshot(),
-                [this.#cwd, ...this.#additionalDirectories],
-                signal,
-            );
+            return await embedLocalHistoryImages(history.snapshot(), signal);
         } finally {
             this.#replay = { kind: "idle" };
         }
     };
 
-    private readonly imageRoots = (): readonly string[] => [this.#cwd, ...this.#additionalDirectories];
-
-    private readonly emitAgentText = async (text: string, messageId: string): Promise<void> => {
+    private readonly emitAgentMessage = async (chunks: readonly string[], messageId: string): Promise<void> => {
         const signal = AbortSignal.timeout(20_000);
-        await emitMarkdownWithLocalImages({
-            markdown: text,
+        await emitMarkdownChunksWithLocalImages({
+            chunks,
             onImage: async (image) => await this.emitRaster(image, messageId, signal),
             onText: async (content) => await this.#turn.onText(content, messageId),
-            roots: this.imageRoots(),
             signal,
         });
+    };
+
+    private readonly bufferAgentText = async (text: string, messageId: string): Promise<void> => {
+        if (this.#bufferedAgentText !== null && this.#bufferedAgentText.messageId !== messageId) {
+            await this.emitAgentMessage(this.#bufferedAgentText.chunks, this.#bufferedAgentText.messageId);
+            this.#bufferedAgentText = null;
+        }
+        this.#bufferedAgentText = {
+            chunks: [...(this.#bufferedAgentText?.chunks ?? []), text],
+            messageId,
+        };
+    };
+
+    private readonly flushAgentText = async (): Promise<void> => {
+        const buffered = this.#bufferedAgentText;
+        this.#bufferedAgentText = null;
+        if (buffered !== null) {
+            await this.emitAgentMessage(buffered.chunks, buffered.messageId);
+        }
     };
 
     private readonly prepareAgentContent = async (content: AgentDisplayContent): Promise<AgentDisplayContent> => {
@@ -1081,7 +1094,7 @@ class AcpProcessSession implements AcpClientHandler {
         }
         if (content.type === "image" && content.data.length === 0 && content.uri.length > 0) {
             const signal = AbortSignal.timeout(20_000);
-            const raster = await readAuthorizedRaster(content.uri, this.imageRoots(), signal);
+            const raster = await readLocalRaster(content.uri, signal);
             if (raster !== null) {
                 return await this.importRaster(raster, signal);
             }
@@ -1594,6 +1607,7 @@ class AcpProcessSession implements AcpClientHandler {
                 options.signal,
             );
             await this.#updateTail;
+            await this.flushAgentText();
             await running.activities.finish();
             let result: AcpPromptResult;
             try {
@@ -1625,6 +1639,7 @@ class AcpProcessSession implements AcpClientHandler {
                 cause: error,
             });
         } finally {
+            this.#bufferedAgentText = null;
             this.#turn = new IdleAcpTurn();
         }
     };
@@ -1950,10 +1965,11 @@ class AcpProcessSession implements AcpClientHandler {
                     );
                 } else {
                     await this.#turn.activities.finishNarrative();
-                    await this.emitAgentText(update.content.text, truncate(update.messageId ?? "", 255));
+                    await this.bufferAgentText(update.content.text, truncate(update.messageId ?? "", 255));
                 }
             } else {
                 await this.#turn.activities.finishNarrative();
+                await this.flushAgentText();
                 await this.emitAgentContent(
                     normalizeContentBlock(update.content),
                     truncate(update.messageId ?? "", 255),

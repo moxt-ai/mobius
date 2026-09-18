@@ -181,17 +181,7 @@ class DaemonAcpObserver implements AcpSessionObserver {
         sessionId: string,
         artifact: LocalArtifact,
         signal: AbortSignal,
-    ): Promise<string> => {
-        try {
-            return (await uploadRuntimeArtifact(this.#config, sessionId, artifact, signal)).artifactId;
-        } catch (cause) {
-            signal.throwIfAborted();
-            if (cause instanceof Error && cause.name === "AbortError") {
-                throw cause;
-            }
-            return "";
-        }
-    };
+    ): Promise<string> => (await uploadRuntimeArtifact(this.#config, sessionId, artifact, signal)).artifactId;
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.#record(event.sessionId, encodeSessionCommandsUpdatedEvent(event));

@@ -1,5 +1,5 @@
 import { readFile, realpath, stat } from "node:fs/promises";
-import { basename, isAbsolute, normalize, relative, sep } from "node:path";
+import { basename, isAbsolute, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MAX_LOCAL_RASTER_BYTES = 3_000_000;
@@ -67,11 +67,6 @@ export function readInlineRaster(data: string, name = "Image"): LocalRasterImage
     return new LocalRasterImage(basename(name) || "Image", mimeType, bytes);
 }
 
-function isInsideRoot(root: string, target: string): boolean {
-    const relation = relative(root, target);
-    return relation !== ".." && !relation.startsWith(`..${sep}`) && !isAbsolute(relation);
-}
-
 async function resolveCanonicalPath(requested: string, signal: AbortSignal): Promise<string | null> {
     signal.throwIfAborted();
     if (!isAbsolute(requested) || requested.includes("\0") || normalize(requested) !== requested) {
@@ -118,11 +113,7 @@ function parseLocalImageUri(uri: string): string | null {
     return trimmed;
 }
 
-export async function readAuthorizedRaster(
-    uri: string,
-    roots: readonly string[],
-    signal: AbortSignal,
-): Promise<LocalRasterImage | null> {
+export async function readLocalRaster(uri: string, signal: AbortSignal): Promise<LocalRasterImage | null> {
     signal.throwIfAborted();
     const requested = parseLocalImageUri(uri);
     if (requested === null) {
@@ -135,21 +126,6 @@ export async function readAuthorizedRaster(
     const targetMetadata = await stat(target);
     signal.throwIfAborted();
     if (!targetMetadata.isFile() || targetMetadata.size < 1 || targetMetadata.size > MAX_LOCAL_RASTER_BYTES) {
-        return null;
-    }
-    const authorizedRoots: string[] = [];
-    for (const root of roots) {
-        const directory = await resolveCanonicalPath(root, signal);
-        if (directory === null) {
-            continue;
-        }
-        const metadata = await stat(directory);
-        signal.throwIfAborted();
-        if (metadata.isDirectory()) {
-            authorizedRoots.push(directory);
-        }
-    }
-    if (!authorizedRoots.some((root) => isInsideRoot(root, target))) {
         return null;
     }
     const bytes = new Uint8Array(await readFile(target));

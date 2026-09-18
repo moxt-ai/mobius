@@ -276,7 +276,7 @@ export async function readCodexHistory(
         const snapshot = await response.promise;
         return {
             ...snapshot,
-            history: await embedLocalHistoryImages(snapshot.history, [cwd, snapshot.cwd], signal),
+            history: await embedLocalHistoryImages(snapshot.history, signal),
         };
     } finally {
         clearTimeout(timeout);

@@ -1272,7 +1272,10 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
             const echoedPrompt =
                 prompt === "generate markdown image" || prompt === "generate media artifacts"
                     ? (() => {
-                          const path = join(process.cwd(), "generated-image.png");
+                          const path = join(
+                              process.env["FAKE_ACP_IMAGE_DIRECTORY"] ?? process.cwd(),
+                              "generated-image.png",
+                          );
                           writeFileSync(
                               path,
                               Buffer.from(
@@ -1307,17 +1310,23 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 prompt !== "Report Bot execution settings" &&
                 prompt !== "Report prompt blocks"
             ) {
-                await context.client.notify(acp.methods.client.session.update, {
-                    sessionId: context.params.sessionId,
-                    update: {
-                        content: {
-                            text: echoedPrompt,
-                            type: "text",
+                const chunks =
+                    prompt === "generate markdown image"
+                        ? [echoedPrompt.slice(0, 2), echoedPrompt.slice(2, -1), echoedPrompt.slice(-1)]
+                        : [echoedPrompt];
+                for (const text of chunks) {
+                    await context.client.notify(acp.methods.client.session.update, {
+                        sessionId: context.params.sessionId,
+                        update: {
+                            content: {
+                                text,
+                                type: "text",
+                            },
+                            messageId: `assistant-${turnNumber.toString()}`,
+                            sessionUpdate: "agent_message_chunk",
                         },
-                        messageId: `assistant-${turnNumber.toString()}`,
-                        sessionUpdate: "agent_message_chunk",
-                    },
-                });
+                    });
+                }
             }
 
             transcript.push({

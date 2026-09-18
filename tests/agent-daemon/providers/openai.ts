@@ -25,6 +25,8 @@ interface ToolPreference {
 }
 
 interface ProviderOptions {
+    readonly firstAnswer?: string;
+    readonly textChunks?: readonly string[];
     readonly toolPreference?: ToolPreference;
 }
 
@@ -185,7 +187,7 @@ function responsesEvent(response: ServerResponse, type: string, sequenceNumber: 
     );
 }
 
-function sendResponsesText(response: ServerResponse, model: string, answer: string): void {
+function sendResponsesText(response: ServerResponse, model: string, answer: string, chunks: readonly string[]): void {
     const item = {
         id: "msg_mobius",
         type: "message",
@@ -202,26 +204,30 @@ function sendResponsesText(response: ServerResponse, model: string, answer: stri
         content_index: 0,
         part: { type: "output_text", text: "", annotations: [] },
     });
-    responsesEvent(response, "response.output_text.delta", 3, {
-        item_id: item.id,
-        output_index: 0,
-        content_index: 0,
-        delta: answer,
-    });
-    responsesEvent(response, "response.output_text.done", 4, {
+    let sequenceNumber = 3;
+    for (const chunk of chunks) {
+        responsesEvent(response, "response.output_text.delta", sequenceNumber, {
+            item_id: item.id,
+            output_index: 0,
+            content_index: 0,
+            delta: chunk,
+        });
+        sequenceNumber += 1;
+    }
+    responsesEvent(response, "response.output_text.done", sequenceNumber, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         text: answer,
     });
-    responsesEvent(response, "response.content_part.done", 5, {
+    responsesEvent(response, "response.content_part.done", sequenceNumber + 1, {
         item_id: item.id,
         output_index: 0,
         content_index: 0,
         part: item.content[0],
     });
-    responsesEvent(response, "response.output_item.done", 6, { output_index: 0, item });
-    responsesEvent(response, "response.completed", 7, { response: completed });
+    responsesEvent(response, "response.output_item.done", sequenceNumber + 2, { output_index: 0, item });
+    responsesEvent(response, "response.completed", sequenceNumber + 3, { response: completed });
     response.end();
 }
 
@@ -282,8 +288,16 @@ function chatChunk(response: ServerResponse, model: string, choices: unknown, us
     );
 }
 
-function sendChatText(response: ServerResponse, model: string, answer: string): void {
-    chatChunk(response, model, [{ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }]);
+function sendChatText(response: ServerResponse, model: string, chunks: readonly string[]): void {
+    chunks.forEach((chunk, index) => {
+        chatChunk(response, model, [
+            {
+                index: 0,
+                delta: { ...(index === 0 ? { role: "assistant" } : {}), content: chunk },
+                finish_reason: null,
+            },
+        ]);
+    });
     chatChunk(response, model, [{ index: 0, delta: {}, finish_reason: "stop" }], {
         prompt_tokens: 10,
         completion_tokens: 6,
@@ -385,7 +399,12 @@ export class FakeOpenAiProvider implements AsyncDisposable {
     }
 
     static async start(model: string, answer: string, options: ProviderOptions = {}): Promise<FakeOpenAiProvider> {
+        const textChunks = options.textChunks ?? [answer];
+        if (textChunks.join("") !== answer) {
+            throw new Error("Fake OpenAI provider text chunks must concatenate to the configured answer");
+        }
         const requests: ProviderRequestDiagnostic[] = [];
+        let textResponses = 0;
         const server = createServer(async (request, response) => {
             if (request.method === "GET" && request.url?.endsWith("/models") === true) {
                 response.writeHead(200, { "content-type": "application/json" });
@@ -414,6 +433,9 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             const tools = availableTools(payload);
             const hasToolResult = includesToolResult(payload);
             const tool = hasToolResult ? undefined : selectTool(tools, options.toolPreference);
+            const selectedAnswer =
+                textResponses === 0 && options.firstAnswer !== undefined ? options.firstAnswer : answer;
+            const selectedChunks = selectedAnswer === answer ? textChunks : [selectedAnswer];
             requests.push({
                 hasToolResult,
                 selectedTool: tool === undefined ? undefined : { kind: tool.kind, name: tool.name },
@@ -424,19 +446,24 @@ export class FakeOpenAiProvider implements AsyncDisposable {
             if (request.url?.endsWith("/responses") === true) {
                 response.writeHead(200, responseHeaders());
                 if (tool === undefined) {
-                    sendResponsesText(response, model, answer);
+                    textResponses += 1;
+                    sendResponsesText(response, model, selectedAnswer, selectedChunks);
                 } else {
                     sendResponsesToolCall(response, model, tool);
                 }
                 return;
             }
             if (payload["stream"] === false) {
-                sendChatCompletion(response, model, answer, tool);
+                if (tool === undefined) {
+                    textResponses += 1;
+                }
+                sendChatCompletion(response, model, selectedAnswer, tool);
                 return;
             }
             response.writeHead(200, responseHeaders());
             if (tool === undefined) {
-                sendChatText(response, model, answer);
+                textResponses += 1;
+                sendChatText(response, model, selectedChunks);
             } else {
                 sendChatToolCall(response, model, tool);
             }

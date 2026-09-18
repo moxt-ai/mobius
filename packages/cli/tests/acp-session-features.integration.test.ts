@@ -97,13 +97,17 @@ class RecordingObserver implements AcpSessionObserver {
     };
 }
 
-function fakeAgent(additionalArguments: readonly string[] = []): LocalAgentDefinition {
-    return new LocalAgentDefinition("codex", "Codex", process.execPath, [
-        fakeAgentPath,
-        "--agent-name",
+function fakeAgent(
+    additionalArguments: readonly string[] = [],
+    environment: Readonly<Record<string, string>> = {},
+): LocalAgentDefinition {
+    return new LocalAgentDefinition(
+        "codex",
         "Codex",
-        ...additionalArguments,
-    ]);
+        process.execPath,
+        [fakeAgentPath, "--agent-name", "Codex", ...additionalArguments],
+        environment,
+    );
 }
 
 describe("ACP session features", () => {
@@ -185,6 +189,42 @@ describe("ACP session features", () => {
         } finally {
             await manager.close();
             await rm(directory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an ACP Agent links an image outside its workspace, When Mobius records the reply, Then it uploads the Agent-owned artifact", async () => {
+        const workspace = await mkdtemp(join(tmpdir(), "mobius-agent-workspace-"));
+        const generatedImages = await mkdtemp(join(tmpdir(), "mobius-agent-generated-images-"));
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const output: string[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent([], { FAKE_ACP_IMAGE_DIRECTORY: generatedImages }),
+                commandId: "codex-generated-image-command",
+                cwd: workspace,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    output.push(text);
+                    return Promise.resolve();
+                },
+                prompt: "generate markdown image",
+                resources: [],
+                sessionId: "codex-generated-image-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(output.join("")).not.toContain("Image unavailable");
+            expect(observer.importedImages).toHaveLength(1);
+            expect(observer.importedImages[0]).toMatchObject({ mimeType: "image/png", name: "generated-image.png" });
+        } finally {
+            await manager.close();
+            await Promise.all([
+                rm(workspace, { force: true, recursive: true }),
+                rm(generatedImages, { force: true, recursive: true }),
+            ]);
         }
     });
 

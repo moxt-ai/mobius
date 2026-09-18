@@ -5,13 +5,12 @@ import {
     parseNativeHistoryText,
     SESSION_HISTORY_IMAGE_CHARACTER_LIMIT,
 } from "@moxt-ai/mobius-protocol";
-import { readAuthorizedRaster } from "../authorization/local-raster.ts";
+import { readLocalRaster } from "../authorization/local-raster.ts";
 
 const IMAGE_MARKER = /\[@image\]\(([^)\r\n]*)(?:\)|$)/g;
 
 export async function embedLocalHistoryImages(
     history: NativeSessionHistory,
-    roots: readonly string[],
     signal: AbortSignal,
 ): Promise<NativeSessionHistory> {
     if (history.status !== "available") {
@@ -21,7 +20,7 @@ export async function embedLocalHistoryImages(
     let imageCharacters = 0;
     for (const message of history.messages) {
         signal.throwIfAborted();
-        const resolved = await resolveMessageImages(message, roots, imageCharacters, signal);
+        const resolved = await resolveMessageImages(message, imageCharacters, signal);
         imageCharacters += (resolved.images ?? []).reduce((size, image) => size + image.data.length, 0);
         messages.push(resolved);
     }
@@ -33,7 +32,6 @@ export async function embedLocalHistoryImages(
 
 async function resolveMessageImages(
     message: NativeHistoryMessage,
-    roots: readonly string[],
     usedCharacters: number,
     signal: AbortSignal,
 ): Promise<NativeHistoryMessage> {
@@ -52,7 +50,7 @@ async function resolveMessageImages(
             imageCharacters += embedded.data.length;
             return "";
         }
-        const local = await readAuthorizedRaster(uri, roots, signal);
+        const local = await readLocalRaster(uri, signal);
         if (local === null) {
             return "[Image unavailable]";
         }
