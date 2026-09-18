@@ -2628,6 +2628,50 @@ describe.sequential("Platform hosting boundary", () => {
         }
     });
 
+    it("Given a ready Local Agent conversation, When the owner submits a Turn whose image exceeds the legacy 256KB body cap, Then Mobius accepts the Turn and delivers the image to the Runtime", async () => {
+        const fixture = await createReadyConversation("turn-large-image");
+        try {
+            const owner = new MobiusBotOwnerClient({
+                actorReference: "large-image-owner",
+                credentialProvider: new StaticMobiusCredentialProvider(fixture.appCredential),
+                endpoint: relayOrigin,
+                projectId: fixture.projectId,
+                transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+            });
+            // A base64 payload well past the historical 256KB body cap, still within the
+            // 6MB prompt-attachment budget. "A" repeated is valid base64 and decodes cleanly.
+            const largeImageData = "A".repeat(400 * 1024);
+            expect(largeImageData.length).toBeGreaterThan(256 * 1024);
+            const submittedImage = {
+                data: largeImageData,
+                mimeType: "image/png",
+                name: "screenshot.png",
+            };
+            const accepted = await owner.submitProjectConversationTurn(
+                fixture.conversationId,
+                {
+                    additionalDirectoryIds: [],
+                    artifactIds: [],
+                    content: "Describe the pasted screenshot.",
+                    idempotencyKey: "large-image-turn",
+                    images: [submittedImage],
+                    resources: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            expect(accepted).toMatchObject({ duplicate: false });
+            const command = decodeBotSessionPromptCommand(await fixture.socketMessages.next());
+            expect(command).toMatchObject({
+                commandId: "large-image-turn",
+                conversationId: fixture.conversationId,
+                images: [submittedImage],
+                sessionId: fixture.sessionId,
+            });
+        } finally {
+            fixture.socket.close(1000, "Large image Turn test complete");
+        }
+    });
+
     it("Given an organization with bounded capacity, When an App reaches that capacity, Then usage and audit APIs expose the enforced result", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(

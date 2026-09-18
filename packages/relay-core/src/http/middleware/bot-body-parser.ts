@@ -7,10 +7,12 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-async function parseBotBody(request: Request): Promise<Readonly<Record<string, unknown>>> {
+const DEFAULT_BOT_BODY_LIMIT_BYTES = 256 * 1024;
+
+async function parseBotBody(request: Request, maximumBytes: number): Promise<Readonly<Record<string, unknown>>> {
     let encoded: string;
     try {
-        encoded = await readBoundedUtf8Body(request, 256 * 1024);
+        encoded = await readBoundedUtf8Body(request, maximumBytes);
     } catch (cause) {
         if (cause instanceof RequestBodyError) {
             throw new BotApiError(
@@ -34,9 +36,11 @@ async function parseBotBody(request: Request): Promise<Readonly<Record<string, u
     return value;
 }
 
-export function botBodyParser<TEnvironment extends BodyParserEnvironment>(): MiddlewareHandler<TEnvironment> {
+export function botBodyParser<TEnvironment extends BodyParserEnvironment>(
+    maximumBytes: number = DEFAULT_BOT_BODY_LIMIT_BYTES,
+): MiddlewareHandler<TEnvironment> {
     return contextBodyParser<TEnvironment>(
-        parseBotBody,
+        (request) => parseBotBody(request, maximumBytes),
         (request) => request.method === "POST" || request.method === "PUT",
     );
 }

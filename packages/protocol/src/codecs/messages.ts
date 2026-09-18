@@ -45,7 +45,7 @@ import {
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DIRECTORY_IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,2047}$/;
 const MAX_PROMPT_LENGTH = 10_000;
-const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
+export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
 const MAX_EVENT_TEXT_LENGTH = 100_000;
 const MAX_RUNTIME_DELIVERY_PAYLOAD_LENGTH = 8 * 1024 * 1024;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);

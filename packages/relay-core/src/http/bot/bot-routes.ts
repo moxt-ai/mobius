@@ -1,4 +1,9 @@
-import { decodePromptImagesValue, decodePromptResourcesValue, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
+import {
+    decodePromptImagesValue,
+    decodePromptResourcesValue,
+    MAX_PROMPT_ATTACHMENT_LENGTH,
+    MOBIUS_API_PREFIX,
+} from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import type { OperationTiming } from "../../infra/operation-timing.ts";
 import type { BotService } from "../../service/bot/bot-service.ts";
@@ -34,6 +39,11 @@ import {
     string,
     turnDisposition,
 } from "./bot-input.ts";
+
+// A conversation turn carries base64 images and embedded resources inline, unlike the small
+// metadata bodies of every other bot route. Size its parser to the protocol attachment budget
+// (MAX_PROMPT_ATTACHMENT_LENGTH) plus room for content, field names, and JSON/base64 overhead.
+const TURN_BODY_LIMIT_BYTES = MAX_PROMPT_ATTACHMENT_LENGTH + 1024 * 1024;
 
 interface BotHttpEnvironment {
     readonly Bindings: {
@@ -146,42 +156,46 @@ function createBotOwnerRoutes() {
                 ),
             ),
         )
-        .post("/conversations/:conversationId/turns", botBodyParser<BotHttpEnvironment>(), async (c) => {
-            const hasDisposition = Object.hasOwn(c.var.body, "disposition");
-            const value = exactBody(
-                c.var.body,
-                hasDisposition
-                    ? [
-                          "additionalDirectoryIds",
-                          "artifactIds",
-                          "content",
-                          "disposition",
-                          "idempotencyKey",
-                          "images",
-                          "resources",
-                          "targetTurnId",
-                      ]
-                    : ["additionalDirectoryIds", "artifactIds", "content", "idempotencyKey", "images", "resources"],
-            );
-            return c.json(
-                await c.var.bots.submitProjectConversationTurn(
-                    pathIdentifier(c.req.param("conversationId")),
-                    bearer(c.req.raw),
-                    actorReference(c.req.raw),
-                    identifier(value, "idempotencyKey"),
-                    string(value, "content", 100_000, true),
-                    identifiers(value, "additionalDirectoryIds", 16),
-                    decodePromptImagesValue(value["images"]),
-                    decodePromptResourcesValue(value["resources"]),
-                    identifiers(value, "artifactIds", 16),
-                    hasDisposition ? turnDisposition(value) : "reject",
-                    hasDisposition ? identifier(value, "targetTurnId") : "",
-                    Date.now(),
-                    c.var.signal,
-                ),
-                202,
-            );
-        })
+        .post(
+            "/conversations/:conversationId/turns",
+            botBodyParser<BotHttpEnvironment>(TURN_BODY_LIMIT_BYTES),
+            async (c) => {
+                const hasDisposition = Object.hasOwn(c.var.body, "disposition");
+                const value = exactBody(
+                    c.var.body,
+                    hasDisposition
+                        ? [
+                              "additionalDirectoryIds",
+                              "artifactIds",
+                              "content",
+                              "disposition",
+                              "idempotencyKey",
+                              "images",
+                              "resources",
+                              "targetTurnId",
+                          ]
+                        : ["additionalDirectoryIds", "artifactIds", "content", "idempotencyKey", "images", "resources"],
+                );
+                return c.json(
+                    await c.var.bots.submitProjectConversationTurn(
+                        pathIdentifier(c.req.param("conversationId")),
+                        bearer(c.req.raw),
+                        actorReference(c.req.raw),
+                        identifier(value, "idempotencyKey"),
+                        string(value, "content", 100_000, true),
+                        identifiers(value, "additionalDirectoryIds", 16),
+                        decodePromptImagesValue(value["images"]),
+                        decodePromptResourcesValue(value["resources"]),
+                        identifiers(value, "artifactIds", 16),
+                        hasDisposition ? turnDisposition(value) : "reject",
+                        hasDisposition ? identifier(value, "targetTurnId") : "",
+                        Date.now(),
+                        c.var.signal,
+                    ),
+                    202,
+                );
+            },
+        )
         .put(
             "/conversations/:conversationId/turns/:turnId/disposition",
             botBodyParser<BotHttpEnvironment>(),
