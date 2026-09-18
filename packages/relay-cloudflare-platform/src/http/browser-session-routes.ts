@@ -19,6 +19,7 @@ import { bearer, requestedProjectId } from "./conversation-request.ts";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAXIMUM_PAGE_SIZE = 500;
+const MAXIMUM_TURN_BODY_BYTES = 4 * 1_024 * 1_024;
 
 const nonemptyStringSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
 const idempotencyKeySchema = v.pipe(
@@ -249,7 +250,7 @@ export function createBrowserSessionRoutes() {
                 ),
             );
         })
-        .post("/turns", bodyParser(turnSchema), async (context) => {
+        .post("/turns", bodyParser(turnSchema, MAXIMUM_TURN_BODY_BYTES), async (context) => {
             const value = context.req.valid("json");
             const access = await authorize(context.env, context.req.raw, Permission.TurnCreate, context.var.signal);
             if ("messageId" in value) {

@@ -8,6 +8,7 @@ import {
     decodeSessionConfigureCommand,
     decodeSessionEventAcknowledgement,
     decodeSessionPrepareCommand,
+    decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
     encodeNativeSessionResult,
     encodeSessionConfigUpdatedEvent,
@@ -1085,6 +1086,57 @@ it("Given an App-owned Session, When its backend issues browser access, Then the
             vi.setSystemTime(new Date("2026-09-10T00:11:00.000Z"));
             await expect(browser.sessions.read(fixture.sessionId, new AbortController().signal)).rejects.toMatchObject({
                 status: 401,
+            });
+        } finally {
+            browser.close();
+        }
+    } finally {
+        fixture.socket.close();
+    }
+});
+
+it("Given browser access to an App-owned Session, When the browser submits a three-megabyte Turn, Then Platform accepts and delivers it", async () => {
+    const fixture = await createReadyConversation("session-scoped-large-turn");
+    try {
+        const issued = await json(
+            await fixture.worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${fixture.projectId}/sessions/${fixture.sessionId}/access-credentials`,
+                    {
+                        method: "POST",
+                        headers: credentialHeaders(fixture.appCredential),
+                        body: JSON.stringify({ expiresInSeconds: 600 }),
+                    },
+                ),
+                fixture.environment,
+            ),
+            201,
+        );
+        const browser = new MobiusClient({
+            endpoint: relayOrigin,
+            projectId: fixture.projectId,
+            credentialProvider: new StaticMobiusCredentialProvider(text(issued, "credential")),
+            transport: new PlatformWorkerTransport(fixture.worker, fixture.environment),
+        });
+        const image = { data: "A".repeat(3_000_000), mimeType: "image/png", name: "large-screenshot.png" };
+        try {
+            const turn = await browser.turns.submit(
+                fixture.sessionId,
+                {
+                    idempotencyKey: "three-megabyte-turn",
+                    content: "Describe the screenshot.",
+                    images: [image],
+                    resources: [],
+                    artifactIds: [],
+                    additionalDirectoryIds: [],
+                },
+                AbortSignal.timeout(5_000),
+            );
+            expect(turn.sessionId).toBe(fixture.sessionId);
+            expect(decodeSessionPromptCommand(await fixture.socketMessages.next())).toMatchObject({
+                commandId: "three-megabyte-turn",
+                images: [image],
+                sessionId: fixture.sessionId,
             });
         } finally {
             browser.close();

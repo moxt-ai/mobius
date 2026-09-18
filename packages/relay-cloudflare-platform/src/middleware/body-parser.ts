@@ -2,13 +2,16 @@ import { createMiddleware } from "hono/factory";
 import * as v from "valibot";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 
-const MAXIMUM_BODY_BYTES = 128 * 1_024;
+const DEFAULT_MAXIMUM_BODY_BYTES = 128 * 1_024;
 
 interface BodyParserEnvironment {
     readonly Variables: { readonly signal: AbortSignal };
 }
 
-export function bodyParser<TSchema extends v.GenericSchema<unknown, object>>(schema: TSchema) {
+export function bodyParser<TSchema extends v.GenericSchema<unknown, object>>(
+    schema: TSchema,
+    maximumBodyBytes = DEFAULT_MAXIMUM_BODY_BYTES,
+) {
     return createMiddleware<
         BodyParserEnvironment,
         string,
@@ -17,7 +20,7 @@ export function bodyParser<TSchema extends v.GenericSchema<unknown, object>>(sch
             out: { json: v.InferOutput<TSchema> };
         }
     >(async (context, next) => {
-        const value = await parseBody(context.req.raw, schema, context.var.signal);
+        const value = await parseBody(context.req.raw, schema, context.var.signal, maximumBodyBytes);
         context.req.addValidatedData("json", value);
         await next();
     });
@@ -27,6 +30,7 @@ async function parseBody<TSchema extends v.GenericSchema<unknown, object>>(
     request: Request,
     schema: TSchema,
     signal: AbortSignal,
+    maximumBodyBytes: number,
 ): Promise<v.InferOutput<TSchema>> {
     signal.throwIfAborted();
     const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
@@ -34,7 +38,7 @@ async function parseBody<TSchema extends v.GenericSchema<unknown, object>>(
         throw new PlatformControlPlaneError("invalid_request", "A JSON request body is required", 400);
     }
     const declaredLength = request.headers.get("content-length");
-    if (declaredLength !== null && Number(declaredLength) > MAXIMUM_BODY_BYTES) {
+    if (declaredLength !== null && Number(declaredLength) > maximumBodyBytes) {
         throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
     }
     const reader = request.body?.getReader();
@@ -56,7 +60,7 @@ async function parseBody<TSchema extends v.GenericSchema<unknown, object>>(
                     break;
                 }
                 length += chunk.value.byteLength;
-                if (length > MAXIMUM_BODY_BYTES) {
+                if (length > maximumBodyBytes) {
                     void reader.cancel().catch(() => undefined);
                     throw new PlatformControlPlaneError("invalid_request", "The request body is too large", 413);
                 }

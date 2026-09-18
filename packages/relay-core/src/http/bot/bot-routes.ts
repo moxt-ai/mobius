@@ -1,11 +1,7 @@
-import {
-    decodePromptImagesValue,
-    decodePromptResourcesValue,
-    MAX_PROMPT_ATTACHMENT_LENGTH,
-    MOBIUS_API_PREFIX,
-} from "@moxt-ai/mobius-protocol";
+import { decodePromptImagesValue, decodePromptResourcesValue, MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { Hono } from "hono";
 import type { OperationTiming } from "../../infra/operation-timing.ts";
+import { MAX_TURN_REQUEST_BODY_LENGTH } from "../../infra/request-limits.ts";
 import type { BotService } from "../../service/bot/bot-service.ts";
 import { botBodyParser } from "../middleware/bot-body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
@@ -39,11 +35,6 @@ import {
     string,
     turnDisposition,
 } from "./bot-input.ts";
-
-// A conversation turn carries base64 images and embedded resources inline, unlike the small
-// metadata bodies of every other bot route. Size its parser to the protocol attachment budget
-// (MAX_PROMPT_ATTACHMENT_LENGTH) plus room for content, field names, and JSON/base64 overhead.
-const TURN_BODY_LIMIT_BYTES = MAX_PROMPT_ATTACHMENT_LENGTH + 1024 * 1024;
 
 interface BotHttpEnvironment {
     readonly Bindings: {
@@ -158,7 +149,7 @@ function createBotOwnerRoutes() {
         )
         .post(
             "/conversations/:conversationId/turns",
-            botBodyParser<BotHttpEnvironment>(TURN_BODY_LIMIT_BYTES),
+            botBodyParser<BotHttpEnvironment>(MAX_TURN_REQUEST_BODY_LENGTH),
             async (c) => {
                 const hasDisposition = Object.hasOwn(c.var.body, "disposition");
                 const value = exactBody(

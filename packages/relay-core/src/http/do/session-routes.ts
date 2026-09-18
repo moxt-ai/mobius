@@ -41,6 +41,7 @@ import {
     readString,
     reconciliationOutcome,
 } from "../../infra/relay-http.ts";
+import { MAX_TURN_REQUEST_BODY_LENGTH } from "../../infra/request-limits.ts";
 import { isRecord } from "../../service/do/session-codec.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { errorMiddleware, rethrowHonoError } from "../middleware/error-middleware.ts";
@@ -48,6 +49,7 @@ import { operationTimingMiddleware } from "../middleware/operation-timing-middle
 import type { RelayHttpEnvironment } from "../relay-http-environment.ts";
 
 const MAXIMUM_FILE_BYTES = 128 * 1024 * 1024;
+const turnBodyParser = bodyParser<RelayHttpEnvironment>(undefined, MAX_TURN_REQUEST_BODY_LENGTH);
 
 function readIdentifierArray(
     value: Readonly<Record<string, unknown>>,
@@ -447,7 +449,7 @@ export function createSessionRoutes() {
                 ),
             );
         })
-        .post("/projects/:projectId/sessions/:sessionId/turns", bodyParser<RelayHttpEnvironment>(), async (context) => {
+        .post("/projects/:projectId/sessions/:sessionId/turns", turnBodyParser, async (context) => {
             const useCases = context.env.services.sessions;
             const body = context.req.valid("json");
             const legacyFields = [
