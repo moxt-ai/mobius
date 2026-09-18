@@ -280,8 +280,10 @@ jobs:
         include:
           - environment: staging
             domain: mobius.moxt.ws
+            asset_domain: assets.mobius.moxt.ws
           - environment: production
             domain: mobius.moxt.ai
+            asset_domain: assets.mobius.moxt.ai
     environment:
       name: ${{ matrix.environment }}
       url: https://${{ matrix.domain }}
@@ -349,30 +351,39 @@ jobs:
           echo "Unexpected Platform health response after deployment propagation: $actual" >&2
           exit 1
 
-      - name: Verify Platform app HTML and JavaScript
+      - name: Verify Platform app HTML and CDN assets
         env:
           PLATFORM_ORIGIN: https://${{ matrix.domain }}
+          PLATFORM_ASSET_ORIGIN: https://${{ matrix.asset_domain }}
         run: |
           python3 - <<'PY'
           import os
           import subprocess
+          import tempfile
           from html.parser import HTMLParser
           from urllib.parse import urljoin, urlsplit
 
-          def download(url):
-              result = subprocess.run(
-                  ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "5",
-                   "--max-time", "15", "--write-out", "\n%{content_type}", url],
-                  check=True, stdout=subprocess.PIPE, text=True, timeout=20,
-              )
+          def download(url, request_origin=None):
+              command = ["curl", "--fail", "--silent", "--show-error", "--connect-timeout", "5",
+                         "--max-time", "15", "--write-out", "\n%{content_type}"]
+              if request_origin is not None:
+                  command.extend(["--header", f"Origin: {request_origin}"])
+              with tempfile.NamedTemporaryFile() as headers:
+                  result = subprocess.run(
+                      [*command, "--dump-header", headers.name, url],
+                      check=True, stdout=subprocess.PIPE, text=True, timeout=20,
+                  )
+                  headers.seek(0)
+                  response_headers = headers.read().decode().lower()
               body, content_type = result.stdout.rsplit("\n", 1)
-              return body, content_type.split(";", 1)[0]
+              return body, content_type.split(";", 1)[0], response_headers
 
           class AppPage(HTMLParser):
               def __init__(self):
                   super().__init__()
                   self.has_root = False
                   self.modules = []
+                  self.stylesheets = []
 
               def handle_starttag(self, tag, attrs):
                   attrs = dict(attrs)
@@ -380,18 +391,32 @@ jobs:
                       self.has_root = True
                   if tag == "script" and attrs.get("type") == "module" and attrs.get("src"):
                       self.modules.append(attrs["src"])
+                  if tag == "link" and "stylesheet" in attrs.get("rel", "").split() and attrs.get("href"):
+                      self.stylesheets.append(attrs["href"])
 
           origin = os.environ["PLATFORM_ORIGIN"]
-          html, content_type = download(origin + "/")
+          asset_origin = os.environ["PLATFORM_ASSET_ORIGIN"]
+          html, content_type, _ = download(origin + "/")
           assert content_type == "text/html", "Platform root must serve HTML"
           page = AppPage()
           page.feed(html)
-          assert page.has_root and page.modules, "Platform HTML must contain the app root and entry module"
-          for source in page.modules:
+          assert page.has_root and page.modules and page.stylesheets, "Platform HTML must contain the app root, entry module, and stylesheet"
+
+          def verify_asset(source, content_types):
               url = urljoin(origin + "/", source)
-              assert urlsplit(url).scheme == "https" and urlsplit(url).netloc == urlsplit(origin).netloc, "Entry module must use the Platform origin"
-              javascript, content_type = download(url)
-              assert content_type in ("application/javascript", "text/javascript"), "Entry module must serve JavaScript"
-              assert javascript, "Entry module must not be empty"
-          print(f"Platform app HTML and entry modules are available at {origin}")
+              asset_url = urlsplit(url)
+              expected_asset_url = urlsplit(asset_origin)
+              assert asset_url.scheme == expected_asset_url.scheme and asset_url.netloc == expected_asset_url.netloc, "Platform assets must use the configured CDN origin"
+              assert asset_url.path.startswith("/assets/"), "Platform assets must use the assets path"
+              asset, content_type, headers = download(url, origin)
+              assert content_type in content_types, "Platform asset must use its expected content type"
+              assert asset, "Platform asset must not be empty"
+              assert f"access-control-allow-origin: {origin}" in headers, "Platform asset CDN must authorize the Platform origin"
+              assert "cache-control: public, max-age=31536000, immutable" in headers, "Platform asset CDN must preserve immutable caching"
+
+          for source in page.modules:
+              verify_asset(source, ("application/javascript", "text/javascript"))
+          for source in page.stylesheets:
+              verify_asset(source, ("text/css",))
+          print(f"Platform app HTML and CDN assets are available at {origin}")
           PY
