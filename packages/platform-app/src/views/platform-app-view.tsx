@@ -3,6 +3,7 @@ import { type ReactNode, useCallback, useEffect } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
+import { platformDataTestId } from "../data-testid.ts";
 import { createPlatformClient } from "../services/platform-client.ts";
 import { usePlatformStore } from "../view-models/platform-app-view-model.ts";
 
@@ -281,6 +282,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                                     : "grid min-w-0 gap-2 rounded-xl border border-[#dde3df] bg-white p-4 text-left text-inherit hover:border-[#a8c8b2] hover:shadow-md [&>strong]:overflow-hidden [&>strong]:text-ellipsis [&>strong]:whitespace-nowrap [&>code]:overflow-hidden [&>code]:text-ellipsis [&>code]:text-[11px] [&>code]:text-[#69776f] [&>span:last-child]:text-[11px] [&>span:last-child]:text-[#8a958e]"
                                             }
                                             onClick={() => setSelectedAppId(app.appId)}
+                                            data-testid={platformDataTestId.applicationChoice}
                                         >
                                             <span className="mb-0.5 grid size-[38px] place-items-center rounded-lg bg-[#e7f3eb] text-[#168247]">
                                                 <AppWindow size={20} />
@@ -442,6 +444,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                                 type="button"
                                                 className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
                                                 aria-label={`Revoke key ${index + 1}`}
+                                                data-testid={platformDataTestId.revokeCredential}
                                                 disabled={credential.revokedAt.length > 0 || busy.length > 0}
                                                 onClick={() =>
                                                     void perform(`revoke-${credential.credentialId}`, async () => {

@@ -3,9 +3,10 @@
 ## End-to-end tests as the system control surface
 
 The end-to-end suite is a deliberately small, high-signal control surface for the
-whole product. A maintainer should be able to read its executable scenarios and
-understand the critical journeys Mobius promises, without first reading every
-package. The scenario source and its observable assertions are the coverage
+product's happy paths. A maintainer should be able to read its executable scenarios
+and understand the successful journeys Mobius promises, without first reading
+every package. Business rules, variants, and failures belong in integration or
+contract tests. The scenario source and its observable assertions are the coverage
 claim; a prose inventory of covered behavior is not.
 
 Each end-to-end scenario must prove both of these properties:
@@ -44,7 +45,7 @@ the journey, and prose documentation cannot establish either property above.
 
 ## Verification and advisory coverage
 
-`pnpm check` runs static checks, builds assets, and executes `pnpm test:coverage`.
+`pnpm ci:check` is reserved for CI. It runs static checks, builds assets, and executes `pnpm test:coverage`.
 Coverage runs CLI, SDK, protocol/cross-package integration, E2E, web integration,
 Standalone Worker, and Platform Worker suites, sequentially after assets are built.
 The four suites using the root configuration partition its complete test set.
@@ -80,10 +81,9 @@ seven times. Each group saves its Istanbul execution maps as one artifact for 14
 days. The required `check` job only combines job results; it does not check out the
 repository, install dependencies, or merge advisory coverage again.
 
-`pnpm check` remains the canonical local full verification command. It builds once,
-runs all seven suites, and emits the combined HTML and LCOV reports. CI keeps the
-same suite membership but avoids making a combined advisory report part of the
-critical path. Failed tests and missing suite maps remain blocking.
+Do not run `pnpm ci:check` locally. Run `pnpm lint` and `pnpm typecheck`, then run only
+the suites related to the change when needed. CI retains the complete suite membership;
+failed tests and missing suite maps remain blocking.
 
 After `pnpm build`, use `pnpm test:cli`, `pnpm test:sdk`,
 `pnpm test:integration`, or `pnpm test:e2e` for the corresponding coverage suite.
@@ -152,7 +152,10 @@ Do not test repository tooling or scaffolding. This includes CI workflows, lint 
 
 ## Required Test Levels
 
-Critical user paths must use end-to-end tests. Protocols and external boundaries must use integration or contract tests. End-to-end tests start at the actual supported public entrypoint and compose the production path behind it; integration and contract tests exercise the production boundary contract. Use production components together with real temporary filesystems, subprocesses, sockets, and local protocol servers where the product path requires them.
+Only write end-to-end tests for representative happy paths. Business logic must be covered by integration tests, while protocols and external boundaries use integration or contract tests. End-to-end tests start at the actual supported public entrypoint and compose the production path behind it; integration and contract tests exercise the production boundary contract. Use production components together with real temporary filesystems, subprocesses, sockets, and local protocol servers where the product path requires them.
+
+Integration tests exercise behavior through user-visible mouse and keyboard interactions. They must not read from, write to, or invoke application stores directly. Test infrastructure may create and destroy the production application around those interactions.
+Integration tests bootstrap the entire application; rendering individual React components or views is forbidden.
 
 A lower-level test is not acceptance if the supported user path could break while the test still passes. Boundary tests may support a slice, but they cannot replace its user-visible acceptance scenario.
 
@@ -242,7 +245,7 @@ Worker integration scenarios belong in
 `packages/relay-cloudflare-standalone/test/**/*.integration.test.ts`. Keep the
 `--max-workers=1 --no-isolate` flags in the package command: the Workers Vitest
 integration currently requires shared, serialized storage for Durable Object
-WebSocket tests. `pnpm check` includes these suites with coverage;
+WebSocket tests. `pnpm ci:check` includes these suites with coverage;
 `pnpm test:integration:hosting` remains available for focused verification without the
 aggregate coverage report.
 
@@ -286,4 +289,4 @@ Do not use real sleeps, polling delays, implicit `Date.now()` values, or timing 
 
 For an operation that owns resources, test observable cleanup after success, failure, timeout, and cancellation when those outcomes are reachable. Retry tests must prove the attempt limit, cancellation during backoff, and the rule that unsafe or indeterminate operations are not retried. Error-contract tests assert stable codes and sanitized boundary messages, not incidental infrastructure wording.
 
-Coverage identifies untested code but does not decide which tests to write. Do not create impossible typed states or duplicate tests merely to increase coverage. If a branch is unreachable under current invariants, remove or simplify it. Cover critical user paths with end-to-end tests and protocol or external boundaries with integration or contract tests.
+Coverage identifies untested code but does not decide which tests to write. Do not create impossible typed states or duplicate tests merely to increase coverage. If a branch is unreachable under current invariants, remove or simplify it. Cover representative happy paths with end-to-end tests, business logic with integration tests, and protocol or external boundaries with integration or contract tests.

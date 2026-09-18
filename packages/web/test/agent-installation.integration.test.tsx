@@ -5,13 +5,17 @@ import {
     encodeAgentInstallFailedEvent,
     encodeAgentInstallProgressEvent,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { AgentIntegrationOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { pairDaemon, saveBrowserCredential, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
+import {
+    createTestApplication,
+    pairDaemon,
+    saveBrowserCredential,
+    setupWebIntegrationEnvironment,
+} from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
@@ -27,7 +31,7 @@ describe.sequential("Agent integration installation", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -94,7 +98,7 @@ describe.sequential("Agent integration installation", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -125,7 +129,7 @@ describe.sequential("Agent integration installation", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("button", { name: "New chat" });

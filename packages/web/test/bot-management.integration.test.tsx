@@ -19,13 +19,13 @@ import {
     redeemMobiusBotConnectionGrant,
     StaticMobiusCredentialProvider,
 } from "@moxt-ai/mobius-sdk";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { AgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -143,7 +143,7 @@ describe.sequential("Bot management and conversations", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             fireEvent.click(await screen.findByRole("link", { name: "Bots" }));
@@ -182,7 +182,7 @@ describe.sequential("Bot management and conversations", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             fireEvent.click(await screen.findByRole("link", { name: "Bots" }));
@@ -210,7 +210,7 @@ describe.sequential("Bot management and conversations", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             fireEvent.click(await screen.findByRole("link", { name: "Bots" }));
@@ -289,7 +289,7 @@ describe.sequential("Bot management and conversations", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             fireEvent.click(await screen.findByRole("link", { name: "Bots" }));
@@ -470,7 +470,7 @@ describe.sequential("Bot management and conversations", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             fireEvent.click(await screen.findByRole("link", { name: "Bots" }));
@@ -621,7 +621,7 @@ describe.sequential("Bot management and conversations", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             await waitForDocumentState(
                 () => screen.queryByRole("heading", { level: 2, name: "Summarize the launch evidence." }) !== null,
                 signal,

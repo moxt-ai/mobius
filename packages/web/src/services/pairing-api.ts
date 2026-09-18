@@ -1223,12 +1223,6 @@ export async function readProjectRuntimeConnection(
     }
 }
 
-export async function readChannelHistory(channelId: string): Promise<ChannelHistory> {
-    const signal = AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS);
-    const connection = await readChannelConnection(channelId, signal);
-    return await readConnectionHistoryWithSignal(connection, signal);
-}
-
 export async function readConnectionHistory(
     connection: ChannelConnection,
     cancellationSignal: AbortSignal = new AbortController().signal,

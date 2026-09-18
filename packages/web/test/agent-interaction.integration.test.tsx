@@ -14,15 +14,15 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { App } from "@/app";
+import { dataTestId } from "@/data-testid";
 import { AgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { useChatStore } from "@/store/chat-store";
 import {
     completeRenderedPrompt,
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -63,7 +63,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -90,7 +90,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -112,7 +112,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -153,7 +153,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -188,7 +188,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -215,7 +215,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -251,7 +251,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -345,7 +345,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -494,7 +494,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -533,14 +533,23 @@ describe.sequential("Agent interaction boundaries", () => {
             const secondFollowUp = "Run the second task";
             const thirdFollowUp = "Run the third task";
             const followUps = [secondFollowUp, thirdFollowUp];
-            useChatStore.getState().addDraftResource({
-                mimeType: "text/plain",
-                name: "second-task-context.txt",
-                text: "Context that must stay attached to the second task.",
-                type: "embedded",
-                uri: "attachment:///second-task-context.txt",
+            fireEvent.click(screen.getByTestId(dataTestId.attachPromptFiles));
+            const fileInput = screen.getByTestId(dataTestId.promptFileInput);
+            if (!(fileInput instanceof HTMLInputElement)) {
+                throw new Error("The attachment picker is unavailable");
+            }
+            fireEvent.change(fileInput, {
+                target: {
+                    files: [
+                        new File(["Context that must stay attached to the second task."], "second-task-context.txt", {
+                            type: "text/plain",
+                        }),
+                    ],
+                },
             });
-            await screen.findByText("second-task-context.txt");
+            expect((await screen.findByTestId(dataTestId.promptAttachment)).textContent).toContain(
+                "second-task-context.txt",
+            );
             for (const followUp of followUps) {
                 const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
                 fireEvent.change(followUpInput, { target: { value: followUp } });
@@ -679,7 +688,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -713,7 +722,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -769,7 +778,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -979,7 +988,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1014,7 +1023,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1043,7 +1052,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1195,7 +1204,7 @@ describe.sequential("Agent interaction boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));

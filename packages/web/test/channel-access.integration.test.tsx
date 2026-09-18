@@ -1,11 +1,11 @@
 import { decodeSessionPrepareCommand, SESSION_PREPARE_KIND } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -22,7 +22,7 @@ describe.sequential("Channel access boundaries", () => {
         window.history.replaceState(null, "", settingsPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -57,7 +57,7 @@ describe.sequential("Channel access boundaries", () => {
         window.history.replaceState(null, "", accessPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -80,7 +80,7 @@ describe.sequential("Channel access boundaries", () => {
             await closeMobiusTransport();
             window.localStorage.clear();
             window.history.replaceState(null, "", accessLink);
-            render(<App />);
+            createTestApplication();
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, linkedPreparation);
@@ -95,7 +95,7 @@ describe.sequential("Channel access boundaries", () => {
             window.localStorage.clear();
             saveBrowserCredential(paired.channelId, paired.credential);
             window.history.replaceState(null, "", accessPath);
-            render(<App />);
+            createTestApplication();
 
             const linkedDevices = await screen.findByRole("list", {
                 name: "Linked devices",
@@ -118,7 +118,7 @@ describe.sequential("Channel access boundaries", () => {
             }
             window.localStorage.setItem(`mobius:channel-credential:${paired.channelId}`, linkedCredential);
             window.history.replaceState(null, "", accessPath);
-            render(<App />);
+            createTestApplication();
 
             expect(
                 await screen.findByText("unauthorized: A valid pairing or channel credential is required"),
@@ -129,7 +129,7 @@ describe.sequential("Channel access boundaries", () => {
             window.localStorage.clear();
             saveBrowserCredential(paired.channelId, paired.credential);
             window.history.replaceState(null, "", accessPath);
-            render(<App />);
+            createTestApplication();
 
             fireEvent.click(
                 await screen.findByRole("button", {
@@ -149,7 +149,7 @@ describe.sequential("Channel access boundaries", () => {
             await closeMobiusTransport();
             window.localStorage.setItem(`mobius:channel-credential:${paired.channelId}`, linkedCredential);
             window.history.replaceState(null, "", renewedAccessLink);
-            render(<App />);
+            createTestApplication();
 
             await screen.findByRole("textbox", { name: "Message the local agent" });
             expect(window.location.hash).toBe("");
@@ -168,7 +168,7 @@ describe.sequential("Channel access boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const ownerPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -195,7 +195,7 @@ describe.sequential("Channel access boundaries", () => {
             await closeMobiusTransport();
             window.localStorage.clear();
             window.history.replaceState(null, "", accessLink);
-            render(<App />);
+            createTestApplication();
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(linkedPreparation.sessionId).toBe(ownerPreparation.sessionId);

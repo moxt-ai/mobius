@@ -55,9 +55,8 @@ pnpm dev:stack
 ```
 
 Use the Web port reported by `pnpm worktree:ports` for browser checks. Stop all
-development processes when verification finishes. Run the task-specific checks
-and `pnpm check` before a pull request, following `TESTING.md` and repository
-instructions.
+development processes when verification finishes. Run `pnpm lint`, `pnpm typecheck`,
+and only task-specific tests when needed. Do not run `pnpm ci:check` locally.
 
 Creating a worktree does not authorize committing, pushing, opening a pull
 request, deleting a worktree, or changing an existing branch's history. Perform

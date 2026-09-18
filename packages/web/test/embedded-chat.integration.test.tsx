@@ -1,8 +1,9 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { MobiusChat, readChannelConnection } from "../src/index.ts";
+import { readChannelConnection } from "../src/index.ts";
 import {
+    createEmbeddedTestApplication,
     pairDaemon,
     saveBrowserCredential,
     setupWebIntegrationEnvironment,
@@ -24,9 +25,8 @@ describe.sequential("Embedded Mobius chat", () => {
         const connection = await readChannelConnection(paired.channelId, AbortSignal.timeout(15_000));
         vi.useFakeTimers({ now: new Date("2026-09-08T00:00:00Z") });
         try {
-            // MobiusChat is the complete public application mounted by host workspaces.
-            // It uses the real Worker and a stateful daemon at the protocol boundary.
-            render(<MobiusChat connection={connection} />);
+            // The embedded application uses the real Worker and a stateful daemon at the protocol boundary.
+            createEmbeddedTestApplication(connection);
             expect(screen.getByRole("status", { name: "Loading Mobius chat" })).toBeTruthy();
             expect(screen.queryByText("Loading Mobius chat…")).toBeNull();
             await waitForDocumentState(() => screen.queryByRole("heading", { name: "Local Agents" }) !== null, signal);

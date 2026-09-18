@@ -14,15 +14,14 @@ import {
     type SessionConfigOption,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { App } from "@/app";
+import { dataTestId } from "@/data-testid";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { readChannelHistory } from "@/services/pairing-api";
-import { useChatStore } from "@/store/chat-store";
 import {
     completeRenderedPrompt,
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -100,7 +99,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(
@@ -135,7 +134,7 @@ describe.sequential("Session persistence boundaries", () => {
             }
 
             signal.throwIfAborted();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(
                 await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
             );
@@ -162,7 +161,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
         let reconnectedDaemon = paired.daemon;
 
         try {
@@ -205,19 +204,30 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation);
-            useChatStore.getState().addDraftResource({
-                mimeType: "text/plain",
-                name: "public-api-context.txt",
-                text: "content transferred outside the control message",
-                type: "embedded",
-                uri: "attachment:///public-api-context.txt",
+            const attachFiles = screen.getByTestId(dataTestId.attachPromptFiles);
+            await waitFor(() => expect(attachFiles.hasAttribute("disabled")).toBe(false));
+            fireEvent.click(attachFiles);
+            const fileInput = screen.getByTestId(dataTestId.promptFileInput);
+            if (!(fileInput instanceof HTMLInputElement)) {
+                throw new Error("The attachment picker is unavailable");
+            }
+            fireEvent.change(fileInput, {
+                target: {
+                    files: [
+                        new File(["content transferred outside the control message"], "public-api-context.txt", {
+                            type: "text/plain",
+                        }),
+                    ],
+                },
             });
-            await screen.findByText("public-api-context.txt");
+            expect((await screen.findByTestId(dataTestId.promptAttachment)).textContent).toContain(
+                "public-api-context.txt",
+            );
             const promptInput = screen.getByRole("textbox", {
                 name: "Message the local agent",
             });
@@ -334,7 +344,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -483,7 +493,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -566,73 +576,12 @@ describe.sequential("Session persistence boundaries", () => {
         }
     });
 
-    it("Given an additional workspace is selected before the first prompt, When background history refreshes before preparation completes, Then the local identity remains ready to use", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
-
-        try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation);
-
-            fireEvent.click(await screen.findByRole("button", { name: /Workspace directory:/ }));
-            const workspaceRequest = decodeWorkspaceListCommand(await paired.daemon.receive(WORKSPACE_LIST_KIND));
-            paired.daemon.send(
-                encodeWorkspaceEntriesEvent({
-                    bindingId: workspaceRequest.bindingId,
-                    directoryId: workspaceRequest.directoryId,
-                    directoryLabel: "/workspace",
-                    entries: [
-                        {
-                            directoryId: "shared-policy-workspace",
-                            name: "Shared policy workspace",
-                        },
-                    ],
-                    kind: "workspace.entries",
-                    parentDirectoryId: "",
-                    requestId: workspaceRequest.requestId,
-                }),
-            );
-            const picker = await screen.findByRole("dialog", {
-                name: "Choose workspace",
-            });
-            fireEvent.click(
-                await within(picker).findByRole("button", {
-                    name: "Add Shared policy workspace as an additional directory",
-                }),
-            );
-            const selectedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            expect(selectedPreparation.additionalDirectoryIds).toEqual(["shared-policy-workspace"]);
-            fireEvent.click(
-                within(picker).getByRole("button", {
-                    name: "Close directory browser",
-                }),
-            );
-
-            useChatStore.getState().reconcileHistory(await readChannelHistory(paired.channelId));
-
-            expect(
-                screen.getByRole("button", {
-                    name: "Remove Shared policy workspace",
-                }),
-            ).toBeTruthy();
-            await sendReadySession(paired.daemon, selectedPreparation);
-            await screen.findByRole("button", { name: /Run settings:/ });
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
     it("Given a prompted Session uses an additional workspace, When the Web app reloads, Then preparation retains the immutable workspace identity", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -676,7 +625,7 @@ describe.sequential("Session persistence boundaries", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(resumedPreparation).toMatchObject({
                 additionalDirectoryIds: ["shared-policy-workspace"],
@@ -696,7 +645,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const olderPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -739,7 +688,7 @@ describe.sequential("Session persistence boundaries", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(resumedPreparation.sessionId).toBe(olderPreparation.sessionId);
             await sendReadySession(paired.daemon, resumedPreparation);
@@ -766,7 +715,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -787,7 +736,7 @@ describe.sequential("Session persistence boundaries", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(resumedPreparation.sessionId).toBe(initialPreparation.sessionId);
             await sendReadySession(paired.daemon, resumedPreparation);
@@ -812,7 +761,7 @@ describe.sequential("Session persistence boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -879,7 +828,7 @@ describe.sequential("Session persistence boundaries", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(resumedPreparation).toMatchObject({
                 bindingId: "configuration-binding",

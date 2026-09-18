@@ -64,7 +64,7 @@
         "test:coverage:hosting": "pnpm build:test && pnpm test:coverage:suite web && pnpm test:coverage:suite standalone && pnpm test:coverage:suite platform",
         "knip": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k knip",
         "check:static": "pnpm --filter mobius-workspace run --parallel '/^(lint|typecheck|knip)$/'",
-        "check": "pnpm check:static && pnpm test:coverage",
+        "ci:check": "pnpm check:static && pnpm test:coverage",
         "postinstall": "simple-git-hooks"
     },
     "simple-git-hooks": {

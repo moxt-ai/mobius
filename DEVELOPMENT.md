@@ -2,11 +2,12 @@
 
 ## Repository checks
 
-Run `pnpm check` with `VITE_CLERK_PUBLISHABLE_KEY` set for the Platform build.
-For local build-only verification, use the same fixture as CI:
+Do not run `pnpm ci:check` locally. Run lint and type checks, plus only related tests
+when needed:
 
 ```bash
-VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm check
+pnpm lint
+pnpm typecheck
 ```
 
 Lint (including architecture), typechecking, and Knip run concurrently through
@@ -25,7 +26,7 @@ root build excludes those frontend packages to avoid duplicate builds and races
 with Vite clearing their output directories.
 
 PRs, merge groups, main pushes, and manual CI runs execute the components of
-`pnpm check` in ten parallel jobs: lint, typecheck, Knip, and seven coverage
+`pnpm ci:check` in ten parallel jobs: lint, typecheck, Knip, and seven coverage
 suites. Each coverage job owns its build outputs. CLI, SDK, integration, E2E,
 and web suites each use up to four file workers; builds use three workspace tasks.
 The required `check` status merges coverage and requires every job to succeed.

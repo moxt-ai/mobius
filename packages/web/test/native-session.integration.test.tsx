@@ -7,13 +7,13 @@ import {
     NATIVE_SESSION_TURN_FORK_KIND,
     SESSION_PREPARE_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -31,7 +31,7 @@ describe.sequential("Native Session boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -144,7 +144,7 @@ describe.sequential("Native Session boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -288,7 +288,7 @@ describe.sequential("Native Session boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -421,7 +421,7 @@ describe.sequential("Native Session boundaries", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -538,7 +538,7 @@ describe.sequential("Native Session boundaries", () => {
 
             cleanup();
             await closeMobiusTransport();
-            render(<App />);
+            createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(resumedPreparation.sessionId).toBe(openRequest.targetSessionId);
             await sendReadySession(paired.daemon, resumedPreparation);

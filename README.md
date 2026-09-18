@@ -3,7 +3,7 @@
 [![CI](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml/badge.svg)](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml)
 
 The engineering-quality target is 100% across lines, statements, functions, and
-branches, as an advisory target. `pnpm check` runs the complete verification suites,
+branches, as an advisory target. CI uses `pnpm ci:check` for the complete verification suites,
 reports combined production TS/TSX coverage, and enforces architecture constraints.
 CI saves the three test groups' coverage maps as downloadable artifacts. See [Testing](TESTING.md)
 for scope and commands.
@@ -159,7 +159,8 @@ apk add --no-cache bash ca-certificates gcompat
 
 ```bash
 pnpm install
-pnpm check
+pnpm lint
+pnpm typecheck
 ```
 
 Start the local Cloudflare Lite deployment profile and production Web build:

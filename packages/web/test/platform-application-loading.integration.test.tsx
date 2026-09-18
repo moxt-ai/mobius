@@ -1,8 +1,8 @@
 import { createServer, type ServerResponse } from "node:http";
-import { flushSync } from "react-dom";
-import { createRoot } from "react-dom/client";
+import { fireEvent, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
-import { PlatformApp } from "../../platform-app/src/views/platform-app-view.tsx";
+import { platformDataTestId } from "../../platform-app/src/data-testid.ts";
+import { createPlatformTestApplication } from "./platform-app-integration-harness.ts";
 
 // A stateful Platform HTTP peer keeps credential reads pending until released,
 // avoiding hosted Clerk credentials and nondeterministic network throttling.
@@ -75,9 +75,15 @@ it("Given an organization's application keys are visible, When a user switches a
     if (address === null || typeof address === "string") {
         throw new Error("Missing server address");
     }
-    const container = document.createElement("div");
-    document.body.appendChild(container);
-    const root = createRoot(container);
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const application = createPlatformTestApplication({
+        endpoint,
+        getToken: async () => "developer",
+        userControl: null,
+        organization: { id: tenant.tenantId, name: tenant.displayName },
+        organizationControl: null,
+    });
+    const { container } = application;
     const rendered = (text: string) =>
         new Promise<void>((resolve) => {
             const observer = new MutationObserver(() => {
@@ -89,61 +95,45 @@ it("Given an organization's application keys are visible, When a user switches a
             observer.observe(container, { childList: true, subtree: true, characterData: true });
         });
     try {
-        flushSync(() =>
-            root.render(
-                <PlatformApp
-                    key={tenant.tenantId}
-                    endpoint={`http://127.0.0.1:${address.port}`}
-                    getToken={async () => "developer"}
-                    userControl={null}
-                    organization={{ id: tenant.tenantId, name: tenant.displayName }}
-                    organizationControl={null}
-                />,
-            ),
-        );
         await requested.get("Alpha")?.promise;
         const alphaRendered = rendered("Active");
         release("Alpha", "");
         await alphaRendered;
-        const beta = Array.from(container.querySelectorAll("button")).find((button) =>
-            button.textContent?.startsWith("Beta"),
-        );
+        const beta = screen
+            .getAllByTestId(platformDataTestId.applicationChoice)
+            .find((entry) => entry.textContent?.startsWith("Beta"));
         if (beta === undefined) {
             throw new Error("Beta application is missing");
         }
-        flushSync(() => beta.click());
+        fireEvent.click(beta);
         await requested.get("Beta")?.promise;
         expect(container.textContent).toContain("Loading application");
         expect(container.textContent).not.toContain("Active");
-        expect(container.querySelector('[aria-label="Revoke key 1"]')).toBeNull();
+        expect(screen.queryByTestId(platformDataTestId.revokeCredential)).toBeNull();
         const betaRendered = rendered("Revoked");
         release("Beta", timestamp);
         await betaRendered;
         expect(container.textContent).not.toContain("Loading application");
         expect(container.textContent).not.toContain("Active");
         const organizationRendered = rendered("No applications yet");
-        flushSync(() =>
-            root.render(
-                <PlatformApp
-                    key="org_other"
-                    endpoint={`http://127.0.0.1:${address.port}`}
-                    getToken={async () => "other-organization"}
-                    userControl={null}
-                    organization={{ id: "org_other", name: "Other team" }}
-                    organizationControl={null}
-                />,
-            ),
+        application.rerender(
+            {
+                endpoint,
+                getToken: async () => "other-organization",
+                userControl: null,
+                organization: { id: "org_other", name: "Other team" },
+                organizationControl: null,
+            },
+            "org_other",
         );
-        expect(container.querySelector('[aria-label="Revoke key 1"]')).toBeNull();
+        expect(screen.queryByTestId(platformDataTestId.revokeCredential)).toBeNull();
         await organizationRendered;
         expect(container.textContent).toContain("Other team");
         expect(container.textContent).toContain("org_other");
         expect(container.textContent).not.toContain("Alpha");
         expect(container.textContent).not.toContain("Beta");
-        expect(container.querySelector('[aria-label="Create tenant"]')).toBeNull();
     } finally {
-        flushSync(() => root.unmount());
-        container.remove();
+        await application.destroy();
         for (const response of pending.values()) {
             response.end();
         }

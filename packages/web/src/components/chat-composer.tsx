@@ -7,6 +7,7 @@ import { SessionConfigControls } from "@/components/session-config-controls";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { WorkspacePicker } from "@/components/workspace-picker";
+import { dataTestId } from "@/data-testid";
 import { DeletedSessionState, type UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
@@ -390,6 +391,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                                 {conversation.draftResources.map((resource) => (
                                     <li
                                         className="inline-flex min-h-11 items-center gap-1.5 rounded-lg border-[0.5px] border-black/9 bg-surface-subtle py-1 pr-1 pl-2 text-[11px] text-copy-secondary lg:min-h-9"
+                                        data-testid={dataTestId.promptAttachment}
                                         key={resource.uri}
                                     >
                                         <FileText aria-hidden="true" className="size-3.5 text-muted-foreground" />
@@ -465,6 +467,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         <Button
                             aria-label="Attach images or text resources"
                             className="size-11 rounded-full text-copy-secondary hover:bg-black/[0.04] lg:size-9"
+                            data-testid={dataTestId.attachPromptFiles}
                             disabled={!canAttach || attaching}
                             onClick={() => fileInputRef.current?.click()}
                             size="icon"
@@ -484,6 +487,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         <input
                             accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.json,.csv,.yaml,.yml,.xml"
                             className="sr-only"
+                            data-testid={dataTestId.promptFileInput}
                             multiple
                             onChange={(event) => {
                                 if (event.currentTarget.files !== null) {

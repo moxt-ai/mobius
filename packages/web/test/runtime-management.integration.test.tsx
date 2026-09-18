@@ -1,11 +1,11 @@
 import { decodeSessionPrepareCommand, MOBIUS_API_PREFIX, SESSION_PREPARE_KIND } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
+    createTestApplication,
     pairDaemon,
     StatefulDaemon,
     saveBrowserCredential,
@@ -109,7 +109,7 @@ describe.sequential("Project Runtime management", () => {
         window.history.replaceState(null, "", settingsPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -170,7 +170,7 @@ describe.sequential("Project Runtime management", () => {
         window.history.replaceState(null, "", settingsPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -224,7 +224,7 @@ describe.sequential("Project Runtime management", () => {
         window.history.replaceState(null, "", settingsPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -294,7 +294,7 @@ describe.sequential("Project Runtime management", () => {
         window.history.replaceState(null, "", accessPath);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
@@ -312,7 +312,7 @@ describe.sequential("Project Runtime management", () => {
             await closeMobiusTransport();
             window.localStorage.clear();
             window.history.replaceState(null, "", accessLink);
-            render(<App />);
+            createTestApplication();
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, linkedPreparation);

@@ -46,7 +46,10 @@ Make illegal states unrepresentable.
 - Describe each behavior slice as: "After this, a user can ... and see ..." If that sentence is not concrete, narrow the slice.
 - Start every behavior change with a failing Given-When-Then scenario at the highest boundary that owns it. Change a representative end-to-end scenario only when the behavior changes a critical user journey; otherwise use the owning integration or contract boundary.
 - Do not add unit tests by default. Add one only when the user explicitly requests unit-level coverage or a repository maintainer documents an exception for an invariant that cannot be exercised through a supported product boundary.
-- Keep the end-to-end suite a small, high-signal control surface over critical user journeys. Its scenarios must enter through production user entrypoints and compose the participating production subsystems; test-only orchestration must not bypass an internal product layer. Protocols, variants, and external boundaries use integration or contract tests. Do not test CI, linting, Git hooks, build tooling, dependency configuration, or other repository scaffolding.
+- Only write end-to-end tests for happy paths. Business logic must be covered by integration tests, while protocols, variants, and external boundaries use integration or contract tests. End-to-end scenarios must enter through production user entrypoints and compose the participating production subsystems; test-only orchestration must not bypass an internal product layer. Do not test CI, linting, Git hooks, build tooling, dependency configuration, or other repository scaffolding.
+- Integration tests must exercise only user behavior through mouse or keyboard operations. Direct access to stores in tests is forbidden.
+- Integration tests must bootstrap and render the entire application. Rendering individual React components or views in an integration test is forbidden.
+- Tests must select elements with shared `data-testid.ts` constants and `getByTestId`. `getByRole`, `querySelector`, and ad hoc test IDs are forbidden.
 - Except for deterministic fake timers, mocks, spies, stubs, monkey patching, module replacement, and canned request interceptors are prohibited. If a real external dependency cannot be used safely or deterministically, inject a stateful fake through its production port.
 - Tests involving time must use fake timers with an explicit system time. Every test is prohibited from using real sleeps, wall-clock time, polling delays, or timing tolerances.
 - Assert externally observable results, not private control flow, collaborator calls, or implementation details.
@@ -65,4 +68,4 @@ Make illegal states unrepresentable.
 
 ## Verification
 
-Run `pnpm check` before submitting a pull request.
+Do not run `pnpm ci:check` on a local machine. For local development, run `pnpm lint` and `pnpm typecheck`, plus only the test cases related to the change when needed.

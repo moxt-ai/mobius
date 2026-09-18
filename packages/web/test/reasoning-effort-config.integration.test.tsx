@@ -1,10 +1,10 @@
 import { decodeSessionPrepareCommand, SESSION_PREPARE_KIND, type SessionConfigOption } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { App } from "@/app";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
+    createTestApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -76,7 +76,7 @@ describe.sequential("Required reasoning effort configuration", () => {
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
         saveBrowserCredential(paired.channelId, paired.credential);
-        render(<App />);
+        createTestApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));

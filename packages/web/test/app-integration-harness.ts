@@ -18,11 +18,32 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, configure, fireEvent, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
 import { afterAll, beforeAll, expect } from "vitest";
-import type { AgentOption, InstallableAgentOption } from "@/domain/channel";
+import { App } from "@/app";
+import type { AgentOption, ChannelConnection, InstallableAgentOption } from "@/domain/channel";
+import { MobiusChat } from "@/index";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import { startLocalRelay } from "./relay-harness.ts";
+
+export function createTestApplication() {
+    const application = render(createElement(App));
+    return {
+        destroy: async (): Promise<void> => {
+            application.unmount();
+        },
+    } as const;
+}
+
+export function createEmbeddedTestApplication(connection: ChannelConnection) {
+    const application = render(createElement(MobiusChat, { connection }));
+    return {
+        destroy: async (): Promise<void> => {
+            application.unmount();
+        },
+    } as const;
+}
 
 interface CreatedPairing {
     readonly channelId: string;
@@ -106,7 +127,7 @@ function decodeClaimedPairing(value: unknown): ClaimedPairing {
     };
 }
 
-export function setHappyDomUrl(url: URL): void {
+function setHappyDomUrl(url: URL): void {
     const api: unknown = Reflect.get(window, "happyDOM");
     if (!isRecord(api)) {
         throw new Error("The Web integration test requires Happy DOM");
