@@ -25,6 +25,10 @@ Create the directory database and R2 buckets before the first remote deployment:
   `packages/relay-cloudflare-platform/migrations/dashboard`.
   Session/Conversation access credentials, App credential Project scopes, and
   Project audit events belong to the Project Durable Object.
+- `mobius-platform-<environment>-web-assets` stores append-only,
+  content-addressed dashboard JavaScript and CSS. Its custom domain serves those
+  files independently of Worker deployments so already-open dashboards can keep
+  loading their original chunks.
 
 Copy `packages/relay-cloudflare-platform/wrangler.jsonc` into deployment-owned
 configuration and add the directory database's `database_name` and `database_id`.
@@ -35,6 +39,23 @@ Bind a separate Workers KV namespace as `APP_CREDENTIAL_CACHE` for each
 environment. The checked-in staging and production configurations include their
 namespace IDs; local development uses a local namespace. KV bindings are not
 inherited from the top-level Wrangler configuration.
+
+Provision each dashboard asset bucket and custom domain once. Replace the zone
+IDs with the zones that own `moxt.ws` and `moxt.ai`:
+
+```bash
+pnpm wrangler r2 bucket create mobius-platform-staging-web-assets
+pnpm wrangler r2 bucket domain add mobius-platform-staging-web-assets --domain assets.mobius.moxt.ws --zone-id <MOXT_WS_ZONE_ID> --min-tls 1.2 --force
+pnpm wrangler r2 bucket cors set mobius-platform-staging-web-assets --file config/r2/platform-staging-web-assets-cors.json --force
+
+pnpm wrangler r2 bucket create mobius-platform-production-web-assets
+pnpm wrangler r2 bucket domain add mobius-platform-production-web-assets --domain assets.mobius.moxt.ai --zone-id <MOXT_AI_ZONE_ID> --min-tls 1.2 --force
+pnpm wrangler r2 bucket cors set mobius-platform-production-web-assets --file config/r2/platform-production-web-assets-cors.json --force
+```
+
+Do not delete objects from these buckets. The deployment uploads each build's
+hashed assets before activating its Worker and gives them a one-year immutable
+cache policy.
 
 Configure these JSON-encoded Worker variables:
 

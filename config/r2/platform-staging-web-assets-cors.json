@@ -1,0 +1,12 @@
+{
+    "rules": [
+        {
+            "allowed": {
+                "origins": ["https://mobius.moxt.ws"],
+                "methods": ["GET"],
+                "headers": ["*"]
+            },
+            "maxAgeSeconds": 86400
+        }
+    ]
+}

@@ -22,6 +22,7 @@
         "deploy:temporary": "pnpm wrangler deploy --temporary",
         "deploy:cloudflare:r2": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-standalone deploy:r2",
         "deploy:cloudflare:platform": "pnpm --filter @moxt-ai/mobius-relay-cloudflare-platform run deploy",
+        "publish:platform-assets": "bash scripts/publish-platform-assets.sh",
         "mobius": "pnpm --filter @moxt-ai/mobius exec node src/cli.ts",
         "wrangler": "node scripts/wrangler.ts",
         "worktree:new": "bash scripts/worktree/new.sh",

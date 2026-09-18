@@ -9,7 +9,20 @@ export default defineConfig(({ mode }) => {
     if (publishableKey === undefined || publishableKey.trim().length === 0) {
         throw new Error(`Set VITE_CLERK_PUBLISHABLE_KEY before building Platform in ${mode} mode.`);
     }
+    const assetOrigin =
+        mode === "staging"
+            ? "https://assets.mobius.moxt.ws"
+            : mode === "production"
+              ? "https://assets.mobius.moxt.ai"
+              : undefined;
     return {
+        ...(assetOrigin === undefined
+            ? {}
+            : {
+                  experimental: {
+                      renderBuiltUrl: (filename: string) => `${assetOrigin}/${filename}`,
+                  },
+              }),
         plugins: [react(), tailwindcss()],
         server: {
             host: "127.0.0.1",

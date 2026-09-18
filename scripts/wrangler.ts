@@ -259,6 +259,10 @@ async function run(signal: AbortSignal): Promise<void> {
     const dryRun = hasArgument(wranglerArguments, "--dry-run");
     const deploymentArguments = ["--filter", target.packageName, "exec", "wrangler", ...wranglerArguments];
 
+    if (target === platformTarget && environment !== undefined && !dryRun && !temporaryDeployment) {
+        await runPnpm(["publish:platform-assets", environment], signal);
+    }
+
     if (!dryRun && !temporaryDeployment) {
         await applyD1Migrations("--remote", wranglerArguments, target, signal);
     }
