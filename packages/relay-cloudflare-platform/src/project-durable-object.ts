@@ -1,27 +1,12 @@
 import { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
 import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
+import { decodeProjectDurableObjectPath } from "./entity/project-durable-object-path.ts";
 import platformWorker, {
     type ConfiguredPlatformRelayBindings,
     type ProjectPlatformRelayBindings,
 } from "./platform-worker.ts";
 import { executeProjectDatabaseRequest } from "./storage/project-durable-object-database.ts";
 import { initializeProjectDurableObjectSchema } from "./storage/project-durable-object-schema.ts";
-
-function projectIdFromRequest(request: Request): string | null {
-    const internal = request.headers.get("x-mobius-project-id");
-    if (internal !== null) {
-        return internal;
-    }
-    const match = /\/mobius\/api\/v1\/projects\/([^/]+)/.exec(new URL(request.url).pathname);
-    if (match?.[1] === undefined) {
-        return null;
-    }
-    try {
-        return decodeURIComponent(match[1]);
-    } catch {
-        return null;
-    }
-}
 
 export class ProjectRelay {
     readonly #database: DurableObjectDatabaseAdapter;
@@ -40,13 +25,15 @@ export class ProjectRelay {
     }
 
     readonly fetch = async (request: Request): Promise<Response> => {
-        const projectId = projectIdFromRequest(request);
-        if (projectId === null || decodePlatformProjectPlacement(projectId) === null) {
+        const requestUrl = new URL(request.url);
+        const projectPath = decodeProjectDurableObjectPath(requestUrl.pathname);
+        if (projectPath === null || decodePlatformProjectPlacement(projectPath.projectId) === null) {
             return Response.json(
                 { error: { code: "project_id_invalid", message: "The Project identifier is invalid" } },
                 { status: 400 },
             );
         }
+        const projectId = projectPath.projectId;
         const identity = this.#sqlite.query("SELECT project_id FROM project_object_identity WHERE singleton = 1")[0];
         if (identity === undefined) {
             this.#sqlite.run("INSERT INTO project_object_identity (singleton, project_id) VALUES (1, ?)", [projectId]);
@@ -59,11 +46,13 @@ export class ProjectRelay {
         if (new URL(request.url).hostname === "project.internal") {
             return await executeProjectDatabaseRequest(request, this.#database);
         }
+        requestUrl.pathname = projectPath.requestPathname;
+        const routedRequest = new Request(requestUrl, request);
         const environment: ConfiguredPlatformRelayBindings & ProjectPlatformRelayBindings = {
             ...this.#environment,
             MOBIUS_PROJECT_DATABASE: this.#database,
             MOBIUS_PROJECT_ID: projectId,
         };
-        return await platformWorker.fetch(request, environment);
+        return await platformWorker.fetch(routedRequest, environment);
     };
 }

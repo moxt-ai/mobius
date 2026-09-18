@@ -1,6 +1,7 @@
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import type { SqlDatabase } from "@moxt-ai/mobius-relay-core/database";
 import { decodePlatformProjectPlacement, projectIdFromPrefixedValue } from "../entity/platform-project-id.ts";
+import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
 
 export interface ProjectWorkerRoutingBindings {
     readonly PROJECT_RELAY: DurableObjectNamespace;
@@ -116,15 +117,15 @@ export async function routeProjectDurableObject(
         return failure("project_id_invalid", 400);
     }
     request.signal.throwIfAborted();
-    const headers = new Headers(request.headers);
-    headers.set("x-mobius-project-id", projectId);
+    const durableObjectUrl = new URL(request.url);
+    durableObjectUrl.pathname = encodeProjectDurableObjectPath(projectId, durableObjectUrl.pathname);
     const body = request.body === null ? undefined : await request.arrayBuffer();
     request.signal.throwIfAborted();
     return await bindings.PROJECT_RELAY.getByName(projectId, { locationHint: placement.locationHint }).fetch(
-        request.url,
+        durableObjectUrl,
         {
             method: request.method,
-            headers,
+            headers: request.headers,
             ...(body === undefined ? {} : { body }),
             signal: request.signal,
             redirect: request.redirect,

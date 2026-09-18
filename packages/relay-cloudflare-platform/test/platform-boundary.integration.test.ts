@@ -181,6 +181,27 @@ async function projectRows(projectId: string, sql: string, ...values: readonly (
     return await runInDurableObject(stub, (_instance, state) => state.storage.sql.exec(sql, ...values).toArray());
 }
 
+it("Given a Project Durable Object path, When its database receives an operation, Then the path selects the Project without a routing header", async () => {
+    const fixture = await provisionPlatformProject("path-routed-database");
+    const response = await env.PROJECT_RELAY.getByName(fixture.projectId).fetch(
+        `https://project.internal/mobius/internal/projects/${encodeURIComponent(fixture.projectId)}/database`,
+        {
+            body: JSON.stringify({
+                kind: "first",
+                statement: {
+                    sql: "SELECT project_id FROM project_object_identity WHERE singleton = 1",
+                    values: [],
+                },
+            }),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+        },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ project_id: fixture.projectId });
+});
+
 it.each(["wnam", "enam", "sam", "weur", "eeur", "apac", "apac-ne", "apac-se", "oc", "afr", "me"])(
     "Given the %s Durable Object location, When an App provisions a Project, Then the Project is available at that location while its dashboard record remains available",
     async (locationHint) => {

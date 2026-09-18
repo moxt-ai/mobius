@@ -1,6 +1,7 @@
 import { DatabaseError, type SqlDatabase, type SqlStatement } from "@moxt-ai/mobius-relay-core/database";
 import * as v from "valibot";
 import type { PlatformProjectLocationHint } from "../entity/platform-control-plane.ts";
+import { encodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
 
 const sqlValueSchema = v.union([v.null(), v.string(), v.number()]);
 const statementSchema = v.object({ sql: v.string(), values: v.array(sqlValueSchema) });
@@ -43,9 +44,9 @@ async function requestDatabase(
     try {
         const response = await namespace
             .getByName(projectId, { locationHint })
-            .fetch("https://project.internal/database", {
+            .fetch(`https://project.internal${encodeProjectDurableObjectPath(projectId, "/database")}`, {
                 method: "POST",
-                headers: { "content-type": "application/json", "x-mobius-project-id": projectId },
+                headers: { "content-type": "application/json" },
                 body: JSON.stringify(operation),
                 signal: deadline,
             });
