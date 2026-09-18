@@ -1481,40 +1481,75 @@ function assertPreparedPermission(configOptions: readonly SessionConfigOption[],
     }
 }
 
-async function applyRequiredExecutionSelection(
+function warnIgnoredExecutionSetting(
+    audit: AuditStore,
+    commandId: string,
+    sessionId: string,
+    agentId: string,
+    selection: SessionConfigurationSelection,
+    category: string,
+    reason: string,
+): void {
+    const details: Readonly<Record<string, string>> = {
+        agentId,
+        category,
+        configId: selection.configId,
+        reason,
+        requestedValue: selection.value,
+    };
+    const event = "bot_execution_setting_ignored";
+    audit.record({ commandId, details, event, sessionId });
+    process.stderr.write(`Mobius daemon warning ${JSON.stringify({ commandId, event, sessionId, ...details })}\n`);
+}
+
+async function applySupportedExecutionSelection(
     sessions: AcpSessionManager,
+    audit: AuditStore,
     configOptions: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
     category: string,
     agent: LocalAgentDefinition,
     cwd: string,
     additionalDirectories: readonly string[],
+    commandId: string,
     sessionId: string,
     signal: AbortSignal,
 ): Promise<readonly SessionConfigOption[]> {
-    const option = configOptions.find((candidate) => candidate.id === selection.configId);
-    if (
-        option === undefined ||
-        option.type !== "select" ||
-        option.category !== category ||
-        selection.valueType !== "select" ||
-        selection.booleanValue
-    ) {
-        throw new AcpExecutionError(
-            `The required Agent setting ${selection.configId} is unavailable`,
-            {},
-            "invalid_session_configuration",
-        );
-    }
     if (selection.value === AGENT_DEFAULT_EXECUTION_SETTING) {
         return configOptions;
     }
-    if (!option.values.some((value) => value.value === selection.value)) {
-        throw new AcpExecutionError(
-            `The required Agent setting ${selection.configId} is unavailable`,
-            {},
-            "invalid_session_configuration",
+    const option = configOptions.find((candidate) => candidate.id === selection.configId);
+    if (option === undefined) {
+        warnIgnoredExecutionSetting(audit, commandId, sessionId, agent.id, selection, category, "setting_unavailable");
+        return configOptions;
+    }
+    if (option.type !== "select" || option.category !== category) {
+        warnIgnoredExecutionSetting(
+            audit,
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            category,
+            "setting_schema_mismatch",
         );
+        return configOptions;
+    }
+    if (selection.valueType !== "select" || selection.booleanValue) {
+        warnIgnoredExecutionSetting(
+            audit,
+            commandId,
+            sessionId,
+            agent.id,
+            selection,
+            category,
+            "selection_schema_mismatch",
+        );
+        return configOptions;
+    }
+    if (!option.values.some((value) => value.value === selection.value)) {
+        warnIgnoredExecutionSetting(audit, commandId, sessionId, agent.id, selection, category, "value_unavailable");
+        return configOptions;
     }
     if (option.currentValue === selection.value) {
         return configOptions;
@@ -1633,25 +1668,29 @@ async function executeBotPrompt(
                     signal: executionSignal,
                 });
                 assertPreparedPermission(prepared.configOptions, execution.executionConfiguration.permissionMode);
-                let configOptions = await applyRequiredExecutionSelection(
+                let configOptions = await applySupportedExecutionSelection(
                     sessions,
+                    audit,
                     prepared.configOptions,
                     execution.executionConfiguration.model,
                     "model",
                     agent,
                     resolved.cwd,
                     resolved.additionalDirectories,
+                    command.commandId,
                     command.sessionId,
                     executionSignal,
                 );
-                configOptions = await applyRequiredExecutionSelection(
+                configOptions = await applySupportedExecutionSelection(
                     sessions,
+                    audit,
                     configOptions,
                     execution.executionConfiguration.reasoningEffort,
                     "thought_level",
                     agent,
                     resolved.cwd,
                     resolved.additionalDirectories,
+                    command.commandId,
                     command.sessionId,
                     executionSignal,
                 );

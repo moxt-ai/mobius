@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from "node:fs/promise
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -162,6 +163,9 @@ async function readCompletedText(frames: ClientFrames): Promise<string> {
     while (!completed) {
         const envelope = decodeSessionEventEnvelope(await frames.next());
         const kind = decodeMessageKind(envelope.payload);
+        if (kind === SESSION_FAILED_KIND) {
+            throw new Error(`Bot execution failed: ${envelope.payload}`);
+        }
         completed = kind === SESSION_COMPLETED_KIND;
         const payload: unknown = JSON.parse(envelope.payload);
         if (typeof payload === "object" && payload !== null && !Array.isArray(payload)) {
@@ -213,7 +217,7 @@ describe("daemon Bot execution boundary", () => {
         vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
     });
     afterEach(() => vi.useRealTimers());
-    it("Given a paired Runtime root, When Bot commands select directories inside it, Then the daemon validates and executes them", async () => {
+    it("Given a paired Runtime root, When Bot commands include supported and stale settings, Then the daemon applies supported settings and executes them", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -497,6 +501,73 @@ describe("daemon Bot execution boundary", () => {
             expect(await readCompletedText(frames)).toBe(
                 `test-large|${await realpath(workspace)}|bot-context|relay-cleared`,
             );
+
+            const staleReasoningConfiguration: AgentExecutionConfiguration = {
+                model: selectedExecutionConfiguration.model,
+                permissionMode: selectedExecutionConfiguration.permissionMode,
+                reasoningEffort: {
+                    booleanValue: false,
+                    configId: "reasoning_effort",
+                    value: "retired-effort",
+                    valueType: "select",
+                },
+            };
+            const staleReasoningPrompt = new BotSessionPromptCommand(
+                "session_stale_reasoning",
+                "message_stale_reasoning",
+                "codex",
+                binding.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "Report Bot execution settings",
+                "execution_stale_reasoning",
+                "capability_stale_reasoning",
+                "j".repeat(43),
+                new Date(Date.now() + 60_000).toISOString(),
+                binding.botId,
+                "conversation_stale_reasoning",
+                "turn_stale_reasoning",
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                staleReasoningConfiguration,
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(staleReasoningPrompt));
+            expect(await readCompletedText(frames)).toBe(
+                `test-large|${await realpath(workspace)}|bot-context|relay-cleared`,
+            );
+            const warningDatabase = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const warning = warningDatabase
+                    .prepare(
+                        `SELECT command_id, details_json, event, session_id
+                         FROM audit_events
+                         WHERE command_id = ? AND event = 'bot_execution_setting_ignored'`,
+                    )
+                    .get(staleReasoningPrompt.commandId);
+                if (warning === undefined) {
+                    throw new Error("Expected an audit warning for the ignored Agent execution setting");
+                }
+                expect(warning).toMatchObject({
+                    command_id: staleReasoningPrompt.commandId,
+                    event: "bot_execution_setting_ignored",
+                    session_id: staleReasoningPrompt.sessionId,
+                });
+                expect(JSON.parse(String(Reflect.get(warning, "details_json")))).toEqual({
+                    agentId: "codex",
+                    category: "thought_level",
+                    configId: "reasoning_effort",
+                    reason: "value_unavailable",
+                    requestedValue: "retired-effort",
+                });
+            } finally {
+                warningDatabase.close();
+            }
 
             const prompt = new BotSessionPromptCommand(
                 "session_alpha",
