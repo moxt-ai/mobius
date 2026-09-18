@@ -18,7 +18,8 @@ case "${1:-}" in
     ;;
 esac
 
-asset_directory="packages/platform-app/dist/assets"
+repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+asset_directory="$repository_root/packages/platform-app/dist/assets"
 if [[ ! -d "$asset_directory" ]]; then
   echo "Missing built Platform assets: $asset_directory" >&2
   exit 1
@@ -44,7 +45,7 @@ printf '[]\n' > "$css_manifest"
 javascript_entries=()
 css_entries=()
 for file in "${assets[@]}"; do
-  key="${file#packages/platform-app/dist/}"
+  key="${file#"$repository_root/packages/platform-app/dist/"}"
   if [[ ! "$key" =~ ^assets/[A-Za-z0-9._-]+\.(css|js)$ ]]; then
     echo "Unsafe or unsupported Platform asset path: $key" >&2
     exit 1
@@ -94,7 +95,7 @@ publish_assets() {
 publish_assets "$javascript_manifest" "text/javascript; charset=utf-8" "${#javascript_entries[@]}"
 publish_assets "$css_manifest" "text/css; charset=utf-8" "${#css_entries[@]}"
 
-probe_key="${assets[0]#packages/platform-app/dist/}"
+probe_key="${assets[0]#"$repository_root/packages/platform-app/dist/"}"
 curl --fail --silent --show-error --connect-timeout 5 --max-time 15 \
   --header "Origin: $app_origin" \
   --dump-header "$headers" \
