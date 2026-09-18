@@ -43,9 +43,9 @@ function processExists(pid: number): boolean {
 
 describe("ACP conversation sessions", () => {
     it.skipIf(process.platform === "win32")(
-        "Given a Pi ACP prompt hangs, When its outer deadline expires, Then Mobius reports a typed timeout and terminates the adapter and Pi child",
+        "Given an ACP Turn keeps running, When days elapse, Then Mobius keeps it active until cancellation and releases the process tree",
         async () => {
-            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-pi-prompt-timeout-"));
+            const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-long-turn-"));
             const adapterPath = join(temporaryDirectory, "pi-acp");
             const piPidPath = join(temporaryDirectory, "pi.pid");
             await writeFile(
@@ -82,7 +82,6 @@ child.once("exit", (code) => process.exit(code ?? 84));
                 "0.85.0",
                 adapterBaseline.adapterIdentity,
                 agentBaseline.agentIdentity,
-                1_000,
             );
             const activityStarted = Promise.withResolvers<void>();
 
@@ -103,18 +102,31 @@ child.once("exit", (code) => process.exit(code ?? 84));
                     sessionId: "pi-hanging-conversation",
                     signal: new AbortController().signal,
                 });
+                let settled = false;
+                void hangingTurn.then(
+                    () => {
+                        settled = true;
+                    },
+                    () => {
+                        settled = true;
+                    },
+                );
                 await activityStarted.promise;
 
-                await vi.advanceTimersByTimeAsync(1_000);
+                await vi.advanceTimersByTimeAsync(7 * 24 * 60 * 60 * 1_000);
 
-                await expect(hangingTurn).rejects.toMatchObject({
-                    code: "prompt_timeout",
-                });
                 const piPid = Number.parseInt(await readFile(piPidPath, "utf8"), 10);
                 expect(Number.isSafeInteger(piPid)).toBe(true);
+                expect(settled).toBe(false);
+                expect(processExists(piPid)).toBe(true);
+
+                await manager.cancelPrompt("pi-hanging-conversation");
+
+                await expect(hangingTurn).resolves.toEqual({ stopReason: "cancelled" });
                 expect(processExists(piPid)).toBe(false);
             } finally {
                 vi.useRealTimers();
+                await manager.cancelPrompt("pi-hanging-conversation");
                 await manager.close();
                 await rm(temporaryDirectory, { force: true, recursive: true });
             }

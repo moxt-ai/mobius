@@ -101,6 +101,7 @@ const MAX_ACP_PROCESSES = 10;
 const MAX_PRE_SESSION_UPDATES = 100;
 const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 const SESSION_CONTROL_COMMAND_ID = "session-control";
+const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];
@@ -2986,7 +2987,7 @@ export class AcpSessionManager {
                 deadlineController.abort(
                     new AcpExecutionError("The steering request exceeded its deadline", {}, "steering_timeout"),
                 ),
-            options.agent.promptTimeoutMilliseconds,
+            SESSION_CONTROL_TIMEOUT_MILLISECONDS,
         );
         deadline.unref();
         try {
@@ -3015,28 +3016,13 @@ export class AcpSessionManager {
         if (this.#activeSessionIds.has(options.sessionId)) {
             throw new AcpExecutionError("Another prompt is already running in this conversation", {}, "session_busy");
         }
-        const deadlineController = new AbortController();
-        const deadlineError = new AcpExecutionError(
-            "The local Agent prompt exceeded its deadline",
-            {},
-            "prompt_timeout",
-        );
-        const deadline = setTimeout(
-            () => deadlineController.abort(deadlineError),
-            options.agent.promptTimeoutMilliseconds,
-        );
-        deadline.unref();
-        const boundedOptions = {
-            ...options,
-            signal: AbortSignal.any([options.signal, deadlineController.signal]),
-        };
         this.#activeSessionIds.add(options.sessionId);
         this.#activeCommandIds.set(options.sessionId, options.commandId);
         try {
             if (this.#cancellationRequests.has(options.sessionId)) {
                 return { stopReason: "cancelled" };
             }
-            const runtime = await this.ensureSession(boundedOptions);
+            const runtime = await this.ensureSession(options);
             if (this.#nativeOperations.has(`${options.agent.id}:${runtime.nativeSessionId()}`)) {
                 throw new AcpExecutionError("The native session is being managed", {}, "session_busy");
             }
@@ -3044,7 +3030,7 @@ export class AcpSessionManager {
                 return { stopReason: "cancelled" };
             }
             try {
-                const result = await runtime.prompt(boundedOptions);
+                const result = await runtime.prompt(options);
                 return this.#cancellationRequests.has(options.sessionId) ? { stopReason: "cancelled" } : result;
             } catch (error) {
                 if (this.#cancellationRequests.has(options.sessionId)) {
@@ -3072,7 +3058,6 @@ export class AcpSessionManager {
                 cause: error,
             });
         } finally {
-            clearTimeout(deadline);
             try {
                 await this.#cancellationRequests.get(options.sessionId);
             } finally {

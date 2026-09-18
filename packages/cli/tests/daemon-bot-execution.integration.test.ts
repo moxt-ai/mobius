@@ -217,7 +217,7 @@ describe("daemon Bot execution boundary", () => {
         vi.setSystemTime(new Date("2025-01-01T00:00:00.000Z"));
     });
     afterEach(() => vi.useRealTimers());
-    it("Given a paired Runtime root, When Bot commands include supported and stale settings, Then the daemon applies supported settings and executes them", async () => {
+    it("Given a paired Runtime root, When Bot commands include an expired start and supported or stale settings, Then the daemon rejects late work and executes valid work", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-bot-long-state-directory-"));
         const workspace = join(stateDirectory, "workspace");
         const overrideWorkspace = join(stateDirectory, "override-workspace");
@@ -419,6 +419,49 @@ describe("daemon Bot execution boundary", () => {
                 bindingRevision: 1,
                 botId: "bot_alpha",
             };
+
+            const expiredStart = new BotSessionPromptCommand(
+                "session_expired_start",
+                "message_expired_start",
+                "codex",
+                binding.bindingId,
+                "default",
+                [],
+                [],
+                [],
+                "This command must not start",
+                "execution_expired_start",
+                "capability_expired_start",
+                "e".repeat(43),
+                new Date(Date.now() - 1).toISOString(),
+                binding.botId,
+                "conversation_expired_start",
+                "turn_expired_start",
+                binding.behaviorRevisionId,
+                binding.bindingRevision,
+                binding.behaviorInstructions,
+                binding.behaviorDigest,
+                [],
+                new OwnerBotReplyRoute(),
+                selectedExecutionConfiguration,
+            );
+            writeServerTextFrame(socket, encodeBotSessionPromptCommand(expiredStart));
+            const expiredKinds: string[] = [];
+            let receivedExpiredFailure = false;
+            while (!receivedExpiredFailure) {
+                const failedEnvelope = decodeSessionEventEnvelope(await frames.next());
+                const failedKind = decodeMessageKind(failedEnvelope.payload);
+                expiredKinds.push(failedKind);
+                if (failedKind !== SESSION_FAILED_KIND) {
+                    continue;
+                }
+                expect(decodeSessionFailedEvent(failedEnvelope.payload)).toMatchObject({
+                    code: "turn_expired",
+                    commandId: expiredStart.commandId,
+                });
+                receivedExpiredFailure = true;
+            }
+            expect(expiredKinds).not.toContain(SESSION_STARTED_KIND);
 
             const overrideDirectoryId = `path-${Buffer.from(overrideWorkspace, "utf8").toString("base64url")}`;
             const unpreparedOverride = new BotSessionPromptCommand(

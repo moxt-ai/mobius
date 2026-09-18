@@ -56,11 +56,6 @@ export class BotExecutionContextRegistry {
     readonly #activeByHandle = new Map<string, ActiveBotExecutionContext>();
     readonly #handlesBySession = new Map<string, string>();
     readonly #inactiveHandles = new Set<string>();
-    readonly #now: () => number;
-
-    constructor(now: () => number = Date.now) {
-        this.#now = now;
-    }
 
     readonly activate = (command: BotSessionPromptCommand): BotExecutionContextLease => {
         let handle = this.#handlesBySession.get(command.sessionId);
@@ -94,12 +89,6 @@ export class BotExecutionContextRegistry {
             throw new LocalBotAuthorizationError(
                 "execution_context_required",
                 "An active Bot execution context is required",
-            );
-        }
-        if (Date.parse(context.command.executionDeadlineAt) <= this.#now()) {
-            throw new LocalBotAuthorizationError(
-                "execution_capability_expired",
-                "The Bot execution capability has expired",
             );
         }
         return context;

@@ -85,7 +85,7 @@ interface PrepareProjectConversationRequest {
     readonly initialConfiguration?: ProjectConversationConfiguration;
 }
 
-function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit, now: number): void {
+function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit: ExecutionPermit): void {
     if (
         permit.scope.projectId !== runtime.scope.projectId ||
         permit.scope.projectId !== runtime.scope.projectId ||
@@ -100,7 +100,6 @@ function assertPinnedExecutionPermit(runtime: BotRuntimeExecutionAccess, permit:
         permit.bindingRevision !== runtime.bindingRevision ||
         permit.runtimeId !== runtime.runtimeId ||
         permit.operation !== "outbound-message:create" ||
-        permit.expiresAtEpochMilliseconds <= now ||
         permit.remainingUses < 1
     ) {
         throw new SessionRuntimeError(
@@ -2179,7 +2178,7 @@ export class BotService {
             now,
             signal,
         );
-        assertPinnedExecutionPermit(runtime, permit, now);
+        assertPinnedExecutionPermit(runtime, permit);
         const resolveTarget = async () => {
             if (target.kind === "target") {
                 return target.id;

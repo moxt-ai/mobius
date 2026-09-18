@@ -14,7 +14,6 @@ import { AgentProbeError } from "../agent-probe-error.ts";
 import { BridgedAcpAgentDefinition } from "../agent-specification.ts";
 
 const ACP_PROBE_TIMEOUT_MILLISECONDS = 30_000;
-const PROMPT_TIMEOUT_MILLISECONDS = 5 * 60 * 1_000;
 
 export class PiAgentSpecification extends BridgedAcpAgentDefinition {
     override readonly acpProbeTimeoutMilliseconds = ACP_PROBE_TIMEOUT_MILLISECONDS;
@@ -47,8 +46,6 @@ export class PiAgentSpecification extends BridgedAcpAgentDefinition {
         "bundle",
         "cli.js",
     ];
-    override readonly promptTimeoutMilliseconds = PROMPT_TIMEOUT_MILLISECONDS;
-
     override readonly resolveManagedAgent = async (
         stateDirectory: string,
         _platform: NodeJS.Platform,

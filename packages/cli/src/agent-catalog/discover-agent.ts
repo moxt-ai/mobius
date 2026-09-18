@@ -133,7 +133,6 @@ export async function discoverAgent(
                 agentVersion,
                 adapter.identity,
                 agent.identity,
-                specification.promptTimeoutMilliseconds,
             );
             try {
                 const readiness = await probeAcpReadiness(
@@ -159,7 +158,6 @@ export async function discoverAgent(
                         agentVersion,
                         adapter.identity,
                         agent.identity,
-                        specification.promptTimeoutMilliseconds,
                         readiness.capabilities,
                     ),
                 );

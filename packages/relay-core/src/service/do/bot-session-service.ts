@@ -24,8 +24,8 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { ExecutionPermit } from "../../entity/authentication/project-authentication.ts";
 import {
-    BOT_EXECUTION_LIFETIME_MILLISECONDS,
     BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
+    BOT_EXECUTION_START_WINDOW_MILLISECONDS,
     BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS,
     BotConversationEvent,
     BotConversationEventPage,
@@ -413,11 +413,7 @@ export class BotSessionService {
         if (execution === undefined || rowText(execution, "secret_digest") !== secretDigest) {
             throw new BotSessionRuntimeError("execution_capability_invalid", "The Bot execution capability is invalid");
         }
-        if (
-            rowText(execution, "state") !== "active" ||
-            execution["revoked_at"] !== null ||
-            rowInteger(execution, "expires_at") <= now
-        ) {
+        if (rowText(execution, "state") !== "active" || execution["revoked_at"] !== null) {
             throw new BotSessionRuntimeError(
                 "execution_capability_expired",
                 "The Bot execution capability has expired",
@@ -442,7 +438,6 @@ export class BotSessionService {
             rowText(execution, "runtime_id"),
             rowText(execution, "operation"),
             new Set(decodeIdentifierArray(rowText(execution, "allowed_delivery_target_ids_json"))),
-            rowInteger(execution, "expires_at"),
             usageLimit - usageCount,
         );
     };
@@ -622,7 +617,7 @@ export class BotSessionService {
         const capabilityId = `bcp_${crypto.randomUUID()}`;
         const capabilitySecret = createRandomToken(32);
         const capabilityDigest = await hashSecret(capabilitySecret);
-        const deadlineAt = now + BOT_EXECUTION_LIFETIME_MILLISECONDS;
+        const startDeadlineAt = now + BOT_EXECUTION_START_WINDOW_MILLISECONDS;
         signal.throwIfAborted();
         const botCommand = decodeBotSessionPromptCommand(
             encodeBotSessionPromptCommand(
@@ -639,7 +634,7 @@ export class BotSessionService {
                     executionId,
                     capabilityId,
                     capabilitySecret,
-                    new Date(deadlineAt).toISOString(),
+                    new Date(startDeadlineAt).toISOString(),
                     context.botId,
                     context.conversationId,
                     turnId,
@@ -701,7 +696,7 @@ export class BotSessionService {
                 bindingRevision: context.bindingRevision,
                 runtimeId: context.runtimeId,
                 createdAt: now,
-                deadlineAt,
+                deadlineAt: startDeadlineAt,
             },
             capability: {
                 scopeKey: key,
@@ -711,7 +706,7 @@ export class BotSessionService {
                 secretDigest: capabilityDigest,
                 allowedDeliveryTargetIds: context.allowedDeliveryTargets.map((target) => target.deliveryTargetId),
                 usageLimit: BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
-                expiresAt: deadlineAt,
+                expiresAt: startDeadlineAt,
             },
         });
         switch (result.kind) {
@@ -749,7 +744,7 @@ export class BotSessionService {
                 context.bindingId,
                 context.bindingRevision,
                 context.runtimeId,
-                new Date(deadlineAt).toISOString(),
+                new Date(startDeadlineAt).toISOString(),
             ),
             false,
         );
@@ -875,11 +870,7 @@ export class BotSessionService {
         if (execution === undefined || rowText(execution, "secret_digest") !== secretDigest) {
             throw new BotSessionRuntimeError("execution_capability_invalid", "The Bot execution capability is invalid");
         }
-        if (
-            rowText(execution, "state") !== "active" ||
-            execution["revoked_at"] !== null ||
-            rowInteger(execution, "expires_at") <= now
-        ) {
+        if (rowText(execution, "state") !== "active" || execution["revoked_at"] !== null) {
             throw new BotSessionRuntimeError(
                 "execution_capability_expired",
                 "The Bot execution capability has expired",

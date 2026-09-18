@@ -1460,7 +1460,6 @@ function botExecutionAgent(
         agent.agentVersion,
         agent.adapterIdentity,
         agent.agentIdentity,
-        agent.promptTimeoutMilliseconds,
         agent.capabilities,
         agent.permissionProfile,
     );
@@ -1589,10 +1588,9 @@ async function executeBotPrompt(
         publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
     });
     try {
-        const deadline = Date.parse(command.executionDeadlineAt);
-        const remaining = deadline - Date.now();
-        if (!Number.isSafeInteger(deadline) || remaining <= 0) {
-            throw new LocalBotAuthorizationError("turn_expired", "The Bot execution deadline has expired");
+        const startDeadline = Date.parse(command.executionDeadlineAt);
+        if (!Number.isSafeInteger(startDeadline) || startDeadline <= Date.now()) {
+            throw new LocalBotAuthorizationError("turn_expired", "The Bot execution start deadline has expired");
         }
         const execution = await authorizer.authorize(command, config.catalog, directories, config.bindingId, signal);
         const resolved = await resolveSessionDirectories(
@@ -1604,8 +1602,6 @@ async function executeBotPrompt(
         );
         const attachments = await resolvePromptArtifacts(config, command, signal);
         const applied = await applicator.apply(command, execution, attachments.resources, signal);
-        const deadlineSignal = AbortSignal.timeout(remaining);
-        const executionSignal = AbortSignal.any([signal, deadlineSignal]);
         const startExecution = (): void => {
             audit.record({
                 commandId: command.commandId,
@@ -1643,7 +1639,7 @@ async function executeBotPrompt(
                 prompt: command.prompt,
                 resources: applied.resources,
                 sessionId: command.sessionId,
-                signal: executionSignal,
+                signal,
                 targetCommandId: command.targetCommandId,
             });
         } else {
@@ -1665,7 +1661,7 @@ async function executeBotPrompt(
                     agent,
                     cwd: resolved.cwd,
                     sessionId: command.sessionId,
-                    signal: executionSignal,
+                    signal,
                 });
                 assertPreparedPermission(prepared.configOptions, execution.executionConfiguration.permissionMode);
                 let configOptions = await applySupportedExecutionSelection(
@@ -1679,7 +1675,7 @@ async function executeBotPrompt(
                     resolved.additionalDirectories,
                     command.commandId,
                     command.sessionId,
-                    executionSignal,
+                    signal,
                 );
                 configOptions = await applySupportedExecutionSelection(
                     sessions,
@@ -1692,7 +1688,7 @@ async function executeBotPrompt(
                     resolved.additionalDirectories,
                     command.commandId,
                     command.sessionId,
-                    executionSignal,
+                    signal,
                 );
                 for (const selection of command.sessionConfigurations) {
                     await sessions.configureSession({
@@ -1703,7 +1699,7 @@ async function executeBotPrompt(
                         cwd: resolved.cwd,
                         requestId: `cfg_${randomUUID()}`,
                         sessionId: command.sessionId,
-                        signal: executionSignal,
+                        signal,
                         value: selection.value,
                         valueType: selection.valueType,
                     });
@@ -1734,7 +1730,7 @@ async function executeBotPrompt(
                     prompt: command.prompt,
                     resources: applied.resources,
                     sessionId: command.sessionId,
-                    signal: executionSignal,
+                    signal,
                     targetCommandId: command.targetCommandId,
                 });
                 stopReason = result.stopReason;
@@ -1762,12 +1758,7 @@ async function executeBotPrompt(
         });
     } catch (error) {
         activities.flush();
-        const failure =
-            Date.parse(command.executionDeadlineAt) <= Date.now()
-                ? new LocalBotAuthorizationError("turn_expired", "The Bot execution deadline has expired", {
-                      cause: error,
-                  })
-                : error;
+        const failure = error;
         audit.record({
             commandId: command.commandId,
             details: {

@@ -422,7 +422,6 @@ class DoRoutes {
                     capabilityId: permit.capabilityId,
                     conversationId: permit.conversationId,
                     executionId: permit.executionId,
-                    expiresAtEpochMilliseconds: permit.expiresAtEpochMilliseconds,
                     operation: permit.operation,
                     projectId: permit.scope.projectId,
                     remainingUses: permit.remainingUses,

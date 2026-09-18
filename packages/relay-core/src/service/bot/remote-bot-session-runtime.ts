@@ -45,7 +45,6 @@ const EXECUTION_PERMIT_FIELDS = Object.freeze([
     "capabilityId",
     "conversationId",
     "executionId",
-    "expiresAtEpochMilliseconds",
     "operation",
     "projectId",
     "remainingUses",
@@ -120,7 +119,6 @@ function decodeExecutionPermit(value: unknown, expectedScope: ProjectScope): Exe
         text(value, "runtimeId"),
         text(value, "operation"),
         new Set(stringList(value, "allowedTargetIds")),
-        integer(value, "expiresAtEpochMilliseconds"),
         integer(value, "remainingUses"),
     );
 }

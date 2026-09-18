@@ -61,11 +61,18 @@ command, executable path, callback URL, provider destination, or local
 permission decision. Requests containing such fields fail schema validation
 before any execution target is resolved.
 
-`BotExecutionCapability` is short-lived, opaque, server-backed, scoped to one
-execution, and immediately invalid once that execution ends. It pins the Bot,
-conversation, turn, behavior revision, binding revision, Runtime, allowed
-targets, operation, and use limit. The Runtime credential proves which daemon
-is calling; the execution capability proves which Bot execution is acting.
+`BotExecutionCapability` is opaque, server-backed, scoped to one active
+execution, and immediately invalid once that execution reaches a terminal
+state. It pins the Bot, conversation, turn, behavior revision, binding revision,
+Runtime, allowed targets, operation, and use limit. The Runtime credential
+proves which daemon is calling; the execution capability proves which Bot
+execution is acting.
+
+`executionDeadlineAt` is the dispatch and start-admission cutoff. The daemon
+rejects a command that has not started by that time, but an admitted Session
+Turn has no total wall-clock execution deadline. It continues until the Agent
+finishes, the user cancels it, or the execution fails through another lifecycle
+boundary.
 
 Project applications and OIDC exchange are documented in [Project
 authentication and credential operations](project-authentication.md). Project

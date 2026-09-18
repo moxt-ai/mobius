@@ -35,7 +35,6 @@ export class LocalAgentDefinition {
     readonly id: string;
     readonly label: string;
     readonly permissionProfile: AgentPermissionProfile;
-    readonly promptTimeoutMilliseconds: number;
 
     constructor(
         id: string,
@@ -47,13 +46,9 @@ export class LocalAgentDefinition {
         agentVersion = "",
         adapterIdentity: ExecutableIdentity = readTrustedIdentity(command),
         agentIdentity: ExecutableIdentity = adapterIdentity,
-        promptTimeoutMilliseconds = 30 * 60 * 1_000,
         capabilities: SessionCapabilities = unsupportedSessionCapabilities(),
         permissionProfile: AgentPermissionProfile = permissionProfileForAgent(id),
     ) {
-        if (!Number.isSafeInteger(promptTimeoutMilliseconds) || promptTimeoutMilliseconds < 1) {
-            throw new Error("The local Agent prompt deadline is invalid");
-        }
         this.adapterIdentity = adapterIdentity;
         this.adapterPath = adapterIdentity.realPath;
         this.adapterVersion = adapterVersion;
@@ -63,7 +58,6 @@ export class LocalAgentDefinition {
         this.id = id;
         this.label = label;
         this.permissionProfile = permissionProfile;
-        this.promptTimeoutMilliseconds = promptTimeoutMilliseconds;
         this.command = adapterIdentity.realPath;
         this.arguments = Object.freeze([...arguments_]);
         this.environment = permissionProfile.apply(environment, permissionProfile.currentMode(environment));
@@ -86,7 +80,6 @@ export class LocalAgentDefinition {
             this.agentVersion,
             this.adapterIdentity,
             this.agentIdentity,
-            this.promptTimeoutMilliseconds,
             this.capabilities,
             this.permissionProfile,
         );

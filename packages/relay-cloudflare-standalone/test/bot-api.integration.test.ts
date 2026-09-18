@@ -2131,7 +2131,7 @@ describe.sequential("Provider-neutral Bot API", () => {
         }
     });
 
-    it("Given idempotent inbound and outbound work with a required completion policy, When a turn completes and the Bot is suspended, Then work is created once, capabilities expire, and audit records remain singular", async () => {
+    it("Given an active Bot execution outlives its start deadline, When it sends outbound work and later completes, Then its capability stays active only until completion", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const pairing = await pairRuntime(app);
         const daemon = await openDaemon(pairing);
@@ -2218,6 +2218,7 @@ describe.sequential("Provider-neutral Bot API", () => {
 
             const outboundUrl = `${relayOrigin}${MOBIUS_API_PREFIX}/v1/bot-executions/${command.executionId}/delivery-targets/${target.deliveryTargetId}/messages`;
             const outboundBody = JSON.stringify({ idempotencyKey: "manual-once", text: "Manual notification" });
+            vi.setSystemTime(new Date(Date.parse(command.executionDeadlineAt) + 1));
             const firstOutbound = await json(
                 await app.request(outboundUrl, {
                     body: outboundBody,

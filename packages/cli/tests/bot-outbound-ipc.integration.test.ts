@@ -68,7 +68,7 @@ function command(deadline: string): BotSessionPromptCommand {
 }
 
 describe("Bot outbound local IPC", () => {
-    it("Given an active Bot execution, When its Agent invokes the CLI, Then the daemon authorizes the context and forwards only the scoped outbound request", async () => {
+    it("Given a Bot execution remains active past its start deadline, When its Agent invokes the CLI, Then the daemon forwards the scoped outbound request", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-bot-ipc-"));
         const socketPath = join(temporaryDirectory, "bot.sock");
         const requests: Array<{
@@ -92,8 +92,8 @@ describe("Bot outbound local IPC", () => {
             });
         });
         await listen(relay);
-        const registry = new BotExecutionContextRegistry(() => Date.parse("2026-09-08T08:00:00.000Z"));
-        const lease = registry.activate(command("2026-09-08T08:30:00.000Z"));
+        const registry = new BotExecutionContextRegistry();
+        const lease = registry.activate(command("2000-01-01T00:00:00.000Z"));
         const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const cancellation = new AbortController();
@@ -102,7 +102,6 @@ describe("Bot outbound local IPC", () => {
         try {
             await ipc.listen(cancellation.signal);
             expect((await stat(socketPath)).mode & 0o777).toBe(0o600);
-
             const result = await executeFile(
                 process.execPath,
                 [cliPath, "bot", "message", "send", "--target", "current", "--text", "Task complete"],

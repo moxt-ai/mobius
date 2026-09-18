@@ -16,7 +16,7 @@ import {
     type SessionSummary,
 } from "../do/session.ts";
 
-export const BOT_EXECUTION_LIFETIME_MILLISECONDS = 30 * 60 * 1_000;
+export const BOT_EXECUTION_START_WINDOW_MILLISECONDS = 30 * 60 * 1_000;
 export const BOT_EXECUTION_OUTBOUND_USAGE_LIMIT = 16;
 export const BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000;
 

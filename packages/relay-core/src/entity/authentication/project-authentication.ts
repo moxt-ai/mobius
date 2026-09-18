@@ -506,7 +506,6 @@ export class ExecutionPermit {
     readonly capabilityId: string;
     readonly conversationId: string;
     readonly executionId: string;
-    readonly expiresAtEpochMilliseconds: number;
     readonly operation: string;
     readonly remainingUses: number;
     readonly runtimeId: string;
@@ -528,7 +527,6 @@ export class ExecutionPermit {
         runtimeId: string,
         operation: string,
         allowedTargetIds: ReadonlySet<string>,
-        expiresAtEpochMilliseconds: number,
         remainingUses: number,
     ) {
         this.scope = scope;
@@ -544,7 +542,6 @@ export class ExecutionPermit {
         this.runtimeId = runtimeId;
         this.operation = operation;
         this.allowedTargetIds = new Set(allowedTargetIds);
-        this.expiresAtEpochMilliseconds = expiresAtEpochMilliseconds;
         this.remainingUses = remainingUses;
     }
 }

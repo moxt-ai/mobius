@@ -9,8 +9,8 @@ export * from "./entity/authentication/conversation-access.ts";
 export * from "./entity/authentication/project-authentication.ts";
 export { BotApiError, type BotErrorCode, type BotFailureKind } from "./entity/bot/bot-error.ts";
 export {
-    BOT_EXECUTION_LIFETIME_MILLISECONDS,
     BOT_EXECUTION_OUTBOUND_USAGE_LIMIT,
+    BOT_EXECUTION_START_WINDOW_MILLISECONDS,
     BOT_OUTBOUND_MESSAGE_LIFETIME_MILLISECONDS,
     BotConversationEvent,
     BotConversationEventPage,
