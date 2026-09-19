@@ -107,10 +107,6 @@ export const TurnContentRecordSchema = v.object({
 });
 export type TurnContentRecord = Readonly<v.InferOutput<typeof TurnContentRecordSchema>>;
 
-export const TurnMessageAnchorRecordSchema = v.object({
-    message_id: v.string(),
-});
-
 export const TurnRuntimeRecordSchema = v.object({ ...TurnRecordSchema.entries, runtime_id: v.string() });
 export type TurnRuntimeRecord = Readonly<v.InferOutput<typeof TurnRuntimeRecordSchema>>;
 
@@ -353,8 +349,39 @@ export const ActivityDetailRecordSchema = v.pick(ActivityRecordSchema, [
 ]);
 export type ActivityDetailRecord = Readonly<v.InferOutput<typeof ActivityDetailRecordSchema>>;
 
-export const TurnActivityRecordSchema = v.pick(ActivityRecordSchema, ["attempt_id", "summary_json", "detail_kind"]);
+export const TurnActivityRecordSchema = v.pick(ActivityRecordSchema, [
+    "command_id",
+    "attempt_id",
+    "summary_json",
+    "detail_kind",
+]);
 export type TurnActivityRecord = Readonly<v.InferOutput<typeof TurnActivityRecordSchema>>;
+
+export const CanonicalMessageRecordSchema = v.object({
+    command_id: v.string(),
+    message_id: v.string(),
+    content: v.string(),
+    content_chunks: v.pipe(v.number(), v.safeInteger()),
+});
+export type CanonicalMessageRecord = Readonly<v.InferOutput<typeof CanonicalMessageRecordSchema>>;
+
+export const MessageChunkRecordSchema = v.object({
+    message_id: v.string(),
+    chunk_index: v.pipe(v.number(), v.safeInteger()),
+    content: v.string(),
+});
+export type MessageChunkRecord = Readonly<v.InferOutput<typeof MessageChunkRecordSchema>>;
+
+export const ActiveResponseBlockRecordSchema = v.object({
+    command_id: v.string(),
+    payload: v.string(),
+});
+
+export const TurnMessageAnchorLookupSchema = v.object({
+    command_id: v.string(),
+    message_id: v.string(),
+});
+export type TurnMessageAnchorLookup = Readonly<v.InferOutput<typeof TurnMessageAnchorLookupSchema>>;
 
 export const SessionCountSchema = v.object({
     active_sessions: v.pipe(v.number(), v.safeInteger()),

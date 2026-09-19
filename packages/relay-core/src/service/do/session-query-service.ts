@@ -24,7 +24,7 @@ import {
     SessionRuntimeError,
     type SessionSummary,
 } from "../../entity/do/session.ts";
-import type { TurnRecord } from "../../entity/do/session-records.ts";
+import type { TurnActivityRecord, TurnRecord } from "../../entity/do/session-records.ts";
 import type { SessionQueriesStorage } from "../../storage/do/session-queries-storage.ts";
 import { rowNullableString, rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
 import type { SessionArchiveService } from "./session-archive-service.ts";
@@ -346,7 +346,7 @@ export class SessionQueryService {
             limit: limit + 1,
         });
         const pageRows = rows.slice(0, limit);
-        const messages = pageRows.map((row) => this.messageFromRow(scope, sessionId, row));
+        const messages = this.messagesFromRows(scope, sessionId, pageRows);
         const last = pageRows.at(-1);
         const lastCommittedSequence = rowNumber(session, "next_sequence") - 1;
         return {
@@ -426,87 +426,102 @@ export class SessionQueryService {
         };
     };
 
-    private readonly messageFromRow = (scope: ProjectScope, sessionId: string, row: TurnRecord): SessionMessage => {
-        let command: SessionPromptCommand;
-        try {
-            command = decodeSessionPromptCommand(rowString(row, "command_json"));
-        } catch (cause) {
-            throw new SessionRuntimeError("session_storage_unavailable", "The stored command is invalid", { cause });
-        }
-        const activityRows = this.#storage.listTurnActivities({
-            scopeKey: scopeKey(scope),
-            sessionId: sessionId,
-            commandId: command.commandId,
+    private readonly messagesFromRows = (
+        scope: ProjectScope,
+        sessionId: string,
+        rows: readonly TurnRecord[],
+    ): readonly SessionMessage[] => {
+        const commands = rows.map((row) => ({ command: decodeCommand(row), row }));
+        const commandIds = commands.map(({ command }) => command.commandId);
+        const key = { commandIds, scopeKey: scopeKey(scope), sessionId };
+
+        const activitiesByCommand = groupByCommandId(this.#storage.listTurnActivities(key));
+        const contentsByCommand = groupByCommandId(this.#storage.listTurnContents(key));
+        const canonicalByCommand = new Map(
+            this.#storage.listCanonicalAssistantMessages(key).map((message) => [message.command_id, message]),
+        );
+        const anchoredMessageIdByCommand = new Map(
+            this.#storage.listTurnMessageIds(key).map((anchor) => [anchor.command_id, anchor.message_id]),
+        );
+        const activeResponseByCommand = this.#storage.listActiveTurnResponses({
+            ...key,
+            commandIds: commandIds.filter((commandId) => !canonicalByCommand.has(commandId)),
         });
-        const activities = activityRows.map((activityRow) => {
-            const event = decodeRecordedSessionEvent(rowString(activityRow, "summary_json"));
-            if (event.kind !== AGENT_ACTIVITY_KIND) {
-                throw new SessionRuntimeError("session_storage_unavailable", "The stored activity summary is invalid");
-            }
-            const detailKind = rowString(activityRow, "detail_kind");
-            if (detailKind !== "available" && detailKind !== "truncated" && detailKind !== "unrecorded") {
-                throw new SessionRuntimeError(
-                    "session_storage_unavailable",
-                    "The stored activity availability is invalid",
-                );
-            }
-            const detailAvailability: SessionMessage["activities"][number]["detailAvailability"] = detailKind;
-            return {
-                activityId: event.activityId,
-                attemptId: rowString(activityRow, "attempt_id"),
-                activityType: event.activityType,
-                detailAvailability,
-                input: event.input,
-                locations: event.locations,
-                name: event.name,
-                output: event.output,
-                sequence: event.sequence,
-                status: event.status,
-                title: event.title,
-                toolCallId: event.activityId,
-                toolKind: event.toolKind,
-            };
-        });
-        const canonical = this.#storage.readCanonicalAssistantMessage({
-            scopeKey: scopeKey(scope),
-            sessionId,
-            commandId: command.commandId,
-        });
-        const activeResponse =
-            canonical === undefined
-                ? this.#storage.readActiveTurnResponse({
-                      scopeKey: scopeKey(scope),
-                      sessionId,
-                      commandId: command.commandId,
-                  })
-                : "";
-        const anchoredMessageId = this.#storage.readTurnMessageId(scopeKey(scope), sessionId, command.commandId);
-        const contents = this.#storage
-            .listTurnContents({ scopeKey: scopeKey(scope), sessionId, commandId: command.commandId })
-            .map((contentRow) => {
+
+        return commands.map(({ command, row }) => {
+            const canonical = canonicalByCommand.get(command.commandId);
+            const activeResponse =
+                canonical === undefined ? (activeResponseByCommand.get(command.commandId) ?? "") : "";
+            const contents = (contentsByCommand.get(command.commandId) ?? []).map((contentRow) => {
                 const event = decodeAgentContentEvent(rowString(contentRow, "content_json"));
                 if (event.kind !== AGENT_CONTENT_KIND || event.commandId !== command.commandId) {
                     throw new SessionRuntimeError("session_storage_unavailable", "The stored agent content is invalid");
                 }
                 return event.content;
             });
-        return {
-            activities,
-            additionalDirectoryIds: command.additionalDirectoryIds,
-            agentId: command.agentId,
-            attempt: attemptSummaryFromRow(row),
-            commandId: command.commandId,
-            contents,
-            createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
-            disposition: command.disposition,
-            images: command.images,
-            messageId: anchoredMessageId || canonical?.messageId || "",
-            prompt: command.prompt,
-            resources: command.resources,
-            response: canonical?.content ?? `${rowString(row, "response")}${activeResponse}`,
-            sessionId,
-            targetCommandId: command.targetCommandId,
-            turnId: rowString(row, "turn_id"),
-        };
+            return {
+                activities: (activitiesByCommand.get(command.commandId) ?? []).map(activityFromRow),
+                additionalDirectoryIds: command.additionalDirectoryIds,
+                agentId: command.agentId,
+                attempt: attemptSummaryFromRow(row),
+                commandId: command.commandId,
+                contents,
+                createdAt: new Date(rowNumber(row, "created_at")).toISOString(),
+                disposition: command.disposition,
+                images: command.images,
+                messageId: anchoredMessageIdByCommand.get(command.commandId) || canonical?.message_id || "",
+                prompt: command.prompt,
+                resources: command.resources,
+                response: canonical?.content ?? `${rowString(row, "response")}${activeResponse}`,
+                sessionId,
+                targetCommandId: command.targetCommandId,
+                turnId: rowString(row, "turn_id"),
+            };
+        });
+    };
+}
+
+function decodeCommand(row: TurnRecord): SessionPromptCommand {
+    try {
+        return decodeSessionPromptCommand(rowString(row, "command_json"));
+    } catch (cause) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The stored command is invalid", { cause });
+    }
+}
+
+function groupByCommandId<TRow extends { readonly command_id: string }>(rows: readonly TRow[]): Map<string, TRow[]> {
+    const grouped = new Map<string, TRow[]>();
+    for (const row of rows) {
+        const forCommand = grouped.get(row.command_id);
+        if (forCommand === undefined) {
+            grouped.set(row.command_id, [row]);
+        } else {
+            forCommand.push(row);
+        }
+    }
+    return grouped;
+}
+
+function activityFromRow(activityRow: TurnActivityRecord): SessionMessage["activities"][number] {
+    const event = decodeRecordedSessionEvent(activityRow.summary_json);
+    if (event.kind !== AGENT_ACTIVITY_KIND) {
+        throw new SessionRuntimeError("session_storage_unavailable", "The stored activity summary is invalid");
+    }
+    const detailKind = activityRow.detail_kind;
+    const detailAvailability: SessionMessage["activities"][number]["detailAvailability"] = detailKind;
+    return {
+        activityId: event.activityId,
+        attemptId: activityRow.attempt_id,
+        activityType: event.activityType,
+        detailAvailability,
+        input: event.input,
+        locations: event.locations,
+        name: event.name,
+        output: event.output,
+        sequence: event.sequence,
+        status: event.status,
+        title: event.title,
+        toolCallId: event.activityId,
+        toolKind: event.toolKind,
     };
 }

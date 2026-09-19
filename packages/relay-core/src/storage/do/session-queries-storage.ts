@@ -1,12 +1,17 @@
 import {
+    ActiveResponseBlockRecordSchema,
     type ActivityDetailRecord,
     ActivityDetailRecordSchema,
     type AttemptRecord,
     AttemptRecordSchema,
+    type CanonicalMessageRecord,
+    CanonicalMessageRecordSchema,
     type CommittedEventRecord,
     CommittedEventRecordSchema,
     type InteractionRecord,
     InteractionRecordSchema,
+    type MessageChunkRecord,
+    MessageChunkRecordSchema,
     type RuntimeIdentity,
     RuntimeIdentitySchema,
     SessionConfigurationRecordSchema,
@@ -16,7 +21,8 @@ import {
     TurnActivityRecordSchema,
     type TurnContentRecord,
     TurnContentRecordSchema,
-    TurnMessageAnchorRecordSchema,
+    type TurnMessageAnchorLookup,
+    TurnMessageAnchorLookupSchema,
     type TurnRecord,
     TurnRecordSchema,
 } from "../../entity/do/session-records.ts";
@@ -25,6 +31,10 @@ import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
 import { decodeStreamBlock, sessionDeltaText } from "./session-stream-codec.ts";
 import { rowNumber, rowString } from "./sqlite-row.ts";
+
+function placeholders(count: number): string {
+    return Array.from({ length: count }, () => "?").join(", ");
+}
 
 export class SessionQueriesStorage {
     readonly #database: DoSqlDatabase;
@@ -54,105 +64,145 @@ export class SessionQueriesStorage {
             ),
         )[0];
 
-    readonly readTurnMessageId = (scopeKey: string, sessionId: string, commandId: string): string => {
-        const anchor = decodeStorageRows(
-            TurnMessageAnchorRecordSchema,
+    readonly listTurnMessageIds = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandIds: readonly string[];
+    }): readonly TurnMessageAnchorLookup[] => {
+        if (input.commandIds.length === 0) {
+            return [];
+        }
+        return decodeStorageRows(
+            TurnMessageAnchorLookupSchema,
             this.#database.query(
-                `SELECT message_id FROM turn_message_anchors
-       WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
-                [scopeKey, sessionId, commandId],
+                `SELECT command_id, message_id FROM turn_message_anchors
+       WHERE scope_key = ? AND session_id = ? AND command_id IN (${placeholders(input.commandIds.length)})`,
+                [input.scopeKey, input.sessionId, ...input.commandIds],
             ),
-        )[0];
-        return anchor === undefined ? "" : rowString(anchor, "message_id");
+        );
     };
 
     readonly listTurnContents = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
-        readonly commandId: string;
-    }): readonly TurnContentRecord[] =>
-        decodeStorageRows(
+        readonly commandIds: readonly string[];
+    }): readonly TurnContentRecord[] => {
+        if (input.commandIds.length === 0) {
+            return [];
+        }
+        return decodeStorageRows(
             TurnContentRecordSchema,
             this.#database.query(
                 `SELECT command_id, content_id, content_json, event_sequence
                    FROM turn_content_views
-                  WHERE scope_key = ? AND session_id = ? AND command_id = ?
-                  ORDER BY event_sequence`,
-                [input.scopeKey, input.sessionId, input.commandId],
+                  WHERE scope_key = ? AND session_id = ? AND command_id IN (${placeholders(input.commandIds.length)})
+                  ORDER BY command_id, event_sequence`,
+                [input.scopeKey, input.sessionId, ...input.commandIds],
             ),
         );
-
-    readonly readCanonicalAssistantMessage = (input: {
-        readonly scopeKey: string;
-        readonly sessionId: string;
-        readonly commandId: string;
-    }): { readonly messageId: string; readonly content: string } | undefined => {
-        const message = this.#database.query(
-            `SELECT message_id, content, content_chunks
-               FROM session_messages
-              WHERE scope_key = ? AND session_id = ? AND command_id = ? AND role = 'assistant'`,
-            [input.scopeKey, input.sessionId, input.commandId],
-        )[0];
-        if (message === undefined) {
-            return undefined;
-        }
-        const count = rowNumber(message, "content_chunks");
-        if (!Number.isSafeInteger(count) || count < 0) {
-            throw new DatabaseError(
-                "database_statement_invalid",
-                "The canonical Session message chunk count is invalid",
-            );
-        }
-        let content = rowString(message, "content");
-        const chunks = this.#database.query(
-            `SELECT chunk_index, content
-               FROM session_message_chunks
-              WHERE scope_key = ? AND session_id = ? AND message_id = ?
-              ORDER BY chunk_index`,
-            [input.scopeKey, input.sessionId, rowString(message, "message_id")],
-        );
-        if (chunks.length !== count) {
-            throw new DatabaseError(
-                "database_statement_invalid",
-                "The canonical Session message chunks are incomplete",
-            );
-        }
-        for (let index = 0; index < chunks.length; index += 1) {
-            const chunk = chunks[index];
-            if (chunk === undefined || rowNumber(chunk, "chunk_index") !== index + 1) {
-                throw new DatabaseError(
-                    "database_statement_invalid",
-                    "The canonical Session message chunks are invalid",
-                );
-            }
-            content += rowString(chunk, "content");
-        }
-        return { content, messageId: rowString(message, "message_id") };
     };
 
-    readonly readActiveTurnResponse = (input: {
+    readonly listCanonicalAssistantMessages = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
-        readonly commandId: string;
-    }): string => {
-        const rows = this.#database.query(
-            `SELECT block.payload
+        readonly commandIds: readonly string[];
+    }): readonly CanonicalMessageRecord[] => {
+        if (input.commandIds.length === 0) {
+            return [];
+        }
+        const messages = decodeStorageRows(
+            CanonicalMessageRecordSchema,
+            this.#database.query(
+                `SELECT command_id, message_id, content, content_chunks
+               FROM session_messages
+              WHERE scope_key = ? AND session_id = ? AND role = 'assistant'
+                AND command_id IN (${placeholders(input.commandIds.length)})`,
+                [input.scopeKey, input.sessionId, ...input.commandIds],
+            ),
+        );
+        if (messages.length === 0) {
+            return [];
+        }
+        const chunksByMessage = new Map<string, MessageChunkRecord[]>();
+        for (const chunk of decodeStorageRows(
+            MessageChunkRecordSchema,
+            this.#database.query(
+                `SELECT message_id, chunk_index, content
+               FROM session_message_chunks
+              WHERE scope_key = ? AND session_id = ?
+                AND message_id IN (${placeholders(messages.length)})
+              ORDER BY message_id, chunk_index`,
+                [input.scopeKey, input.sessionId, ...messages.map((message) => message.message_id)],
+            ),
+        )) {
+            const forMessage = chunksByMessage.get(chunk.message_id);
+            if (forMessage === undefined) {
+                chunksByMessage.set(chunk.message_id, [chunk]);
+            } else {
+                forMessage.push(chunk);
+            }
+        }
+        return messages.map((message) => {
+            const chunks = chunksByMessage.get(message.message_id) ?? [];
+            if (chunks.length !== message.content_chunks) {
+                throw new DatabaseError(
+                    "database_statement_invalid",
+                    "The canonical Session message chunks are incomplete",
+                );
+            }
+            let content = message.content;
+            for (let index = 0; index < chunks.length; index += 1) {
+                const chunk = chunks[index];
+                if (chunk === undefined || chunk.chunk_index !== index + 1) {
+                    throw new DatabaseError(
+                        "database_statement_invalid",
+                        "The canonical Session message chunks are invalid",
+                    );
+                }
+                content += chunk.content;
+            }
+            return {
+                command_id: message.command_id,
+                content,
+                content_chunks: message.content_chunks,
+                message_id: message.message_id,
+            };
+        });
+    };
+
+    readonly listActiveTurnResponses = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandIds: readonly string[];
+    }): ReadonlyMap<string, string> => {
+        if (input.commandIds.length === 0) {
+            return new Map();
+        }
+        const rows = decodeStorageRows(
+            ActiveResponseBlockRecordSchema,
+            this.#database.query(
+                `SELECT stream.command_id AS command_id, block.payload AS payload
                FROM session_streams stream
                INNER JOIN session_stream_blocks block
                  ON block.scope_key = stream.scope_key
                 AND block.session_id = stream.session_id
                 AND block.stream_id = stream.stream_id
-              WHERE stream.scope_key = ? AND stream.session_id = ? AND stream.command_id = ?
-              ORDER BY block.block_index`,
-            [input.scopeKey, input.sessionId, input.commandId],
+              WHERE stream.scope_key = ? AND stream.session_id = ?
+                AND stream.command_id IN (${placeholders(input.commandIds.length)})
+              ORDER BY stream.command_id, block.block_index`,
+                [input.scopeKey, input.sessionId, ...input.commandIds],
+            ),
         );
-        let response = "";
+        const responses = new Map<string, string>();
         for (const row of rows) {
-            for (const event of decodeStreamBlock(rowString(row, "payload"))) {
-                response += sessionDeltaText(event.payload);
+            const current = responses.get(row.command_id) ?? "";
+            let appended = current;
+            for (const event of decodeStreamBlock(row.payload)) {
+                appended += sessionDeltaText(event.payload);
             }
+            responses.set(row.command_id, appended);
         }
-        return response;
+        return responses;
     };
 
     readonly readActiveEventPayload = (input: {
@@ -323,18 +373,22 @@ export class SessionQueriesStorage {
     readonly listTurnActivities = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;
-        readonly commandId: string;
-    }): readonly TurnActivityRecord[] =>
-        decodeStorageRows(
+        readonly commandIds: readonly string[];
+    }): readonly TurnActivityRecord[] => {
+        if (input.commandIds.length === 0) {
+            return [];
+        }
+        return decodeStorageRows(
             TurnActivityRecordSchema,
             this.#database.query(
-                `SELECT attempt_id, summary_json, detail_kind
+                `SELECT command_id, attempt_id, summary_json, detail_kind
        FROM tool_call_views
-       WHERE scope_key = ? AND session_id = ? AND command_id = ?
-       ORDER BY event_sequence`,
-                [input.scopeKey, input.sessionId, input.commandId],
+       WHERE scope_key = ? AND session_id = ? AND command_id IN (${placeholders(input.commandIds.length)})
+       ORDER BY command_id, event_sequence`,
+                [input.scopeKey, input.sessionId, ...input.commandIds],
             ),
         );
+    };
     readonly findTurnRuntime = (input: {
         readonly scopeKey: string;
         readonly sessionId: string;

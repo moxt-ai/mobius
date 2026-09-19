@@ -3015,6 +3015,165 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given a Session has Turns with varied activities, content, and completion state, When a browser reads its message page, Then every Turn is fully and correctly assembled", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "batched-message-session";
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+
+        try {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+
+            const activity = (commandId: string, activityId: string, sequence: number): RecordedSessionEvent => ({
+                activityId,
+                activityType: "tool",
+                commandId,
+                content: [],
+                detail: { kind: "unrecorded" },
+                input: "{}",
+                kind: AGENT_ACTIVITY_KIND,
+                locations: [],
+                name: "terminal",
+                output: `output-${sequence.toString()}`,
+                sequence,
+                sessionId,
+                status: "completed",
+                title: "Run terminal command",
+                toolKind: "execute",
+            });
+            const media: AgentDisplayContent = {
+                artifactId: "",
+                data: "",
+                mimeType: "text/plain",
+                name: "note.txt",
+                newText: "",
+                oldText: "",
+                path: "",
+                terminalId: "",
+                text: "attached content",
+                type: "text",
+                uri: "",
+            };
+
+            const completedCommand = prompt(sessionId, "batched-completed", "Turn with activities and content");
+            await completeTurn(host, daemon, completedCommand, "Completed response", [
+                activity(completedCommand.commandId, "batched-completed-activity-1", 1),
+                activity(completedCommand.commandId, "batched-completed-activity-2", 2),
+                {
+                    commandId: completedCommand.commandId,
+                    content: media,
+                    contentId: "batched-completed-content",
+                    kind: "agent.content",
+                    messageId: "batched-completed-message",
+                    sessionId,
+                },
+            ]);
+
+            const bareCommand = prompt(sessionId, "batched-bare", "Turn with no activities or content");
+            await completeTurn(host, daemon, bareCommand, "Bare response");
+
+            const streamingCommand = prompt(sessionId, "batched-streaming", "Turn still streaming its response");
+            await submitPrompt(host, daemon, streamingCommand);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "batched-streaming-started", {
+                    attemptId: "batched-streaming-attempt",
+                    commandId: streamingCommand.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+            await commit(
+                host,
+                daemon,
+                envelope(
+                    sessionId,
+                    "batched-streaming-activity",
+                    activity(streamingCommand.commandId, "batched-streaming-activity-1", 1),
+                ),
+            );
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "batched-streaming-delta-1", {
+                    commandId: streamingCommand.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "batched-streaming-message",
+                    sessionId,
+                    text: "Streaming ",
+                }),
+            );
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "batched-streaming-delta-2", {
+                    commandId: streamingCommand.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "batched-streaming-message",
+                    sessionId,
+                    text: "response",
+                }),
+            );
+
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            const body = await response.json();
+            expect(body).toMatchObject({
+                messages: [
+                    {
+                        commandId: streamingCommand.commandId,
+                        contents: [],
+                        response: "Streaming response",
+                    },
+                    {
+                        commandId: completedCommand.commandId,
+                        contents: [media],
+                        response: "Completed response",
+                    },
+                    {
+                        activities: [],
+                        commandId: bareCommand.commandId,
+                        contents: [],
+                        response: "Bare response",
+                    },
+                ],
+            });
+            if (
+                !isRecord(body) ||
+                !Array.isArray(body["messages"]) ||
+                !isRecord(body["messages"][0]) ||
+                !Array.isArray(body["messages"][0]["activities"]) ||
+                !isRecord(body["messages"][1]) ||
+                !Array.isArray(body["messages"][1]["activities"])
+            ) {
+                throw new Error("Expected the streaming and completed Turns to carry their activities arrays");
+            }
+            expect(body["messages"][0]["activities"]).toMatchObject([
+                { output: "output-1", toolCallId: "batched-streaming-activity-1" },
+            ]);
+            const completedActivities = body["messages"][1]["activities"];
+            expect(completedActivities).toHaveLength(2);
+            expect(completedActivities).toMatchObject([
+                { output: "output-1", toolCallId: "batched-completed-activity-1" },
+                { output: "output-2", toolCallId: "batched-completed-activity-2" },
+            ]);
+        } finally {
+            daemon.socket.close(1000, "Batched message projection test complete");
+            host.socket.close(1000, "Batched message projection test complete");
+        }
+    });
+
     it("Given an Agent titled a prepared session, When the browser reconnects and prepares it again, Then the same session resumes without closing the channel", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket } = createSessionRequests(app);
