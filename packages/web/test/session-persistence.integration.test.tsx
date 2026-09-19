@@ -862,6 +862,9 @@ describe.sequential("Session persistence boundaries", () => {
                 expect(conversationButtons[1]?.textContent).toContain("Older persisted prompt");
             });
             expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("Older persisted prompt");
+            const restoredConversationButtons = within(restoredConversations).getAllByRole("link");
+            expect(restoredConversationButtons[0]?.textContent).not.toContain("default");
+            expect(restoredConversationButtons[0]?.textContent).toContain("Default workspace");
         } finally {
             cleanup();
             await closeMobiusTransport();

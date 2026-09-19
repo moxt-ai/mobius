@@ -55,6 +55,24 @@ function restoreAdditionalDirectories(
     });
 }
 
+function directoryLabelFromId(directoryId: string): string {
+    if (directoryId === "default") {
+        return "Default workspace";
+    }
+    if (directoryId === "home") {
+        return "~";
+    }
+    if (!directoryId.startsWith("path-")) {
+        return directoryId;
+    }
+    try {
+        const base64 = directoryId.slice("path-".length).replaceAll("-", "+").replaceAll("_", "/");
+        return decodeURIComponent(escape(atob(base64)));
+    } catch {
+        return directoryId;
+    }
+}
+
 export abstract class SessionUsageState {
     abstract readonly available: boolean;
     abstract readonly context: SessionContextUsageUpdatedEvent | null;
@@ -1355,7 +1373,7 @@ export class Conversation {
             mergeNativeHistory(recorded.sessionId, recorded.nativeHistory, base.messages),
             new UnpreparedSessionState(recorded.elicitations, recorded.permissions),
             recorded.directoryId,
-            recorded.directoryId,
+            directoryLabelFromId(recorded.directoryId),
             restoreAdditionalDirectories(recorded.additionalDirectoryIds),
             base.draftImages,
             base.draftResources,
@@ -1431,7 +1449,9 @@ export class Conversation {
             mergeNativeHistory(this.sessionId, recorded.nativeHistory, this.messages),
             this.session.withInteractions(recorded.elicitations, recorded.permissions),
             recorded.directoryId,
-            this.directoryId === recorded.directoryId ? this.directoryLabel : recorded.directoryId,
+            this.directoryId === recorded.directoryId
+                ? this.directoryLabel
+                : directoryLabelFromId(recorded.directoryId),
             this.directoryId === recorded.directoryId
                 ? additionalDirectories
                 : restoreAdditionalDirectories(recorded.additionalDirectoryIds),
