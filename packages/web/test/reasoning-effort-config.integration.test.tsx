@@ -14,6 +14,7 @@ import {
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
+import { AgentOption } from "@/domain/channel";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     createTestApplication,
@@ -24,6 +25,25 @@ import {
 } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
+
+const discoveryCapabilities = {
+    additionalDirectories: true,
+    audioPrompt: false,
+    closeSession: true,
+    deleteSession: true,
+    embeddedContextPrompt: true,
+    imagePrompt: true,
+    listSessions: true,
+    loadSession: true,
+    promptQueueing: false,
+    resumeSession: true,
+    steering: false,
+    unstableForkSession: false,
+};
+
+function discoveryAgent(id: string, label: string): AgentOption {
+    return new AgentOption(id, label, `/usr/local/bin/${id}`, "integration", discoveryCapabilities, true, true);
+}
 
 function sendDiscoveredNativeMode(agentId: string, requestId: string): string {
     return encodeAgentSettingsDiscoveredEvent({
@@ -493,6 +513,35 @@ describe.sequential("Agent-native run settings", () => {
                     valueType: "select",
                 },
             ]);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a channel offers several discovery-capable Agents, When a conversation opens, Then Mobius discovers settings only for that conversation's Agent", async () => {
+        const paired = await pairDaemon({
+            agents: [discoveryAgent("codex", "Codex"), discoveryAgent("hermes", "Hermes Agent")],
+        });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const prepare = decodeSessionPrepareCommand(encodedPrepare);
+            expect(discovery).toMatchObject({ agentId: "codex", kind: AGENT_SETTINGS_DISCOVER_KIND });
+            paired.daemon.send(sendDiscoveredNativeMode(discovery.agentId, discovery.requestId));
+            await sendReadySession(paired.daemon, prepare, []);
+
+            await screen.findByRole("button", { name: /Run settings: Default/ });
+            expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
         } finally {
             cleanup();
             await closeMobiusTransport();

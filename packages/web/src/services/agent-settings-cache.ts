@@ -302,16 +302,6 @@ export class AgentSettingsCache {
         return await this.#resolveSelectedModel(initial, signal);
     };
 
-    readonly preload = async (agentIds: readonly string[], signal: AbortSignal): Promise<void> => {
-        await Promise.all(
-            agentIds.map(async (agentId) => {
-                try {
-                    await this.load(agentId, false, signal);
-                } catch {}
-            }),
-        );
-    };
-
     readonly select = async (
         agentId: string,
         configId: string,

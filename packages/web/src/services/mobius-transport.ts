@@ -455,10 +455,6 @@ class ConnectedTransport extends TransportConnection {
         void this.#serviceClients.catch((error: unknown) => {
             useChatStore.getState().setErrorMessage(failureMessage(error));
         });
-        void this.#agentSettings.preload(
-            connection.agents.filter((agent) => agent.agentSettingsDiscovery === true).map((agent) => agent.id),
-            AbortSignal.timeout(90_000),
-        );
     }
 
     readonly close = async (): Promise<void> => {
@@ -970,10 +966,6 @@ class ConnectedTransport extends TransportConnection {
                     ? await readProjectRuntimeConnection(this.#connection.projectId, this.#connection.runtimeId)
                     : await readChannelConnection(this.#channelId);
             useChatStore.getState().refreshChannelConnection(connection);
-            void this.#agentSettings.preload(
-                connection.agents.filter((agent) => agent.agentSettingsDiscovery === true).map((agent) => agent.id),
-                AbortSignal.timeout(90_000),
-            );
         } catch (error) {
             useChatStore.getState().setErrorMessage(failureMessage(error));
         }
