@@ -251,7 +251,7 @@ function PairingInstructions({ pairing }: { readonly pairing: CreatedPairing }) 
                     <Laptop className="size-5" />
                 </span>
                 <h2 className="mt-5 text-base font-semibold tracking-[-0.02em]">Local machine channel</h2>
-                <p className="mt-2 text-xs leading-5 text-[#68707d]">
+                <p className="mt-2 text-xs leading-5 text-copy-tertiary">
                     Code <strong className="font-mono text-[#454959]">{pairing.pairingCode}</strong>
                     <br />
                     Expires at {expiresAt}

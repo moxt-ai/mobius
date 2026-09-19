@@ -17,7 +17,7 @@
     --secondary: rgba(11, 26, 57, 0.08);
     --secondary-foreground: #1c1e22;
     --muted: rgba(11, 26, 57, 0.05);
-    --muted-foreground: #68707d;
+    --muted-foreground: #5c6470;
     --accent: rgba(11, 26, 57, 0.05);
     --accent-foreground: #0e0f11;
     --border: #c8cdd1;
@@ -28,7 +28,7 @@
     --success: #227b4e;
     --warning: #9a6700;
     --copy-secondary: #454959;
-    --copy-tertiary: #68707d;
+    --copy-tertiary: #5c6470;
     --surface-subtle: #f7f8f9;
     --success-subtle: #eefaf3;
     --warning-subtle: #fff3c4;
