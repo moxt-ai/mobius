@@ -805,12 +805,12 @@ export abstract class UserChatMessage extends ChatMessage {
     }
 }
 
-class ImmediateUserChatMessage extends UserChatMessage {
+export class ImmediateUserChatMessage extends UserChatMessage {
     readonly disposition = SessionPromptDisposition.Reject;
     readonly targetCommandId = "";
 }
 
-class QueuedUserChatMessage extends UserChatMessage {
+export class QueuedUserChatMessage extends UserChatMessage {
     readonly disposition = SessionPromptDisposition.Queue;
     readonly targetCommandId: string;
 
@@ -837,7 +837,7 @@ class QueuedUserChatMessage extends UserChatMessage {
         );
 }
 
-class SteeringUserChatMessage extends UserChatMessage {
+export class SteeringUserChatMessage extends UserChatMessage {
     readonly disposition = SessionPromptDisposition.Steer;
     readonly targetCommandId: string;
 

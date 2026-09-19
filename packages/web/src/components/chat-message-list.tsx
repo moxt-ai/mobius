@@ -13,11 +13,18 @@ import { AgentRichContent } from "@/components/agent-rich-content";
 import { ChatComposer } from "@/components/chat-composer";
 import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
-import { UserPromptMessage } from "@/components/user-prompt-message";
+import { type PromptDelivery, UserPromptMessage } from "@/components/user-prompt-message";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
 import { dataTestId } from "@/data-testid";
 import type { ChannelConnection } from "@/domain/channel";
-import { AgentChatMessage, type ChatMessage, NativeHistoryChatMessage, UserChatMessage } from "@/domain/chat";
+import {
+    AgentChatMessage,
+    type ChatMessage,
+    ImmediateUserChatMessage,
+    NativeHistoryChatMessage,
+    SteeringUserChatMessage,
+    UserChatMessage,
+} from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import { forkConversationAtTurn, sendPrompt } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
@@ -274,6 +281,23 @@ export function NativeSessionHistoryView({
 }
 
 /**
+ * How a prompt reached the conversation. A steered prompt was injected into a Turn that was already
+ * running, which the transcript must show so it is not mistaken for an ordinary first message. A prompt
+ * that was merely queued first is delivered like any other by the time the transcript renders it, and the
+ * pending-follow-ups tray already names it, so it stays an ordinary bubble here.
+ */
+function promptDelivery(message: UserChatMessage): PromptDelivery {
+    if (message instanceof SteeringUserChatMessage) {
+        return { kind: "steered" };
+    }
+    if (message instanceof ImmediateUserChatMessage) {
+        return { kind: "sent" };
+    }
+    // A UserChatMessage created by another path is an ordinary prompt.
+    return { kind: "sent" };
+}
+
+/**
  * Streaming replaces the Agent message object on every update. Memoizing the row keeps every other
  * message in the transcript from re-rendering, and therefore from re-parsing its Markdown, while one
  * message grows. Repeated whole-transcript re-parsing is what makes a large streamed table freeze.
@@ -300,6 +324,7 @@ const Message = memo(function Message({
         return (
             <UserPromptMessage
                 connection={connection}
+                delivery={promptDelivery(message)}
                 images={message.images}
                 resources={message.resources}
                 sessionId={sessionId}

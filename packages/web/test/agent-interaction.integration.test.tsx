@@ -519,11 +519,16 @@ describe.sequential("Agent interaction boundaries", () => {
                     .map((message) => message.textContent?.replaceAll(/\s+/g, " ").trim());
                 expect(transcript).toEqual([
                     "Inspect the failing workflow",
-                    "Run the regression suite afterward",
+                    "Steered into the running turnRun the regression suite afterward",
                     expect.stringContaining("The original turn accepted steering."),
                 ]);
                 expect(paired.daemon.available(SESSION_PROMPT_KIND)).toBe(0);
             });
+
+            // The transcript distinguishes how each prompt was delivered rather than styling them alike.
+            expect(
+                screen.getAllByLabelText("Message from you").map((message) => message.getAttribute("data-delivery")),
+            ).toEqual(["sent", "steered"]);
         } finally {
             cleanup();
             await closeMobiusTransport();

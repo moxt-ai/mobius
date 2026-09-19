@@ -5,8 +5,27 @@ import type { ChannelConnection } from "@/domain/channel";
 import { cn } from "@/lib/utils";
 import { artifactIdFromUri } from "@/services/pairing-api";
 
+/**
+ * How a prompt was delivered to the conversation. An ordinary prompt is the default bubble; a steered
+ * prompt was injected into a Turn that was already running, so it is labelled and outlined to stand apart
+ * from one that started its own Turn. The label is words as well as colour, so the distinction does not
+ * depend on colour perception.
+ */
+export type PromptDelivery = { readonly kind: "sent" } | { readonly kind: "steered" };
+
+const DELIVERY_LABELS: Readonly<Record<PromptDelivery["kind"], string>> = Object.freeze({
+    sent: "",
+    steered: "Steered into the running turn",
+});
+
+const DELIVERY_BUBBLE_CLASSES: Readonly<Record<PromptDelivery["kind"], string>> = Object.freeze({
+    sent: "border-primary/12 bg-success-subtle text-foreground",
+    steered: "border-primary/35 bg-success-subtle text-foreground",
+});
+
 interface UserPromptMessageProps {
     readonly connection?: ChannelConnection | undefined;
+    readonly delivery?: PromptDelivery;
     readonly images: readonly PromptImage[];
     readonly resources: readonly PromptResource[];
     readonly sessionId?: string | undefined;
@@ -58,7 +77,14 @@ function AttachmentChip({ name }: { readonly name: string }) {
     );
 }
 
-export function UserPromptMessage({ connection, images, resources, sessionId, text }: UserPromptMessageProps) {
+export function UserPromptMessage({
+    connection,
+    delivery = { kind: "sent" },
+    images,
+    resources,
+    sessionId,
+    text,
+}: UserPromptMessageProps) {
     // Inline images cover the optimistic send and native history; image resources cover a reload.
     const shownInline = new Set(images.map((image) => image.name));
     const isRestoredImage = (resource: PromptResource): boolean =>
@@ -66,13 +92,25 @@ export function UserPromptMessage({ connection, images, resources, sessionId, te
     const imageResources = resources.filter(isRestoredImage);
     const otherResources = resources.filter((resource) => !isRestoredImage(resource));
     const attachmentCount = images.length + imageResources.length;
+    const deliveryLabel = DELIVERY_LABELS[delivery.kind];
     return (
         <article
             aria-label="Message from you"
             className="mb-5 flex justify-end motion-safe:animate-[message-enter_200ms_ease-out_both]"
+            data-delivery={delivery.kind}
         >
             <div className="min-w-0 max-w-[85%] max-md:max-w-[94%]">
-                <div className="grid min-w-0 gap-2 rounded-[18px] rounded-br-[6px] border-[0.5px] border-primary/12 bg-success-subtle px-3.5 py-2.5 text-[15px] leading-6 whitespace-pre-wrap text-foreground [overflow-wrap:anywhere] md:px-4 md:py-3">
+                <div
+                    className={cn(
+                        "grid min-w-0 gap-2 rounded-[18px] border-[0.5px] px-3.5 py-2.5 text-[15px] leading-6 whitespace-pre-wrap [overflow-wrap:anywhere] md:px-4 md:py-3",
+                        DELIVERY_BUBBLE_CLASSES[delivery.kind],
+                    )}
+                >
+                    {deliveryLabel.length > 0 && (
+                        <span className="text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
+                            {deliveryLabel}
+                        </span>
+                    )}
                     {attachmentCount > 0 && (
                         <div className={cn("grid min-w-0 gap-1.5", attachmentCount > 1 && "grid-cols-2")}>
                             {images.map((image, index) => (
