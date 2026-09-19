@@ -5,6 +5,12 @@ import { fileURLToPath } from "node:url";
 import { readWorktreeEnvironment } from "./worktree/environment.ts";
 
 const OUTPUT_LIMIT = 256_000;
+/**
+ * A finite publication or deployment stage must not be able to wait forever. The CI job timeout does not
+ * bound a local run, so the wrapper owns a deadline and reports it distinctly from caller cancellation.
+ * Long-lived `dev` execution is excluded; see `runPnpm`.
+ */
+const FINITE_COMMAND_TIMEOUT_MILLISECONDS = 15 * 60_000;
 const TEMPORARY_DEPLOYMENT_PROFILE = "mobius_temporary_preview";
 const DIRECTORY_DATABASE_BINDING = "DIRECTORY_DATABASE";
 const PLATFORM_DIRECTORY_DATABASE_BINDING = "PLATFORM_DIRECTORY_DATABASE";
@@ -40,17 +46,46 @@ class CommandFailedError extends Error {
     }
 }
 
+/**
+ * A stage that exceeded its own deadline. It is distinct from caller cancellation so a stalled command is
+ * never reported as an interrupt, and from a non-zero exit so the cause stays unambiguous.
+ */
+class CommandTimeoutError extends Error {
+    readonly command: string;
+    readonly timeoutMilliseconds: number;
+
+    constructor(command: string, timeoutMilliseconds: number) {
+        super(
+            `Command "${command}" exceeded its ${Math.round(timeoutMilliseconds / 60_000).toString()} minute deadline`,
+        );
+        this.command = command;
+        this.timeoutMilliseconds = timeoutMilliseconds;
+        this.name = "CommandTimeoutError";
+    }
+}
+
 function appendOutput(current: string, chunk: string): string {
     const combined = current + chunk;
     return combined.length > OUTPUT_LIMIT ? combined.slice(combined.length - OUTPUT_LIMIT) : combined;
 }
 
+/**
+ * Runs a finite pnpm command under the caller's cancellation and a wrapper-owned deadline. `dev` is
+ * long-lived by design, so it keeps only the caller's signal; every other stage is bounded, and a stage
+ * that hits its deadline is aborted and reported as a timeout rather than as a failure or an interrupt.
+ */
 async function runPnpm(arguments_: readonly string[], signal: AbortSignal): Promise<string> {
+    // Every invocation is `--filter <package> <script> ...`, so the stage is the first non-flag argument.
+    const stage = arguments_.find((argument) => !argument.startsWith("-"));
+    const isLongLived = arguments_.includes("dev");
+    const deadline = isLongLived ? null : AbortSignal.timeout(FINITE_COMMAND_TIMEOUT_MILLISECONDS);
+    const effectiveSignal = deadline === null ? signal : AbortSignal.any([signal, deadline]);
+    const stageName = stage ?? arguments_.join(" ");
     return await new Promise((resolve, reject) => {
         const child = spawn(pnpmCommand, [...arguments_], {
             cwd: repositoryRoot,
             env: process.env,
-            signal,
+            signal: effectiveSignal,
             stdio: ["inherit", "pipe", "pipe"],
         });
         let output = "";
@@ -65,10 +100,22 @@ async function runPnpm(arguments_: readonly string[], signal: AbortSignal): Prom
             process.stderr.write(text);
             output = appendOutput(output, text);
         });
-        child.once("error", reject);
+        child.once("error", (error: Error) => {
+            // The deadline aborts the child, which surfaces as an abort error. Report the timeout instead,
+            // so a stalled stage is never confused with a caller interrupt.
+            if (deadline?.aborted === true && !signal.aborted) {
+                reject(new CommandTimeoutError(stageName, FINITE_COMMAND_TIMEOUT_MILLISECONDS));
+                return;
+            }
+            reject(error);
+        });
         child.once("close", (exitCode) => {
             if (exitCode === 0) {
                 resolve(output);
+                return;
+            }
+            if (deadline?.aborted === true && !signal.aborted) {
+                reject(new CommandTimeoutError(stageName, FINITE_COMMAND_TIMEOUT_MILLISECONDS));
                 return;
             }
             reject(new CommandFailedError(exitCode ?? 1));
