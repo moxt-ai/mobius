@@ -29,7 +29,7 @@ import { Link, useNavigate } from "react-router";
 
 import { Button } from "@/components/ui/button";
 import { PairingApiError } from "@/domain/channel";
-import { projectRuntimeRoutePath } from "@/services/app-routes";
+import { projectRuntimeRoutePath, projectRuntimeRouteState } from "@/services/app-routes";
 import {
     createProjectRuntimePairing,
     OwnerRuntimeManagementAccess,
@@ -418,7 +418,7 @@ function RuntimeList({
                                         )}
                                     </div>
                                 </div>
-                                {canManage && !confirming && (
+                                {!confirming && (canManage || runtime.online) && (
                                     <div className="flex shrink-0 flex-col gap-2 sm:items-stretch">
                                         {runtime.online && (
                                             <Button
@@ -438,25 +438,27 @@ function RuntimeList({
                                                 {runtime.agents.length > 0 ? "Open chat" : "Set up Agent"}
                                             </Button>
                                         )}
-                                        <Button
-                                            aria-busy={revoking}
-                                            aria-label={`Revoke ${name}`}
-                                            className="min-h-11 shrink-0 text-destructive hover:text-destructive"
-                                            disabled={revocation instanceof RevokingRuntimeState}
-                                            id={`revoke-runtime-${runtime.runtimeId}`}
-                                            onClick={() => onRequestRevocation(runtime.runtimeId)}
-                                            variant="outline"
-                                        >
-                                            {revoking ? (
-                                                <LoaderCircle
-                                                    aria-hidden="true"
-                                                    className="size-4 animate-spin motion-reduce:animate-none"
-                                                />
-                                            ) : (
-                                                <Trash2 aria-hidden="true" className="size-4" />
-                                            )}
-                                            Revoke
-                                        </Button>
+                                        {canManage && (
+                                            <Button
+                                                aria-busy={revoking}
+                                                aria-label={`Revoke ${name}`}
+                                                className="min-h-11 shrink-0 text-destructive hover:text-destructive"
+                                                disabled={revocation instanceof RevokingRuntimeState}
+                                                id={`revoke-runtime-${runtime.runtimeId}`}
+                                                onClick={() => onRequestRevocation(runtime.runtimeId)}
+                                                variant="outline"
+                                            >
+                                                {revoking ? (
+                                                    <LoaderCircle
+                                                        aria-hidden="true"
+                                                        className="size-4 animate-spin motion-reduce:animate-none"
+                                                    />
+                                                ) : (
+                                                    <Trash2 aria-hidden="true" className="size-4" />
+                                                )}
+                                                Revoke
+                                            </Button>
+                                        )}
                                     </div>
                                 )}
                             </div>
@@ -507,7 +509,13 @@ function RuntimeList({
     );
 }
 
-function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: string; readonly projectId: string }) {
+function RuntimeManagementPanel({
+    accessChannelId,
+    projectId,
+}: {
+    readonly accessChannelId: string;
+    readonly projectId: string;
+}) {
     const navigate = useNavigate();
     const [controller] = useState(() => new AbortController());
     const [directory, setDirectory] = useState<RuntimeDirectoryState>(new LoadingRuntimeDirectoryState());
@@ -519,7 +527,7 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
     const loadDirectory = useCallback(async (): Promise<void> => {
         setDirectory(new LoadingRuntimeDirectoryState());
         try {
-            const loaded = await readRuntimeDirectory(channelId, projectId, controller.signal);
+            const loaded = await readRuntimeDirectory(accessChannelId, projectId, controller.signal);
             if (controller.signal.aborted) {
                 return;
             }
@@ -529,7 +537,7 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
                 setDirectory(new FailedRuntimeDirectoryState(failureMessage(error)));
             }
         }
-    }, [channelId, controller, projectId]);
+    }, [accessChannelId, controller, projectId]);
 
     useEffect(() => {
         void loadDirectory();
@@ -541,7 +549,12 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
         setCopyConfirmation("");
         setPairing(new CreatingRuntimePairingState(idempotencyKey));
         try {
-            const created = await createProjectRuntimePairing(channelId, projectId, idempotencyKey, controller.signal);
+            const created = await createProjectRuntimePairing(
+                accessChannelId,
+                projectId,
+                idempotencyKey,
+                controller.signal,
+            );
             if (!controller.signal.aborted) {
                 setPairing(new PendingRuntimePairingState(created));
             }
@@ -560,7 +573,12 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
         setAnnouncement("");
         setPairing(new CheckingRuntimePairingState(created));
         try {
-            const status = await readProjectRuntimePairing(channelId, projectId, created.pairingId, controller.signal);
+            const status = await readProjectRuntimePairing(
+                accessChannelId,
+                projectId,
+                created.pairingId,
+                controller.signal,
+            );
             if (controller.signal.aborted) {
                 return;
             }
@@ -570,7 +588,7 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
                 return;
             }
             if (status instanceof MobiusPairedRuntimePairingStatus) {
-                const loaded = await readRuntimeDirectory(channelId, projectId, controller.signal);
+                const loaded = await readRuntimeDirectory(accessChannelId, projectId, controller.signal);
                 if (controller.signal.aborted) {
                     return;
                 }
@@ -626,7 +644,7 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
         setAnnouncement("");
         setRevocation(new RevokingRuntimeState(runtime.runtimeId));
         try {
-            await revokeProjectRuntime(channelId, projectId, runtime.runtimeId, controller.signal);
+            await revokeProjectRuntime(accessChannelId, projectId, runtime.runtimeId, controller.signal);
             if (controller.signal.aborted) {
                 return;
             }
@@ -704,8 +722,8 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
 
             {directory instanceof ReadOnlyRuntimeDirectoryState && (
                 <div className="mt-5 rounded-xl border-[0.5px] border-black/10 bg-white px-5 py-4 text-sm leading-6 text-muted-foreground shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
-                    This browser has linked-device access. It can see Project Runtimes, but only the original owner
-                    browser can pair or revoke local machines.
+                    This browser has linked-device access. It can open a chat on any online Project Runtime, but only
+                    the original owner browser can pair or revoke local machines.
                 </div>
             )}
 
@@ -807,11 +825,15 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
 
             {readyDirectory !== null && (
                 <RuntimeList
-                    channelId={channelId}
+                    channelId={accessChannelId}
                     directory={readyDirectory}
                     onCancelRevocation={cancelRevocation}
                     onConfirmRevocation={(runtime) => void revokeRuntime(runtime)}
-                    onOpenRuntime={(runtime) => void navigate(projectRuntimeRoutePath(projectId, runtime.runtimeId))}
+                    onOpenRuntime={(runtime) =>
+                        void navigate(projectRuntimeRoutePath(projectId, runtime.runtimeId), {
+                            state: projectRuntimeRouteState(accessChannelId),
+                        })
+                    }
                     onRequestRevocation={(runtimeId) => setRevocation(new ConfirmingRuntimeRevocationState(runtimeId))}
                     revocation={revocation}
                 />
@@ -821,12 +843,12 @@ function RuntimeManagementPanel({ channelId, projectId }: { readonly channelId: 
 }
 
 export function RuntimeManagementPage({
-    channelId,
+    accessChannelId,
     desktopSidebarCollapsed,
     onToggleDesktopSidebar,
     projectId,
 }: {
-    readonly channelId: string;
+    readonly accessChannelId: string;
     readonly desktopSidebarCollapsed: boolean;
     readonly onToggleDesktopSidebar: () => void;
     readonly projectId: string;
@@ -880,7 +902,11 @@ export function RuntimeManagementPage({
 
             <div className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto w-full max-w-[980px] px-5 py-8 sm:px-8 sm:py-10">
-                    <RuntimeManagementPanel channelId={channelId} key={channelId} projectId={projectId} />
+                    <RuntimeManagementPanel
+                        accessChannelId={accessChannelId}
+                        key={accessChannelId}
+                        projectId={projectId}
+                    />
                 </div>
             </div>
         </>

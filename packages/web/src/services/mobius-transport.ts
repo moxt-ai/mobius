@@ -60,7 +60,7 @@ import {
     LegacyChannelCredentialAuthority,
     LinkedChannelCredentialAuthority,
     OwnerChannelCredentialAuthority,
-    ProjectOwnerRuntimeCredentialAuthority,
+    ProjectRuntimeCredentialAuthority,
     RecordedActivity,
 } from "@/domain/channel";
 import {
@@ -78,9 +78,9 @@ import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
 function createRelayUrl(connection: ChannelConnection): string {
     const path: `/${string}` =
-        connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
+        connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
             ? `/projects/${encodeURIComponent(connection.projectId)}/runtimes/${encodeURIComponent(connection.runtimeId)}/host`
-            : `/channels/${encodeURIComponent(connection.channelId)}/host`;
+            : `/channels/${encodeURIComponent(connection.accessChannelId)}/host`;
     const relayUrl = mobiusApiUrl(window.location.origin, path);
     relayUrl.searchParams.set("token", connection.hostToken);
     relayUrl.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -221,13 +221,17 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
         endpoint: window.location.origin,
         projectId: connection.projectId,
     });
-    if (connection.credentialAuthority instanceof LinkedChannelCredentialAuthority) {
+    if (
+        connection.credentialAuthority instanceof LinkedChannelCredentialAuthority ||
+        connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
+    ) {
+        // A linked device cannot exchange its credential for a Project browser credential, so the Runtime
+        // services keep using the credential that opened the host socket.
         return new DirectBrowserServiceClients(issuer);
     }
     if (
         !(connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) &&
-        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority) &&
-        !(connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority)
+        !(connection.credentialAuthority instanceof LegacyChannelCredentialAuthority)
     ) {
         issuer.close();
         throw new MobiusChannelError("channel_credential_invalid", "The channel credential authority is invalid");
@@ -353,10 +357,10 @@ class ConnectedTransport extends TransportConnection {
 
     constructor(connection: ChannelConnection, onHistoryChanged: () => void) {
         super();
-        this.#channelId = connection.channelId;
+        this.#channelId = connection.accessChannelId;
         this.#connection = connection;
         this.#serviceClients = connectBrowserServiceClients(connection);
-        this.#agentSettings = new AgentSettingsCache(connection.channelId, {
+        this.#agentSettings = new AgentSettingsCache(connection.accessChannelId, {
             discover: async (agentId, model, signal) => {
                 const clients = await this.#serviceClients;
                 return await clients.scoped.runtimes.discoverAgentSettings(
@@ -962,8 +966,13 @@ class ConnectedTransport extends TransportConnection {
     readonly #refreshAgentCatalog = async (): Promise<void> => {
         try {
             const connection =
-                this.#connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
-                    ? await readProjectRuntimeConnection(this.#connection.projectId, this.#connection.runtimeId)
+                this.#connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority
+                    ? await readProjectRuntimeConnection(
+                          this.#connection.projectId,
+                          this.#connection.runtimeId,
+                          new AbortController().signal,
+                          this.#channelId,
+                      )
                     : await readChannelConnection(this.#channelId);
             useChatStore.getState().refreshChannelConnection(connection);
         } catch (error) {

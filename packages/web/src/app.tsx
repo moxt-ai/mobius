@@ -23,9 +23,10 @@ import { RuntimeManagementPage } from "@/components/runtime-management-page";
 import { Button } from "@/components/ui/button";
 import { WorkspaceRouteProvider } from "@/components/workspace-route-provider";
 import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
-import { isIdentifier, PairingApiError, ProjectOwnerRuntimeCredentialAuthority } from "@/domain/channel";
+import { isIdentifier, PairingApiError } from "@/domain/channel";
 import {
     ChannelWorkspaceRoutePaths,
+    decodeProjectRuntimeRouteState,
     ProjectRuntimeWorkspaceRoutePaths,
     type WorkspaceRoutePaths,
 } from "@/services/app-routes";
@@ -50,6 +51,7 @@ import { useChatStore } from "@/store/chat-store";
 const SIDEBAR_LAYOUT_STORAGE_KEY = "mobius:conversation-sidebar-layout";
 
 export interface ChatProps {
+    readonly accessChannelId: string;
     readonly channelId: string;
     readonly connection: ChannelConnection;
     readonly desktopSidebarCollapsed: boolean;
@@ -241,6 +243,7 @@ function ChannelWorkspace({
     }
 
     const context: ChatProps = {
+        accessChannelId: connection.accessChannelId,
         channelId: connection.channelId,
         connection,
         desktopSidebarCollapsed: sidebarLayout.kind === "collapsed",
@@ -413,6 +416,8 @@ function ProjectRuntimeRoute() {
     const projectId = params["projectId"] ?? "";
     const runtimeId = params["runtimeId"] ?? "";
     const [state, setState] = useState<ChannelRouteState>(new LoadingChannelRouteState());
+    const location = useLocation();
+    const [accessChannelId] = useState(() => decodeProjectRuntimeRouteState(location.state));
 
     useEffect(() => {
         if (!isIdentifier(projectId) || !isIdentifier(runtimeId)) {
@@ -423,7 +428,12 @@ function ProjectRuntimeRoute() {
         setState(new LoadingChannelRouteState());
         const load = async (): Promise<void> => {
             try {
-                const connection = await readProjectRuntimeConnection(projectId, runtimeId, controller.signal);
+                const connection = await readProjectRuntimeConnection(
+                    projectId,
+                    runtimeId,
+                    controller.signal,
+                    accessChannelId,
+                );
                 const history = await readConnectionDirectory(connection, controller.signal);
                 if (active) {
                     setState(new ReadyChannelRouteState(connection, history));
@@ -444,22 +454,13 @@ function ProjectRuntimeRoute() {
             active = false;
             controller.abort();
         };
-    }, [projectId, runtimeId]);
+    }, [accessChannelId, projectId, runtimeId]);
 
     if (!isIdentifier(projectId) || !isIdentifier(runtimeId)) {
         return <ChannelErrorPage message="The Project Runtime route is malformed." title="Invalid Runtime" />;
     }
-    if (
-        state instanceof ReadyChannelRouteState &&
-        state.connection.projectId === projectId &&
-        state.connection.runtimeId === runtimeId &&
-        state.connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority
-    ) {
-        const routes = new ProjectRuntimeWorkspaceRoutePaths(
-            projectId,
-            runtimeId,
-            state.connection.credentialAuthority.ownerChannelId,
-        );
+    if (state instanceof ReadyChannelRouteState && state.connection.projectId === projectId) {
+        const routes = new ProjectRuntimeWorkspaceRoutePaths(projectId, runtimeId, state.connection.accessChannelId);
         return (
             <WorkspaceRouteProvider routes={routes}>
                 <ChannelWorkspace
@@ -616,7 +617,7 @@ function ChannelAccessRoutePage() {
     const context = useOutletContext<ChatProps>();
     return (
         <ChannelAccessPage
-            channelId={context.channelId}
+            channelId={context.accessChannelId}
             desktopSidebarCollapsed={context.desktopSidebarCollapsed}
             onToggleDesktopSidebar={context.onToggleDesktopSidebar}
         />
@@ -627,7 +628,7 @@ function RuntimeManagementRoutePage() {
     const context = useOutletContext<ChatProps>();
     return (
         <RuntimeManagementPage
-            channelId={context.channelId}
+            accessChannelId={context.accessChannelId}
             desktopSidebarCollapsed={context.desktopSidebarCollapsed}
             onToggleDesktopSidebar={context.onToggleDesktopSidebar}
             projectId={context.projectId}

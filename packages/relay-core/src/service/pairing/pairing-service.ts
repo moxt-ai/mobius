@@ -181,12 +181,12 @@ export class PairingService {
             signal,
         );
 
-    readonly authorizeProjectOwnerRuntimeHost = async (
+    readonly authorizeProjectRuntimeHost = async (
         projectId: string,
         runtimeId: string,
         token: string,
         signal: AbortSignal,
-    ) => await this.#pairings.authorizeProjectOwnerRuntimeHost(projectId, runtimeId, token, signal);
+    ) => await this.#pairings.authorizeProjectRuntimeHost(projectId, runtimeId, token, signal);
 
     readonly revokeProjectRuntime = async (
         projectId: string,

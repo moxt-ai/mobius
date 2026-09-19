@@ -37,7 +37,7 @@ export interface PairingOperations {
     readonly authorizeDaemon: (channelId: string, token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeRuntimeCredential: (token: string, signal: AbortSignal) => Promise<RuntimeAccessContext>;
     readonly authorizeHost: (channelId: string, token: string, signal: AbortSignal) => Promise<ChannelHostCredential>;
-    readonly authorizeProjectOwnerRuntimeHost: (
+    readonly authorizeProjectRuntimeHost: (
         projectId: string,
         runtimeId: string,
         token: string,

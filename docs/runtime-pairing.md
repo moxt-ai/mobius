@@ -38,10 +38,12 @@ expires after ten minutes. The page distinguishes a claimed-but-offline daemon
 from a connected Runtime instead of treating claim as proof of liveness.
 
 **Access from other devices** remains a separate browser-linking flow. A browser
-opened through that one-time access link can view the Project Runtime directory,
-but it cannot create or revoke Runtime pairings. Adding a local execution
-machine must always begin in the original owner browser's **Local machines**
-page.
+opened through that one-time access link can view the Project Runtime directory
+and open a chat on any online Runtime in the Project, which runs the Agent on
+that machine under the linked credential's `RuntimeRead` and `SessionWrite`
+permissions. It cannot create or revoke Runtime pairings. Adding a local
+execution machine must always begin in the original owner browser's **Local
+machines** page.
 
 ## Public API
 

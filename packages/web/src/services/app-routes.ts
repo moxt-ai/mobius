@@ -1,3 +1,25 @@
+import { isIdentifier } from "@/domain/channel";
+
+const PROJECT_RUNTIME_ACCESS_STATE_KEY = "mobiusAccessChannelId";
+
+/**
+ * A Project Runtime route is addressable from any channel in the Project, so the channel that opened it
+ * travels in the navigation state. It decides which saved credential the page resolves and where the
+ * "Access from other devices" and "Local machines" links point; an absent or malformed value simply falls
+ * back to the credential the Project route already holds.
+ */
+export function projectRuntimeRouteState(channelId: string): { readonly mobiusAccessChannelId: string } {
+    return { [PROJECT_RUNTIME_ACCESS_STATE_KEY]: channelId };
+}
+
+export function decodeProjectRuntimeRouteState(state: unknown): string {
+    if (typeof state !== "object" || state === null) {
+        return "";
+    }
+    const value = Reflect.get(state, PROJECT_RUNTIME_ACCESS_STATE_KEY);
+    return typeof value === "string" && isIdentifier(value) ? value : "";
+}
+
 function channelRoutePath(channelId: string): string {
     return `/channels/${encodeURIComponent(channelId)}`;
 }
@@ -56,9 +78,9 @@ export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
     readonly runtimesPath: string;
     readonly settingsPath: string;
 
-    constructor(projectId: string, runtimeId: string, ownerChannelId: string) {
+    constructor(projectId: string, runtimeId: string, accessChannelId: string) {
         super();
-        this.accessPath = channelAccessRoutePath(ownerChannelId);
+        this.accessPath = channelAccessRoutePath(accessChannelId);
         this.rootPath = projectRuntimeRoutePath(projectId, runtimeId);
         this.runtimesPath = `${this.rootPath}/machines`;
         this.settingsPath = `${this.rootPath}/settings`;

@@ -17,7 +17,7 @@ import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import type { CreatedChannelAccessGrant, LinkedChannelDevice } from "@/domain/channel";
 import { PairingApiError } from "@/domain/channel";
-import { createChannelAccessGrant, readLinkedChannelDevices, revokeLinkedChannelDevice } from "@/services/pairing-api";
+import { createChannelAccessGrant, readAccessChannelDevices, revokeLinkedChannelDevice } from "@/services/pairing-api";
 import { useChatStore } from "@/store/chat-store";
 
 abstract class DeviceDirectoryState {}
@@ -127,7 +127,7 @@ function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
     const loadDevices = useCallback(async (): Promise<void> => {
         setDirectory(new LoadingDeviceDirectoryState());
         try {
-            setDirectory(new OwnerDeviceDirectoryState(await readLinkedChannelDevices(channelId, controller.signal)));
+            setDirectory(new OwnerDeviceDirectoryState(await readAccessChannelDevices(channelId, controller.signal)));
         } catch (error) {
             if (error instanceof PairingApiError && error.code === "owner_access_required") {
                 setDirectory(new LinkedDeviceDirectoryState());
@@ -201,8 +201,9 @@ function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
                         Share this channel
                     </h2>
                     <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                        Create a link that works once for 10 minutes. The new browser gets its own revocable credential;
-                        your owner credential is never put in the link.
+                        Create a link that works once for 10 minutes. The new browser gets its own revocable credential
+                        and can chat on any of the Project's local machines; your owner credential is never put in the
+                        link.
                     </p>
                 </div>
                 {directory instanceof OwnerDeviceDirectoryState && (
@@ -224,8 +225,8 @@ function ChannelAccessPanel({ channelId }: { readonly channelId: string }) {
 
             {directory instanceof LinkedDeviceDirectoryState && (
                 <div className="mt-5 rounded-xl border-[0.5px] border-black/10 bg-white px-5 py-4 text-sm leading-6 text-muted-foreground shadow-[0_1px_3px_rgba(0,0,0,0.03)]">
-                    This browser has linked-device access. It can use the channel, but only the original browser can
-                    create links or revoke devices.
+                    This browser has linked-device access. It can use the channel and chat on any of the Project's local
+                    machines, but only the original browser can create links or revoke devices.
                 </div>
             )}
 

@@ -89,7 +89,7 @@ export function createProjectRuntimePairingRoutes() {
         })
         .get("/projects/:projectId/runtimes/:runtimeId/host", async (context) => {
             const request = context.req.raw;
-            const access = await context.env.services.runtimePairings.authorizeProjectOwnerRuntimeHost(
+            const access = await context.env.services.runtimePairings.authorizeProjectRuntimeHost(
                 validateIdentifier(context.req.param("projectId"), "project_id"),
                 validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
                 context.req.query("token") ?? "",

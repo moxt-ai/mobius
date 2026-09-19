@@ -128,10 +128,15 @@ any browser that holds a scoped high-entropy host credential. The pairing browse
 is the credential owner: it can mint a ten-minute, single-use access grant whose
 secret is carried only in a URL fragment. Redeeming that grant atomically creates
 a distinct linked-device credential; the grant secret and host credentials are
-stored only as hashes. Linked devices cannot delegate access. The owner can list
-and revoke each one independently, and revocation closes matching live sockets as
-well as rejecting later HTTP and WebSocket authorization. The channel ID is only
-an address and does not grant access. Mobius does not implement sign-up or
+stored only as hashes. A linked device cannot delegate access, but it requires no
+extra grant to reach the Project's other machines: a Project-wide credential
+already carries `runtime:read`, so selecting a Runtime authorizes only the
+resolved `runtimeId` against the caller's Project and the same credential opens
+that Runtime's host socket. A linked browser can therefore run a chat on any
+online machine, while pairing and revocation stay owner-only. The owner can list
+and revoke each linked device independently, and revocation closes matching live
+sockets as well as rejecting later HTTP and WebSocket authorization. The channel
+ID is only an address and does not grant access. Mobius does not implement sign-up or
 user/team policy. A deployment may register provider-neutral OIDC
 authentication, but external issuer/subject verification becomes Project
 authority only through an explicit server-owned grant; organization and role

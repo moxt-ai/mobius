@@ -310,16 +310,24 @@ export class LinkedChannelCredentialAuthority extends ChannelCredentialAuthority
 
 export class LegacyChannelCredentialAuthority extends ChannelCredentialAuthority {}
 
-export class ProjectOwnerRuntimeCredentialAuthority extends ChannelCredentialAuthority {
-    readonly ownerChannelId: string;
+/**
+ * Addresses one Runtime of a Project rather than a single channel. The selected Runtime's host socket is
+ * reached through the Project Runtime route, so the relay routes it to that machine's Durable Object
+ * instead of the browser's own channel. The channel that opened the route travels beside the authority in
+ * `ChannelConnection.accessChannelId`, because credential storage and the device-access page belong to
+ * that channel while the host socket belongs to the Runtime.
+ */
+export class ProjectRuntimeCredentialAuthority extends ChannelCredentialAuthority {
+    readonly accessChannelId: string;
 
-    constructor(ownerChannelId: string) {
+    constructor(accessChannelId: string) {
         super();
-        this.ownerChannelId = ownerChannelId;
+        this.accessChannelId = accessChannelId;
     }
 }
 
 export class ChannelConnection {
+    readonly accessChannelId: string;
     readonly agents: readonly AgentOption[];
     readonly channelId: string;
     readonly credentialAuthority: ChannelCredentialAuthority;
@@ -340,7 +348,9 @@ export class ChannelConnection {
         projectId: string,
         runtimeId: string,
         installableAgents: readonly InstallableAgentOption[] = [],
+        accessChannelId: string = channelId,
     ) {
+        this.accessChannelId = accessChannelId;
         this.agents = agents;
         this.channelId = channelId;
         this.credentialAuthority = credentialAuthority;

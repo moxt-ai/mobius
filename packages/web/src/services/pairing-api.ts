@@ -46,7 +46,7 @@ import {
     OwnerChannelCredentialAuthority,
     PairingApiError,
     PendingRecordedTurn,
-    ProjectOwnerRuntimeCredentialAuthority,
+    ProjectRuntimeCredentialAuthority,
     RecordedActivity,
     RecordedContent,
     RecordedSession,
@@ -596,6 +596,21 @@ class ProjectOwnerBrowserCredential extends BrowserChannelCredential {
     }
 }
 
+/**
+ * A Project Runtime connection addresses one Runtime rather than the channel that opened it. It carries the
+ * host socket through the Project Runtime route, so a linked browser never needs a credential alias for
+ * another machine's channel.
+ */
+function connectionCredentialAuthority(
+    credential: BrowserChannelCredential,
+    accessChannelId: string,
+): ChannelCredentialAuthority {
+    if (credential instanceof ProjectOwnerBrowserCredential || credential instanceof LinkedBrowserChannelCredential) {
+        return new ProjectRuntimeCredentialAuthority(accessChannelId);
+    }
+    return channelCredentialAuthority(credential);
+}
+
 function channelCredentialAuthority(credential: BrowserChannelCredential): ChannelCredentialAuthority {
     if (credential instanceof OwnerBrowserChannelCredential) {
         return new OwnerChannelCredentialAuthority();
@@ -605,9 +620,6 @@ function channelCredentialAuthority(credential: BrowserChannelCredential): Chann
     }
     if (credential instanceof LegacyBrowserChannelCredential) {
         return new LegacyChannelCredentialAuthority();
-    }
-    if (credential instanceof ProjectOwnerBrowserCredential) {
-        return new ProjectOwnerRuntimeCredentialAuthority(credential.ownerChannelId);
     }
     throw new PairingApiError("channel_credential_invalid", "The saved channel credential is invalid.");
 }
@@ -895,10 +907,20 @@ function decodeChannelConnection(
 
 function runtimeConnection(
     runtime: MobiusRuntimeDescriptor,
-    credential: ProjectOwnerBrowserCredential,
+    credential: BrowserChannelCredential,
+    accessChannelId: string,
 ): ChannelConnection {
     if (runtime.projectId !== credential.projectId) {
         throw new PairingApiError("invalid_relay_response", "The relay returned a Runtime from another Project.");
+    }
+    if (
+        !(credential instanceof ProjectOwnerBrowserCredential) &&
+        !(credential instanceof LinkedBrowserChannelCredential)
+    ) {
+        throw new PairingApiError(
+            "runtime_access_denied",
+            "This browser cannot address another Runtime in the Project.",
+        );
     }
     const agents = runtime.agents.map(
         (agent) =>
@@ -931,13 +953,14 @@ function runtimeConnection(
     return new ChannelConnection(
         agents,
         runtime.channelId,
-        channelCredentialAuthority(credential),
+        connectionCredentialAuthority(credential, accessChannelId),
         runtime.machineName,
         runtime.workspaceName,
         credential.hostToken,
         credential.projectId,
         runtime.runtimeId,
         installableAgents,
+        accessChannelId,
     );
 }
 
@@ -1096,7 +1119,11 @@ export async function createChannelAccessGrant(
     );
 }
 
-export async function readLinkedChannelDevices(
+/**
+ * Lists the linked devices of the channel that opened the current page. A Project Runtime route records its
+ * access channel rather than the Runtime's own channel, which the browser may not hold a credential for.
+ */
+export async function readAccessChannelDevices(
     channelId: string,
     cancellationSignal: AbortSignal,
 ): Promise<readonly LinkedChannelDevice[]> {
@@ -1199,8 +1226,9 @@ export async function readProjectRuntimeConnection(
     projectId: string,
     runtimeId: string,
     cancellationSignal: AbortSignal = new AbortController().signal,
+    accessChannelId: string = "",
 ): Promise<ChannelConnection> {
-    const credential = readProjectOwnerCredential(projectId);
+    const credential = projectCredential(accessChannelId, projectId);
     const client = publicServiceClient(credential);
     try {
         const runtimes = await client.runtimes.list(requestSignal(cancellationSignal));
@@ -1208,7 +1236,7 @@ export async function readProjectRuntimeConnection(
         if (runtime === undefined) {
             throw new PairingApiError("runtime_not_found", "The selected Runtime is not available in this Project.");
         }
-        return runtimeConnection(runtime, credential);
+        return runtimeConnection(runtime, credential, accessChannelId);
     } catch (error) {
         if (error instanceof PairingApiError) {
             throw error;
@@ -1420,7 +1448,7 @@ export async function readRuntimeManagementAccess(
         return new ReadOnlyRuntimeManagementAccess();
     }
     try {
-        await readLinkedChannelDevices(channelId, cancellationSignal);
+        await readAccessChannelDevices(channelId, cancellationSignal);
         saveBrowserChannelCredential(
             channelId,
             new OwnerBrowserChannelCredential(credential.hostToken, credential.projectId),
@@ -1506,12 +1534,10 @@ export async function revokeProjectRuntime(
 }
 
 function connectionCredential(connection: ChannelConnection): BrowserChannelCredential {
-    if (connection.credentialAuthority instanceof ProjectOwnerRuntimeCredentialAuthority) {
-        return new ProjectOwnerBrowserCredential(
-            connection.hostToken,
-            connection.projectId,
-            connection.credentialAuthority.ownerChannelId,
-        );
+    if (connection.credentialAuthority instanceof ProjectRuntimeCredentialAuthority) {
+        // The Project Runtime host socket was opened with the credential the route resolved, so history
+        // reads reuse that same credential rather than the selected machine's own channel file.
+        return projectCredential(connection.credentialAuthority.accessChannelId, connection.projectId);
     }
     if (connection.credentialAuthority instanceof OwnerChannelCredentialAuthority) {
         return new OwnerBrowserChannelCredential(connection.hostToken, connection.projectId);
