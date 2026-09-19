@@ -404,7 +404,10 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
     if (process.argv.includes("--without-model")) {
         options = options.filter((option) => option.category !== "model");
     }
-    if (process.argv.includes("--without-reasoning-effort")) {
+    if (
+        process.argv.includes("--without-reasoning-effort") ||
+        (process.argv.includes("--reasoning-effort-for-test-large-only") && state.model !== "test-large")
+    ) {
         options = options.filter((option) => option.category !== "thought_level");
     }
     if (process.argv.includes("--with-permission-option")) {

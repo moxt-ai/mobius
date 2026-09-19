@@ -108,6 +108,19 @@ const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
 const SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
 const MAX_PENDING_NATIVE_IMPORTS = 4;
+const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
+
+class PendingAgentSettingsDiscovery {
+    readonly agentId: string;
+    readonly expiresAt: number;
+    readonly socket: ChannelSocket;
+
+    constructor(agentId: string, expiresAt: number, socket: ChannelSocket) {
+        this.agentId = agentId;
+        this.expiresAt = expiresAt;
+        this.socket = socket;
+    }
+}
 
 function reconcileNativeHistoryCoverage(
     history: NativeSessionHistory,
@@ -199,6 +212,7 @@ export interface ChannelPeers {
 }
 
 export class ChannelActor {
+    readonly #pendingAgentSettingsDiscoveries = new Map<string, PendingAgentSettingsDiscovery>();
     readonly #pendingNativeImports = new Map<
         string,
         | {
@@ -247,6 +261,7 @@ export class ChannelActor {
     readonly attachDaemon = async (replacedExistingConnection: boolean, signal: AbortSignal): Promise<void> => {
         this.#clearInFlightDeliveries();
         if (replacedExistingConnection) {
+            this.failPendingAgentSettingsDiscoveries();
             this.#pendingNativeImports.clear();
             await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         }
@@ -281,6 +296,7 @@ export class ChannelActor {
             return;
         }
         this.#backpressuredEventBySource.clear();
+        this.failPendingAgentSettingsDiscoveries();
         this.#pendingNativeImports.clear();
         await this.#commands.markRuntimeDisconnected(this.#scope, this.#runtimeId, this.#clock.now(), signal);
         this.broadcastRuntimeStatus(false);
@@ -499,6 +515,25 @@ export class ChannelActor {
                 this.#pendingNativeImports.delete(result.requestId);
                 return;
             }
+            if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
+                const discovered = decodeAgentSettingsDiscoveredEvent(message);
+                this.withPendingAgentSettingsDiscovery(discovered.requestId, (pending) => {
+                    if (pending.agentId !== discovered.agentId) {
+                        throw new ProtocolMessageError(
+                            "The Agent settings discovery result does not match the requested Agent",
+                        );
+                    }
+                    this.sendAgentSettingsDiscoveryResult(pending, message);
+                });
+                return;
+            }
+            if (kind === AGENT_SETTINGS_DISCOVERY_FAILED_KIND) {
+                const failed = decodeAgentSettingsDiscoveryFailedEvent(message);
+                this.withPendingAgentSettingsDiscovery(failed.requestId, (pending) => {
+                    this.sendAgentSettingsDiscoveryResult(pending, message);
+                });
+                return;
+            }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
                 this.#pendingNativeImports.delete(decodeSessionOperationFailedEvent(message).requestId);
             }
@@ -644,7 +679,7 @@ export class ChannelActor {
             }
             if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                 const command = decodeAgentSettingsDiscoverCommand(message);
-                this.forwardAgentSettingsDiscovery(socket, message, command.requestId);
+                this.forwardAgentSettingsDiscovery(socket, message, command.requestId, command.agentId);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -1047,8 +1082,19 @@ export class ChannelActor {
         socket: ChannelSocket,
         message: string,
         requestId: string,
+        agentId: string,
     ): void => {
+        const now = this.#clock.now();
+        this.expireAgentSettingsDiscoveries(now);
+        if (this.#pendingAgentSettingsDiscoveries.has(requestId)) {
+            throw new ProtocolMessageError("Another Agent settings discovery is pending");
+        }
+        this.#pendingAgentSettingsDiscoveries.set(
+            requestId,
+            new PendingAgentSettingsDiscovery(agentId, now + AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS, socket),
+        );
         if (!this.sendToDaemon(message)) {
+            this.#pendingAgentSettingsDiscoveries.delete(requestId);
             socket.send(
                 encodeAgentSettingsDiscoveryFailedEvent({
                     code: "runtime_offline",
@@ -1059,7 +1105,52 @@ export class ChannelActor {
             );
             return;
         }
-        this.broadcast(this.#peers.hosts(), message);
+    };
+
+    private readonly withPendingAgentSettingsDiscovery = (
+        requestId: string,
+        consume: (pending: PendingAgentSettingsDiscovery) => void,
+    ): void => {
+        this.expireAgentSettingsDiscoveries(this.#clock.now());
+        const pending = this.#pendingAgentSettingsDiscoveries.get(requestId);
+        if (pending === undefined) {
+            return;
+        }
+        this.#pendingAgentSettingsDiscoveries.delete(requestId);
+        consume(pending);
+    };
+
+    private readonly sendAgentSettingsDiscoveryResult = (
+        pending: PendingAgentSettingsDiscovery,
+        message: string,
+    ): void => {
+        if (pending.socket.isOpen()) {
+            pending.socket.send(message);
+        }
+    };
+
+    private readonly expireAgentSettingsDiscoveries = (now: number): void => {
+        for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
+            if (pending.expiresAt <= now) {
+                this.#pendingAgentSettingsDiscoveries.delete(requestId);
+            }
+        }
+    };
+
+    private readonly failPendingAgentSettingsDiscoveries = (): void => {
+        for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
+            if (pending.socket.isOpen()) {
+                pending.socket.send(
+                    encodeAgentSettingsDiscoveryFailedEvent({
+                        code: "runtime_offline",
+                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                        message: "The local runtime is offline",
+                        requestId,
+                    }),
+                );
+            }
+        }
+        this.#pendingAgentSettingsDiscoveries.clear();
     };
 
     private readonly sendToDaemon = (message: string): boolean => {

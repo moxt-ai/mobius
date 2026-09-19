@@ -892,32 +892,44 @@ async function discoverAgentSettings(
 ): Promise<AgentSettingsDiscoveredEvent> {
     const agent = config.catalog.find(command.agentId);
     const cwd = await directories.resolve(config.bindingId, "default", signal);
-    const snapshot = await sessions.inspectAgentSettings({
+    const baseSnapshot = await sessions.inspectAgentSettings({
         additionalDirectories: [],
         agent,
         cwd,
         signal,
     });
+    const selectedSnapshot =
+        command.model === undefined
+            ? baseSnapshot
+            : await sessions.inspectAgentSettings({
+                  additionalDirectories: [],
+                  agent,
+                  cwd,
+                  model: command.model,
+                  signal,
+              });
     const adapter = agentSettingsAdapterForAgent(agent.id);
-    const settings = settingsFromSnapshot(agent, snapshot.configOptions);
+    const baseSettings = settingsFromSnapshot(agent, baseSnapshot.configOptions);
+    const settings = settingsFromSnapshot(agent, selectedSnapshot.configOptions);
     const modelEffort = await discoverModelEffort(
         command,
         agent,
         adapter.modelEffortResolution,
-        snapshot.configOptions,
+        baseSnapshot.configOptions,
+        selectedSnapshot.configOptions,
         cwd,
         sessions,
         signal,
     );
     return {
         agentId: command.agentId,
-        agentName: snapshot.agentName,
-        agentVersion: snapshot.agentVersion,
+        agentName: selectedSnapshot.agentName,
+        agentVersion: selectedSnapshot.agentVersion,
         kind: AGENT_SETTINGS_DISCOVERED_KIND,
         modelEffort,
         requestId: command.requestId,
         settings,
-        settingsRevision: settingsRevision(agent, snapshot.agentVersion, settings, modelEffort),
+        settingsRevision: settingsRevision(agent, baseSnapshot.agentVersion, baseSettings, modelEffort),
     };
 }
 
@@ -981,26 +993,19 @@ async function discoverModelEffort(
     agent: LocalAgentDefinition,
     resolution: string,
     initialOptions: readonly SessionConfigOption[],
+    selectedOptions: readonly SessionConfigOption[],
     cwd: string,
     sessions: AcpSessionManager,
     signal: AbortSignal,
 ): Promise<AgentModelEffort> {
     const model = modelOption(initialOptions);
-    const effort = effortOption(initialOptions);
     if (
         resolution !== AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE &&
         resolution !== AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION
     ) {
         return unavailableModelEffort();
     }
-    if (
-        model === undefined ||
-        model.type !== "select" ||
-        model.values.length === 0 ||
-        effort === undefined ||
-        effort.type !== "select" ||
-        effort.values.length < 2
-    ) {
+    if (model === undefined || model.type !== "select" || model.values.length === 0) {
         return unavailableModelEffort();
     }
     const inspectModel = async (modelValue: string): Promise<readonly SessionConfigOption[]> =>
@@ -1013,8 +1018,12 @@ async function discoverModelEffort(
                 signal,
             })
         ).configOptions;
-    const valuesByModel: Record<string, readonly (typeof effort.values)[number][]> = {};
+    const valuesByModel: Record<string, readonly SessionConfigOption["values"][number][]> = {};
     if (resolution === "complete") {
+        const effort = effortOption(initialOptions);
+        if (effort === undefined || effort.type !== "select" || effort.values.length < 2) {
+            return unavailableModelEffort();
+        }
         for (const value of model.values) {
             const selectedEffort = effortOption(await inspectModel(value.value));
             valuesByModel[value.value] = selectedEffort?.type === "select" ? selectedEffort.values : [];
@@ -1030,11 +1039,12 @@ async function discoverModelEffort(
         if (!model.values.some((value) => value.value === command.model)) {
             throw new AcpExecutionError("The selected Agent model is unavailable", {}, "invalid_session_configuration");
         }
-        const selectedEffort = effortOption(await inspectModel(command.model));
+        const selectedEffort = effortOption(selectedOptions);
         valuesByModel[command.model] = selectedEffort?.type === "select" ? selectedEffort.values : [];
     }
+    const selectedEffort = effortOption(selectedOptions);
     return {
-        effortSettingId: effort.id,
+        effortSettingId: selectedEffort?.id ?? "",
         modelSettingId: model.id,
         resolution: "on_model_selection",
         valuesByModel,
@@ -1047,13 +1057,18 @@ function settingsRevision(
     settings: readonly AgentSetting[],
     modelEffort: AgentModelEffort,
 ): string {
-    // A dynamic effort lookup adds one model's values to an otherwise stable
-    // Agent capability document. It must not look like the Agent's settings
-    // changed each time a caller switches models.
+    // A dynamic effort lookup adds one model's settings and values to an
+    // otherwise stable Agent capability document. It must not look like the
+    // Agent's settings changed each time a caller switches models.
     const revisionModelEffort =
         modelEffort.resolution === AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE
             ? modelEffort
-            : { ...modelEffort, valuesByModel: {} };
+            : {
+                  effortSettingId: "",
+                  modelSettingId: modelEffort.modelSettingId,
+                  resolution: modelEffort.resolution,
+                  valuesByModel: {},
+              };
     return createHash("sha256")
         .update(
             JSON.stringify({
@@ -1503,21 +1518,6 @@ function assertSessionConfigurationSchema(
     }
 }
 
-function assertSessionConfigurationCoverage(
-    options: readonly SessionConfigOption[],
-    selections: readonly SessionConfigurationSelection[],
-): void {
-    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
-    if (selectionsById.size !== selections.length) {
-        throw invalidSessionConfiguration("The Turn configuration contains duplicate Agent settings");
-    }
-    for (const option of options) {
-        if (!selectionsById.has(option.id)) {
-            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
-        }
-    }
-}
-
 function sessionConfigurationSelectionIsAvailable(
     option: SessionConfigOption,
     selection: SessionConfigurationSelection,
@@ -1692,7 +1692,6 @@ async function applyCompleteSessionConfiguration(
     sessionId: string,
     signal: AbortSignal,
 ): Promise<void> {
-    assertSessionConfigurationCoverage(initialOptions, selections);
     let options = initialOptions;
     const orderedSelections = selections.toSorted((left, right) => {
         const priority =

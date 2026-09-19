@@ -144,17 +144,37 @@ function eventWithCachedModelEffortValues(
     if (event.modelEffort.resolution !== MODEL_EFFORT_ON_MODEL_SELECTION) {
         return event;
     }
-    const previousValues =
+    const canReuseCachedCapability =
         requestedModel.length > 0 &&
         cached !== undefined &&
         cached.event.settingsRevision === event.settingsRevision &&
-        cached.event.modelEffort.resolution === MODEL_EFFORT_ON_MODEL_SELECTION
-            ? cached.event.modelEffort.valuesByModel
-            : {};
+        cached.event.modelEffort.resolution === MODEL_EFFORT_ON_MODEL_SELECTION;
+    const previousValues =
+        canReuseCachedCapability && cached !== undefined ? cached.event.modelEffort.valuesByModel : {};
+    const effortSettingId =
+        event.modelEffort.effortSettingId.length > 0
+            ? event.modelEffort.effortSettingId
+            : canReuseCachedCapability && cached !== undefined
+              ? cached.event.modelEffort.effortSettingId
+              : "";
+    let settings = event.settings;
+    if (
+        canReuseCachedCapability &&
+        cached !== undefined &&
+        effortSettingId.length > 0 &&
+        !settings.some((setting) => setting.id === effortSettingId)
+    ) {
+        const cachedEffort = cached.event.settings.find((setting) => setting.id === effortSettingId);
+        if (cachedEffort !== undefined) {
+            settings = [...settings, cachedEffort];
+        }
+    }
     return {
         ...event,
+        settings,
         modelEffort: {
             ...event.modelEffort,
+            effortSettingId,
             valuesByModel: {
                 ...previousValues,
                 ...inferredDefaultModelEffortValues(event),
@@ -195,6 +215,19 @@ function withResolvedEffortOptions(
             values,
         };
     });
+}
+
+function optionsWithCachedEffortSetting(
+    event: AgentSettingsDiscoveredEvent,
+    options: readonly SessionConfigOption[],
+    preferences: ReturnType<typeof readSessionConfigPreferences>,
+): readonly SessionConfigOption[] {
+    const effortSettingId = event.modelEffort.effortSettingId;
+    if (effortSettingId.length === 0 || options.some((option) => option.id === effortSettingId)) {
+        return options;
+    }
+    const effort = event.settings.find((setting) => setting.id === effortSettingId);
+    return effort === undefined ? options : [...options, optionFromSetting(effort, preferences)];
 }
 
 function optionWithSelection(
@@ -287,7 +320,13 @@ export class AgentSettingsCache {
         signal: AbortSignal,
     ): Promise<CachedAgentSettings> => {
         const existing = await this.load(agentId, false, signal);
-        const selected = optionWithSelection(existing.options, configId, value, booleanValue);
+        const preferences = readSessionConfigPreferences(this.#channelId, agentId);
+        const selected = optionWithSelection(
+            optionsWithCachedEffortSetting(existing.event, existing.options, preferences),
+            configId,
+            value,
+            booleanValue,
+        );
         const modelChanged = configId === existing.event.modelEffort.modelSettingId;
         const needsSelectedModelDiscovery =
             modelChanged &&
@@ -300,13 +339,21 @@ export class AgentSettingsCache {
             ? new CachedAgentSettings(
                   agentId,
                   next.event,
-                  optionWithSelection(next.options, configId, value, booleanValue),
+                  optionWithSelection(
+                      optionsWithCachedEffortSetting(next.event, next.options, preferences),
+                      configId,
+                      value,
+                      booleanValue,
+                  ),
               )
             : next;
         const adjusted = new CachedAgentSettings(
             agentId,
             selectedEntry.event,
-            withResolvedEffortOptions(selectedEntry.event, selectedEntry.options),
+            withResolvedEffortOptions(
+                selectedEntry.event,
+                optionsWithCachedEffortSetting(selectedEntry.event, selectedEntry.options, preferences),
+            ),
         );
         this.#entries.set(agentId, adjusted);
         saveSessionConfigPreferences(this.#channelId, agentId, adjusted.options);

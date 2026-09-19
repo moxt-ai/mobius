@@ -128,6 +128,75 @@ function sendDiscoveredModelSettings(agentId: string, requestId: string, model: 
     });
 }
 
+function sendDiscoveredDeferredEffortSettings(agentId: string, requestId: string, model: string): string {
+    const selectedModel = model.length === 0 ? "model-a" : model;
+    if (model.length === 0 || selectedModel === "model-a") {
+        return encodeAgentSettingsDiscoveredEvent({
+            agentId,
+            agentName: "DeepSeek Harness",
+            agentVersion: "integration",
+            kind: "agent.settings.discovered",
+            modelEffort: {
+                effortSettingId: "",
+                modelSettingId: "model",
+                resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+                valuesByModel: model.length === 0 ? {} : { [selectedModel]: [] },
+            },
+            requestId,
+            settings: [
+                {
+                    booleanValue: false,
+                    category: "model",
+                    defaultValue: selectedModel,
+                    description: "Execution model",
+                    id: "model",
+                    name: "Model",
+                    type: "select",
+                    values: [modelValue("Model A", "model-a"), modelValue("Model B", "model-b")],
+                },
+            ],
+            settingsRevision: "3".repeat(64),
+        });
+    }
+    const effortValues = [modelValue("Balanced", "balanced"), modelValue("High", "high")];
+    return encodeAgentSettingsDiscoveredEvent({
+        agentId,
+        agentName: "DeepSeek Harness",
+        agentVersion: "integration",
+        kind: "agent.settings.discovered",
+        modelEffort: {
+            effortSettingId: "reasoning_effort",
+            modelSettingId: "model",
+            resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            valuesByModel: { [selectedModel]: effortValues },
+        },
+        requestId,
+        settings: [
+            {
+                booleanValue: false,
+                category: "model",
+                defaultValue: selectedModel,
+                description: "Execution model",
+                id: "model",
+                name: "Model",
+                type: "select",
+                values: [modelValue("Model A", "model-a"), modelValue("Model B", "model-b")],
+            },
+            {
+                booleanValue: false,
+                category: "thought_level",
+                defaultValue: "balanced",
+                description: "Reasoning effort",
+                id: "reasoning_effort",
+                name: "Reasoning effort",
+                type: "select",
+                values: effortValues,
+            },
+        ],
+        settingsRevision: "3".repeat(64),
+    });
+}
+
 function sendDiscoveredCompleteModelSettings(agentId: string, requestId: string): string {
     const modelAEfforts = [modelValue("Low", "low"), modelValue("Medium", "medium")];
     const modelBEfforts = [modelValue("Balanced", "balanced"), modelValue("High", "high")];
@@ -245,8 +314,10 @@ describe.sequential("Agent-native run settings", () => {
             await sendReadySession(paired.daemon, prepare, []);
 
             fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
-            const model = screen.getByRole("combobox", { name: "Model" });
-            fireEvent.pointerDown(model, { button: 0, pointerType: "mouse" });
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
             fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
 
             const selectedModel = decodeAgentSettingsDiscoverCommand(
@@ -259,6 +330,98 @@ describe.sequential("Agent-native run settings", () => {
                 expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
             });
             expect(paired.daemon.available(SESSION_CONFIGURE_KIND)).toBe(0);
+
+            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(input, { target: { value: "Use the selected model" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.sessionConfigurations).toEqual([
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "model-b",
+                    valueType: "select",
+                },
+                {
+                    booleanValue: false,
+                    configId: "reasoning_effort",
+                    value: "balanced",
+                    valueType: "select",
+                },
+            ]);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given the default model has no effort setting, When the user switches to a model that exposes effort, Then the picker appears without a reload or protocol error", async () => {
+        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const prepare = decodeSessionPrepareCommand(encodedPrepare);
+            paired.daemon.send(sendDiscoveredDeferredEffortSettings(discovery.agentId, discovery.requestId, ""));
+            await sendReadySession(paired.daemon, prepare, []);
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
+            expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+
+            const selectedModel = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            expect(selectedModel).toMatchObject({ agentId: "codex", model: "model-b" });
+            paired.daemon.send(
+                sendDiscoveredDeferredEffortSettings(selectedModel.agentId, selectedModel.requestId, "model-b"),
+            );
+
+            await waitFor(() => {
+                expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toBeTruthy();
+            });
+            expect(
+                screen.queryByText(/invalid_protocol_message: Received an invalid message from the relay/),
+            ).toBeNull();
+
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model A" }));
+            const deselectedModel = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            expect(deselectedModel).toMatchObject({ agentId: "codex", model: "model-a" });
+            paired.daemon.send(
+                sendDiscoveredDeferredEffortSettings(deselectedModel.agentId, deselectedModel.requestId, "model-a"),
+            );
+            await waitFor(() => {
+                expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+            });
+
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+            await waitFor(() => {
+                expect(screen.getByRole("combobox", { name: "Reasoning effort" })).toBeTruthy();
+            });
+            expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
 
             const input = await screen.findByRole("textbox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use the selected model" } });

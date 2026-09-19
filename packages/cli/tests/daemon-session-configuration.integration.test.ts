@@ -237,7 +237,7 @@ describe("daemon session configuration boundary", () => {
             "deepseek-harness",
             "DeepSeek Harness",
             process.execPath,
-            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--without-reasoning-effort"],
+            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--reasoning-effort-for-test-large-only"],
             {
                 MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
             },
@@ -271,8 +271,8 @@ describe("daemon session configuration boundary", () => {
             const discovered = await readAgentSettings(frames, discoveryRequestId);
             expect(discovered.modelEffort).toEqual({
                 effortSettingId: "",
-                modelSettingId: "",
-                resolution: "unavailable",
+                modelSettingId: "model",
+                resolution: "on_model_selection",
                 valuesByModel: {},
             });
             expect(discovered.settings).toEqual(
@@ -282,6 +282,28 @@ describe("daemon session configuration boundary", () => {
                 ]),
             );
             expect(discovered.settings).not.toEqual(
+                expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
+            );
+            const selectedDiscoveryRequestId = "deepseek-large-model-settings";
+            writeServerTextFrame(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    model: "test-large",
+                    requestId: selectedDiscoveryRequestId,
+                }),
+            );
+            const selectedModelSettings = await readAgentSettings(frames, selectedDiscoveryRequestId);
+            expect(selectedModelSettings.modelEffort).toEqual({
+                effortSettingId: "reasoning_effort",
+                modelSettingId: "model",
+                resolution: "on_model_selection",
+                valuesByModel: {
+                    "test-large": expect.arrayContaining([expect.objectContaining({ value: "high" })]),
+                },
+            });
+            expect(selectedModelSettings.settings).toEqual(
                 expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
             );
             const firstSessionConfigurations: readonly SessionConfigurationSelection[] = [
@@ -295,6 +317,12 @@ describe("daemon session configuration boundary", () => {
                     booleanValue: false,
                     configId: "model",
                     value: "test-large",
+                    valueType: "select",
+                },
+                {
+                    booleanValue: false,
+                    configId: "reasoning_effort",
+                    value: "high",
                     valueType: "select",
                 },
                 {
@@ -332,13 +360,26 @@ describe("daemon session configuration boundary", () => {
                 text: "DeepSeek Harness turn 1: first configured turn",
             });
 
+            const secondSessionConfigurations: SessionConfigurationSelection[] = [];
+            for (const selection of firstSessionConfigurations) {
+                if (selection.configId === "reasoning_effort") {
+                    continue;
+                }
+                if (selection.configId === "dsh_access_mode") {
+                    secondSessionConfigurations.push({ ...selection, value: "workspace-write" });
+                    continue;
+                }
+                if (selection.configId === "model") {
+                    secondSessionConfigurations.push({ ...selection, value: "test-small" });
+                    continue;
+                }
+                secondSessionConfigurations.push(selection);
+            }
             const secondPrompt: SessionPromptCommand = {
                 ...firstPrompt,
                 commandId: "second_configured_turn",
                 prompt: "second configured turn",
-                sessionConfigurations: firstSessionConfigurations.map((selection) =>
-                    selection.configId === "dsh_access_mode" ? { ...selection, value: "workspace-write" } : selection,
-                ),
+                sessionConfigurations: secondSessionConfigurations,
             };
             writeServerTextFrame(await socketReady.promise, encodeSessionPromptCommand(secondPrompt));
             const secondResult = await readTerminalSessionResult(frames, secondPrompt.sessionId);
