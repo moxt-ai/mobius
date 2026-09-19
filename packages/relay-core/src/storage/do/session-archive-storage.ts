@@ -502,27 +502,27 @@ export class SessionArchiveStorage {
         readonly sessionId: string;
         readonly throughSequence: number;
     }): void => {
+        // Keep the latest event per source in one pass. The previous correlated
+        // NOT EXISTS examined the whole prefix once per candidate row, which made
+        // a single terminal commit quadratic in the events of the Turn and could
+        // exhaust the Durable Object CPU limit on long Sessions.
         this.#database.run(
             `INSERT INTO session_event_receipts (
                scope_key, session_id, source_kind, source_id, event_id,
                payload_hash, source_seq, sequence_number, recorded_at
              )
-             SELECT e.scope_key, e.session_id, e.source_kind, e.source_id, e.event_id,
-                    e.payload_hash, e.source_seq, e.sequence_number, e.recorded_at
-               FROM session_events e
-              WHERE e.scope_key = ? AND e.session_id = ? AND e.sequence_number <= ?
-                AND NOT EXISTS (
-                    SELECT 1 FROM session_events later
-                     WHERE later.scope_key = e.scope_key
-                       AND later.session_id = e.session_id
-                       AND later.source_kind = e.source_kind
-                       AND later.source_id = e.source_id
-                       AND later.sequence_number <= ?
-                       AND (
-                           length(later.source_seq) > length(e.source_seq)
-                           OR (length(later.source_seq) = length(e.source_seq) AND later.source_seq > e.source_seq)
-                       )
-                )
+             SELECT scope_key, session_id, source_kind, source_id, event_id,
+                    payload_hash, source_seq, sequence_number, recorded_at
+               FROM (
+                   SELECT e.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY e.source_kind, e.source_id
+                              ORDER BY length(e.source_seq) DESC, e.source_seq DESC
+                          ) AS source_rank
+                     FROM session_events e
+                    WHERE e.scope_key = ? AND e.session_id = ? AND e.sequence_number <= ?
+               )
+              WHERE source_rank = 1
              ON CONFLICT(scope_key, session_id, source_kind, source_id) DO UPDATE SET
                event_id = excluded.event_id,
                payload_hash = excluded.payload_hash,
@@ -534,7 +534,7 @@ export class SessionArchiveStorage {
                     length(excluded.source_seq) = length(session_event_receipts.source_seq)
                     AND excluded.source_seq > session_event_receipts.source_seq
                 )`,
-            [input.scopeKey, input.sessionId, input.throughSequence, input.throughSequence],
+            [input.scopeKey, input.sessionId, input.throughSequence],
         );
     };
 
