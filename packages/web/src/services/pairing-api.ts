@@ -1260,9 +1260,13 @@ export async function readProjectRuntimeConnection(
     projectId: string,
     runtimeId: string,
     cancellationSignal: AbortSignal = new AbortController().signal,
-    accessChannelId: string = "",
+    requestedAccessChannelId: string = "",
 ): Promise<ChannelConnection> {
-    const credential = projectCredential(accessChannelId, projectId);
+    const credential = projectCredential(requestedAccessChannelId, projectId);
+    // The channel that owns device access is a property of the resolved credential, not of the
+    // navigation state: a reload or deep link drops `location.state`, and an empty channel would
+    // render an access link that matches no channel.
+    const accessChannelId = resolveAccessChannelId(credential, requestedAccessChannelId);
     const client = publicServiceClient(credential);
     try {
         const runtimes = await client.runtimes.list(requestSignal(cancellationSignal));
@@ -1279,6 +1283,17 @@ export async function readProjectRuntimeConnection(
     } finally {
         client.close();
     }
+}
+
+/**
+ * The device-access page belongs to one channel. The Project owner credential records which channel
+ * created it, so it survives a reload even when the navigation state that carried it does not.
+ */
+function resolveAccessChannelId(credential: BrowserChannelCredential, requestedAccessChannelId: string): string {
+    if (credential instanceof ProjectOwnerBrowserCredential) {
+        return credential.ownerChannelId;
+    }
+    return requestedAccessChannelId;
 }
 
 export async function readConnectionHistory(

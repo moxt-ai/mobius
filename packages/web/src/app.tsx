@@ -154,7 +154,7 @@ function ChannelWorkspace({
     const navigate = useNavigate();
     const mainContentRef = useRef<HTMLElement>(null);
     const channelIndexOpen = location.pathname === routes.rootPath;
-    const accessOpen = location.pathname === routes.accessPath;
+    const accessOpen = routes.access.kind === "available" && location.pathname === routes.access.path;
     const runtimesOpen = location.pathname === routes.runtimesPath;
     const settingsOpen = location.pathname === routes.settingsPath || routes.isSessionSettingsPath(location.pathname);
     const managementPageOpen = accessOpen || runtimesOpen || settingsOpen;

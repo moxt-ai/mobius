@@ -5,8 +5,9 @@ const PROJECT_RUNTIME_ACCESS_STATE_KEY = "mobiusAccessChannelId";
 /**
  * A Project Runtime route is addressable from any channel in the Project, so the channel that opened it
  * travels in the navigation state. It decides which saved credential the page resolves and where the
- * "Access from other devices" and "Local machines" links point; an absent or malformed value simply falls
- * back to the credential the Project route already holds.
+ * "Access from other devices" and "Local machines" links point. Navigation state does not survive a
+ * reload or a cold deep link, so an absent or malformed value falls back to the channel recorded by the
+ * resolved Project owner credential, and device access stays hidden when neither names one.
  */
 export function projectRuntimeRouteState(channelId: string): { readonly mobiusAccessChannelId: string } {
     return { [PROJECT_RUNTIME_ACCESS_STATE_KEY]: channelId };
@@ -40,8 +41,16 @@ export function projectRuntimeRoutePath(projectId: string, runtimeId: string): s
     return `/projects/${encodeURIComponent(projectId)}/runtimes/${encodeURIComponent(runtimeId)}`;
 }
 
+/**
+ * Device access is scoped to one channel. A workspace that cannot name that channel has no addressable
+ * access page, so the link is representable as unavailable instead of a route that matches no channel.
+ */
+export type ChannelAccessSettings =
+    | { readonly kind: "available"; readonly path: string }
+    | { readonly kind: "unavailable" };
+
 export abstract class WorkspaceRoutePaths {
-    abstract readonly accessPath: string;
+    abstract readonly access: ChannelAccessSettings;
     abstract readonly rootPath: string;
     abstract readonly runtimesPath: string;
     abstract readonly settingsPath: string;
@@ -51,14 +60,14 @@ export abstract class WorkspaceRoutePaths {
 }
 
 export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
-    readonly accessPath: string;
+    readonly access: ChannelAccessSettings;
     readonly rootPath: string;
     readonly runtimesPath: string;
     readonly settingsPath: string;
 
     constructor(channelId: string) {
         super();
-        this.accessPath = channelAccessRoutePath(channelId);
+        this.access = { kind: "available", path: channelAccessRoutePath(channelId) };
         this.rootPath = channelRoutePath(channelId);
         this.runtimesPath = channelRuntimesRoutePath(channelId);
         this.settingsPath = channelSettingsRoutePath(channelId);
@@ -73,14 +82,16 @@ export class ChannelWorkspaceRoutePaths extends WorkspaceRoutePaths {
 }
 
 export class ProjectRuntimeWorkspaceRoutePaths extends WorkspaceRoutePaths {
-    readonly accessPath: string;
+    readonly access: ChannelAccessSettings;
     readonly rootPath: string;
     readonly runtimesPath: string;
     readonly settingsPath: string;
 
     constructor(projectId: string, runtimeId: string, accessChannelId: string) {
         super();
-        this.accessPath = channelAccessRoutePath(accessChannelId);
+        this.access = isIdentifier(accessChannelId)
+            ? { kind: "available", path: channelAccessRoutePath(accessChannelId) }
+            : { kind: "unavailable" };
         this.rootPath = projectRuntimeRoutePath(projectId, runtimeId);
         this.runtimesPath = `${this.rootPath}/machines`;
         this.settingsPath = `${this.rootPath}/settings`;

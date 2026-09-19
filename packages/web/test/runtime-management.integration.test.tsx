@@ -164,6 +164,73 @@ describe.sequential("Project Runtime management", () => {
         }
     });
 
+    it("Given the owner is already in a Project Runtime, When the browser reloads that URL without navigation state, Then device access still opens the owning channel", async () => {
+        const paired = await pairDaemon();
+        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
+        window.history.replaceState(null, "", settingsPath);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+        const additionalDaemons: StatefulDaemon[] = [];
+
+        try {
+            await screen.findByRole("heading", { level: 1, name: "Agent settings" });
+            fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
+            await screen.findByRole("heading", { level: 1, name: "Local machines" });
+
+            fireEvent.click(await screen.findByRole("button", { name: "Pair another machine" }));
+            const pairingCode = (await screen.findByRole("textbox", { name: "One-time pairing code" })).getAttribute(
+                "value",
+            );
+            if (pairingCode === null) {
+                throw new Error("Expected the Web pairing flow to expose a pairing code");
+            }
+            const claimed = await claimRuntimePairing(pairingCode);
+            additionalDaemons.push(claimed.daemon);
+            fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
+            await screen.findByText("Second integration machine is connected.");
+
+            const directory = await screen.findByRole("list", { name: "Project runtimes" });
+            const secondMachine = within(directory).getByText("Second integration machine").closest("li");
+            if (secondMachine === null) {
+                throw new Error("Expected the second Runtime list item");
+            }
+            fireEvent.click(
+                within(secondMachine).getByRole("button", { name: "Open chat on Second integration machine" }),
+            );
+            await waitFor(() => {
+                expect(window.location.pathname).toMatch(
+                    new RegExp(
+                        `^/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}/sessions/[a-zA-Z0-9._:-]+$`,
+                        "u",
+                    ),
+                );
+            });
+            const preparation = decodeSessionPrepareCommand(await claimed.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(claimed.daemon, preparation);
+
+            // A reload drops `location.state` while keeping the credential store and the URL.
+            cleanup();
+            await closeMobiusTransport();
+            const runtimePath = `/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}`;
+            window.history.replaceState(null, "", runtimePath);
+            createTestApplication();
+
+            await screen.findByRole("textbox", { name: "Message the local agent" });
+            fireEvent.click(screen.getByRole("link", { name: "Access from other devices" }));
+
+            await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
+            expect(screen.queryByText("Channel unavailable")).toBeNull();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            for (const daemon of additionalDaemons) {
+                daemon.close();
+            }
+            paired.daemon.close();
+        }
+    });
+
     it("Given another paired machine has no ready Agent, When the owner opens it, Then Web enters that Runtime and shows Agent setup", async () => {
         const paired = await pairDaemon();
         const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;

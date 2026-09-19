@@ -81,7 +81,7 @@ export function ConversationSidebar({
     const runningConversations = conversations.filter((conversation) => conversation.isRunning);
     const recentConversations = conversations.filter((conversation) => !conversation.isRunning);
     const displayWidth = sidebarDisplayWidth(layout);
-    const accessPath = routes.accessPath;
+    const access = routes.access;
     const runtimesPath = routes.runtimesPath;
     const activeSessionId = conversations.find((conversation) => conversation.id === activeConversationId)?.sessionId;
     const settingsPath =
@@ -304,22 +304,24 @@ export function ConversationSidebar({
                             </span>
                             Local machines
                         </NavLink>
-                        <NavLink
-                            className={({ isActive }) =>
-                                cn(
-                                    "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-                                    isActive && "bg-black/8 hover:bg-black/8",
-                                )
-                            }
-                            end
-                            onClick={closeSidebar}
-                            to={accessPath}
-                        >
-                            <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
-                                <Smartphone aria-hidden="true" className="size-3.5" />
-                            </span>
-                            Access from other devices
-                        </NavLink>
+                        {access.kind === "available" && (
+                            <NavLink
+                                className={({ isActive }) =>
+                                    cn(
+                                        "flex min-h-11 items-center gap-2.5 rounded-[9px] px-2.5 text-[13px] font-medium text-foreground no-underline transition-colors duration-150 hover:bg-black/5 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+                                        isActive && "bg-black/8 hover:bg-black/8",
+                                    )
+                                }
+                                end
+                                onClick={closeSidebar}
+                                to={access.path}
+                            >
+                                <span className="inline-flex size-7 items-center justify-center rounded-[8px] bg-white text-copy-secondary shadow-[inset_0_0_0_0.5px_rgba(0,0,0,0.09)]">
+                                    <Smartphone aria-hidden="true" className="size-3.5" />
+                                </span>
+                                Access from other devices
+                            </NavLink>
+                        )}
                         <NavLink
                             className={({ isActive }) =>
                                 cn(
