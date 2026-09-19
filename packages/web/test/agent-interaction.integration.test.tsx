@@ -1882,6 +1882,24 @@ describe.sequential("Agent interaction boundaries", () => {
             );
             await paired.daemon.sendSessionEvent(
                 prompt.sessionId,
+                encodeSessionUsageUpdatedEvent({
+                    _meta: null,
+                    commandId: prompt.commandId,
+                    kind: "session.usage.updated",
+                    sessionId: prompt.sessionId,
+                    source: "prompt",
+                    usage: {
+                        cachedReadTokens: 12_160,
+                        cachedWriteTokens: null,
+                        inputTokens: 11_615,
+                        outputTokens: 4,
+                        thoughtTokens: 0,
+                        totalTokens: 23_779,
+                    },
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
                 encodeSessionCompletedEvent({
                     commandId: prompt.commandId,
                     kind: "session.completed",
@@ -1904,6 +1922,20 @@ describe.sequential("Agent interaction boundaries", () => {
                 expect(usage?.getAttribute("aria-label")).toContain("25%");
                 expect(usage?.getAttribute("aria-label")).toContain("$0.25 USD");
             });
+
+            // The context window and the last prompt's counters come from different events at different
+            // moments, so the readout names them separately instead of one table under the other's headline.
+            const usagePanel = document.querySelector("details.group\\/context");
+            if (!(usagePanel instanceof HTMLElement)) {
+                throw new Error("Expected the Agent usage popover");
+            }
+            expect(within(usagePanel).getByRole("region", { name: "Context window" })).toBeTruthy();
+            expect(within(usagePanel).getByRole("region", { name: "Last prompt" })).toBeTruthy();
+
+            // Both groups describe the same numbers, so neither may drift to another locale's grouping.
+            expect(within(usagePanel).getByText("50K / 200K tokens")).toBeTruthy();
+            expect(within(usagePanel).getByText("23,779")).toBeTruthy();
+            expect(within(usagePanel).getByText("12,160")).toBeTruthy();
         } finally {
             cleanup();
             await closeMobiusTransport();

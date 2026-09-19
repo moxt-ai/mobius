@@ -86,32 +86,47 @@ function ContextUsageIndicator() {
             <div className="absolute right-0 bottom-[calc(100%+8px)] z-40 w-64 rounded-xl border-[0.5px] border-black/10 bg-white p-3 shadow-[0_14px_40px_rgba(0,0,0,0.14)]">
                 <div className="flex items-center justify-between text-xs font-medium text-foreground">
                     <span>Agent usage</span>
-                    {hasContext && <span>{usage.percent.toString()}% context</span>}
                 </div>
+                {/*
+                 * The live context window and the last prompt's counters come from different events at
+                 * different moments, so each group gets its own heading. Without them the table reads as a
+                 * breakdown of the ratio above it, which makes a correctly-computed number look wrong.
+                 */}
                 {hasContext && (
-                    <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
-                        <span
-                            className="block h-full rounded-full bg-copy-tertiary transition-[width] duration-300 motion-reduce:transition-none"
-                            style={{ width: `${usage.percent.toString()}%` }}
-                        />
-                    </div>
-                )}
-                <p className="mt-2 text-[11px] leading-[18px] text-muted-foreground">{usage.summary}</p>
-                {usage.costLabel.length > 0 && (
-                    <p className="mt-0.5 text-[11px] leading-[18px] text-muted-foreground">{usage.costLabel}</p>
+                    <section aria-label="Context window" className="mt-2">
+                        <div className="flex items-center justify-between text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
+                            <h3>Context window</h3>
+                            <span className="tabular-nums">{usage.percent.toString()}% used</span>
+                        </div>
+                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-black/[0.06]">
+                            <span
+                                className="block h-full rounded-full bg-copy-tertiary transition-[width] duration-300 motion-reduce:transition-none"
+                                style={{ width: `${usage.percent.toString()}%` }}
+                            />
+                        </div>
+                        <p className="mt-1.5 text-[11px] leading-[18px] text-muted-foreground">{usage.summary}</p>
+                        {usage.costLabel.length > 0 && (
+                            <p className="mt-0.5 text-[11px] leading-[18px] text-muted-foreground">{usage.costLabel}</p>
+                        )}
+                    </section>
                 )}
                 {usage.details.length > 0 && (
-                    <dl className="mt-2 max-h-64 space-y-1 overflow-y-auto border-t border-black/[0.06] pt-2 text-xs text-muted-foreground">
-                        {usage.details.map((detail, index) => (
-                            <div
-                                className="flex items-start justify-between gap-3"
-                                key={`${index.toString()}-${detail.label}`}
-                            >
-                                <dt className="min-w-0 break-words">{detail.label}</dt>
-                                <dd className="shrink-0 tabular-nums">{detail.value}</dd>
-                            </div>
-                        ))}
-                    </dl>
+                    <section aria-label="Last prompt" className="mt-2 border-t border-black/[0.06] pt-2">
+                        <h3 className="text-[10px] leading-4 font-semibold tracking-[0.04em] text-copy-tertiary uppercase">
+                            Last prompt
+                        </h3>
+                        <dl className="mt-1 max-h-64 space-y-1 overflow-y-auto text-xs text-muted-foreground">
+                            {usage.details.map((detail, index) => (
+                                <div
+                                    className="flex items-start justify-between gap-3"
+                                    key={`${index.toString()}-${detail.label}`}
+                                >
+                                    <dt className="min-w-0 break-words">{detail.label}</dt>
+                                    <dd className="shrink-0 tabular-nums">{detail.value}</dd>
+                                </div>
+                            ))}
+                        </dl>
+                    </section>
                 )}
             </div>
         </details>

@@ -159,7 +159,7 @@ class MeasuredSessionUsage extends SessionUsageState {
                 ["Reasoning", usage.thoughtTokens],
             ] satisfies readonly (readonly [string, number | null | undefined])[]) {
                 if (value != null) {
-                    details.push({ label, value: value.toLocaleString("en-US") });
+                    details.push({ label, value: formatUsageNumber(value) });
                 }
             }
         }
@@ -168,13 +168,13 @@ class MeasuredSessionUsage extends SessionUsageState {
             if (quota.token_count !== null) {
                 details.push({
                     label: "Agent quota tokens",
-                    value: quota.token_count.totalTokens.toLocaleString("en-US"),
+                    value: formatUsageNumber(quota.token_count.totalTokens),
                 });
             }
             for (const model of quota.model_usage) {
                 details.push({
                     label: model.model,
-                    value: model.token_count.totalTokens.toLocaleString("en-US"),
+                    value: formatUsageNumber(model.token_count.totalTokens),
                 });
             }
         }
@@ -2113,11 +2113,24 @@ function reconcileContents(
     return [...contents.values()];
 }
 
+/**
+ * The usage readout shows a compact summary directly above a detailed breakdown of the same numbers, so
+ * both must use one locale or the panel contradicts itself: a compact summary renders `12.2K` while the
+ * breakdown under it renders `12,217`, and a host locale with different grouping renders something else
+ * again. The interface is English-only, so the readout is pinned to `en-US` rather than following the host
+ * locale, which for a hosted deployment is unrelated to the reader's preference.
+ */
+const USAGE_NUMBER_LOCALE = "en-US";
+
 function formatCompactNumber(value: number): string {
-    return new Intl.NumberFormat(undefined, {
+    return new Intl.NumberFormat(USAGE_NUMBER_LOCALE, {
         maximumFractionDigits: 1,
         notation: "compact",
     }).format(value);
+}
+
+function formatUsageNumber(value: number): string {
+    return value.toLocaleString(USAGE_NUMBER_LOCALE);
 }
 
 function previewFromPrompt(
