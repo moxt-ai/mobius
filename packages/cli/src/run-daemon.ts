@@ -156,6 +156,7 @@ import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
+import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
 import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
@@ -2153,6 +2154,10 @@ async function runRelayConnection(
             signal.addEventListener("abort", stop, { once: true });
             const handleClose = (event: CloseEvent): void => {
                 diagnostics.connectionClosed(connectionEpoch, event.code, event.reason, "relay");
+                if (isRuntimeRelayRevocation(event.code, event.reason)) {
+                    rejectConnection(new RuntimeRelayRevokedError(event.code, event.reason));
+                    return;
+                }
                 resolveConnection();
             };
             const handleError = (event: Event): void => {
@@ -2842,6 +2847,9 @@ export async function runDaemon(
             } catch (error) {
                 if (signal.aborted) {
                     return;
+                }
+                if (error instanceof RuntimeRelayRevokedError) {
+                    throw error;
                 }
                 diagnostics.connectionFailed(connectionEpoch, error, "connection");
             }

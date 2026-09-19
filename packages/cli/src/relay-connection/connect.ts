@@ -2,6 +2,7 @@ import { WebSocket } from "undici";
 
 import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import { runtimeAuthorization } from "./runtime-authentication.ts";
+import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./runtime-revocation.ts";
 
 const CONNECTION_TIMEOUT_MILLISECONDS = 15_000;
 
@@ -43,7 +44,7 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
             socket.removeEventListener("error", onError);
             socket.removeEventListener("open", onOpen);
         };
-        const fail = (error: RelayConnectionError): void => {
+        const fail = (error: Error): void => {
             if (finished) {
                 return;
             }
@@ -65,6 +66,10 @@ export function connectRelay(url: URL, signal: AbortSignal): Promise<WebSocket> 
             );
         };
         const onClose = (event: CloseEvent): void => {
+            if (isRuntimeRelayRevocation(event.code, event.reason)) {
+                fail(new RuntimeRelayRevokedError(event.code, event.reason));
+                return;
+            }
             fail(
                 new RelayConnectionError("relay_connection_closed", "Relay connection closed before it was ready", {
                     closeCode: event.code.toString(),

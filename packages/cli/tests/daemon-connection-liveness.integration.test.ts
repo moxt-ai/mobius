@@ -48,6 +48,7 @@ import {
 } from "../../protocol/src/index.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
+import { RuntimeRelayRevokedError } from "../src/relay-connection/runtime-revocation.ts";
 import { SessionEventOutbox } from "../src/relay-connection/session-event-outbox.ts";
 import type { DaemonScheduledTask, DaemonTimer } from "../src/relay-connection/timer.ts";
 import { runDaemon } from "../src/run-daemon.ts";
@@ -1360,6 +1361,124 @@ describe("daemon relay connection liveness", () => {
         } finally {
             cancellation.abort();
             await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_CODEX_PATH", previousCodexPath);
+            restoreEnvironmentVariable("MOBIUS_CLAUDE_PATH", previousClaudePath);
+            restoreEnvironmentVariable("MOBIUS_COPILOT_PATH", previousCopilotPath);
+            restoreEnvironmentVariable("MOBIUS_HERMES_PATH", previousHermesPath);
+            restoreEnvironmentVariable("MOBIUS_GEMINI_PATH", previousGeminiPath);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            restoreEnvironmentVariable("PATH", previousPath);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given an active Runtime is revoked by the Relay, When the daemon receives the terminal close, Then it exits instead of reconnecting", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-runtime-revoked-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const relay = createServer((request, response) => {
+            if (
+                request.method === "PUT" &&
+                request.url === `${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        let resolveUpgrade = (_socket: Duplex): void => undefined;
+        const upgraded = new Promise<Duplex>((resolve) => {
+            resolveUpgrade = resolve;
+        });
+        let upgradeCount = 0;
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            upgradeCount += 1;
+            respondToClientClose(socket);
+            resolveUpgrade(socket);
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const previousCodexPath = process.env["MOBIUS_CODEX_PATH"];
+        const previousClaudePath = process.env["MOBIUS_CLAUDE_PATH"];
+        const previousCopilotPath = process.env["MOBIUS_COPILOT_PATH"];
+        const previousHermesPath = process.env["MOBIUS_HERMES_PATH"];
+        const previousGeminiPath = process.env["MOBIUS_GEMINI_PATH"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        const previousPath = process.env["PATH"];
+        process.env["MOBIUS_CODEX_PATH"] = join(stateDirectory, "missing-codex");
+        process.env["MOBIUS_CLAUDE_PATH"] = join(stateDirectory, "missing-claude");
+        process.env["MOBIUS_COPILOT_PATH"] = join(stateDirectory, "missing-copilot");
+        process.env["MOBIUS_HERMES_PATH"] = join(stateDirectory, "missing-hermes");
+        process.env["MOBIUS_GEMINI_PATH"] = join(stateDirectory, "missing-gemini");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        process.env["PATH"] = "";
+        const config = createDaemonConfig({
+            defaultWorkspace,
+            auditDatabasePath,
+            channelId: "runtime-revoked-channel",
+            relayUrl: new URL(
+                `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/runtime-revoked-channel/daemon`,
+            ),
+        });
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            const socket = await upgraded;
+            writeServerCloseFrame(socket, 1008, "Runtime revoked");
+
+            await expect(daemon).rejects.toBeInstanceOf(RuntimeRelayRevokedError);
+            await expect(daemon).rejects.toMatchObject({
+                code: "runtime_relay_revoked",
+                closeCode: 1008,
+                closeReason: "Runtime revoked",
+            });
+            expect(upgradeCount).toBe(1);
+        } finally {
+            cancellation.abort();
+            await daemon.catch(() => undefined);
             audit.close();
             for (const socket of sockets) {
                 socket.destroy();

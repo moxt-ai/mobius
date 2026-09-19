@@ -18,6 +18,7 @@ export {
     resumeLocalMachine,
     resumeMobiusRuntime,
 } from "./pairing/pair-local-machine.ts";
+export { RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
 export { runDaemon } from "./run-daemon.ts";
 export {
     createMobiusRuntimeEngine,
