@@ -18,6 +18,7 @@ import {
     MobiusError,
     MobiusFailedTurnState,
     MobiusIndeterminateTurnState,
+    MobiusPageRequest,
     MobiusPermissionResponseRequest,
     MobiusRecordingPolicy,
     type MobiusSession,
@@ -550,7 +551,34 @@ class ConnectedTransport extends TransportConnection {
         if (turnId.length === 0) {
             throw new MobiusChannelError("turn_not_found", "The queued Turn is no longer available for steering");
         }
-        await clients.scoped.turns.steer(request.sessionId, turnId, AbortSignal.timeout(20_000));
+        const signal = AbortSignal.timeout(20_000);
+        await clients.scoped.turns.steer(request.sessionId, turnId, signal);
+        // The Relay accepts the disposition before the local daemon decides whether the target Turn is
+        // still active. Waiting for the accepted Turn's terminal outcome keeps the optimistic promotion
+        // revocable, so a daemon-side rejection rolls the message back instead of losing it silently.
+        await this.awaitAcceptedTurnOutcome(clients.scoped, request.sessionId, turnId, signal);
+    };
+
+    private readonly awaitAcceptedTurnOutcome = async (
+        scoped: MobiusClient,
+        sessionId: string,
+        turnId: string,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        while (!signal.aborted) {
+            const outcome = await scoped.turns.read(sessionId, turnId, signal);
+            if (outcome.state instanceof MobiusFailedTurnState) {
+                throw new MobiusChannelError(outcome.state.code, outcome.state.message);
+            }
+            if (
+                outcome.state instanceof MobiusSucceededTurnState ||
+                outcome.state instanceof MobiusCancelledTurnState
+            ) {
+                return;
+            }
+            await scoped.events.wait(sessionId, new MobiusPageRequest(100, ""), 1_000, signal);
+        }
+        signal.throwIfAborted();
     };
 
     readonly cancelAgentInstallation = async (request: AgentInstallCancelRequest): Promise<void> => {

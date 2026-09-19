@@ -806,6 +806,11 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     failTurn: (turn, message) => {
         set((state) => {
             const conversation = readConversation(state.conversations, turn.conversationId);
+            // The queue submission that started this Turn is no longer its owner once the user steers it:
+            // the steering path restores the message, so failing the Turn here would also hide the queue.
+            if (conversation.isQueuedSteeringCommand(turn.commandId)) {
+                return {};
+            }
             const currentMessage = readAgentMessage(conversation, turn.agentMessageId);
             const agentMessage = conversation.isSteeringCommand(turn.commandId)
                 ? currentMessage.transition(new FailedTurnState(message))

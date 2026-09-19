@@ -7,6 +7,7 @@ import {
     encodeSessionCompletedEvent,
     encodeSessionElicitationRequestedEvent,
     encodeSessionElicitationResolvedEvent,
+    encodeSessionFailedEvent,
     encodeSessionStartedEvent,
     encodeSessionUsageUpdatedEvent,
     MOBIUS_API_PREFIX,
@@ -493,6 +494,95 @@ describe.sequential("Agent interaction boundaries", () => {
                 ]);
                 expect(paired.daemon.available(SESSION_PROMPT_KIND)).toBe(0);
             });
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given the Agent is finishing its Turn, When the daemon rejects a steered follow-up, Then the message returns to the queue and the rejection is reported", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare, [], {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: false,
+                resumeSession: true,
+                steering: true,
+                unstableForkSession: true,
+            });
+            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(promptInput, { target: { value: "Inspect the failing workflow" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const runningPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                runningPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "running-attempt",
+                    commandId: runningPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: runningPrompt.sessionId,
+                }),
+            );
+            expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
+
+            const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(followUpInput, { target: { value: "Run the regression suite afterward" } });
+            fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
+            const followUpTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
+            fireEvent.click(
+                within(followUpTray).getByRole("button", {
+                    name: "Steer queued message: Run the regression suite afterward",
+                }),
+            );
+
+            // The Relay accepts the disposition before the daemon decides; the daemon reports the
+            // rejection on the steered Turn's own command.
+            const steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(steeringPrompt).toMatchObject({
+                disposition: "steer",
+                prompt: "Run the regression suite afterward",
+                targetCommandId: runningPrompt.commandId,
+            });
+            await paired.daemon.sendSessionEvent(
+                steeringPrompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "steering-attempt",
+                    commandId: steeringPrompt.commandId,
+                    kind: "session.started",
+                    sessionId: steeringPrompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                steeringPrompt.sessionId,
+                encodeSessionFailedEvent({
+                    code: "steering_target_unavailable",
+                    commandId: steeringPrompt.commandId,
+                    kind: "session.failed",
+                    message: "The target turn is no longer active",
+                    sessionId: steeringPrompt.sessionId,
+                }),
+            );
+
+            const restoredTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
+            await waitFor(() => {
+                expect(within(restoredTray).getByText("Run the regression suite afterward")).toBeTruthy();
+            });
+            expect(screen.getByRole("alert").textContent).toContain("steering_target_unavailable");
+            expect(within(screen.getByRole("log")).queryByText("Run the regression suite afterward")).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();

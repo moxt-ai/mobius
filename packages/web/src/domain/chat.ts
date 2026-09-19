@@ -941,6 +941,20 @@ export class AgentChatMessage extends ChatMessage {
         return new AgentChatMessage(`${commandId}:agent`, commandId, new Date(), "", new QueuedTurnState());
     }
 
+    readonly restoreQueued = (): AgentChatMessage =>
+        new AgentChatMessage(
+            this.id,
+            this.commandId,
+            this.createdAt,
+            "",
+            new QueuedTurnState(),
+            this.activities,
+            this.contents,
+            this.lastCommittedSeq,
+            this.turnId,
+            this.timing,
+        );
+
     readonly appendText = (delta: string, committedSequence: string): AgentChatMessage => {
         if (BigInt(committedSequence) <= BigInt(this.lastCommittedSeq)) {
             return this;
@@ -1290,10 +1304,39 @@ export class Conversation {
             turns.toReversed().find((turn) => turn.disposition !== SessionPromptDisposition.Steer) ?? lastTurn;
         const messages: ChatMessage[] = [];
         for (const turn of turns) {
-            messages.push(restoreUserMessage(turn));
+            // A steering Turn is not a turn of its own: the daemon injects it into the running Turn, so it
+            // contributes only its prompt. A rejected steering Turn injected nothing, so it is restored as a
+            // queued follow-up instead, keeping the message recoverable rather than silently dropping it.
             if (turn.disposition === SessionPromptDisposition.Steer) {
+                if (turn instanceof FailedRecordedTurn) {
+                    messages.push(
+                        new QueuedUserChatMessage(
+                            turn.commandId,
+                            turn.createdAt,
+                            turn.prompt,
+                            turn.images,
+                            turn.resources,
+                            turn.targetCommandId,
+                        ),
+                        new AgentChatMessage(
+                            `${turn.commandId}:agent`,
+                            turn.commandId,
+                            turn.createdAt,
+                            "",
+                            new QueuedTurnState(),
+                            [],
+                            [],
+                            lastCommittedSeq,
+                            turn.turnId,
+                            turn.timing,
+                        ),
+                    );
+                    continue;
+                }
+                messages.push(restoreUserMessage(turn));
                 continue;
             }
+            messages.push(restoreUserMessage(turn));
             let state: AgentTurnState;
             let fallbackText = "";
             if (turn instanceof PendingRecordedTurn) {
@@ -1529,6 +1572,13 @@ export class Conversation {
     readonly isSteeringCommand = (commandId: string): boolean =>
         this.messages.some((message) => message instanceof SteeringUserChatMessage && message.commandId === commandId);
 
+    /**
+     * A queued follow-up that the user promoted to steering is answered by the running Turn, not by its own
+     * Turn. Once promoted, the steering path owns its outcome, so the original queue submission must not
+     * report it as a failed Turn.
+     */
+    readonly isQueuedSteeringCommand = (commandId: string): boolean => this.isSteeringCommand(commandId);
+
     readonly promoteQueuedMessage = (commandId: string): Conversation => {
         let promoted = false;
         const messages = this.messages.map((message) => {
@@ -1561,6 +1611,11 @@ export class Conversation {
         );
     };
 
+    /**
+     * Rejected steering returns the follow-up to the queue. Its Turn was promoted from a queued follow-up,
+     * so its Agent message returns to the waiting state as well; otherwise the pair cannot be shown as a
+     * pending follow-up and the message would be lost.
+     */
     readonly restoreQueuedMessage = (commandId: string): Conversation =>
         new Conversation(
             this.agentId,
@@ -1570,11 +1625,15 @@ export class Conversation {
             this.title,
             this.preview,
             this.draft,
-            this.messages.map((message) =>
-                message instanceof SteeringUserChatMessage && message.commandId === commandId
-                    ? message.asQueued()
-                    : message,
-            ),
+            this.messages.map((message) => {
+                if (message instanceof SteeringUserChatMessage && message.commandId === commandId) {
+                    return message.asQueued();
+                }
+                if (message instanceof AgentChatMessage && message.commandId === commandId) {
+                    return message.restoreQueued();
+                }
+                return message;
+            }),
             this.session,
             this.directoryId,
             this.directoryLabel,
