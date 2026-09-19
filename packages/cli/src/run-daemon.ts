@@ -151,6 +151,7 @@ import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/opera
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
+import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
@@ -160,6 +161,10 @@ import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from ".
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
 const AGENT_ACTIVITY_COALESCING_MILLISECONDS = 100;
+const AGENT_TEXT_COALESCING_MILLISECONDS = 100;
+// Mirrors the protocol's per-event text limit; a delta larger than this is
+// rejected by the Session event codec rather than truncated.
+const AGENT_TEXT_MAXIMUM_LENGTH = 100_000;
 const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
@@ -1301,6 +1306,24 @@ async function executePrompt(
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
         publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
     });
+    const text = new CoalescingTextPublisher(
+        timer,
+        (messageId, delta) => {
+            publisher.recordAttempt(
+                command.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: command.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId,
+                    sessionId: command.sessionId,
+                    text: delta,
+                }),
+                attemptId,
+            );
+        },
+        AGENT_TEXT_COALESCING_MILLISECONDS,
+        AGENT_TEXT_MAXIMUM_LENGTH,
+    );
     try {
         const resolved = await resolveSessionDirectories(
             directories,
@@ -1393,18 +1416,8 @@ async function executePrompt(
                 disposition: command.disposition,
                 images: attachments.images,
                 onActivity: activities.record,
-                onText: (text, messageId) => {
-                    publisher.recordAttempt(
-                        command.sessionId,
-                        encodeAgentMessageDeltaEvent({
-                            commandId: command.commandId,
-                            kind: AGENT_MESSAGE_DELTA_KIND,
-                            messageId,
-                            sessionId: command.sessionId,
-                            text,
-                        }),
-                        attemptId,
-                    );
+                onText: (delta, messageId) => {
+                    text.record(messageId, delta);
                     return Promise.resolve();
                 },
                 prompt: command.prompt,
@@ -1416,6 +1429,7 @@ async function executePrompt(
             stopReason = result.stopReason;
         }
 
+        text.flush();
         activities.flush();
         publisher.recordAttempt(
             command.sessionId,
@@ -1434,6 +1448,7 @@ async function executePrompt(
             sessionId: command.sessionId,
         });
     } catch (error) {
+        text.flush();
         activities.flush();
         audit.record({
             commandId: command.commandId,

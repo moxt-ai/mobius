@@ -1354,7 +1354,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                 const chunks =
                     prompt === "generate markdown image"
                         ? [echoedPrompt.slice(0, 2), echoedPrompt.slice(2, -1), echoedPrompt.slice(-1)]
-                        : [echoedPrompt];
+                        : prompt === "stream token burst"
+                          ? Array.from({ length: 64 }, (_value, index) => `token-${index.toString()} `)
+                          : [echoedPrompt];
                 for (const text of chunks) {
                     await context.client.notify(acp.methods.client.session.update, {
                         sessionId: context.params.sessionId,
