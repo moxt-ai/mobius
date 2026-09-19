@@ -1057,8 +1057,25 @@ async function discoverModelEffort(
         }
         const selectedEffort = effortOption(selectedOptions);
         valuesByModel[command.model] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+        return {
+            effortSettingId: selectedEffort?.id ?? "",
+            modelSettingId: model.id,
+            resolution: "on_model_selection",
+            valuesByModel,
+        };
     }
-    const selectedEffort = effortOption(selectedOptions);
+    // No model was named, so the Agent answered about its own default model — one
+    // whose effort option an Agent may withhold. Resolve that model's capability
+    // too, or a session that never switches models can never offer an effort.
+    const defaultModel = model.type === "select" ? model.currentValue : "";
+    const reportedEffort = effortOption(selectedOptions);
+    const selectedEffort =
+        defaultModel.length > 0 && reportedEffort === undefined
+            ? effortOption(await inspectModel(defaultModel))
+            : reportedEffort;
+    if (defaultModel.length > 0) {
+        valuesByModel[defaultModel] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+    }
     return {
         effortSettingId: selectedEffort?.id ?? "",
         modelSettingId: model.id,

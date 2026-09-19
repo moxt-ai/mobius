@@ -217,6 +217,46 @@ function sendDiscoveredDeferredEffortSettings(agentId: string, requestId: string
     });
 }
 
+function sendDiscoveredDefaultModelEffort(agentId: string, requestId: string): string {
+    const effortValues = [modelValue("Balanced", "balanced"), modelValue("High", "high")];
+    return encodeAgentSettingsDiscoveredEvent({
+        agentId,
+        agentName: "DeepSeek Harness",
+        agentVersion: "integration",
+        kind: "agent.settings.discovered",
+        modelEffort: {
+            effortSettingId: "reasoning_effort",
+            modelSettingId: "model",
+            resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            valuesByModel: { "model-a": effortValues },
+        },
+        requestId,
+        settings: [
+            {
+                booleanValue: false,
+                category: "model",
+                defaultValue: "model-a",
+                description: "Execution model",
+                id: "model",
+                name: "Model",
+                type: "select",
+                values: [modelValue("Model A", "model-a"), modelValue("Model B", "model-b")],
+            },
+            {
+                booleanValue: false,
+                category: "thought_level",
+                defaultValue: "balanced",
+                description: "Reasoning effort",
+                id: "reasoning_effort",
+                name: "Reasoning effort",
+                type: "select",
+                values: effortValues,
+            },
+        ],
+        settingsRevision: "4".repeat(64),
+    });
+}
+
 function sendDiscoveredCompleteModelSettings(agentId: string, requestId: string): string {
     const modelAEfforts = [modelValue("Low", "low"), modelValue("Medium", "medium")];
     const modelBEfforts = [modelValue("Balanced", "balanced"), modelValue("High", "high")];
@@ -308,6 +348,37 @@ describe.sequential("Agent-native run settings", () => {
                     valueType: "select",
                 },
             ]);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given the default model itself exposes effort, When the user opens run settings, Then the picker is available without switching models", async () => {
+        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const prepare = decodeSessionPrepareCommand(encodedPrepare);
+            // The Agent reports the default model's own effort capability, so a
+            // session that never switches models still offers the control.
+            paired.daemon.send(sendDiscoveredDefaultModelEffort(discovery.agentId, discovery.requestId));
+            await sendReadySession(paired.daemon, prepare, []);
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
+
+            const effort = await screen.findByRole("combobox", { name: "Reasoning effort" });
+            expect(effort).toBeTruthy();
+            expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
         } finally {
             cleanup();
             await closeMobiusTransport();
