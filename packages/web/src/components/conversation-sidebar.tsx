@@ -184,8 +184,11 @@ export function ConversationSidebar({
                     <strong className="block truncate text-[13px] leading-[18px] font-medium text-foreground">
                         {conversation.title}
                     </strong>
-                    <span className="block truncate text-[11px] leading-4 font-normal text-muted-foreground">
-                        {conversation.isRunning ? conversation.activeStateLabel : conversation.preview}
+                    <span
+                        className="block truncate text-[11px] leading-4 font-normal text-muted-foreground"
+                        title={conversation.directoryLabel}
+                    >
+                        {conversation.directoryLabel}
                     </span>
                 </span>
             </NavLink>
