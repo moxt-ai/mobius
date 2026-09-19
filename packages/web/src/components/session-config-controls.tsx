@@ -13,6 +13,7 @@ import {
     SelectTrigger,
     SelectValue,
 } from "@/components/ui/select";
+import { dataTestId } from "@/data-testid";
 import { ReadySessionState, SessionPreparationFailedState } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import type { CachedAgentSettings } from "@/services/agent-settings-cache";
@@ -439,6 +440,7 @@ function SessionConfigControlsView({
                     "group h-11 w-auto max-w-full min-w-0 gap-0 rounded-full bg-transparent p-1 text-xs text-copy-secondary hover:bg-transparent lg:h-9 lg:max-w-[240px] lg:p-0",
                     failure.length > 0 && "text-destructive",
                 )}
+                data-testid={dataTestId.runSettingsTrigger}
                 onClick={() => {
                     if (open) {
                         close();

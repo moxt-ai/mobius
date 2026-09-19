@@ -5,7 +5,7 @@ import type {
     SessionConfigOption,
     SessionConfigurationSelection,
 } from "@moxt-ai/mobius-sdk";
-
+import { readStoredAgentSettings, saveStoredAgentSettings } from "@/services/agent-settings-storage";
 import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
 
 const MODEL_EFFORT_COMPLETE = "complete";
@@ -13,6 +13,10 @@ const MODEL_EFFORT_ON_MODEL_SELECTION = "on_model_selection";
 
 export interface AgentSettingsDiscovery {
     readonly discover: (agentId: string, model: string, signal: AbortSignal) => Promise<AgentSettingsDiscoveredEvent>;
+}
+
+export interface AgentVersions {
+    readonly version: (agentId: string) => string;
 }
 
 export class CachedAgentSettings {
@@ -282,10 +286,12 @@ export class AgentSettingsCache {
     readonly #discovery: AgentSettingsDiscovery;
     readonly #entries = new Map<string, CachedAgentSettings>();
     readonly #pending = new Map<string, PendingAgentSettings>();
+    readonly #versions: AgentVersions;
 
-    constructor(channelId: string, discovery: AgentSettingsDiscovery) {
+    constructor(channelId: string, discovery: AgentSettingsDiscovery, versions: AgentVersions) {
         this.#channelId = channelId;
         this.#discovery = discovery;
+        this.#versions = versions;
     }
 
     readonly close = (): void => {
@@ -297,7 +303,7 @@ export class AgentSettingsCache {
     };
 
     readonly load = async (agentId: string, force: boolean, signal: AbortSignal): Promise<CachedAgentSettings> => {
-        const existing = this.#entries.get(agentId);
+        const existing = this.#entries.get(agentId) ?? this.#restored(agentId);
         const initial = force || existing === undefined ? await this.#discover(agentId, "", signal) : existing;
         return await this.#resolveSelectedModel(initial, signal);
     };
@@ -380,7 +386,7 @@ export class AgentSettingsCache {
     ): CachedAgentSettings => {
         const cachedEvent = eventWithCachedModelEffortValues(
             event,
-            requestedModel.length === 0 ? undefined : this.#entries.get(agentId),
+            requestedModel.length === 0 ? undefined : (this.#entries.get(agentId) ?? this.#restored(agentId)),
             requestedModel,
         );
         const preferences = readSessionConfigPreferences(this.#channelId, agentId);
@@ -388,7 +394,26 @@ export class AgentSettingsCache {
             cachedEvent,
             cachedEvent.settings.map((setting) => optionFromSetting(setting, preferences)),
         );
+        saveStoredAgentSettings(this.#channelId, agentId, this.#versions.version(agentId), cachedEvent);
         return new CachedAgentSettings(agentId, cachedEvent, options);
+    };
+
+    readonly #restored = (agentId: string): CachedAgentSettings | undefined => {
+        const event = readStoredAgentSettings(this.#channelId, agentId, this.#versions.version(agentId));
+        if (event === undefined) {
+            return undefined;
+        }
+        const preferences = readSessionConfigPreferences(this.#channelId, agentId);
+        const entry = new CachedAgentSettings(
+            agentId,
+            event,
+            withResolvedEffortOptions(
+                event,
+                event.settings.map((setting) => optionFromSetting(setting, preferences)),
+            ),
+        );
+        this.#entries.set(agentId, entry);
+        return entry;
     };
 
     readonly #resolveSelectedModel = async (

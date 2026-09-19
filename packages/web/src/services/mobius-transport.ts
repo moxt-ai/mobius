@@ -360,17 +360,24 @@ class ConnectedTransport extends TransportConnection {
         this.#channelId = connection.accessChannelId;
         this.#connection = connection;
         this.#serviceClients = connectBrowserServiceClients(connection);
-        this.#agentSettings = new AgentSettingsCache(connection.accessChannelId, {
-            discover: async (agentId, model, signal) => {
-                const clients = await this.#serviceClients;
-                return await clients.scoped.runtimes.discoverAgentSettings(
-                    connection.runtimeId,
-                    agentId,
-                    model.length === 0 ? {} : { model },
-                    signal,
-                );
+        this.#agentSettings = new AgentSettingsCache(
+            connection.accessChannelId,
+            {
+                discover: async (agentId, model, signal) => {
+                    const clients = await this.#serviceClients;
+                    return await clients.scoped.runtimes.discoverAgentSettings(
+                        connection.runtimeId,
+                        agentId,
+                        model.length === 0 ? {} : { model },
+                        signal,
+                    );
+                },
             },
-        });
+            {
+                version: (agentId) =>
+                    connection.agents.find((candidate) => candidate.id === agentId)?.agentVersion ?? "",
+            },
+        );
         this.#client = connectMobiusChannelClient({
             onHistoryChanged,
             onCommands: (event) => {

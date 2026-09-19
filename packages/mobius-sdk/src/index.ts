@@ -47,6 +47,7 @@ export {
     decodeAgentContentEvent,
     decodeAgentDisplayContentValue,
     decodeAgentExecutionConfiguration,
+    decodeAgentSettingsDiscoveredEvent,
     decodeInteraction,
     decodeNativeSessionHistory,
     decodePromptImagesValue,
