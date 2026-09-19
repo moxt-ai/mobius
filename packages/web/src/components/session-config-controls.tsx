@@ -471,13 +471,19 @@ function SessionConfigControlsView({
             </Button>
             {open && (
                 <>
+                    {/*
+                     * A pointer-only dismiss surface. Keyboard users close the panel with Escape or its
+                     * header button, so this must stay out of the accessibility tree; otherwise it is
+                     * announced as a second "Close run settings" control beside the real one.
+                     */}
                     <button
-                        aria-label="Close run settings"
+                        aria-hidden="true"
                         className={cn(
                             "fixed inset-0 z-30 bg-black/20 backdrop-blur-[1px]",
                             panelLayout.kind !== "sheet" && "md:bg-transparent md:backdrop-blur-none",
                         )}
                         onClick={close}
+                        tabIndex={-1}
                         type="button"
                     />
                     <section

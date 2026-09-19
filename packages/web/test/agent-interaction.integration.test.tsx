@@ -197,6 +197,36 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given the composer and run settings are open, When a screen reader lists their controls, Then each action is exposed exactly once", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            await screen.findByRole("textbox", { name: "Message the local agent" });
+
+            // The visible attach button opens the native picker, so the input itself must stay hidden from
+            // assistive technology rather than appearing as a second, unlabeled control.
+            const fileInput = screen.getByTestId(dataTestId.promptFileInput);
+            expect(fileInput.getAttribute("aria-hidden")).toBe("true");
+            expect(fileInput.getAttribute("tabindex")).toBe("-1");
+            expect(screen.getAllByTestId(dataTestId.promptFileInput)).toHaveLength(1);
+            expect(screen.getByRole("button", { name: "Attach images or text resources" })).toBeTruthy();
+
+            fireEvent.click(await screen.findByTestId(dataTestId.runSettingsTrigger));
+            await screen.findByRole("dialog", { name: "Run settings" });
+            expect(screen.getAllByRole("button", { name: "Close run settings" })).toHaveLength(1);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a new chat starts with a Markdown heading, When the first message is sent, Then the compact header shows a readable title", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
@@ -550,8 +580,13 @@ describe.sequential("Agent interaction boundaries", () => {
             );
 
             // The Relay accepts the disposition before the daemon decides; the daemon reports the
-            // rejection on the steered Turn's own command.
-            const steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            // rejection on the steered Turn's own command. The queued follow-up is normally held back
+            // until the running Turn settles, but under load it can be released first, so drain until
+            // the promoted steer arrives rather than assuming it is the next prompt.
+            let steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            while (steeringPrompt.disposition !== "steer") {
+                steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            }
             expect(steeringPrompt).toMatchObject({
                 disposition: "steer",
                 prompt: "Run the regression suite afterward",
@@ -916,6 +951,15 @@ describe.sequential("Agent interaction boundaries", () => {
             await waitFor(() => {
                 expect(within(conversations).getAllByRole("link")).toHaveLength(3);
             });
+
+            // A row carries a title and a directory label. Its two lines must describe different things,
+            // never repeat one string, which is what a prompt-derived title paired with its own preview did.
+            for (const row of within(conversations).getAllByRole("link")) {
+                const lines = Array.from(row.querySelectorAll("strong, span > span"), (line) =>
+                    line.textContent?.trim(),
+                ).filter((line): line is string => line !== undefined && line.length > 0);
+                expect(new Set(lines).size).toBe(lines.length);
+            }
         } finally {
             cleanup();
             await closeMobiusTransport();

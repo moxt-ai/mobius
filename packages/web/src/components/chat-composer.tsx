@@ -540,8 +540,14 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                                 <Paperclip className="size-4" />
                             )}
                         </Button>
+                        {/*
+                         * The visible attach button opens this native picker, so the input is a programmatic
+                         * target only. Left exposed it is announced as a second, unlabeled control whose
+                         * "Choose Files / No file chosen" name does not describe what may be attached.
+                         */}
                         <input
                             accept="image/png,image/jpeg,image/gif,image/webp,text/*,.md,.json,.csv,.yaml,.yml,.xml"
+                            aria-hidden="true"
                             className="sr-only"
                             data-testid={dataTestId.promptFileInput}
                             multiple
@@ -551,6 +557,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                                 }
                             }}
                             ref={fileInputRef}
+                            tabIndex={-1}
                             type="file"
                         />
                         <WorkspacePicker key={`workspace:${conversation.id}`} />
