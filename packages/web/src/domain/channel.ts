@@ -375,6 +375,7 @@ export abstract class RecordedTurn {
     readonly response: string;
     readonly sessionId: string;
     readonly targetCommandId: string;
+    readonly turnId: string;
     readonly contents: readonly RecordedContent[];
     abstract readonly status: string;
 
@@ -391,6 +392,7 @@ export abstract class RecordedTurn {
         contents: readonly RecordedContent[],
         disposition = "reject",
         targetCommandId = "",
+        turnId = "",
     ) {
         this.activities = activities;
         this.agentId = agentId;
@@ -403,6 +405,7 @@ export abstract class RecordedTurn {
         this.response = response;
         this.sessionId = sessionId;
         this.targetCommandId = targetCommandId;
+        this.turnId = turnId;
         this.contents = contents;
     }
 }
@@ -423,6 +426,7 @@ export class PendingRecordedTurn extends RecordedTurn {
         contents: readonly RecordedContent[] = [],
         disposition = "reject",
         targetCommandId = "",
+        turnId = "",
     ) {
         super(
             agentId,
@@ -437,6 +441,7 @@ export class PendingRecordedTurn extends RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
     }
 }
@@ -459,6 +464,7 @@ export class RunningRecordedTurn extends RecordedTurn {
         contents: readonly RecordedContent[] = [],
         disposition = "reject",
         targetCommandId = "",
+        turnId = "",
     ) {
         super(
             agentId,
@@ -473,6 +479,7 @@ export class RunningRecordedTurn extends RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
         this.attemptId = attemptId;
     }
@@ -498,6 +505,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
         contents: readonly RecordedContent[] = [],
         disposition = "reject",
         targetCommandId = "",
+        turnId = "",
     ) {
         super(
             agentId,
@@ -512,6 +520,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
         this.attemptId = attemptId;
         this.stopReason = stopReason;
@@ -538,6 +547,7 @@ export class FailedRecordedTurn extends RecordedTurn {
         contents: readonly RecordedContent[] = [],
         disposition = "reject",
         targetCommandId = "",
+        turnId = "",
     ) {
         super(
             agentId,
@@ -552,6 +562,7 @@ export class FailedRecordedTurn extends RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
         this.code = code;
         this.message = message;

@@ -1751,6 +1751,7 @@ export class MobiusMessage extends MobiusMessageContent {
     readonly contents: readonly AgentDisplayContent[];
     readonly sessionId: string;
     readonly targetCommandId: string;
+    readonly turnId: string;
 
     constructor(
         content: MobiusMessageContent,
@@ -1759,6 +1760,7 @@ export class MobiusMessage extends MobiusMessageContent {
         contents: readonly AgentDisplayContent[],
         sessionId: string,
         targetCommandId: string,
+        turnId = "",
     ) {
         super(
             content.activities,
@@ -1777,6 +1779,7 @@ export class MobiusMessage extends MobiusMessageContent {
         this.contents = contents;
         this.sessionId = sessionId;
         this.targetCommandId = targetCommandId;
+        this.turnId = turnId;
     }
 }
 
@@ -1809,6 +1812,7 @@ function decodeMobiusMessage(value: unknown): MobiusMessage {
         arrayField(message, "contents", 100).map(decodeAgentDisplayContentValue),
         identifierField(message, "sessionId"),
         stringField(message, "targetCommandId", 128),
+        stringField(message, "turnId", 128),
     );
 }
 

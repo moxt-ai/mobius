@@ -397,6 +397,7 @@ export interface SessionMessage extends SessionMessageContent {
     readonly contents: readonly AgentDisplayContent[];
     readonly sessionId: string;
     readonly targetCommandId: string;
+    readonly turnId: string;
 }
 
 export interface SessionMessagePage {

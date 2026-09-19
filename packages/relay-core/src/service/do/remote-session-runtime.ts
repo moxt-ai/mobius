@@ -364,6 +364,7 @@ function decodeMessage(value: unknown): SessionMessage {
         response: readString(value, "response", true),
         sessionId: readString(value, "sessionId"),
         targetCommandId: readString(value, "targetCommandId", true),
+        turnId: readString(value, "turnId", true),
     };
 }
 

@@ -988,6 +988,10 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
     if (targetCommandId.length > 0 && !isIdentifier(targetCommandId)) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid target command.");
     }
+    const turnId = value["turnId"] === undefined ? "" : readText(value["turnId"], "turn", 128);
+    if (turnId.length > 0 && !isIdentifier(turnId)) {
+        throw new PairingApiError("invalid_relay_response", "The relay returned an invalid turn identifier.");
+    }
     const status = value["status"];
     if (status === "pending") {
         return new PendingRecordedTurn(
@@ -1003,6 +1007,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
     }
     if (status === "running") {
@@ -1020,6 +1025,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
     }
     if (status === "completed") {
@@ -1038,6 +1044,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
     }
     if (status === "failed") {
@@ -1056,6 +1063,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             contents,
             disposition,
             targetCommandId,
+            turnId,
         );
     }
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
@@ -1733,6 +1741,7 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         response: value["response"],
         sessionId: value["sessionId"],
         targetCommandId: value["targetCommandId"],
+        turnId: value["turnId"],
     };
     const attempt = value["attempt"];
     if (attempt === null || (isRecord(attempt) && attempt["kind"] === "none")) {

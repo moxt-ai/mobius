@@ -511,14 +511,13 @@ class ConnectedTransport extends TransportConnection {
 
     readonly cancel = async (request: CancelRequest): Promise<void> => {
         const clients = await this.#serviceClients;
-        const turn = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
-        if (turn === undefined) {
+        const turnId = await this.resolveTurnId(request);
+        if (turnId.length === 0) {
             throw new MobiusChannelError("turn_not_found", "The active Turn is not available for cancellation");
         }
-        const accepted = await turn;
         await clients.scoped.turns.cancel(
             request.sessionId,
-            accepted.turnId,
+            turnId,
             { idempotencyKey: `cancel-${crypto.randomUUID()}` },
             AbortSignal.timeout(20_000),
         );
@@ -540,12 +539,11 @@ class ConnectedTransport extends TransportConnection {
 
     readonly steerQueuedTurn = async (request: CancelRequest): Promise<void> => {
         const clients = await this.#serviceClients;
-        const turn = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
-        if (turn === undefined) {
+        const turnId = await this.resolveTurnId(request);
+        if (turnId.length === 0) {
             throw new MobiusChannelError("turn_not_found", "The queued Turn is no longer available for steering");
         }
-        const accepted = await turn;
-        await clients.scoped.turns.steer(request.sessionId, accepted.turnId, AbortSignal.timeout(20_000));
+        await clients.scoped.turns.steer(request.sessionId, turnId, AbortSignal.timeout(20_000));
     };
 
     readonly cancelAgentInstallation = async (request: AgentInstallCancelRequest): Promise<void> => {
@@ -962,6 +960,18 @@ class ConnectedTransport extends TransportConnection {
     };
 
     private readonly turnKey = (sessionId: string, commandId: string): string => `${sessionId}\u0000${commandId}`;
+
+    /**
+     * Turns submitted by this browser session are tracked in memory, but a Turn that is still running
+     * after a reload is only known through the Relay history, which carries its turnId.
+     */
+    private readonly resolveTurnId = async (request: CancelRequest): Promise<string> => {
+        const submitted = this.#turnIds.get(this.turnKey(request.sessionId, request.commandId));
+        if (submitted !== undefined) {
+            return (await submitted).turnId;
+        }
+        return request.turnId ?? "";
+    };
 
     readonly #refreshAgentCatalog = async (): Promise<void> => {
         try {
@@ -1416,7 +1426,11 @@ export async function steerQueuedPrompt(commandId: string): Promise<void> {
     try {
         const turn = initialStore.beginQueuedSteering(commandId);
         try {
-            await transport.steerQueuedTurn({ commandId: turn.commandId, sessionId: turn.sessionId });
+            await transport.steerQueuedTurn({
+                commandId: turn.commandId,
+                sessionId: turn.sessionId,
+                turnId: turn.turnId,
+            });
             useChatStore.getState().completeSteering(turn);
         } catch (error) {
             useChatStore.getState().failQueuedSteering(turn, failureMessage(error));
@@ -1438,6 +1452,7 @@ export async function stopActiveTurn(): Promise<void> {
         await transport.cancel({
             commandId: turn.commandId,
             sessionId: turn.sessionId,
+            turnId: turn.turnId,
         });
         useChatStore.getState().requestStop(turn);
         useChatStore.getState().setErrorMessage("");

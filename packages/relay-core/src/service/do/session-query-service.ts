@@ -506,6 +506,7 @@ export class SessionQueryService {
             response: canonical?.content ?? `${rowString(row, "response")}${activeResponse}`,
             sessionId,
             targetCommandId: command.targetCommandId,
+            turnId: rowString(row, "turn_id"),
         };
     };
 }

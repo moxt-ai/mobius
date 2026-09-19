@@ -865,6 +865,7 @@ export class AgentChatMessage extends ChatMessage {
     readonly lastCommittedSeq: string;
     readonly state: AgentTurnState;
     readonly text: string;
+    readonly turnId: string;
 
     constructor(
         id: string,
@@ -875,6 +876,7 @@ export class AgentChatMessage extends ChatMessage {
         activities: readonly RecordedActivity[] = [],
         contents: readonly RecordedContent[] = [],
         lastCommittedSeq = "0",
+        turnId = "",
     ) {
         super(id, createdAt);
         this.activities = activities;
@@ -883,6 +885,7 @@ export class AgentChatMessage extends ChatMessage {
         this.lastCommittedSeq = lastCommittedSeq;
         this.text = text;
         this.state = state;
+        this.turnId = turnId;
     }
 
     static create(commandId: string): AgentChatMessage {
@@ -906,6 +909,7 @@ export class AgentChatMessage extends ChatMessage {
             this.activities,
             this.contents,
             committedSequence,
+            this.turnId,
         );
     };
 
@@ -922,6 +926,7 @@ export class AgentChatMessage extends ChatMessage {
             activities,
             this.contents,
             this.lastCommittedSeq,
+            this.turnId,
         );
     };
 
@@ -942,6 +947,7 @@ export class AgentChatMessage extends ChatMessage {
             this.activities,
             contents,
             this.lastCommittedSeq,
+            this.turnId,
         );
     };
 
@@ -955,6 +961,7 @@ export class AgentChatMessage extends ChatMessage {
             this.activities,
             this.contents,
             this.lastCommittedSeq,
+            this.turnId,
         );
 
     readonly reconcileRecorded = (recorded: AgentChatMessage): AgentChatMessage => {
@@ -972,6 +979,7 @@ export class AgentChatMessage extends ChatMessage {
             reconcileActivities(this.activities, recorded.activities),
             reconcileContents(this.contents, recorded.contents),
             useRecordedText ? recorded.lastCommittedSeq : this.lastCommittedSeq,
+            recorded.turnId.length > 0 ? recorded.turnId : this.turnId,
         );
     };
 
@@ -985,6 +993,7 @@ export class AgentChatMessage extends ChatMessage {
             this.activities,
             this.contents,
             this.lastCommittedSeq,
+            this.turnId,
         );
 }
 
@@ -1267,6 +1276,7 @@ export class Conversation {
                     turn.activities,
                     turn.contents,
                     lastCommittedSeq,
+                    turn.turnId,
                 ).withFallbackText(fallbackText),
             );
         }
@@ -1679,7 +1689,14 @@ export class Conversation {
                 !steeringCommands.has(message.commandId) &&
                 message.state.isStreaming
             ) {
-                return new PendingTurn(this.agentId, message.commandId, this.id, this.sessionId, message.id);
+                return new PendingTurn(
+                    this.agentId,
+                    message.commandId,
+                    this.id,
+                    this.sessionId,
+                    message.id,
+                    message.turnId,
+                );
             }
         }
         throw new Error("Conversation has no active turn");
@@ -1871,13 +1888,22 @@ export class PendingTurn {
     readonly commandId: string;
     readonly conversationId: string;
     readonly sessionId: string;
+    readonly turnId: string;
 
-    constructor(agentId: string, commandId: string, conversationId: string, sessionId: string, agentMessageId: string) {
+    constructor(
+        agentId: string,
+        commandId: string,
+        conversationId: string,
+        sessionId: string,
+        agentMessageId: string,
+        turnId = "",
+    ) {
         this.agentId = agentId;
         this.commandId = commandId;
         this.conversationId = conversationId;
         this.sessionId = sessionId;
         this.agentMessageId = agentMessageId;
+        this.turnId = turnId;
     }
 }
 
@@ -1886,12 +1912,14 @@ export class SteeringTurn {
     readonly commandId: string;
     readonly conversationId: string;
     readonly sessionId: string;
+    readonly turnId: string;
 
-    constructor(agentId: string, commandId: string, conversationId: string, sessionId: string) {
+    constructor(agentId: string, commandId: string, conversationId: string, sessionId: string, turnId = "") {
         this.agentId = agentId;
         this.commandId = commandId;
         this.conversationId = conversationId;
         this.sessionId = sessionId;
+        this.turnId = turnId;
     }
 }
 

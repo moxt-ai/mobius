@@ -1,4 +1,5 @@
 import {
+    decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -8,6 +9,7 @@ import {
     encodeSessionInfoUpdatedEvent,
     encodeSessionStartedEvent,
     encodeWorkspaceEntriesEvent,
+    SESSION_CANCEL_KIND,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
@@ -992,6 +994,61 @@ describe.sequential("Session persistence boundaries", () => {
                 sessionId: initialPreparation.sessionId,
             });
             await sendReadySession(paired.daemon, resumedPreparation);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a Turn is still working when the Web app reloads, When the user stops it, Then the Agent receives the cancellation instead of an unavailable-Turn error", async ({
+        signal,
+    }) => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const initialPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
+            await sendReadySession(paired.daemon, initialPreparation);
+
+            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, { target: { value: "Run a long tool call" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND, signal));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "long-running-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+                signal,
+            );
+
+            // The Turn stays running: reload while the Agent is still working on it.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const resumedPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
+            await sendReadySession(paired.daemon, resumedPreparation);
+
+            const stopButton = await screen.findByRole("button", { name: "Stop agent" });
+            fireEvent.click(stopButton);
+
+            const cancelled = decodeSessionCancelCommand(await paired.daemon.receive(SESSION_CANCEL_KIND, signal));
+            expect(cancelled.commandId).toBe(prompt.commandId);
+            expect(screen.queryByRole("alert")).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();

@@ -182,6 +182,7 @@ export interface PromptObserver {
 export interface CancelRequest {
     readonly commandId: string;
     readonly sessionId: string;
+    readonly turnId?: string;
 }
 
 export interface AgentInstallRequest {
