@@ -54,6 +54,7 @@ import {
     StoppingTurnState,
     UserChatMessage,
 } from "@/domain/chat";
+import { readComposerDraft, readPendingComposerDraft, saveComposerDraft } from "@/services/composer-drafts";
 
 const HISTORY_SYNC_ERROR_PREFIX = "history_sync_failed:";
 
@@ -293,7 +294,8 @@ function restoreConversations(agents: readonly AgentOption[], history: ChannelHi
             conversations.push(Conversation.restore(readAgent(agents, firstTurn.agentId), sessionId, turns));
         } catch {}
     }
-    return conversations;
+    // Unsent text lives only in this browser, so it is restored from storage rather than from history.
+    return conversations.map((conversation) => conversation.updateDraft(readComposerDraft(conversation.sessionId)));
 }
 
 function groupTurnsBySession(history: ChannelHistory): ReadonlyMap<string, readonly RecordedTurn[]> {
@@ -637,6 +639,8 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         );
         const agentMessage = AgentChatMessage.createQueued(commandId);
         const updatedConversation = conversation.addTurn(prompt, userMessage, agentMessage);
+        // The follow-up is queued, so its stored draft must not come back on a reload.
+        saveComposerDraft(conversation.sessionId, "");
         set({
             announcement: "Message queued. It will start after the current turn.",
             conversations: replaceConversation(state.conversations, updatedConversation),
@@ -677,6 +681,8 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
             conversation.draftImages,
             conversation.draftResources,
         );
+        // The prompt has been handed to the running Agent, so its stored draft must not come back.
+        saveComposerDraft(conversation.sessionId, "");
         set({
             announcement: "Steering sent to the running agent.",
             conversations: replaceConversation(state.conversations, conversation.addSteering(userMessage)),
@@ -699,6 +705,8 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         );
         const agentMessage = AgentChatMessage.create(commandId);
         const updatedConversation = conversation.addTurn(prompt, userMessage, agentMessage);
+        // The prompt has been handed to the Agent, so its stored draft must not come back on a reload.
+        saveComposerDraft(conversation.sessionId, "");
         set({
             announcement: "Message sent. The agent is working.",
             conversations: replaceConversation(state.conversations, updatedConversation),
@@ -763,13 +771,24 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         const restored = restoreConversations(connection.agents, history);
         const selectedConversation = findConversationBySession(restored, selectedSessionId);
         const catalog = new ReconciledAgentCatalog(connection.agents, restored, selectedConversation?.id ?? "");
+        // An unsent New chat draft has no Session in the directory, so it cannot be matched to a restored
+        // conversation. The newest stored draft is handed to the conversation this workspace opens on.
+        const pendingDraft = readPendingComposerDraft();
+        const conversations =
+            pendingDraft.length === 0
+                ? catalog.conversations
+                : catalog.conversations.map((conversation) =>
+                      conversation.id === catalog.activeConversationId && conversation.draft.length === 0
+                          ? conversation.updateDraft(pendingDraft)
+                          : conversation,
+                  );
         set({
             activeConversationId: catalog.activeConversationId,
             agentInstallations: initialInstallationStates(connection.installableAgents),
             agents: connection.agents,
             announcement: "",
             channelConfigured: true,
-            conversations: catalog.conversations,
+            conversations,
             errorMessage: "",
             installableAgents: connection.installableAgents,
             machineName: connection.machineName,
@@ -1009,6 +1028,9 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
     setDraft: (draft) => {
         set((state) => {
             const conversation = readActiveConversation(state);
+            // Persist as the user types. An emptied draft removes the stored entry, so sending a prompt
+            // clears it without a second code path.
+            saveComposerDraft(conversation.sessionId, draft);
             return {
                 conversations: replaceConversation(state.conversations, conversation.updateDraft(draft)),
             };

@@ -918,6 +918,54 @@ describe.sequential("Session persistence boundaries", () => {
         }
     });
 
+    it("Given a user typed an unsent prompt, When the Web app reloads, Then the composer still holds that text", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, preparation);
+
+            const draft = "line1\nline2\n  indented\n\nDRAFT-LOSS-VERIFY";
+            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            fireEvent.change(promptInput, { target: { value: draft } });
+            expect((promptInput as HTMLTextAreaElement).value).toBe(draft);
+
+            // A reload discards every in-memory conversation, so the text has to come back from storage.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, resumedPreparation);
+
+            const restoredInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            await waitFor(() => {
+                expect((restoredInput as HTMLTextAreaElement).value).toBe(draft);
+            });
+
+            // Sending the prompt consumes the draft, so it must not come back on the next reload.
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.prompt).toBe(draft);
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const finalPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, finalPreparation);
+            const consumedInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            await waitFor(() => {
+                expect((consumedInput as HTMLTextAreaElement).value).toBe("");
+            });
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given a prepared Session changes configuration, When the next Turn is sent and the page reloads, Then both use the new immutable binding", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
