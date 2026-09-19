@@ -773,6 +773,114 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given a conversation created from New chat, When it completes a turn and the user requests New chat again, Then another conversation is created", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, initialPreparation);
+            await completeRenderedPrompt(paired.daemon, "First conversation", "First response");
+
+            const sidebar = screen.getByRole("complementary", {
+                name: "Conversation sidebar",
+            });
+            const conversations = screen.getByRole("navigation", {
+                name: "Conversations",
+            });
+            expect(within(conversations).getAllByRole("link")).toHaveLength(1);
+
+            // Start a second conversation from New chat and finish a turn in it.
+            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
+            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPreparation);
+            await completeRenderedPrompt(paired.daemon, "Second conversation", "Second response");
+            expect(within(conversations).getAllByRole("link")).toHaveLength(2);
+
+            // Requesting New chat from the completed conversation must start a third one.
+            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
+            const thirdPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, thirdPreparation);
+            await waitFor(() => {
+                expect(window.location.pathname).toBe(
+                    `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(thirdPreparation.sessionId)}`,
+                );
+            });
+            expect(thirdPreparation.sessionId).not.toBe(secondPreparation.sessionId);
+            await waitFor(() => {
+                expect(within(conversations).getAllByRole("link")).toHaveLength(3);
+            });
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given conversations restored from the relay without loaded turns, When the user requests New chat, Then a conversation is created instead of an existing one being reopened", async () => {
+        const paired = await pairDaemon();
+        const channelPath = `/channels/${encodeURIComponent(paired.channelId)}`;
+        window.history.replaceState(null, "", channelPath);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            // Two conversations exist on the paired machine.
+            const firstPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, firstPreparation);
+            await completeRenderedPrompt(paired.daemon, "Alpha conversation", "Alpha response");
+
+            const sidebar = screen.getByRole("complementary", {
+                name: "Conversation sidebar",
+            });
+            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
+            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPreparation);
+            await completeRenderedPrompt(paired.daemon, "Beta conversation", "Beta response");
+
+            // Reopen the channel. The relay directory restores both Sessions, but turn bodies load
+            // lazily and only for the Session the route selects, so the other keeps zero messages.
+            cleanup();
+            await closeMobiusTransport();
+            window.history.replaceState(null, "", channelPath);
+            createTestApplication();
+
+            const conversations = await screen.findByRole("navigation", {
+                name: "Conversations",
+            });
+            await waitFor(() => {
+                expect(within(conversations).getAllByRole("link")).toHaveLength(2);
+            });
+
+            const before = within(conversations)
+                .getAllByRole("link")
+                .map((link) => link.getAttribute("href"));
+            fireEvent.click(
+                within(
+                    screen.getByRole("complementary", {
+                        name: "Conversation sidebar",
+                    }),
+                ).getByRole("button", { name: /New chat.*⌘ N/ }),
+            );
+
+            await waitFor(() => {
+                expect(within(conversations).getAllByRole("link")).toHaveLength(3);
+            });
+            const after = within(conversations)
+                .getAllByRole("link")
+                .map((link) => link.getAttribute("href"));
+            expect(after.filter((href) => !before.includes(href))).toHaveLength(1);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
     it("Given an Agent alternates progress updates and tool work, When the turn completes, Then the chat preserves that timeline before the final answer", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

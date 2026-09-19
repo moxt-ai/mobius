@@ -784,7 +784,7 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         if (state.agents.length === 0) {
             return;
         }
-        const existingDraft = state.conversations.find((conversation) => !conversation.contextLocked);
+        const existingDraft = state.conversations.find((conversation) => conversation.isDraft);
         if (existingDraft !== undefined) {
             set({
                 activeConversationId: existingDraft.id,

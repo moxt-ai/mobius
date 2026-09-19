@@ -1180,6 +1180,18 @@ export class Conversation {
         return this.messages.length > 0 || this.session.restored;
     }
 
+    /**
+     * A draft is a conversation this browser created and has not sent anything to yet. It is the only
+     * conversation New chat may reopen, so it must be recognized without relying on `contextLocked`:
+     * every conversation restored from the relay directory starts with no loaded turns and no restored
+     * Agent context until its own route selects it, which leaves `contextLocked` false for real Sessions
+     * too. Relay-backed conversations always carry their Session id as their conversation id, while the
+     * New chat constructors allocate a separate id, so the two are distinguishable from the first render.
+     */
+    get isDraft(): boolean {
+        return this.id !== this.sessionId && !this.contextLocked;
+    }
+
     readonly matchesPreparation = (
         agentId: string,
         sessionId: string,
