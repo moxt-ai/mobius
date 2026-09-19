@@ -144,11 +144,13 @@ export async function createMobiusRuntimeEngine(
 
 export class MobiusRuntimeEngine {
     readonly #config: DaemonConfig;
+    readonly #options: MobiusRuntimeEngineOptions;
     #state: MobiusRuntimeState = new IdleMobiusRuntimeState();
 
-    constructor(config: DaemonConfig) {
+    constructor(config: DaemonConfig, options: MobiusRuntimeEngineOptions = {}) {
         validateRuntimeConfiguration(config);
         this.#config = config;
+        this.#options = options;
     }
 
     readonly run = async (signal: AbortSignal): Promise<void> => {
@@ -159,12 +161,20 @@ export class MobiusRuntimeEngine {
         this.#state = new RunningMobiusRuntimeState();
         const audit = new AuditStore(this.#config.auditDatabasePath);
         try {
-            await runDaemon(this.#config, audit, signal);
+            await runDaemon(this.#config, audit, signal, undefined, {
+                ...(this.#options.resolveAgentCatalogEnvironment === undefined
+                    ? {}
+                    : { resolveAgentCatalogEnvironment: this.#options.resolveAgentCatalogEnvironment }),
+            });
         } finally {
             audit.close();
             this.#state = new FinishedMobiusRuntimeState();
         }
     };
+}
+
+export interface MobiusRuntimeEngineOptions {
+    readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
 export type { DaemonConfig, DaemonConnectionConfig } from "./config.ts";

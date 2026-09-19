@@ -13,6 +13,7 @@ import { supportedLocalAgentSpecifications } from "../agent-catalog/agents/suppo
 import { discoverLocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import { findVerifiedAgentExecutable, resolveAdapterExecutable } from "../agent-catalog/executable-discovery.ts";
 import type { LocalAgentCatalog } from "../agent-catalog/local-agent.ts";
+import { withDaemonEnvironment } from "../config.ts";
 import type { InstallationAudit, InstallationExecutor } from "./agent-installation-manager.ts";
 import { InstallationManagerError } from "./agent-installation-manager.ts";
 import {
@@ -143,16 +144,9 @@ export class FixedInstallationExecutor implements InstallationExecutor {
             };
             const initialInventory = await discoverLocalAgentInventory({
                 ...discoveryOptions,
-                specifications: this.#specifications,
+                specifications: [specification],
             });
-            const previous = this.#catalog.read();
-            this.#catalog.transition(initialInventory.readyAgents(), initialInventory.installable);
-            try {
-                await this.#publishCatalog(signal);
-            } catch (error) {
-                this.#catalog.transition(previous.agents, previous.installableAgents);
-                throw error;
-            }
+            await this.#publishDiscoveredAgent(agentId, initialInventory, this.#environment, signal);
 
             const alreadyReady = initialInventory.available.find((candidate) => candidate.specification.id === agentId);
             if (alreadyReady instanceof AvailableAgent) {
@@ -210,7 +204,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
                     defaultWorkspace: this.#defaultWorkspace,
                     environment,
                     signal,
-                    specifications: this.#specifications,
+                    specifications: [specification],
                 });
                 const verified = inventory.available.find((candidate) => candidate.specification.id === agentId);
                 if (verified instanceof AvailableAgent) {
@@ -219,14 +213,7 @@ export class FixedInstallationExecutor implements InstallationExecutor {
                         agentVersion: verified.agent.agentVersion,
                     });
 
-                    const previousCatalog = this.#catalog.read();
-                    this.#catalog.transition(inventory.readyAgents(), inventory.installable);
-                    try {
-                        await this.#publishCatalog(signal);
-                    } catch (error) {
-                        this.#catalog.transition(previousCatalog.agents, previousCatalog.installableAgents);
-                        throw error;
-                    }
+                    await this.#publishDiscoveredAgent(agentId, inventory, environment, signal);
                     return;
                 }
 
@@ -258,6 +245,28 @@ export class FixedInstallationExecutor implements InstallationExecutor {
                 signal.throwIfAborted();
             }
             throw translateExecutionError(error);
+        }
+    };
+
+    readonly #publishDiscoveredAgent = async (
+        agentId: string,
+        inventory: Awaited<ReturnType<typeof discoverLocalAgentInventory>>,
+        environment: Readonly<NodeJS.ProcessEnv>,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        const previous = this.#catalog.read();
+        this.#catalog.transition(
+            [
+                ...previous.agents.filter((agent) => agent.id !== agentId),
+                ...inventory.readyAgents().map((agent) => withDaemonEnvironment(agent, environment)),
+            ],
+            [...previous.installableAgents.filter((agent) => agent.id !== agentId), ...inventory.installable],
+        );
+        try {
+            await this.#publishCatalog(signal);
+        } catch (error) {
+            this.#catalog.transition(previous.agents, previous.installableAgents);
+            throw error;
         }
     };
 }

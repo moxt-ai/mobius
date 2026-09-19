@@ -2,11 +2,13 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_CATALOG_REFRESH_KIND,
     AGENT_INSTALL_PROGRESS_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     type AgentDisplayContent,
+    decodeAgentCatalogRefreshCommand,
     decodeAgentInstallProgressEvent,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
@@ -26,6 +28,7 @@ import {
     decodeSessionFailedEvent,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    encodeAgentCatalogRefreshedEvent,
     encodeAgentInstallProgressEvent,
     encodeAgentInstallRequestCommand,
     encodeAgentSettingsDiscoveredEvent,
@@ -828,6 +831,48 @@ describe.sequential("Cloudflare session deployment", () => {
         } finally {
             client.close();
             daemon.socket.close(1000, "Agent settings discovery test complete");
+        }
+    });
+
+    it("Given a paired Runtime, When a project owner refreshes its local Agent catalog, Then the Runtime confirms the refreshed catalog without creating a Session", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { openChannelSocket, pairChannel } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        try {
+            const refresh = app.request(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/runtimes/${pairing.created.runtimeId}/agent-catalog/refresh`,
+                    {
+                        body: "{}",
+                        headers: {
+                            Authorization: `Bearer ${pairing.created.hostToken}`,
+                            "Content-Type": "application/json",
+                        },
+                        method: "POST",
+                    },
+                ),
+            );
+            const command = decodeAgentCatalogRefreshCommand(await daemon.messages.next());
+            expect(command).toMatchObject({
+                kind: AGENT_CATALOG_REFRESH_KIND,
+            });
+            expect(command).not.toHaveProperty("agentId");
+            expect(command).not.toHaveProperty("directoryId");
+            expect(command).not.toHaveProperty("sessionId");
+            daemon.socket.send(
+                encodeAgentCatalogRefreshedEvent({
+                    kind: "agent.catalog.refreshed",
+                    requestId: command.requestId,
+                }),
+            );
+            const response = await refresh;
+            expect(response.status).toBe(200);
+            await expect(response.json()).resolves.toStrictEqual({ ok: true });
+        } finally {
+            daemon.socket.close(1000, "Agent catalog refresh test complete");
         }
     });
 

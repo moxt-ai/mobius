@@ -25,6 +25,19 @@ export class DaemonLocalContext {
     }
 }
 
+export function withDaemonEnvironment(
+    agent: LocalAgentDefinition,
+    environment: Readonly<NodeJS.ProcessEnv>,
+): LocalAgentDefinition {
+    const launchEnvironment: Record<string, string> = {};
+    for (const [name, value] of Object.entries(environment)) {
+        if (typeof value === "string") {
+            launchEnvironment[name] = value;
+        }
+    }
+    return agent.withEnvironment({ ...launchEnvironment, ...agent.environment });
+}
+
 export abstract class DaemonReconnectTarget {
     abstract readonly commandArgument: string;
 }
@@ -78,12 +91,13 @@ export function createDaemonConfig(
     localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
     reconnectTarget: DaemonReconnectTarget = new ChannelDaemonReconnectTarget(connection.channelId),
 ): DaemonConfig {
+    const daemonAgents = agents.map((agent) => withDaemonEnvironment(agent, localContext.environment));
     return {
-        agents,
+        agents: daemonAgents,
         defaultWorkspace: connection.defaultWorkspace,
         auditDatabasePath: connection.auditDatabasePath,
         bindingId: "workspace",
-        catalog: new LocalAgentCatalog(agents, installableAgents),
+        catalog: new LocalAgentCatalog(daemonAgents, installableAgents),
         channelId: connection.channelId,
         installableAgents,
         localContext,

@@ -4,6 +4,9 @@ import { styleText } from "node:util";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_CATALOG_REFRESH_FAILED_KIND,
+    AGENT_CATALOG_REFRESH_KIND,
+    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
     AGENT_INSTALL_COMPLETED_KIND,
@@ -18,11 +21,13 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+    type AgentCatalogRefreshCommand,
     type AgentContentEvent,
     type AgentModelEffort,
     type AgentSetting,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
+    decodeAgentCatalogRefreshCommand,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallRequestCommand,
     decodeAgentSettingsDiscoverCommand,
@@ -47,6 +52,8 @@ import {
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
+    encodeAgentCatalogRefreshedEvent,
+    encodeAgentCatalogRefreshFailedEvent,
     encodeAgentContentEvent,
     encodeAgentInstallCancelledEvent,
     encodeAgentInstallCompletedEvent,
@@ -121,7 +128,10 @@ import type { AcpActivity } from "./acp/activity.ts";
 import { AcpExecutionError, AcpSessionManager, type AcpSessionObserver } from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { agentSettingsAdapterForAgent, applyAgentLaunchSettings } from "./agent-catalog/agent-settings-adapter.ts";
-import { supportedLocalAgentSpecifications } from "./agent-catalog/discover-local-agents.ts";
+import {
+    discoverLocalAgentInventory,
+    supportedLocalAgentSpecifications,
+} from "./agent-catalog/discover-local-agents.ts";
 import {
     AgentIntegrationDefinition,
     LocalAgentCatalogError,
@@ -146,7 +156,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { LocalArtifact } from "./authorization/local-artifact.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import type { DaemonConfig } from "./config.ts";
+import { type DaemonConfig, withDaemonEnvironment } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
@@ -1820,6 +1830,36 @@ async function installDetectedAgentIntegrations(
     }
 }
 
+export interface RunDaemonOptions {
+    readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
+}
+
+async function refreshAgentCatalog(
+    config: DaemonConfig,
+    resolveEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
+    signal: AbortSignal,
+): Promise<void> {
+    signal.throwIfAborted();
+    const environment = await resolveEnvironment(signal);
+    signal.throwIfAborted();
+    const inventory = await discoverLocalAgentInventory({
+        defaultWorkspace: config.defaultWorkspace,
+        environment,
+        signal,
+    });
+    const previousCatalog = config.catalog.read();
+    config.catalog.transition(
+        inventory.readyAgents().map((agent) => withDaemonEnvironment(agent, environment)),
+        inventory.installable,
+    );
+    try {
+        await publishAgentCatalog(config, signal);
+    } catch (error) {
+        config.catalog.transition(previousCatalog.agents, previousCatalog.installableAgents);
+        throw error;
+    }
+}
+
 async function runRelayConnection(
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
@@ -1837,6 +1877,7 @@ async function runRelayConnection(
     onConnected: () => void,
     signal: AbortSignal,
     timer: DaemonTimer,
+    resolveAgentCatalogEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
 ): Promise<void> {
     const relayUrl = new URL(config.relayUrl);
     relayUrl.searchParams.set("deliveryReceipts", "1");
@@ -1858,6 +1899,13 @@ async function runRelayConnection(
         string,
         {
             readonly agentId: string;
+            readonly controller: AbortController;
+            readonly completion: Promise<void>;
+        }
+    >();
+    const agentCatalogRefreshes = new Map<
+        string,
+        {
             readonly controller: AbortController;
             readonly completion: Promise<void>;
         }
@@ -2342,6 +2390,86 @@ async function runRelayConnection(
                         });
                         return;
                     }
+                    if (kind === AGENT_CATALOG_REFRESH_KIND) {
+                        const command: AgentCatalogRefreshCommand = decodeAgentCatalogRefreshCommand(encoded);
+                        if (agentCatalogRefreshes.has(command.requestId) || agentCatalogRefreshes.size > 0) {
+                            if (socket.readyState === WebSocket.OPEN) {
+                                send(
+                                    socket,
+                                    encodeAgentCatalogRefreshFailedEvent({
+                                        code: "agent_catalog_refresh_busy",
+                                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                                        message: "Another local Agent catalog refresh is already running",
+                                        requestId: command.requestId,
+                                    }),
+                                );
+                            }
+                            return;
+                        }
+                        const controller = new AbortController();
+                        const operationSignal = AbortSignal.any([connectionController.signal, controller.signal]);
+                        const timeout = timer.schedule(
+                            () =>
+                                controller.abort(
+                                    new AcpExecutionError(
+                                        "The local Agent catalog refresh timed out",
+                                        {},
+                                        "agent_catalog_refresh_timeout",
+                                    ),
+                                ),
+                            90_000,
+                        );
+                        const completion = (async (): Promise<void> => {
+                            try {
+                                await refreshAgentCatalog(config, resolveAgentCatalogEnvironment, operationSignal);
+                                audit.record({
+                                    commandId: command.requestId,
+                                    event: "agent_catalog_refreshed",
+                                    sessionId: "agent-catalog",
+                                });
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(
+                                        socket,
+                                        encodeAgentCatalogRefreshedEvent({
+                                            kind: AGENT_CATALOG_REFRESHED_KIND,
+                                            requestId: command.requestId,
+                                        }),
+                                    );
+                                }
+                            } catch (error) {
+                                const failure: unknown = operationSignal.aborted
+                                    ? (controller.signal.reason ??
+                                      new AcpExecutionError(
+                                          "The local Agent catalog refresh was cancelled",
+                                          {},
+                                          "agent_catalog_refresh_cancelled",
+                                      ))
+                                    : error;
+                                audit.record({
+                                    commandId: command.requestId,
+                                    details: { code: operationErrorCode(failure) },
+                                    event: "agent_catalog_refresh_failed",
+                                    sessionId: "agent-catalog",
+                                });
+                                if (socket.readyState === WebSocket.OPEN) {
+                                    send(
+                                        socket,
+                                        encodeAgentCatalogRefreshFailedEvent({
+                                            code: operationErrorCode(failure),
+                                            kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                                            message: operationErrorMessage(failure),
+                                            requestId: command.requestId,
+                                        }),
+                                    );
+                                }
+                            } finally {
+                                timeout.cancel();
+                                agentCatalogRefreshes.delete(command.requestId);
+                            }
+                        })();
+                        agentCatalogRefreshes.set(command.requestId, { completion, controller });
+                        return;
+                    }
                     if (kind === NATIVE_SESSION_REQUEST_KIND) {
                         const command = decodeNativeSessionCommand(encoded);
                         const previous = [...nativeRequests.values()].filter(
@@ -2741,6 +2869,7 @@ async function runRelayConnection(
         await Promise.all([
             ...[...nativeRequests.values()].map((request) => request.completion),
             ...[...agentSettingsDiscoveries.values()].map((request) => request.completion),
+            ...[...agentCatalogRefreshes.values()].map((request) => request.completion),
         ]);
     }
 }
@@ -2750,6 +2879,7 @@ export async function runDaemon(
     audit: AuditStore,
     signal: AbortSignal,
     timer: DaemonTimer = systemDaemonTimer,
+    options: RunDaemonOptions = {},
 ): Promise<void> {
     const installationAudit = new AuditInstallationEvents(audit);
     const stateDirectory = config.localContext.stateDirectory;
@@ -2792,6 +2922,12 @@ export async function runDaemon(
     let connectionAnnounced = false;
     let catalogPublished = false;
     let readinessAnnounced = false;
+    const resolveAgentCatalogEnvironment =
+        options.resolveAgentCatalogEnvironment ??
+        (async (catalogSignal: AbortSignal): Promise<Readonly<NodeJS.ProcessEnv>> => {
+            catalogSignal.throwIfAborted();
+            return config.localContext.environment;
+        });
     const startAutomaticIntegrationProvisioning = (): void => {
         if (!connectionAnnounced || !catalogPublished || automaticIntegrationProvisioningStarted) {
             return;
@@ -2856,6 +2992,7 @@ export async function runDaemon(
                     announceConnection,
                     signal,
                     timer,
+                    resolveAgentCatalogEnvironment,
                 );
             } catch (error) {
                 if (signal.aborted) {

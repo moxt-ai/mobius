@@ -10,6 +10,7 @@ import { CodexAgentSpecification } from "../src/agent-catalog/discover-local-age
 import {
     AgentIntegrationDefinition,
     LocalAgentCatalog,
+    LocalAgentDefinition,
     MissingAgentDefinition,
 } from "../src/agent-catalog/local-agent.ts";
 import {
@@ -252,6 +253,40 @@ if (process.argv.includes("--version")) {
             expect(
                 observer.states.filter((state) => state instanceof RunningInstallation).map((state) => state.stage),
             ).toEqual(["checking_acp", "installing_adapter", "checking_acp"]);
+        } finally {
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a refreshed catalog contains other ready Agents, When automatic integration setup verifies Codex, Then it preserves the unrelated refreshed catalog entries", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-catalog-merge-"));
+        const executableDirectory = join(stateDirectory, "external");
+        const agentPath = join(executableDirectory, "codex");
+        const adapterInstaller = new StatefulAdapterInstaller(stateDirectory);
+        const observer = new RecordingInstallationObserver();
+        const audit = new RecordingInstallationAudit();
+
+        try {
+            await writeExternalCodexAgent(agentPath);
+            const catalog = new LocalAgentCatalog(
+                [new LocalAgentDefinition("refreshed-agent", "Refreshed Agent", agentPath, [])],
+                [new AgentIntegrationDefinition("codex", "Codex", agentPath, "codex 0.153.0")],
+            );
+            const manager = createManager(
+                stateDirectory,
+                executableDirectory,
+                catalog,
+                adapterInstaller,
+                observer,
+                audit,
+            );
+
+            await expect(
+                manager.request(request("automatic-integration-catalog-merge"), new AbortController().signal),
+            ).resolves.toBeInstanceOf(SucceededInstallation);
+
+            expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["refreshed-agent", "codex"]);
+            expect(catalog.read().installableAgents).toEqual([]);
         } finally {
             await rm(stateDirectory, { force: true, recursive: true });
         }

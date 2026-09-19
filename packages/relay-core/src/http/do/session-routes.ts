@@ -1,5 +1,6 @@
 import {
     type AgentSettingsDiscoveredEvent,
+    decodeAgentCatalogRefreshCommand,
     decodeAgentSettingsDiscoverCommand,
     decodeNativeSessionCommand,
     decodePromptImagesValue,
@@ -182,6 +183,29 @@ export function createSessionRoutes() {
                 context.header("Cache-Control", "no-store");
                 context.header("Deprecation", "true");
                 return context.json(legacyAgentSettingsResponse(result, readString(body, "directoryId", 2_048)));
+            },
+        )
+        .post(
+            "/projects/:projectId/runtimes/:runtimeId/agent-catalog/refresh",
+            bodyParser<RelayHttpEnvironment>(),
+            async (context) => {
+                const body = context.req.valid("json");
+                assertExactKeys(body, []);
+                const command = decodeAgentCatalogRefreshCommand(
+                    JSON.stringify({
+                        kind: "agent.catalog.refresh",
+                        requestId: crypto.randomUUID(),
+                    }),
+                );
+                await context.env.services.runtimePairings.refreshAgentCatalog(
+                    validateIdentifier(context.req.param("projectId"), "project_id"),
+                    validateIdentifier(context.req.param("runtimeId"), "runtime_id"),
+                    bearerToken(context.req.raw),
+                    command,
+                    context.req.raw.signal,
+                );
+                context.header("Cache-Control", "no-store");
+                return context.json({ ok: true });
             },
         )
         .post(

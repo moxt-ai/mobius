@@ -30,6 +30,9 @@ export const AGENT_INSTALL_CANCELLED_KIND = "agent.integration.install.cancelled
 export const AGENT_SETTINGS_DISCOVER_KIND = "agent.settings.discover";
 export const AGENT_SETTINGS_DISCOVERED_KIND = "agent.settings.discovered";
 export const AGENT_SETTINGS_DISCOVERY_FAILED_KIND = "agent.settings.discovery.failed";
+export const AGENT_CATALOG_REFRESH_KIND = "agent.catalog.refresh";
+export const AGENT_CATALOG_REFRESHED_KIND = "agent.catalog.refreshed";
+export const AGENT_CATALOG_REFRESH_FAILED_KIND = "agent.catalog.refresh.failed";
 export const FILE_READ_KIND = "file.read";
 export const FILE_BEGIN_KIND = "file.begin";
 export const FILE_CHUNK_KIND = "file.chunk";
@@ -223,6 +226,35 @@ const agentSettingsDiscoveryFailedEventSchema = z
     .readonly();
 
 export type AgentSettingsDiscoveryFailedEvent = z.infer<typeof agentSettingsDiscoveryFailedEventSchema>;
+
+const agentCatalogRefreshCommandSchema = z
+    .strictObject({
+        kind: z.literal(AGENT_CATALOG_REFRESH_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentCatalogRefreshCommand = z.infer<typeof agentCatalogRefreshCommandSchema>;
+
+const agentCatalogRefreshedEventSchema = z
+    .strictObject({
+        kind: z.literal(AGENT_CATALOG_REFRESHED_KIND),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentCatalogRefreshedEvent = z.infer<typeof agentCatalogRefreshedEventSchema>;
+
+const agentCatalogRefreshFailedEventSchema = z
+    .strictObject({
+        code: IDENTIFIER,
+        kind: z.literal(AGENT_CATALOG_REFRESH_FAILED_KIND),
+        message: z.string().min(1).max(500),
+        requestId: IDENTIFIER,
+    })
+    .readonly();
+
+export type AgentCatalogRefreshFailedEvent = z.infer<typeof agentCatalogRefreshFailedEventSchema>;
 
 export const sessionConfigurationSelectionSchema = z
     .strictObject({
@@ -872,6 +904,18 @@ export const decodeAgentSettingsDiscoveryFailedEvent = (encoded: string): AgentS
     decode(encoded, agentSettingsDiscoveryFailedEventSchema);
 export const encodeAgentSettingsDiscoveryFailedEvent = (message: AgentSettingsDiscoveryFailedEvent): string =>
     encode(message, agentSettingsDiscoveryFailedEventSchema);
+export const decodeAgentCatalogRefreshCommand = (encoded: string): AgentCatalogRefreshCommand =>
+    decode(encoded, agentCatalogRefreshCommandSchema);
+export const encodeAgentCatalogRefreshCommand = (message: AgentCatalogRefreshCommand): string =>
+    encode(message, agentCatalogRefreshCommandSchema);
+export const decodeAgentCatalogRefreshedEvent = (encoded: string): AgentCatalogRefreshedEvent =>
+    decode(encoded, agentCatalogRefreshedEventSchema);
+export const encodeAgentCatalogRefreshedEvent = (message: AgentCatalogRefreshedEvent): string =>
+    encode(message, agentCatalogRefreshedEventSchema);
+export const decodeAgentCatalogRefreshFailedEvent = (encoded: string): AgentCatalogRefreshFailedEvent =>
+    decode(encoded, agentCatalogRefreshFailedEventSchema);
+export const encodeAgentCatalogRefreshFailedEvent = (message: AgentCatalogRefreshFailedEvent): string =>
+    encode(message, agentCatalogRefreshFailedEventSchema);
 export const decodeFileReadCommand = (encoded: string): FileReadCommand => decode(encoded, fileReadCommandSchema);
 export const encodeFileReadCommand = (message: FileReadCommand): string => encode(message, fileReadCommandSchema);
 export const decodeFileBeginEvent = (encoded: string): FileBeginEvent => decode(encoded, fileBeginEventSchema);

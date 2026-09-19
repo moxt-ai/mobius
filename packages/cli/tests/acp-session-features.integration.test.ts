@@ -20,7 +20,7 @@ import type { AcpActivity } from "../src/acp/activity.ts";
 import { AcpSessionManager, type AcpSessionObserver } from "../src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
 import type { LocalArtifact } from "../src/authorization/local-artifact.ts";
-import { LocalAgentDefinition } from "../src/config.ts";
+import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../src/config.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
@@ -111,6 +111,57 @@ function fakeAgent(
 }
 
 describe("ACP session features", () => {
+    it("Given a managed Runtime has a login-shell-only Agent environment, When it starts an ACP session, Then the Agent receives that environment", async () => {
+        const workspace = await mkdtemp(join(tmpdir(), "mobius-login-shell-workspace-"));
+        const generatedImages = await mkdtemp(join(tmpdir(), "mobius-login-shell-images-"));
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const localContext = new DaemonLocalContext(join(workspace, "state"), {
+            FAKE_ACP_IMAGE_DIRECTORY: generatedImages,
+            PATH: process.env["PATH"] ?? "",
+        });
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath: join(workspace, "audit.sqlite"),
+                channelId: "login-shell-environment",
+                defaultWorkspace: workspace,
+                relayUrl: new URL("ws://127.0.0.1:8787/v1/runtimes/connect?token=test"),
+            },
+            [fakeAgent()],
+            [],
+            localContext,
+        );
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: config.catalog.find("codex"),
+                commandId: "login-shell-command",
+                cwd: workspace,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: () => Promise.resolve(),
+                prompt: "generate markdown image",
+                resources: [],
+                sessionId: "login-shell-session",
+                signal: new AbortController().signal,
+            });
+
+            expect(observer.content).toContainEqual(
+                expect.objectContaining({
+                    content: expect.objectContaining({
+                        uri: await realpath(join(generatedImages, "generated-image.png")),
+                    }),
+                }),
+            );
+        } finally {
+            await manager.close();
+            await Promise.all([
+                rm(workspace, { force: true, recursive: true }),
+                rm(generatedImages, { force: true, recursive: true }),
+            ]);
+        }
+    });
+
     it("Given an ACP tool returns inline image bytes, When Mobius records the tool update, Then it keeps the validated inline raster", async () => {
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);

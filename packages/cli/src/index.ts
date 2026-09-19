@@ -25,6 +25,7 @@ export {
     loadMobiusRuntimeConnection,
     MobiusRuntimeConfigurationError,
     MobiusRuntimeEngine,
+    type MobiusRuntimeEngineOptions,
 } from "./runtime.ts";
 export {
     ImportedLegacyRuntimeConnection,
