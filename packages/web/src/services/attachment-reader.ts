@@ -96,6 +96,32 @@ function attachmentUri(name: string): string {
     return `attachment:///${encodeURIComponent(name.replaceAll("/", "_"))}`;
 }
 
+const IMAGE_EXTENSIONS: Readonly<Record<string, string>> = {
+    "image/gif": "gif",
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+};
+
+/**
+ * Picks a name for a pasted image that does not collide with `taken`. Clipboard images usually arrive
+ * nameless or all sharing one name, and drafts are keyed by name, so a repeated name would silently
+ * replace an earlier paste.
+ */
+export function pastedImageFileName(mimeType: string, taken: ReadonlySet<string>): string {
+    const extension = IMAGE_EXTENSIONS[mimeType] ?? "png";
+    const preferred = `pasted-image.${extension}`;
+    if (!taken.has(preferred)) {
+        return preferred;
+    }
+    for (let suffix = 2; ; suffix += 1) {
+        const candidate = `pasted-image-${suffix.toString()}.${extension}`;
+        if (!taken.has(candidate)) {
+            return candidate;
+        }
+    }
+}
+
 export async function readPromptAttachment(file: File): Promise<ReadPromptAttachment> {
     const image = file.type.startsWith("image/");
     const limit = image ? IMAGE_BYTES_LIMIT : RESOURCE_BYTES_LIMIT;
@@ -127,4 +153,29 @@ export async function readPromptAttachment(file: File): Promise<ReadPromptAttach
         type: "embedded",
         uri: attachmentUri(file.name),
     });
+}
+
+/**
+ * Reads a single image pasted from the clipboard.
+ *
+ * Unlike {@link readPromptAttachment} this does not trust `file.size`: browsers commonly report a
+ * clipboard `File` as zero bytes even though its contents read back fine. The decoded byte length is
+ * checked instead. `name` must already be unique among the current drafts — see
+ * {@link pastedImageFileName}.
+ */
+export async function readClipboardImage(file: File, name: string): Promise<ReadPromptImage> {
+    if (file.size > IMAGE_BYTES_LIMIT) {
+        throw new AttachmentReadError("attachment_size_invalid", "Images must be between 1 byte and 2.5 MB.");
+    }
+    if (!/^image\/(?:gif|jpeg|png|webp)$/.test(file.type)) {
+        throw new AttachmentReadError(
+            "attachment_type_unsupported",
+            "Only PNG, JPEG, GIF, and WebP images are supported.",
+        );
+    }
+    const bytes = new Uint8Array(await readBytes(file));
+    if (bytes.byteLength === 0) {
+        throw new AttachmentReadError("attachment_size_invalid", "Images must be between 1 byte and 2.5 MB.");
+    }
+    return new ReadPromptImage({ data: encodeBase64(bytes), mimeType: file.type, name });
 }

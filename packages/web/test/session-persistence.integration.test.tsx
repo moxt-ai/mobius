@@ -19,6 +19,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { dataTestId } from "@/data-testid";
 import { closeMobiusTransport } from "@/services/mobius-transport";
+import { readChannelConnection, readConnectionHistory } from "@/services/pairing-api";
 import {
     completeRenderedPrompt,
     createTestApplication,
@@ -289,6 +290,162 @@ describe.sequential("Session persistence boundaries", () => {
                     stopReason: "end_turn",
                 }),
             );
+        } finally {
+            await closeMobiusTransport();
+            cleanup();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given the Agent accepts image prompts, When a user pastes an image into the composer, Then it is attached and uploaded as an artifact rather than inlined into the control message", async ({
+        signal,
+    }) => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, preparation);
+            const promptInput = await screen.findByRole("textbox", {
+                name: "Message the local agent",
+            });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+
+            // A byte pattern that is stable and recognizable, so a leak into the control message is detectable.
+            const pastedBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+            const clipboard = new DataTransfer();
+            clipboard.items.add(new File([pastedBytes], "", { type: "image/png" }));
+            fireEvent.paste(promptInput, { clipboardData: clipboard });
+
+            const chips = await screen.findByRole("list", { name: "Prompt images" });
+            expect(within(chips).getByText("pasted-image.png")).toBeDefined();
+
+            fireEvent.change(promptInput, { target: { value: "Describe the pasted image" } });
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: "Send message" }).hasAttribute("disabled")).toBe(false);
+            });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND, signal));
+            expect(prompt.resources).toHaveLength(1);
+            expect(prompt.resources[0]).toMatchObject({
+                mimeType: "image/png",
+                name: "pasted-image.png",
+                text: "",
+                type: "link",
+            });
+            expect(prompt.resources[0]?.uri).toMatch(/^mobius-artifact:/);
+            // The bytes travel as an artifact upload; only the reference may appear in the control message.
+            expect(JSON.stringify(prompt)).not.toContain(btoa(String.fromCharCode(...pastedBytes)));
+
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "pasted-image-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+        } finally {
+            await closeMobiusTransport();
+            cleanup();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a browser only exposes a pasted image through clipboard items, When the user pastes it, Then it is still attached", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, preparation);
+            const promptInput = await screen.findByRole("textbox", {
+                name: "Message the local agent",
+            });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+
+            const clipboard = new DataTransfer();
+            clipboard.items.add(new File([new Uint8Array([137, 80, 78, 71])], "shot.png", { type: "image/png" }));
+            // Simulate the browsers that leave `files` empty for image payloads.
+            fireEvent.paste(promptInput, { clipboardData: { files: [], items: clipboard.items } });
+
+            const chips = await screen.findByRole("list", { name: "Prompt images" });
+            expect(within(chips).getByText("shot.png")).toBeDefined();
+        } finally {
+            await closeMobiusTransport();
+            cleanup();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given a user sent an image attachment, When the Web app reloads, Then the image is restored from its artifact instead of degrading to a filename", async ({
+        signal,
+    }) => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const initialPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
+            await sendReadySession(paired.daemon, initialPreparation);
+            const promptInput = await screen.findByRole("textbox", {
+                name: "Message the local agent",
+            });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+
+            const clipboard = new DataTransfer();
+            clipboard.items.add(new File([new Uint8Array([137, 80, 78, 71])], "", { type: "image/png" }));
+            fireEvent.paste(promptInput, { clipboardData: clipboard });
+            await screen.findByRole("list", { name: "Prompt images" });
+
+            const prompt = await completeRenderedPrompt(paired.daemon, "Keep this image", "IMAGE-KEPT");
+            // The optimistic bubble renders the inline base64 the composer captured.
+            expect((await screen.findByRole("img", { name: "pasted-image.png" })).getAttribute("src")).toMatch(
+                /^data:image\/png;base64,/,
+            );
+
+            // Reload: the Turn is now re-hydrated from the Relay, whose recorded image carries no inline data.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const resumedPreparation = decodeSessionPrepareCommand(
+                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
+            );
+            await sendReadySession(paired.daemon, resumedPreparation);
+
+            const history = await readConnectionHistory(await readChannelConnection(paired.channelId));
+            const recorded = history.turns.find((turn) => turn.commandId === prompt.commandId);
+            expect(recorded?.resources[0]?.uri).toMatch(/^mobius-artifact:/);
+
+            const restored = await screen.findByRole("img", { name: "pasted-image.png" });
+            expect(restored.getAttribute("src")).toMatch(/^blob:/);
         } finally {
             await closeMobiusTransport();
             cleanup();

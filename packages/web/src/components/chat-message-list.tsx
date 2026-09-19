@@ -288,7 +288,15 @@ function Message({
         return <NativeSessionHistoryView history={message.history} agentLabel={agentLabel} />;
     }
     if (message instanceof UserChatMessage) {
-        return <UserPromptMessage images={message.images} resources={message.resources} text={message.text} />;
+        return (
+            <UserPromptMessage
+                connection={connection}
+                images={message.images}
+                resources={message.resources}
+                sessionId={sessionId}
+                text={message.text}
+            />
+        );
     }
     if (message instanceof AgentChatMessage) {
         return (

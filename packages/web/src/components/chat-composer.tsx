@@ -1,6 +1,14 @@
 import { SessionPromptDisposition } from "@moxt-ai/mobius-sdk";
 import { FileText, Image as ImageIcon, LoaderCircle, Paperclip, Send, Square, X } from "lucide-react";
-import { type FormEvent, type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+    type ClipboardEvent,
+    type FormEvent,
+    type KeyboardEvent,
+    useEffect,
+    useLayoutEffect,
+    useRef,
+    useState,
+} from "react";
 
 import { AgentPicker } from "@/components/agent-picker";
 import { SessionConfigControls } from "@/components/session-config-controls";
@@ -12,8 +20,11 @@ import { DeletedSessionState, type UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
     AttachmentReadError,
+    pastedImageFileName,
+    type ReadPromptAttachment,
     ReadPromptImage,
     ReadPromptResource,
+    readClipboardImage,
     readPromptAttachment,
 } from "@/services/attachment-reader";
 import { hasSelectedComposerContext } from "@/services/composer-selected-context";
@@ -164,6 +175,10 @@ function FollowUpTray() {
     );
 }
 
+interface PromptAttachmentSource {
+    readonly read: () => Promise<ReadPromptAttachment>;
+}
+
 interface ChatComposerProps {
     readonly placement: "active" | "idle";
 }
@@ -269,10 +284,9 @@ export function ChatComposer({ placement }: ChatComposerProps) {
         }
     };
 
-    const attachFiles = (files: FileList): void => {
-        const selected = Array.from(files).slice(0, 8);
+    const attachPromptFiles = (selected: readonly PromptAttachmentSource[]): void => {
         setAttaching(true);
-        void Promise.all(selected.map(async (file) => await readPromptAttachment(file)))
+        void Promise.all(selected.map(async (source) => await source.read()))
             .then((attachments) => {
                 for (const attachment of attachments) {
                     if (attachment instanceof ReadPromptImage) {
@@ -304,10 +318,50 @@ export function ChatComposer({ placement }: ChatComposerProps) {
             })
             .finally(() => {
                 setAttaching(false);
-                if (fileInputRef.current !== null) {
-                    fileInputRef.current.value = "";
-                }
             });
+    };
+
+    const attachFiles = (files: FileList): void => {
+        attachPromptFiles(
+            Array.from(files)
+                .slice(0, 8)
+                .map((file) => ({ read: async () => await readPromptAttachment(file) })),
+        );
+        if (fileInputRef.current !== null) {
+            fileInputRef.current.value = "";
+        }
+    };
+
+    const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+        // `files` and `items` are two views over the same payload, so pick one rather than merging them.
+        // `items` is the richer API and carries the kind; `files` is the fallback for browsers that skip it.
+        const clipboard = event.clipboardData;
+        const fromItems = Array.from(clipboard?.items ?? [])
+            .filter((item) => item.kind === "file")
+            .map((item) => item.getAsFile())
+            .filter((file): file is File => file !== null);
+        const images = (fromItems.length > 0 ? fromItems : Array.from(clipboard?.files ?? [])).filter((file) =>
+            file.type.startsWith("image/"),
+        );
+        if (images.length === 0) {
+            return;
+        }
+        // Keep the image out of the textarea, but still let non-image clipboard payloads paste normally.
+        event.preventDefault();
+        if (!conversation.session.capabilities.imagePrompt) {
+            setErrorMessage(`image_prompt_unsupported: ${conversation.agentLabel} does not accept image prompts.`);
+            return;
+        }
+        // Claim every name synchronously so a multi-image paste cannot make two entries collide.
+        const taken = new Set(conversation.draftImages.map((image) => image.name));
+        attachPromptFiles(
+            images.slice(0, 8).map((file) => {
+                const name =
+                    file.name.length > 0 && !taken.has(file.name) ? file.name : pastedImageFileName(file.type, taken);
+                taken.add(name);
+                return { read: async () => await readClipboardImage(file, name) };
+            }),
+        );
     };
 
     return (
@@ -424,6 +478,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         setDraft(event.currentTarget.value);
                     }}
                     onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
                     placeholder={conversation.session.isReady ? "Ask the local agent…" : conversation.session.label}
                     ref={textareaRef}
                     rows={1}

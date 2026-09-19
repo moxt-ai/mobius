@@ -1323,6 +1323,21 @@ function isConcurrentSessionRemoval(error: unknown): boolean {
     );
 }
 
+const MOBIUS_ARTIFACT_URI_PREFIX = "mobius-artifact:";
+
+/**
+ * Reads the artifact id out of a `mobius-artifact:<id>?byteLength=…&sha256=…` link, which is how the
+ * Relay references uploaded prompt attachments on a submitted Turn. Returns an empty string when the
+ * URI is not an artifact reference, so callers can fall back to showing the attachment by name.
+ */
+export function artifactIdFromUri(uri: string): string {
+    if (!uri.startsWith(MOBIUS_ARTIFACT_URI_PREFIX)) {
+        return "";
+    }
+    const artifactId = uri.slice(MOBIUS_ARTIFACT_URI_PREFIX.length).split("?", 1)[0] ?? "";
+    return artifactId.length > 0 ? artifactId : "";
+}
+
 export async function readSessionArtifactBytes(
     connection: ChannelConnection,
     sessionId: string,
