@@ -176,6 +176,19 @@ describe.sequential("Agent interaction boundaries", () => {
                 expect(document.getElementById("main-content")?.hasAttribute("inert")).toBe(true);
                 expect(document.activeElement).toBe(closeButton);
             });
+
+            // The compact-navigation state shows the drawer, so its own close affordance must dismiss
+            // it and hand the conversation back to the user.
+            fireEvent.click(closeButton);
+            await waitFor(() => {
+                expect(screen.queryByRole("dialog", { name: "Conversation sidebar" })).toBeNull();
+                expect(document.getElementById("main-content")?.hasAttribute("inert")).toBe(false);
+            });
+            expect(
+                await screen.findByRole("textbox", {
+                    name: "Message the local agent",
+                }),
+            ).toBeTruthy();
         } finally {
             cleanup();
             await closeMobiusTransport();

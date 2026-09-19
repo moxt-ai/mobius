@@ -216,8 +216,14 @@ export function ConversationSidebar({
                 <div
                     {...sidebarAccessibility(sidebarOpen)}
                     className={cn(
-                        "fixed inset-y-0 left-0 z-40 flex w-[min(320px,calc(100vw-20px))] flex-col overflow-hidden rounded-r-[20px] border-r-[0.5px] border-black/9 bg-sidebar shadow-[18px_0_56px_rgba(0,0,0,0.2)] transition-transform duration-200 ease-out motion-reduce:transition-none lg:static lg:h-full lg:w-full lg:translate-x-0 lg:rounded-none lg:shadow-none",
-                        sidebarOpen ? "translate-x-0" : "-translate-x-[105%]",
+                        "fixed inset-y-0 left-0 z-40 flex w-[min(320px,calc(100vw-20px))] flex-col overflow-hidden rounded-r-[20px] border-r-[0.5px] border-black/9 bg-sidebar shadow-[18px_0_56px_rgba(0,0,0,0.2)] duration-200 ease-out motion-reduce:transition-none lg:static lg:h-full lg:w-full lg:rounded-none lg:shadow-none",
+                        // The mobile drawer slides on `transform`, not Tailwind's `translate-x-*`. Those
+                        // utilities move the panel through the `translate` property, which Tailwind v4
+                        // registers with `syntax: "*"`; that value never interpolates, so a transition on
+                        // it stays at progress 0 forever and freezes the panel off-screen. `transform` is
+                        // an interpolable value, so the drawer settles into its open and closed positions.
+                        "transition-[transform]",
+                        sidebarOpen ? "max-lg:transform-none" : "max-lg:transform-[translateX(-105%)]",
                         layout.kind === "collapsed" && "lg:pointer-events-none lg:invisible",
                     )}
                     id="conversation-sidebar"
