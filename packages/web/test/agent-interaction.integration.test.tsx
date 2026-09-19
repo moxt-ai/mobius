@@ -1042,7 +1042,9 @@ describe.sequential("Agent interaction boundaries", () => {
             const agentMessage = await screen.findByRole("article", {
                 name: "Message from Codex",
             });
-            const progressUpdates = within(agentMessage).getAllByRole("region", {
+            fireEvent.click(within(agentMessage).getByTestId(dataTestId.turnProcessSummary));
+            const turnProcess = within(agentMessage).getByTestId(dataTestId.turnProcess);
+            const progressUpdates = within(turnProcess).getAllByRole("region", {
                 name: "Agent progress update",
             });
             expect(progressUpdates).toHaveLength(2);
@@ -1053,21 +1055,16 @@ describe.sequential("Agent interaction boundaries", () => {
             }
             expect(within(firstProgressUpdate).getByText("renderer")).toBeTruthy();
             expect(within(secondProgressUpdate).getByText("streaming styles")).toBeTruthy();
-            const workDisclosures = within(agentMessage).getAllByTestId("agent-process-disclosure");
-            expect(workDisclosures).toHaveLength(2);
-            const firstWorkDisclosure = workDisclosures.at(0);
-            const secondWorkDisclosure = workDisclosures.at(1);
-            if (firstWorkDisclosure === undefined || secondWorkDisclosure === undefined) {
-                throw new Error("Expected both work disclosures");
+            const steps = within(turnProcess).getAllByTestId(dataTestId.agentActivity);
+            expect(steps).toHaveLength(2);
+            const firstStep = steps.at(0);
+            const secondStep = steps.at(1);
+            if (firstStep === undefined || secondStep === undefined) {
+                throw new Error("Expected both recorded steps");
             }
             const finalAnswer = within(agentMessage).getByText("Use this entry point:");
-            const timeline = [
-                firstProgressUpdate,
-                firstWorkDisclosure,
-                secondProgressUpdate,
-                secondWorkDisclosure,
-                finalAnswer,
-            ];
+            expect(turnProcess.contains(finalAnswer)).toBe(false);
+            const timeline = [firstProgressUpdate, firstStep, secondProgressUpdate, secondStep, finalAnswer];
             for (let index = 1; index < timeline.length; index += 1) {
                 const previous = timeline.at(index - 1);
                 const current = timeline.at(index);
@@ -1088,6 +1085,139 @@ describe.sequential("Agent interaction boundaries", () => {
             cleanup();
             await closeMobiusTransport();
             paired.daemon.close();
+        }
+    });
+
+    it("Given an Agent streams intermediate work, When its turn ends, Then the chat collapses that work into a reopenable worked-for summary", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-20T08:00:00.000Z"));
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, {
+                target: { value: "Fix the failing check" },
+            });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "worked-for-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "reasoning-1",
+                    activityType: "reasoning",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "Reading the failing job log.",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "",
+                    output: "Reading the failing job log.",
+                    sequence: 0,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Inspect the failing check",
+                    toolKind: "think",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "progress-1",
+                    activityType: "progress",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "Reproducing the ordering bug locally.",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "",
+                    output: "Reproducing the ordering bug locally.",
+                    sequence: 1,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Progress update",
+                    toolKind: "",
+                }),
+            );
+            const runningProcess = await screen.findByTestId(dataTestId.turnProcess);
+            expect(within(runningProcess).getByText("Inspect the failing check")).toBeTruthy();
+            expect(within(runningProcess).getByText("Reproducing the ordering bug locally.")).toBeTruthy();
+
+            vi.setSystemTime(new Date("2026-09-20T08:11:22.000Z"));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: prompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: `agent-${prompt.commandId}`,
+                    sessionId: prompt.sessionId,
+                    text: "Fixed the ordering bug.",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            await screen.findByText("Agent response completed.");
+
+            const agentMessage = await screen.findByTestId(dataTestId.agentMessage);
+            const summary = within(agentMessage).getByTestId(dataTestId.turnProcessSummary);
+            await waitFor(() => {
+                expect(summary.textContent).toContain("Worked for 11m 22s");
+            });
+            const settledProcess = within(agentMessage).getByTestId(dataTestId.turnProcess);
+            expect(settledProcess.hasAttribute("open")).toBe(false);
+            expect(summary.getAttribute("aria-label")).toBe("Show work for this turn");
+            expect(within(agentMessage).getByText("Fixed the ordering bug.")).toBeTruthy();
+            expect(settledProcess.contains(within(agentMessage).getByText("Fixed the ordering bug."))).toBe(false);
+
+            fireEvent.click(summary);
+            expect(settledProcess.hasAttribute("open")).toBe(true);
+            expect(summary.getAttribute("aria-label")).toBe("Hide work for this turn");
+            const steps = within(settledProcess).getAllByTestId(dataTestId.agentActivity);
+            expect(steps.length).toBeGreaterThan(0);
+            expect(within(settledProcess).getByText("Inspect the failing check")).toBeTruthy();
+            expect(within(settledProcess).getByText("Reproducing the ordering bug locally.")).toBeTruthy();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+            vi.useRealTimers();
         }
     });
 
@@ -1271,12 +1401,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const agentMessage = await screen.findByRole("article", {
                 name: "Message from Codex",
             });
-            const processDisclosure = within(agentMessage).getByTestId("agent-process-disclosure");
-            const processSummary = processDisclosure.querySelector(":scope > summary");
-            if (!(processSummary instanceof HTMLElement)) {
-                throw new Error("Expected a step disclosure summary");
-            }
-            fireEvent.click(processSummary);
+            fireEvent.click(within(agentMessage).getByTestId(dataTestId.turnProcessSummary));
 
             const reasoningStep = within(agentMessage).getByText("Inspect renderer").closest("details");
             const reasoningSummary = reasoningStep?.querySelector(":scope > summary");

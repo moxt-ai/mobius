@@ -363,6 +363,18 @@ export class ChannelConnection {
     }
 }
 
+/**
+ * How long a Turn took. A Turn is untimed until it starts, running while the local Agent works, and
+ * measured once it settles. Elapsed time is only ever measured between two readings of the same
+ * clock, so browser and relay timestamps are never subtracted from each other.
+ */
+export type TurnTiming =
+    | { readonly kind: "untimed" }
+    | { readonly kind: "running"; readonly startedAt: Date }
+    | { readonly elapsedMilliseconds: number; readonly kind: "measured" };
+
+export const UNTIMED_TURN: TurnTiming = { kind: "untimed" };
+
 export abstract class RecordedTurn {
     readonly activities: readonly RecordedActivity[];
     readonly agentId: string;
@@ -375,6 +387,7 @@ export abstract class RecordedTurn {
     readonly response: string;
     readonly sessionId: string;
     readonly targetCommandId: string;
+    readonly timing: TurnTiming;
     readonly turnId: string;
     readonly contents: readonly RecordedContent[];
     abstract readonly status: string;
@@ -393,6 +406,7 @@ export abstract class RecordedTurn {
         disposition = "reject",
         targetCommandId = "",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         this.activities = activities;
         this.agentId = agentId;
@@ -405,6 +419,7 @@ export abstract class RecordedTurn {
         this.response = response;
         this.sessionId = sessionId;
         this.targetCommandId = targetCommandId;
+        this.timing = timing;
         this.turnId = turnId;
         this.contents = contents;
     }
@@ -427,6 +442,7 @@ export class PendingRecordedTurn extends RecordedTurn {
         disposition = "reject",
         targetCommandId = "",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         super(
             agentId,
@@ -442,6 +458,7 @@ export class PendingRecordedTurn extends RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
     }
 }
@@ -465,6 +482,7 @@ export class RunningRecordedTurn extends RecordedTurn {
         disposition = "reject",
         targetCommandId = "",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         super(
             agentId,
@@ -480,6 +498,7 @@ export class RunningRecordedTurn extends RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
         this.attemptId = attemptId;
     }
@@ -506,6 +525,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
         disposition = "reject",
         targetCommandId = "",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         super(
             agentId,
@@ -521,6 +541,7 @@ export class CompletedRecordedTurn extends RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
         this.attemptId = attemptId;
         this.stopReason = stopReason;
@@ -548,6 +569,7 @@ export class FailedRecordedTurn extends RecordedTurn {
         disposition = "reject",
         targetCommandId = "",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         super(
             agentId,
@@ -563,6 +585,7 @@ export class FailedRecordedTurn extends RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
         this.code = code;
         this.message = message;

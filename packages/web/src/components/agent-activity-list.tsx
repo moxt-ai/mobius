@@ -18,9 +18,10 @@ import { type ReactNode, useCallback, useEffect, useRef, useState } from "react"
 
 import { AgentMarkdown } from "@/components/agent-markdown";
 import { AgentRichContent } from "@/components/agent-rich-content";
-import type { ChannelConnection, RecordedActivity } from "@/domain/channel";
+import { dataTestId } from "@/data-testid";
+import type { ChannelConnection, RecordedActivity, TurnTiming } from "@/domain/channel";
 import { cn } from "@/lib/utils";
-import { describeAgentActivities, describeAgentActivity } from "@/services/activity-presentation";
+import { describeAgentActivity, describeSettledTurnProcess } from "@/services/activity-presentation";
 import { type ActivityDetailResult, readToolCallDetail } from "@/services/pairing-api";
 
 type ActivityDetailLoadState =
@@ -367,7 +368,7 @@ function ActivityLine({
             className="group/activity min-w-0 max-w-full"
             data-activity-type={activity.activityType}
             data-status={activity.status}
-            data-testid="agent-activity"
+            data-testid={dataTestId.agentActivity}
             onToggle={(event) => {
                 setOpen(event.currentTarget.open);
             }}
@@ -417,7 +418,7 @@ function ProgressUpdate({
     );
 }
 
-function WorkActivityDisclosure({
+function ActivityTimeline({
     activities,
     connection,
     sessionId,
@@ -428,42 +429,18 @@ function WorkActivityDisclosure({
     readonly sessionId: string;
     readonly streaming: boolean;
 }) {
-    const initialPresentation = describeAgentActivities(activities, streaming);
-    const [manuallyOpen, setManuallyOpen] = useState(() => !streaming && initialPresentation.defaultOpen);
-    const working =
-        streaming && activities.some((activity) => activity.status === "pending" || activity.status === "running");
-    const presentation = describeAgentActivities(activities, streaming);
-    useEffect(() => {
-        if (!streaming && presentation.defaultOpen) {
-            setManuallyOpen(true);
-        }
-    }, [presentation.defaultOpen, streaming]);
-    const open = streaming || manuallyOpen;
-    const disclosureLabel = presentation.label;
-
     return (
-        <details
-            className="group/work mb-3 min-w-0 max-w-full"
-            data-testid="agent-process-disclosure"
-            onToggle={(event) => {
-                if (!streaming) {
-                    setManuallyOpen(event.currentTarget.open);
-                }
-            }}
-            open={open}
-        >
-            <summary
-                aria-label={`${open ? "Hide" : "Show"} ${disclosureLabel}`}
-                className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
-            >
-                <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
-                <span>{disclosureLabel}</span>
-                {working && (
-                    <LoaderCircle className="ml-1 size-3.5 animate-spin text-warning motion-reduce:animate-none" />
-                )}
-            </summary>
-            <div className="mt-1.5 grid min-w-0 max-w-full gap-1">
-                {activities.map((activity) => (
+        <div className="grid min-w-0 max-w-full gap-1">
+            {activities.map((activity) =>
+                activity.activityType === "progress" ? (
+                    <ProgressUpdate
+                        activity={activity}
+                        connection={connection}
+                        key={`${sessionId}:${activity.activityId}`}
+                        sessionId={sessionId}
+                        streaming={streaming}
+                    />
+                ) : (
                     <ActivityLine
                         activity={activity}
                         connection={connection}
@@ -471,7 +448,50 @@ function WorkActivityDisclosure({
                         sessionId={sessionId}
                         streaming={streaming}
                     />
-                ))}
+                ),
+            )}
+        </div>
+    );
+}
+
+function SettledTurnProcess({
+    activities,
+    connection,
+    sessionId,
+    timing,
+}: {
+    readonly activities: readonly RecordedActivity[];
+    readonly connection: ChannelConnection;
+    readonly sessionId: string;
+    readonly timing: TurnTiming;
+}) {
+    const presentation = describeSettledTurnProcess(activities, timing);
+    const [open, setOpen] = useState(presentation.defaultOpen);
+
+    return (
+        <details
+            className="group/work mb-3 min-w-0 max-w-full"
+            data-testid={dataTestId.turnProcess}
+            onToggle={(event) => {
+                setOpen(event.currentTarget.open);
+            }}
+            open={open}
+        >
+            <summary
+                aria-label={`${open ? "Hide" : "Show"} ${presentation.toggleLabel}`}
+                className="flex min-h-11 w-fit cursor-pointer list-none items-center gap-1.5 rounded-md px-1 text-xs leading-5 text-copy-tertiary outline-none select-none hover:bg-black/[0.035] hover:text-copy-secondary focus-visible:ring-2 focus-visible:ring-ring/70 md:min-h-8"
+                data-testid={dataTestId.turnProcessSummary}
+            >
+                <span>{presentation.label}</span>
+                <ChevronRight className="size-3 shrink-0 transition-transform duration-150 motion-reduce:transition-none group-open/work:rotate-90" />
+            </summary>
+            <div className="mt-1.5">
+                <ActivityTimeline
+                    activities={activities}
+                    connection={connection}
+                    sessionId={sessionId}
+                    streaming={false}
+                />
             </div>
         </details>
     );
@@ -481,58 +501,33 @@ export function AgentActivityList({
     activities,
     connection,
     sessionId,
+    settled,
     streaming,
+    timing,
 }: {
     readonly activities: readonly RecordedActivity[];
     readonly connection: ChannelConnection;
     readonly sessionId: string;
+    readonly settled: boolean;
     readonly streaming: boolean;
+    readonly timing: TurnTiming;
 }) {
     if (activities.length === 0) {
         return null;
     }
-    const timeline: ReactNode[] = [];
-    let workGroupKey = "";
-    let workActivities: RecordedActivity[] = [];
-    const flushWorkActivities = (): void => {
-        if (workActivities.length === 0) {
-            return;
-        }
-        const currentWorkActivities = workActivities;
-        const currentWorkGroupKey = workGroupKey;
-        workGroupKey = "";
-        workActivities = [];
-        timeline.push(
-            <WorkActivityDisclosure
-                activities={currentWorkActivities}
+    if (settled) {
+        return (
+            <SettledTurnProcess activities={activities} connection={connection} sessionId={sessionId} timing={timing} />
+        );
+    }
+    return (
+        <div className="mb-3" data-testid={dataTestId.turnProcess}>
+            <ActivityTimeline
+                activities={activities}
                 connection={connection}
-                key={`work:${currentWorkGroupKey}`}
                 sessionId={sessionId}
                 streaming={streaming}
-            />,
-        );
-    };
-
-    for (const activity of activities) {
-        if (activity.activityType === "progress") {
-            flushWorkActivities();
-            timeline.push(
-                <ProgressUpdate
-                    activity={activity}
-                    connection={connection}
-                    key={`progress:${activity.activityId}`}
-                    sessionId={sessionId}
-                    streaming={streaming}
-                />,
-            );
-            continue;
-        }
-        if (workActivities.length === 0) {
-            workGroupKey = activity.activityId;
-        }
-        workActivities.push(activity);
-    }
-    flushWorkActivities();
-
-    return <>{timeline}</>;
+            />
+        </div>
+    );
 }

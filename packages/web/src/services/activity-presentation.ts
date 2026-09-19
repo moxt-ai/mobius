@@ -1,8 +1,29 @@
-import type { RecordedActivity } from "@/domain/channel";
+import type { RecordedActivity, TurnTiming } from "@/domain/channel";
 
-export interface ActivityDisclosurePresentation {
+export interface SettledTurnProcessPresentation {
     readonly defaultOpen: boolean;
     readonly label: string;
+    readonly toggleLabel: string;
+}
+
+const MILLISECONDS_PER_SECOND = 1_000;
+const SECONDS_PER_MINUTE = 60;
+const MINUTES_PER_HOUR = 60;
+
+/** Formats elapsed Turn time the way the transcript reads it back: "11m 22s", "45s", or "1h 4m". */
+function formatTurnDuration(elapsedMilliseconds: number): string {
+    const totalSeconds = Math.max(0, Math.round(elapsedMilliseconds / MILLISECONDS_PER_SECOND));
+    const seconds = totalSeconds % SECONDS_PER_MINUTE;
+    const totalMinutes = (totalSeconds - seconds) / SECONDS_PER_MINUTE;
+    const minutes = totalMinutes % MINUTES_PER_HOUR;
+    const hours = (totalMinutes - minutes) / MINUTES_PER_HOUR;
+    if (hours > 0) {
+        return `${hours.toString()}h ${minutes.toString()}m`;
+    }
+    if (totalMinutes > 0) {
+        return `${totalMinutes.toString()}m ${seconds.toString()}s`;
+    }
+    return `${seconds.toString()}s`;
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
@@ -30,19 +51,21 @@ export function describeAgentActivity(activity: RecordedActivity): string {
     return normalized.length > 0 ? normalized.slice(0, 500) : activity.title;
 }
 
-export function describeAgentActivities(
+/**
+ * Describes the collapsed summary a finished Turn shows in place of its intermediate work. Measured
+ * Turns read as "Worked for 11m 22s"; Turns whose timing was never recorded fall back to step counts.
+ */
+export function describeSettledTurnProcess(
     activities: readonly RecordedActivity[],
-    streaming: boolean,
-): ActivityDisclosurePresentation {
+    timing: TurnTiming,
+): SettledTurnProcessPresentation {
     const stepLabel = `${activities.length.toString()} ${activities.length === 1 ? "step" : "steps"}`;
-    const working =
-        streaming && activities.some((activity) => activity.status === "pending" || activity.status === "running");
-    if (working) {
-        return { defaultOpen: true, label: `Working · ${stepLabel}` };
-    }
+    const base =
+        timing.kind === "measured" ? `Worked for ${formatTurnDuration(timing.elapsedMilliseconds)}` : stepLabel;
     const failed = activities.some((activity) => activity.status === "failed");
-    if (failed) {
-        return { defaultOpen: true, label: `${stepLabel} · needs attention` };
-    }
-    return { defaultOpen: streaming, label: stepLabel };
+    return {
+        defaultOpen: failed,
+        label: failed ? `${base} · needs attention` : base,
+        toggleLabel: "work for this turn",
+    };
 }

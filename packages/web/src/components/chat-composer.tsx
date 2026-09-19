@@ -471,6 +471,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                 <Textarea
                     aria-describedby="composer-hint connection-hint"
                     className={cn(placement === "active" ? "min-h-12 lg:min-h-16" : "min-h-12 md:min-h-16")}
+                    data-testid={dataTestId.promptInput}
                     id="agent-prompt"
                     maxLength={10000}
                     onChange={(event) => {
@@ -584,6 +585,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                         <Button
                             aria-label={sendLabel}
                             className="group size-11 rounded-full border-0 bg-transparent p-0 shadow-none hover:bg-transparent lg:size-9"
+                            data-testid={dataTestId.sendPrompt}
                             disabled={!canSend}
                             size="icon"
                             title={sendLabel}

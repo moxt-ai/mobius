@@ -26,6 +26,8 @@ import {
     type RecordedSession,
     type RecordedTurn,
     RunningRecordedTurn,
+    type TurnTiming,
+    UNTIMED_TURN,
 } from "@/domain/channel";
 
 const EMPTY_CAPABILITIES: SessionCapabilities = {
@@ -529,6 +531,8 @@ export abstract class AgentTurnState {
     abstract readonly isStreaming: boolean;
     abstract readonly label: string;
     abstract readonly progress: number;
+    /** True once the Turn reached a terminal outcome and its elapsed time can be measured. */
+    abstract readonly settled: boolean;
     abstract readonly details: (sessionId: string) => readonly RunDetail[];
     abstract readonly stop: () => AgentTurnState;
 }
@@ -539,6 +543,7 @@ class AuthorizingTurnState extends AgentTurnState {
     readonly isStreaming = true;
     readonly label = "Authorizing";
     readonly progress = 0;
+    readonly settled = false;
     readonly details = (sessionId: string): readonly RunDetail[] => [
         { label: "Session", value: sessionId },
         { label: "State", value: "Checking local workspace access" },
@@ -552,6 +557,7 @@ class PendingTurnState extends AgentTurnState {
     readonly isStreaming = true;
     readonly label = "Pending";
     readonly progress = 0;
+    readonly settled = false;
     readonly details = (sessionId: string): readonly RunDetail[] => [
         { label: "Session", value: sessionId },
         { label: "State", value: "Waiting for the local runtime" },
@@ -565,6 +571,7 @@ class QueuedTurnState extends AgentTurnState {
     readonly isStreaming = false;
     readonly label = "Queued";
     readonly progress = 0;
+    readonly settled = false;
     readonly details = (sessionId: string): readonly RunDetail[] => [
         { label: "Session", value: sessionId },
         { label: "State", value: "Waiting for the current turn to finish" },
@@ -578,6 +585,7 @@ export class RunningTurnState extends AgentTurnState {
     readonly isStreaming = true;
     readonly label = "Working";
     readonly progress = 1;
+    readonly settled = false;
     readonly #attemptId: string;
 
     constructor(attemptId: string) {
@@ -599,6 +607,7 @@ export class StoppingTurnState extends AgentTurnState {
     readonly isStreaming = true;
     readonly label = "Stopping";
     readonly progress = 1.5;
+    readonly settled = false;
     readonly #attemptId: string;
 
     constructor(attemptId: string) {
@@ -623,6 +632,7 @@ export class CompletedTurnState extends AgentTurnState {
     readonly isStreaming = false;
     readonly label = "Completed";
     readonly progress = 2;
+    readonly settled = true;
     readonly #attemptId: string;
     readonly #stopReason: string;
 
@@ -646,6 +656,7 @@ export class StoppedTurnState extends AgentTurnState {
     readonly isStreaming = false;
     readonly label = "Stopped";
     readonly progress = 2;
+    readonly settled = true;
     readonly #attemptId: string;
 
     constructor(attemptId: string) {
@@ -667,6 +678,7 @@ export class FailedTurnState extends AgentTurnState {
     readonly isStreaming = false;
     readonly label = "Failed";
     readonly progress = 2;
+    readonly settled = true;
     readonly #message: string;
 
     constructor(message: string) {
@@ -865,6 +877,7 @@ export class AgentChatMessage extends ChatMessage {
     readonly lastCommittedSeq: string;
     readonly state: AgentTurnState;
     readonly text: string;
+    readonly timing: TurnTiming;
     readonly turnId: string;
 
     constructor(
@@ -877,6 +890,7 @@ export class AgentChatMessage extends ChatMessage {
         contents: readonly RecordedContent[] = [],
         lastCommittedSeq = "0",
         turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
     ) {
         super(id, createdAt);
         this.activities = activities;
@@ -885,11 +899,24 @@ export class AgentChatMessage extends ChatMessage {
         this.lastCommittedSeq = lastCommittedSeq;
         this.text = text;
         this.state = state;
+        this.timing = timing;
         this.turnId = turnId;
     }
 
     static create(commandId: string): AgentChatMessage {
-        return new AgentChatMessage(`${commandId}:agent`, commandId, new Date(), "", new AuthorizingTurnState());
+        const createdAt = new Date();
+        return new AgentChatMessage(
+            `${commandId}:agent`,
+            commandId,
+            createdAt,
+            "",
+            new AuthorizingTurnState(),
+            [],
+            [],
+            "0",
+            "",
+            { kind: "running", startedAt: createdAt },
+        );
     }
 
     static createQueued(commandId: string): AgentChatMessage {
@@ -910,6 +937,7 @@ export class AgentChatMessage extends ChatMessage {
             this.contents,
             committedSequence,
             this.turnId,
+            this.timing,
         );
     };
 
@@ -927,6 +955,7 @@ export class AgentChatMessage extends ChatMessage {
             this.contents,
             this.lastCommittedSeq,
             this.turnId,
+            this.timing,
         );
     };
 
@@ -948,6 +977,7 @@ export class AgentChatMessage extends ChatMessage {
             contents,
             this.lastCommittedSeq,
             this.turnId,
+            this.timing,
         );
     };
 
@@ -962,6 +992,7 @@ export class AgentChatMessage extends ChatMessage {
             this.contents,
             this.lastCommittedSeq,
             this.turnId,
+            advanceTurnTiming(this.timing, state),
         );
 
     readonly reconcileRecorded = (recorded: AgentChatMessage): AgentChatMessage => {
@@ -980,6 +1011,7 @@ export class AgentChatMessage extends ChatMessage {
             reconcileContents(this.contents, recorded.contents),
             useRecordedText ? recorded.lastCommittedSeq : this.lastCommittedSeq,
             recorded.turnId.length > 0 ? recorded.turnId : this.turnId,
+            reconcileTurnTiming(this.timing, recorded.timing),
         );
     };
 
@@ -994,6 +1026,7 @@ export class AgentChatMessage extends ChatMessage {
             this.contents,
             this.lastCommittedSeq,
             this.turnId,
+            this.timing,
         );
 }
 
@@ -1277,6 +1310,7 @@ export class Conversation {
                     turn.contents,
                     lastCommittedSeq,
                     turn.turnId,
+                    turn.timing,
                 ).withFallbackText(fallbackText),
             );
         }
@@ -1931,6 +1965,33 @@ function activityProgress(status: string): number {
         return 1;
     }
     return 2;
+}
+
+/**
+ * Moves Turn timing forward for a state change. A Turn starts its clock when it begins streaming and
+ * measures elapsed time once it settles, using only browser readings so the measurement is coherent.
+ */
+function advanceTurnTiming(timing: TurnTiming, state: AgentTurnState): TurnTiming {
+    if (state.settled) {
+        return timing.kind === "running"
+            ? {
+                  elapsedMilliseconds: Math.max(0, Date.now() - timing.startedAt.getTime()),
+                  kind: "measured",
+              }
+            : timing;
+    }
+    if (state.isStreaming && timing.kind === "untimed") {
+        return { kind: "running", startedAt: new Date() };
+    }
+    return timing;
+}
+
+/**
+ * Keeps a locally started measurement over a recorded one so elapsed time stays on a single clock,
+ * and adopts relay timing only when this browser never observed the Turn running.
+ */
+function reconcileTurnTiming(current: TurnTiming, recorded: TurnTiming): TurnTiming {
+    return current.kind === "untimed" ? recorded : current;
 }
 
 function activityDetailLength(activity: RecordedActivity): number {

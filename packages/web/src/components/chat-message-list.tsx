@@ -15,6 +15,7 @@ import { SessionInteractions } from "@/components/session-interactions";
 import { Button } from "@/components/ui/button";
 import { UserPromptMessage } from "@/components/user-prompt-message";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
+import { dataTestId } from "@/data-testid";
 import type { ChannelConnection } from "@/domain/channel";
 import { AgentChatMessage, type ChatMessage, NativeHistoryChatMessage, UserChatMessage } from "@/domain/chat";
 import { cn } from "@/lib/utils";
@@ -117,13 +118,16 @@ function AgentMessage({
         <article
             aria-label={`Message from ${agentLabel}`}
             className="mb-8 min-w-0 motion-safe:animate-[message-enter_200ms_ease-out_both] md:mb-12"
+            data-testid={dataTestId.agentMessage}
         >
             <div className="min-w-0">
                 <AgentActivityList
                     activities={message.activities}
                     connection={connection}
                     sessionId={sessionId}
+                    settled={message.state.settled}
                     streaming={message.state.isStreaming}
+                    timing={message.timing}
                 />
                 {message.text.length > 0 && (
                     <div className={cn("agent-stream", message.state.isStreaming && "is-streaming")}>

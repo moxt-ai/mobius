@@ -52,6 +52,8 @@ import {
     RecordedSession,
     type RecordedTurn,
     RunningRecordedTurn,
+    type TurnTiming,
+    UNTIMED_TURN,
     WaitingBrowserPairingStatus,
 } from "@/domain/channel";
 
@@ -964,6 +966,25 @@ function runtimeConnection(
     );
 }
 
+/**
+ * Derives Turn timing from relay attempt timestamps. Both readings come from the relay clock, so a
+ * settled Turn is measured against its own start and an unsettled one keeps only its start.
+ */
+function decodeTurnTiming(startedAtValue: unknown, settledAtValue: unknown): TurnTiming {
+    if (startedAtValue === undefined || startedAtValue === null) {
+        return UNTIMED_TURN;
+    }
+    const startedAt = readDate(startedAtValue, "history attempt start");
+    if (settledAtValue === undefined || settledAtValue === null) {
+        return { kind: "running", startedAt };
+    }
+    const settledAt = readDate(settledAtValue, "history attempt outcome time");
+    return {
+        elapsedMilliseconds: Math.max(0, settledAt.getTime() - startedAt.getTime()),
+        kind: "measured",
+    };
+}
+
 function decodeRecordedTurn(value: unknown): RecordedTurn {
     if (!isRecord(value)) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history.");
@@ -992,6 +1013,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
     if (turnId.length > 0 && !isIdentifier(turnId)) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid turn identifier.");
     }
+    const timing = decodeTurnTiming(value["startedAt"], value["settledAt"]);
     const status = value["status"];
     if (status === "pending") {
         return new PendingRecordedTurn(
@@ -1008,6 +1030,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
     }
     if (status === "running") {
@@ -1026,6 +1049,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
     }
     if (status === "completed") {
@@ -1045,6 +1069,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
     }
     if (status === "failed") {
@@ -1064,6 +1089,7 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             disposition,
             targetCommandId,
             turnId,
+            timing,
         );
     }
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
@@ -1750,10 +1776,12 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
     if (!isRecord(attempt) || typeof attempt["kind"] !== "string") {
         throw new PairingApiError("invalid_relay_response", "The relay returned an invalid execution attempt.");
     }
+    const startedAt = attempt["kind"] === "dispatching" ? attempt["dispatchedAt"] : attempt["startedAt"];
     if (attempt["kind"] === "dispatching" || attempt["kind"] === "running" || attempt["kind"] === "waiting_input") {
         return decodeRecordedTurn({
             ...base,
             attemptId: attempt["attemptId"],
+            startedAt,
             status: "running",
         });
     }
@@ -1761,6 +1789,8 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         return decodeRecordedTurn({
             ...base,
             attemptId: attempt["attemptId"],
+            settledAt: attempt["completedAt"],
+            startedAt,
             status: "completed",
             stopReason: attempt["stopReason"],
         });
@@ -1769,6 +1799,8 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         return decodeRecordedTurn({
             ...base,
             attemptId: attempt["attemptId"],
+            settledAt: attempt["cancelledAt"],
+            startedAt,
             status: "completed",
             stopReason: "cancelled",
         });
@@ -1778,6 +1810,8 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
             ...base,
             code: attempt["code"],
             message: attempt["message"],
+            settledAt: attempt["failedAt"],
+            startedAt,
             status: "failed",
         });
     }
@@ -1786,6 +1820,8 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
             ...base,
             code: "indeterminate",
             message: "The runtime disconnected before the execution outcome was reconciled.",
+            settledAt: attempt["detectedAt"],
+            startedAt,
             status: "failed",
         });
     }
