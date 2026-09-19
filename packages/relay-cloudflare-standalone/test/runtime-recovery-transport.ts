@@ -151,6 +151,30 @@ export class SuspendedEventCommitTransport implements SessionTransport {
     };
 }
 
+// Session storage can become temporarily unavailable independently from the Runtime
+// channel. This fake exercises that production transport boundary without replacing
+// the Runtime actor or its WebSocket handling.
+export class UnavailableEventCommitTransport implements SessionTransport {
+    readonly #sessionId: string;
+    readonly #transport: SessionTransport = {
+        fetch: (scope, sessionId, request) =>
+            env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
+            ).fetch(request),
+    };
+
+    constructor(sessionId: string) {
+        this.#sessionId = sessionId;
+    }
+
+    readonly fetch: SessionTransport["fetch"] = async (scope, sessionId, request) => {
+        if (sessionId === this.#sessionId && new URL(request.url).pathname.endsWith("/commit")) {
+            throw new Error("The Session Durable Object is unavailable");
+        }
+        return await this.#transport.fetch(scope, sessionId, request);
+    };
+}
+
 export function runtimeWithTransport(state: DurableObjectState, sessionTransport: SessionTransport): RuntimeRelay {
     return new RuntimeRelay(
         createDurableObjectContext(state, {

@@ -9,13 +9,46 @@ import type { ChannelConnection, ChannelHistory } from "@/domain/channel";
 import { PairingApiError } from "@/domain/channel";
 import { ChannelHistorySynchronizer } from "@/services/channel-history-synchronizer";
 import { closeMobiusTransport, initializeMobiusTransport } from "@/services/mobius-transport";
-import { readChannelHistoryForSynchronization } from "@/services/pairing-api";
+import {
+    readChannelHistoryForSynchronization,
+    readConnectionDirectory,
+    readSessionHistory,
+} from "@/services/pairing-api";
 import { useChatStore } from "@/store/chat-store";
 
 type MobiusChatLoadState =
     | { readonly kind: "loading" }
     | { readonly kind: "failed"; readonly message: string }
     | { readonly kind: "ready"; readonly history: ChannelHistory };
+
+abstract class ActiveConversationHistoryState {
+    readonly sessionId: string;
+
+    protected constructor(sessionId: string) {
+        this.sessionId = sessionId;
+    }
+}
+
+class LoadingActiveConversationHistoryState extends ActiveConversationHistoryState {
+    constructor(sessionId: string) {
+        super(sessionId);
+    }
+}
+
+class ReadyActiveConversationHistoryState extends ActiveConversationHistoryState {
+    constructor(sessionId: string) {
+        super(sessionId);
+    }
+}
+
+class FailedActiveConversationHistoryState extends ActiveConversationHistoryState {
+    readonly message: string;
+
+    constructor(sessionId: string, message: string) {
+        super(sessionId);
+        this.message = message;
+    }
+}
 
 function ChatLoading({ label }: { readonly label: string }) {
     return (
@@ -37,6 +70,9 @@ function ConnectedMobiusChat({
     readonly history: ChannelHistory;
 }) {
     const [ready, setReady] = useState(false);
+    const [historyState, setHistoryState] = useState<ActiveConversationHistoryState>(
+        new LoadingActiveConversationHistoryState(""),
+    );
     const agents = useChatStore((state) => state.agents);
     const conversations = useChatStore((state) => state.conversations);
     const activeConversationId = useChatStore((state) => state.activeConversationId);
@@ -54,7 +90,17 @@ function ConnectedMobiusChat({
                 useChatStore.getState().reconcileHistory(latestHistory);
             },
             hasActiveTurns: () => useChatStore.getState().conversations.some((conversation) => conversation.isRunning),
-            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection, signal),
+            readHistory: async (signal) => {
+                const store = useChatStore.getState();
+                const active = store.conversations.find(
+                    (conversation) => conversation.id === store.activeConversationId,
+                );
+                const activeSessionId =
+                    active !== undefined && (active.id === active.sessionId || active.messages.length > 0)
+                        ? active.sessionId
+                        : "";
+                return await readChannelHistoryForSynchronization(connection, activeSessionId, signal);
+            },
             reportFailure: (error) => {
                 const message =
                     error instanceof PairingApiError
@@ -70,6 +116,38 @@ function ConnectedMobiusChat({
             void closeMobiusTransport();
         };
     }, [configureChannel, connection, history]);
+
+    const activeSessionId = activeConversation?.sessionId ?? "";
+    const persistedActiveSession =
+        activeConversation !== undefined && activeConversation.id === activeConversation.sessionId;
+
+    useEffect(() => {
+        if (!ready || !persistedActiveSession) {
+            setHistoryState(new ReadyActiveConversationHistoryState(activeSessionId));
+            return;
+        }
+        const controller = new AbortController();
+        setHistoryState(new LoadingActiveConversationHistoryState(activeSessionId));
+        void readSessionHistory(connection, activeSessionId, controller.signal)
+            .then((latestHistory) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                useChatStore.getState().reconcileHistory(latestHistory);
+                setHistoryState(new ReadyActiveConversationHistoryState(activeSessionId));
+            })
+            .catch((error: unknown) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                const message =
+                    error instanceof PairingApiError
+                        ? `${error.code}: ${error.message}`
+                        : "This Session could not be loaded.";
+                setHistoryState(new FailedActiveConversationHistoryState(activeSessionId, message));
+            });
+        return () => controller.abort();
+    }, [activeSessionId, connection, persistedActiveSession, ready]);
 
     if (ready && agents.length === 0) {
         return (
@@ -92,6 +170,18 @@ function ConnectedMobiusChat({
 
     if (!ready || activeConversation === undefined) {
         return <ChatLoading label="Preparing Mobius chat" />;
+    }
+
+    if (persistedActiveSession && historyState.sessionId !== activeSessionId) {
+        return <ChatLoading label="Loading Mobius conversation" />;
+    }
+
+    if (persistedActiveSession && historyState instanceof LoadingActiveConversationHistoryState) {
+        return <ChatLoading label="Loading Mobius conversation" />;
+    }
+
+    if (persistedActiveSession && historyState instanceof FailedActiveConversationHistoryState) {
+        return <p role="alert">{historyState.message}</p>;
     }
 
     return (
@@ -135,7 +225,7 @@ export function MobiusChat({ connection }: { readonly connection: ChannelConnect
     useEffect(() => {
         const controller = new AbortController();
         setState({ kind: "loading" });
-        void readChannelHistoryForSynchronization(connection, controller.signal)
+        void readConnectionDirectory(connection, controller.signal)
             .then((history) => {
                 if (!controller.signal.aborted) {
                     setState({ kind: "ready", history });

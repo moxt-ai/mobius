@@ -34,8 +34,9 @@ import { closeMobiusTransport, initializeMobiusTransport } from "@/services/mobi
 import {
     readChannelConnection,
     readChannelHistoryForSynchronization,
-    readConnectionHistory,
+    readConnectionDirectory,
     readProjectRuntimeConnection,
+    readSessionHistory,
     redeemChannelAccessGrantFromLocation,
 } from "@/services/pairing-api";
 import {
@@ -117,6 +118,19 @@ function ChannelLoadingPage() {
     );
 }
 
+function SessionLoadingState() {
+    return (
+        <section
+            aria-busy="true"
+            aria-live="polite"
+            className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center"
+        >
+            <LoaderCircle className="size-6 animate-spin text-[#279a60]" />
+            <p className="text-sm text-muted-foreground">Loading this conversation.</p>
+        </section>
+    );
+}
+
 function ChannelWorkspace({
     connection,
     history,
@@ -158,7 +172,17 @@ function ChannelWorkspace({
                 useChatStore.getState().reconcileHistory(latestHistory);
             },
             hasActiveTurns: () => useChatStore.getState().conversations.some((conversation) => conversation.isRunning),
-            readHistory: async (signal) => await readChannelHistoryForSynchronization(connection, signal),
+            readHistory: async (signal) => {
+                const store = useChatStore.getState();
+                const active = store.conversations.find(
+                    (conversation) => conversation.id === store.activeConversationId,
+                );
+                const activeSessionId =
+                    active !== undefined && (active.id === active.sessionId || active.messages.length > 0)
+                        ? active.sessionId
+                        : "";
+                return await readChannelHistoryForSynchronization(connection, activeSessionId, signal);
+            },
             reportFailure: (error) => {
                 const message =
                     error instanceof PairingApiError
@@ -293,6 +317,35 @@ class FailedChannelRouteState extends ChannelRouteState {
     }
 }
 
+abstract class SessionRouteLoadState {
+    readonly sessionId: string;
+
+    protected constructor(sessionId: string) {
+        this.sessionId = sessionId;
+    }
+}
+
+class LoadingSessionRouteState extends SessionRouteLoadState {
+    constructor(sessionId: string) {
+        super(sessionId);
+    }
+}
+
+class ReadySessionRouteState extends SessionRouteLoadState {
+    constructor(sessionId: string) {
+        super(sessionId);
+    }
+}
+
+class FailedSessionRouteState extends SessionRouteLoadState {
+    readonly message: string;
+
+    constructor(sessionId: string, message: string) {
+        super(sessionId);
+        this.message = message;
+    }
+}
+
 function ChannelRoute() {
     const params = useParams<"channelId">();
     const channelId = params.channelId ?? "";
@@ -311,7 +364,7 @@ function ChannelRoute() {
                 // Validate the channel-scoped credential before using it for broader
                 // project history reads so revoked access reports the channel boundary.
                 const connection = await readChannelConnection(channelId, controller.signal);
-                const history = await readConnectionHistory(connection, controller.signal);
+                const history = await readConnectionDirectory(connection, controller.signal);
                 if (active) {
                     setState(new ReadyChannelRouteState(connection, history));
                 }
@@ -371,7 +424,7 @@ function ProjectRuntimeRoute() {
         const load = async (): Promise<void> => {
             try {
                 const connection = await readProjectRuntimeConnection(projectId, runtimeId, controller.signal);
-                const history = await readConnectionHistory(connection, controller.signal);
+                const history = await readConnectionDirectory(connection, controller.signal);
                 if (active) {
                     setState(new ReadyChannelRouteState(connection, history));
                 }
@@ -456,12 +509,42 @@ function SessionRoute() {
     const conversations = useChatStore((state) => state.conversations);
     const selectConversation = useChatStore((state) => state.selectConversation);
     const conversation = conversations.find((candidate) => candidate.sessionId === sessionId);
+    const [state, setState] = useState<SessionRouteLoadState>(() => new LoadingSessionRouteState(sessionId));
+    const persistedSession = conversation !== undefined && conversation.id === conversation.sessionId;
 
     useLayoutEffect(() => {
         if (conversation !== undefined && conversation.id !== activeConversationId) {
             selectConversation(conversation.id);
         }
     }, [activeConversationId, conversation, selectConversation]);
+
+    useEffect(() => {
+        if (!isIdentifier(sessionId) || !persistedSession) {
+            setState(new ReadySessionRouteState(sessionId));
+            return;
+        }
+        const controller = new AbortController();
+        setState(new LoadingSessionRouteState(sessionId));
+        void readSessionHistory(context.connection, sessionId, controller.signal)
+            .then((history) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                useChatStore.getState().reconcileHistory(history);
+                setState(new ReadySessionRouteState(sessionId));
+            })
+            .catch((error: unknown) => {
+                if (controller.signal.aborted) {
+                    return;
+                }
+                const message =
+                    error instanceof PairingApiError
+                        ? `${error.code}: ${error.message}`
+                        : "This Session could not be loaded.";
+                setState(new FailedSessionRouteState(sessionId, message));
+            });
+        return () => controller.abort();
+    }, [context.connection, persistedSession, sessionId]);
 
     if (!isIdentifier(sessionId)) {
         return <ChannelContentError message="The Session route is malformed." title="Invalid Session" />;
@@ -476,6 +559,15 @@ function SessionRoute() {
     }
     if (conversation.id !== activeConversationId) {
         return null;
+    }
+    if (persistedSession && state.sessionId !== sessionId) {
+        return <SessionLoadingState />;
+    }
+    if (persistedSession && state instanceof LoadingSessionRouteState) {
+        return <SessionLoadingState />;
+    }
+    if (persistedSession && state instanceof FailedSessionRouteState) {
+        return <ChannelContentError message={state.message} title="Session unavailable" />;
     }
     return <Outlet context={context} />;
 }

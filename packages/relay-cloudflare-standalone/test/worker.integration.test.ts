@@ -80,6 +80,7 @@ import {
     runtimeWithTransport,
     SuspendedDisconnectTransport,
     SuspendedEventCommitTransport,
+    UnavailableEventCommitTransport,
 } from "./runtime-recovery-transport.ts";
 
 const relayOrigin = "https://relay.test";
@@ -2414,6 +2415,58 @@ describe.sequential("Cloudflare session deployment", () => {
         } finally {
             host.socket.close(1000, "Long Session byte backpressure test complete");
             daemon.socket.close(1000, "Long Session byte backpressure test complete");
+        }
+    });
+
+    it("Given one Session Durable Object is unavailable, When its daemon event is deferred, Then the channel socket remains available for another Session", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession, openChannelSocket } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const unavailableSessionId = "unavailable-session";
+        const healthySessionId = "healthy-session";
+        expect((await createSession(pairing.created, unavailableSessionId)).status).toBe(201);
+        expect((await createSession(pairing.created, healthySessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+
+        try {
+            const unavailableEvent = envelope(unavailableSessionId, "unavailable-session-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: unavailableSessionId,
+                title: "Unavailable Session",
+                updatedAt: "2026-09-19T00:00:00.000Z",
+            });
+            const healthyEvent = envelope(healthySessionId, "healthy-session-event", {
+                kind: SESSION_INFO_UPDATED_KIND,
+                sessionId: healthySessionId,
+                title: "Healthy Session",
+                updatedAt: "2026-09-19T00:00:00.000Z",
+            });
+            const runtimeStub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            await runInDurableObject(runtimeStub, async (_instance, state) => {
+                const server = state.getWebSockets("daemon")[0];
+                if (server === undefined) {
+                    throw new Error("Expected a connected daemon");
+                }
+                const runtime = runtimeWithTransport(state, new UnavailableEventCommitTransport(unavailableSessionId));
+                await runtime.webSocketMessage(server, encodeSessionEventEnvelope(unavailableEvent));
+                await runtime.webSocketMessage(server, encodeSessionEventEnvelope(healthyEvent));
+            });
+
+            expect(decodeSessionEventDeferred(await daemon.messages.next())).toEqual({
+                eventId: unavailableEvent.eventId,
+                kind: SESSION_EVENT_DEFERRED_KIND,
+                retryAfterMilliseconds: 1_000,
+                sessionId: unavailableSessionId,
+            });
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                eventId: healthyEvent.eventId,
+                sessionId: healthySessionId,
+            });
+            expect(daemon.socket.readyState).toBe(WebSocket.OPEN);
+        } finally {
+            daemon.socket.close(1000, "Unavailable Session isolation test complete");
         }
     });
 

@@ -7,7 +7,6 @@ import {
     type Interaction,
     MAX_LOCAL_AGENT_DIRECTORY_ENTRIES,
     MobiusAgentIntegrationDescriptor,
-    MobiusApiError,
     MobiusClient,
     MobiusError,
     MobiusMissingAgentDescriptor,
@@ -1227,6 +1226,21 @@ export async function readConnectionHistory(
     return await readConnectionHistoryWithSignal(connection, requestSignal(cancellationSignal));
 }
 
+export async function readConnectionDirectory(
+    connection: ChannelConnection,
+    cancellationSignal: AbortSignal = new AbortController().signal,
+): Promise<ChannelHistory> {
+    return await readConnectionDirectoryWithSignal(connection, requestSignal(cancellationSignal));
+}
+
+export async function readSessionHistory(
+    connection: ChannelConnection,
+    sessionId: string,
+    cancellationSignal: AbortSignal = new AbortController().signal,
+): Promise<ChannelHistory> {
+    return await readSessionHistoryWithSignal(connection, sessionId, requestSignal(cancellationSignal));
+}
+
 interface PendingSessionInteractions {
     readonly elicitations: readonly SessionElicitationRequestedEvent[];
     readonly permissions: readonly SessionPermissionRequestedEvent[];
@@ -1316,11 +1330,14 @@ interface RestoredChannelSession {
     readonly turns: RecordedTurn[];
 }
 
-function isConcurrentSessionRemoval(error: unknown): boolean {
-    return (
-        (error instanceof PairingApiError || error instanceof MobiusApiError) &&
-        (error.code === "session_not_found" || error.code === "session_deleted")
-    );
+class DecodedRecordedSession {
+    readonly hasNativeHistory: boolean;
+    readonly session: RecordedSession;
+
+    constructor(hasNativeHistory: boolean, session: RecordedSession) {
+        this.hasNativeHistory = hasNativeHistory;
+        this.session = session;
+    }
 }
 
 const MOBIUS_ARTIFACT_URI_PREFIX = "mobius-artifact:";
@@ -1515,61 +1532,27 @@ async function readConnectionHistoryWithSignal(
     const credential = connectionCredential(connection);
     const client = publicServiceClient(credential);
     try {
-        const directory = await client.sessions.list(new MobiusPageRequest(100, ""), signal);
-        const summaries = directory.sessions
-            .filter((session) => session.runtimeId === connection.runtimeId)
-            .map((session) => decodeRecordedSession(session, credential));
-        const restoredBySessionId = new Map<string, RestoredChannelSession>();
-        await Promise.all(
-            summaries.map(async ({ hasNativeHistory, session }) => {
-                try {
-                    const [page, nativeHistory, interactions] = await Promise.all([
-                        client.sessions.readMessages(session.sessionId, new MobiusPageRequest(100, ""), signal),
-                        hasNativeHistory
-                            ? client.sessions.readNativeHistory(session.sessionId, signal)
-                            : Promise.resolve(null),
-                        client.interactions.listPending(session.sessionId, signal),
-                    ]);
-                    const additionalDirectoryIds = readSessionAdditionalDirectoryIds(page.messages);
-                    const turns = page.messages.map(decodeSessionMessage);
-                    const pending = pendingSessionInteractions(interactions, session.sessionId, turns);
-                    restoredBySessionId.set(session.sessionId, {
-                        turns,
-                        session: new RecordedSession(
-                            session.agentId,
-                            session.bindingId,
-                            session.configRevision,
-                            session.directoryId,
-                            session.runtimeId,
-                            session.sessionId,
-                            session.title,
-                            session.updatedAt,
-                            nativeHistory,
-                            pending.elicitations,
-                            pending.permissions,
-                            additionalDirectoryIds,
-                            page.lastCommittedSequence,
-                        ),
-                    });
-                } catch (error) {
-                    if (!isConcurrentSessionRemoval(error)) {
-                        throw error;
-                    }
-                }
-            }),
+        const summaries = await readConnectionDirectoryWithClient(client, connection, credential, signal);
+        const results = await Promise.allSettled(
+            summaries.map(async (summary) => await readSessionHistoryForSummary(client, summary, signal)),
         );
-        const restored: RestoredChannelSession[] = [];
-        for (const { session } of summaries) {
-            const value = restoredBySessionId.get(session.sessionId);
-            if (value !== undefined) {
-                restored.push(value);
+        signal.throwIfAborted();
+        const restoredBySessionId = new Map<string, RestoredChannelSession>();
+        for (const result of results) {
+            if (result.status !== "fulfilled") {
+                continue;
             }
+            const restored = result.value;
+            restoredBySessionId.set(restored.session.sessionId, restored);
         }
-        const sessions = restored.map(({ session }) => session);
+        const sessions: RecordedSession[] = [];
         const turns: RecordedTurn[] = [];
-        for (const { turns: sessionTurns } of restored) {
-            sessionTurns.sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-            turns.push(...sessionTurns);
+        for (const summary of summaries) {
+            const restored = restoredBySessionId.get(summary.session.sessionId);
+            sessions.push(restored?.session ?? summary.session);
+            if (restored !== undefined) {
+                turns.push(...restored.turns);
+            }
         }
         return new ChannelHistory(turns, sessions);
     } catch (error) {
@@ -1579,10 +1562,104 @@ async function readConnectionHistoryWithSignal(
     }
 }
 
-function decodeRecordedSession(
-    value: MobiusSession,
+async function readConnectionDirectoryWithSignal(
+    connection: ChannelConnection,
+    signal: AbortSignal,
+): Promise<ChannelHistory> {
+    const credential = connectionCredential(connection);
+    const client = publicServiceClient(credential);
+    try {
+        const summaries = await readConnectionDirectoryWithClient(client, connection, credential, signal);
+        return new ChannelHistory(
+            [],
+            summaries.map((summary) => summary.session),
+        );
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
+}
+
+async function readConnectionDirectoryWithClient(
+    client: MobiusClient,
+    connection: ChannelConnection,
     credential: BrowserChannelCredential,
-): { readonly hasNativeHistory: boolean; readonly session: RecordedSession } {
+    signal: AbortSignal,
+): Promise<readonly DecodedRecordedSession[]> {
+    const directory = await client.sessions.list(new MobiusPageRequest(100, ""), signal);
+    return directory.sessions
+        .filter((session) => session.runtimeId === connection.runtimeId)
+        .map((session) => decodeRecordedSession(session, credential));
+}
+
+async function readSessionHistoryWithSignal(
+    connection: ChannelConnection,
+    sessionId: string,
+    signal: AbortSignal,
+): Promise<ChannelHistory> {
+    const credential = connectionCredential(connection);
+    const client = publicServiceClient(credential);
+    try {
+        const session = decodeRecordedSession(await client.sessions.read(sessionId, signal), credential);
+        if (session.session.runtimeId !== connection.runtimeId) {
+            throw new PairingApiError("session_not_found", "The Session is not available in this local Runtime.");
+        }
+        const restored = await readSessionHistoryForSummary(client, session, signal);
+        return new ChannelHistory(restored.turns, [restored.session]);
+    } catch (error) {
+        return throwPublicApiFailure(error);
+    } finally {
+        client.close();
+    }
+}
+
+async function readSessionHistoryForSummary(
+    client: MobiusClient,
+    summary: DecodedRecordedSession,
+    signal: AbortSignal,
+): Promise<RestoredChannelSession> {
+    const [pageResult, nativeHistoryResult, interactionsResult] = await Promise.allSettled([
+        client.sessions.readMessages(summary.session.sessionId, new MobiusPageRequest(100, ""), signal),
+        summary.hasNativeHistory
+            ? client.sessions.readNativeHistory(summary.session.sessionId, signal)
+            : Promise.resolve(null),
+        client.interactions.listPending(summary.session.sessionId, signal),
+    ]);
+    signal.throwIfAborted();
+    if (pageResult.status !== "fulfilled") {
+        throw pageResult.reason;
+    }
+    if (nativeHistoryResult.status !== "fulfilled") {
+        throw nativeHistoryResult.reason;
+    }
+    if (interactionsResult.status !== "fulfilled") {
+        throw interactionsResult.reason;
+    }
+    const additionalDirectoryIds = readSessionAdditionalDirectoryIds(pageResult.value.messages);
+    const turns = pageResult.value.messages.toReversed().map(decodeSessionMessage);
+    const pending = pendingSessionInteractions(interactionsResult.value, summary.session.sessionId, turns);
+    return {
+        turns,
+        session: new RecordedSession(
+            summary.session.agentId,
+            summary.session.bindingId,
+            summary.session.configRevision,
+            summary.session.directoryId,
+            summary.session.runtimeId,
+            summary.session.sessionId,
+            summary.session.title,
+            summary.session.updatedAt,
+            nativeHistoryResult.value,
+            pending.elicitations,
+            pending.permissions,
+            additionalDirectoryIds,
+            pageResult.value.lastCommittedSequence,
+        ),
+    };
+}
+
+function decodeRecordedSession(value: MobiusSession, credential: BrowserChannelCredential): DecodedRecordedSession {
     const binding = value.defaultBinding;
     if (
         value.projectId !== credential.projectId ||
@@ -1593,9 +1670,9 @@ function decodeRecordedSession(
     ) {
         throw new PairingApiError("invalid_relay_response", "The relay returned an inconsistent session summary.");
     }
-    return {
-        hasNativeHistory: value.hasNativeHistory,
-        session: new RecordedSession(
+    return new DecodedRecordedSession(
+        value.hasNativeHistory,
+        new RecordedSession(
             value.agentId,
             binding.bindingId,
             binding.configRevision,
@@ -1610,7 +1687,7 @@ function decodeRecordedSession(
             [],
             value.lastCommittedSequence,
         ),
-    };
+    );
 }
 
 function decodeSessionMessage(value: unknown): RecordedTurn {
@@ -1749,11 +1826,27 @@ export async function readToolCallDetail(
 
 export async function readChannelHistoryForSynchronization(
     connection: ChannelConnection,
+    activeSessionId: string,
     cancellationSignal: AbortSignal,
 ): Promise<ChannelHistory> {
-    return await readConnectionHistoryWithSignal(
-        connection,
-        AbortSignal.any([cancellationSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]),
+    const signal = AbortSignal.any([cancellationSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]);
+    const directory = await readConnectionDirectoryWithSignal(connection, signal);
+    if (activeSessionId.length === 0) {
+        return directory;
+    }
+    const activeHistory = await readSessionHistoryWithSignal(connection, activeSessionId, signal);
+    const activeSession = activeHistory.sessions[0];
+    if (activeSession === undefined) {
+        return directory;
+    }
+    const existing = directory.sessions.some((session) => session.sessionId === activeSession.sessionId);
+    return new ChannelHistory(
+        activeHistory.turns,
+        existing
+            ? directory.sessions.map((session) =>
+                  session.sessionId === activeSession.sessionId ? activeSession : session,
+              )
+            : [activeSession, ...directory.sessions],
     );
 }
 

@@ -165,6 +165,7 @@ export class SessionCommandsStorage {
         });
     readonly insertTurnWithDispatch = (input: {
         readonly disposition: string;
+        readonly initialTitle: string;
         readonly targetCommandId: string;
         readonly prompt: string;
         readonly turn: Parameters<SessionCommandsStorage["insertQueuedTurn"]>[0];
@@ -210,6 +211,13 @@ export class SessionCommandsStorage {
             });
             this.insertCommandReceipt(input.receipt);
             this.insertDispatch(input.dispatch);
+            if (input.initialTitle.length > 0) {
+                this.setInitialSessionTitle({
+                    scopeKey,
+                    sessionId,
+                    title: input.initialTitle,
+                });
+            }
             this.touchSession(input.turn);
             const turn = this.findTurn(scopeKey, sessionId, input.turn.turnId);
             const pendingWork = this.findPendingWork(scopeKey, sessionId, input.dispatch.workId);
@@ -754,6 +762,17 @@ export class SessionCommandsStorage {
             `UPDATE sessions SET updated_at = ?
          WHERE scope_key = ? AND session_id = ?`,
             [input.updatedAt, input.scopeKey, input.sessionId],
+        );
+
+    private readonly setInitialSessionTitle = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly title: string;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `UPDATE sessions SET title = ?
+         WHERE scope_key = ? AND session_id = ? AND title = ''`,
+            [input.title, input.scopeKey, input.sessionId],
         );
 
     readonly findTurn = (scopeKey: string, sessionId: string, turnId: string): TurnRecord | undefined =>

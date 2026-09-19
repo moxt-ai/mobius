@@ -1,6 +1,7 @@
 import {
     AGENT_MESSAGE_DELTA_KIND,
     type CommittedSessionEvent,
+    conversationTitleFromText,
     decodeCommittedSessionEvent,
     decodeSessionConfigureCommand,
     decodeSessionEventEnvelope,
@@ -123,6 +124,10 @@ export class SessionCommandService {
         const key = scopeKey(scope);
         const encodedCommand = JSON.stringify(validatedCommand);
         const requestHash = await sha256(new TextEncoder().encode(encodedCommand));
+        const initialTitle =
+            validatedCommand.disposition === SessionPromptDisposition.Reject
+                ? conversationTitleFromText(validatedCommand.prompt)
+                : "";
         const binding = this.#storage.findMatchingBinding({
             scopeKey: key,
             sessionId: validatedCommand.sessionId,
@@ -142,6 +147,7 @@ export class SessionCommandService {
         const workId = `dispatch_${turnId}`;
         const result = this.#storage.insertTurnWithDispatch({
             disposition: validatedCommand.disposition,
+            initialTitle,
             prompt: validatedCommand.prompt,
             targetCommandId: validatedCommand.targetCommandId,
             turn: {

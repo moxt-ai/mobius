@@ -2137,7 +2137,20 @@ async function runRelayConnection(
             };
 
             const connectionLiveness = new RelayConnectionLiveness(timer, {
-                send: (message) => send(socket, message),
+                send: (message) => {
+                    if (socket.readyState !== WebSocket.OPEN) {
+                        return false;
+                    }
+                    try {
+                        send(socket, message);
+                        return true;
+                    } catch (error) {
+                        if (socket.readyState !== WebSocket.OPEN) {
+                            return false;
+                        }
+                        throw error;
+                    }
+                },
                 unresponsive: (heartbeatId, timeoutMilliseconds) => {
                     diagnostics.heartbeatTimedOut(connectionEpoch, heartbeatId, timeoutMilliseconds);
                     diagnostics.connectionClosed(

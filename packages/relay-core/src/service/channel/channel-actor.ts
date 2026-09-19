@@ -191,6 +191,14 @@ function isTerminalSessionEventError(error: SessionRuntimeError): boolean {
     );
 }
 
+function isDeferredSessionEventError(error: SessionRuntimeError): boolean {
+    return (
+        error.code === "session_busy" ||
+        error.code === "session_storage_timeout" ||
+        error.code === "session_storage_unavailable"
+    );
+}
+
 export interface RelayClock {
     readonly now: () => number;
 }
@@ -365,7 +373,7 @@ export class ChannelActor {
                         signal,
                     );
                 } catch (error) {
-                    if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_busy") {
+                    if (!signal.aborted && error instanceof SessionRuntimeError && isDeferredSessionEventError(error)) {
                         this.#backpressuredEventBySource.set(sourceKey, envelope.eventId);
                         this.deferSessionEvent(socket, envelope);
                         return;
