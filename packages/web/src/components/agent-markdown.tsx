@@ -1,8 +1,8 @@
 import { code } from "@streamdown/code";
 import type { MermaidConfig } from "@streamdown/mermaid";
+import { type ComponentProps, memo } from "react";
 import { type DiagramPlugin, type MermaidErrorComponentProps, Streamdown } from "streamdown";
 import "streamdown/styles.css";
-import type { ComponentProps } from "react";
 
 import { cn } from "@/lib/utils";
 
@@ -91,7 +91,12 @@ export interface AgentMarkdownProps {
     readonly streaming: boolean;
 }
 
-export function AgentMarkdown({ markdown, streaming }: AgentMarkdownProps) {
+/**
+ * Rendering Markdown is the expensive part of a streamed response: the whole document is re-parsed on
+ * every update. Memoizing on the text and streaming flag keeps an unchanged document from being parsed
+ * again when a parent or sibling state change re-renders the transcript.
+ */
+export const AgentMarkdown = memo(function AgentMarkdown({ markdown, streaming }: AgentMarkdownProps) {
     return (
         <Streamdown
             animated={STREAM_ANIMATION}
@@ -122,4 +127,4 @@ export function AgentMarkdown({ markdown, streaming }: AgentMarkdownProps) {
             {markdown}
         </Streamdown>
     );
-}
+});

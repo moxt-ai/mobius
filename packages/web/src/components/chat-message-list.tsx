@@ -4,7 +4,7 @@ import {
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-sdk";
 import { ArrowDown, GitFork, LoaderCircle, MoreHorizontal } from "lucide-react";
-import { useLayoutEffect, useRef, useState } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 import { AgentActivityList } from "@/components/agent-activity-list";
 import { AgentAvatar } from "@/components/agent-avatar";
@@ -273,7 +273,12 @@ export function NativeSessionHistoryView({
     );
 }
 
-function Message({
+/**
+ * Streaming replaces the Agent message object on every update. Memoizing the row keeps every other
+ * message in the transcript from re-rendering, and therefore from re-parsing its Markdown, while one
+ * message grows. Repeated whole-transcript re-parsing is what makes a large streamed table freeze.
+ */
+const Message = memo(function Message({
     agentLabel,
     connection,
     conversationRunning,
@@ -315,7 +320,7 @@ function Message({
         );
     }
     return null;
-}
+});
 
 export function ChatMessageList({ connection }: { readonly connection: ChannelConnection }) {
     const conversation = useChatStore(selectActiveConversation);
