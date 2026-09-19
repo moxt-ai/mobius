@@ -1,7 +1,6 @@
 import type { RecordedActivity, TurnTiming } from "@/domain/channel";
 
 export interface SettledTurnProcessPresentation {
-    readonly defaultOpen: boolean;
     readonly label: string;
     readonly toggleLabel: string;
 }
@@ -54,18 +53,18 @@ export function describeAgentActivity(activity: RecordedActivity): string {
 /**
  * Describes the collapsed summary a finished Turn shows in place of its intermediate work. Measured
  * Turns read as "Worked for 11m 22s"; Turns whose timing was never recorded fall back to step counts.
+ *
+ * The summary describes work, never outcome. A Turn that recovered from a failed step still collapses,
+ * because Agents that report routine non-zero tool exits would otherwise never collapse their work. A
+ * Turn whose own outcome needs attention reports that through its Turn status instead.
  */
 export function describeSettledTurnProcess(
     activities: readonly RecordedActivity[],
     timing: TurnTiming,
 ): SettledTurnProcessPresentation {
     const stepLabel = `${activities.length.toString()} ${activities.length === 1 ? "step" : "steps"}`;
-    const base =
-        timing.kind === "measured" ? `Worked for ${formatTurnDuration(timing.elapsedMilliseconds)}` : stepLabel;
-    const failed = activities.some((activity) => activity.status === "failed");
     return {
-        defaultOpen: failed,
-        label: failed ? `${base} · needs attention` : base,
+        label: timing.kind === "measured" ? `Worked for ${formatTurnDuration(timing.elapsedMilliseconds)}` : stepLabel,
         toggleLabel: "work for this turn",
     };
 }

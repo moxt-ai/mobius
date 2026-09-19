@@ -1221,6 +1221,132 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
+    it("Given an Agent recovers from a failed step, When its turn ends, Then the chat still collapses that work behind the worked-for summary", async () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-20T09:00:00.000Z"));
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, {
+                target: { value: "Run the failing command" },
+            });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "recovered-step-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "tool-failed",
+                    activityType: "tool",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "exit code 1",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "bash",
+                    output: "exit code 1",
+                    sequence: 0,
+                    sessionId: prompt.sessionId,
+                    status: "failed",
+                    title: "Run the test suite",
+                    toolKind: "execute",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "tool-recovered",
+                    activityType: "tool",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: "all green",
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "bash",
+                    output: "all green",
+                    sequence: 1,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Rerun the test suite",
+                    toolKind: "execute",
+                }),
+            );
+
+            vi.setSystemTime(new Date("2026-09-20T09:01:43.000Z"));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: prompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: `agent-${prompt.commandId}`,
+                    sessionId: prompt.sessionId,
+                    text: "The suite passes now.",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            await screen.findByText("Agent response completed.");
+
+            const agentMessage = await screen.findByTestId(dataTestId.agentMessage);
+            const summary = within(agentMessage).getByTestId(dataTestId.turnProcessSummary);
+            await waitFor(() => {
+                expect(summary.textContent).toContain("Worked for 1m 43s");
+            });
+            const settledProcess = within(agentMessage).getByTestId(dataTestId.turnProcess);
+            expect(settledProcess.hasAttribute("open")).toBe(false);
+            expect(summary.getAttribute("aria-label")).toBe("Show work for this turn");
+            expect(within(agentMessage).getByText("The suite passes now.")).toBeTruthy();
+
+            fireEvent.click(summary);
+            expect(settledProcess.hasAttribute("open")).toBe(true);
+            expect(within(settledProcess).getByText("Run the test suite")).toBeTruthy();
+            expect(within(settledProcess).getByText("Rerun the test suite")).toBeTruthy();
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+            vi.useRealTimers();
+        }
+    });
+
     it("Given an Agent returns a Mermaid diagram, When the user opens its fullscreen view, Then the chat renders an accessible diagram with its source action", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);

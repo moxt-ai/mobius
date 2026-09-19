@@ -466,7 +466,7 @@ function SettledTurnProcess({
     readonly timing: TurnTiming;
 }) {
     const presentation = describeSettledTurnProcess(activities, timing);
-    const [open, setOpen] = useState(presentation.defaultOpen);
+    const [open, setOpen] = useState(false);
 
     return (
         <details
