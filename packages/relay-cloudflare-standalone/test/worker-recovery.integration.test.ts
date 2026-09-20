@@ -38,7 +38,11 @@ import { RuntimeRelay } from "../src/durable-objects.ts";
 import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 import { createStandaloneGateways } from "../src/worker.ts";
 import { testBindings } from "./infra/bindings.ts";
-import { runtimeWithTransport, SuspendedDisconnectTransport } from "./runtime-recovery-transport.ts";
+import {
+    RecordingDeliveryProbeTransport,
+    runtimeWithTransport,
+    SuspendedDisconnectTransport,
+} from "./runtime-recovery-transport.ts";
 
 import {
     commit,
@@ -1781,5 +1785,35 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
         );
         expect(deleted.status).toBe(200);
         expect((await createSession(pairing.created, "quota-third")).status).toBe(201);
+    });
+
+    it("Given a Project owns several Sessions, When its daemon attaches, Then the Relay probes their pending work concurrently instead of one Session at a time", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        for (const sessionId of ["fan-out-first", "fan-out-second"]) {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        }
+        const stub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+        const maximumConcurrentProbes = await runInDurableObject(stub, async (_instance, state) => {
+            const transport = new RecordingDeliveryProbeTransport();
+            const response = await runtimeWithTransport(state, transport).fetch(
+                new Request(
+                    `https://runtime.internal/projects/${encodeURIComponent(pairing.created.projectId)}/daemon?deliveryReceipts=1&liveness=1`,
+                    {
+                        headers: {
+                            Upgrade: "websocket",
+                            "x-mobius-channel-id": pairing.created.channelId,
+                            "x-mobius-runtime-id": pairing.created.runtimeId,
+                        },
+                    },
+                ),
+            );
+            expect(response.status).toBe(101);
+            return transport.maximumConcurrentProbes();
+        });
+        // Serial probing keeps this at 1 and lets a large Project's Session count push the attach past the
+        // daemon's connection deadline; overlapping probes keep the attach bounded by concurrency, not count.
+        expect(maximumConcurrentProbes).toBeGreaterThan(1);
     });
 });

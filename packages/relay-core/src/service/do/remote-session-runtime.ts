@@ -81,6 +81,15 @@ import { validateCreateSessionRequest } from "./session-records.ts";
 
 const SESSION_OPERATION_TIMEOUT_MILLISECONDS = 20_000;
 
+/**
+ * A Project owns one Session Durable Object per Session, and asking one for its pending delivery work
+ * costs a nested round trip. Probing them one at a time made a Runtime attach scale with the Project's
+ * Session count and exceed the daemon's connection deadline, which left the Channel unable to reconnect.
+ * Bound the probes so attach latency tracks this concurrency instead of the Session count, matching the
+ * Runtime message scheduler's bounded concurrency for the same kind of nested Session request.
+ */
+const SESSION_PROBE_CONCURRENCY = 8;
+
 const MAX_INTERNAL_RESPONSE_LENGTH = 96 * 1024 * 1024;
 const IDENTIFIER_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 const DECIMAL_SEQUENCE_PATTERN = /^(?:0|[1-9][0-9]*)$/;
@@ -1287,42 +1296,81 @@ export class RemoteSessionRuntime
         }
         const project = await this.#projects.resolve(scope.projectId, signal);
         const rows = await this.#directory.listReady(project, scope, signal);
-        const deliveries: PendingDaemonDelivery[] = [];
-        for (const row of rows) {
-            signal.throwIfAborted();
-            const value = await this.request(
-                scope,
-                row.session_id,
-                "pending-daemon-deliveries",
-                { limit: limit - deliveries.length, runtimeId },
-                signal,
-            );
-            if (!Array.isArray(value)) {
-                throw new SessionRuntimeError(
-                    "session_storage_unavailable",
-                    "The pending Interaction response list is invalid",
-                );
-            }
-            for (const entry of value) {
-                if (
-                    !isRecord(entry) ||
-                    (entry["interactionId"] !== null && typeof entry["interactionId"] !== "string") ||
-                    typeof entry["payload"] !== "string"
-                ) {
-                    throw new SessionRuntimeError(
-                        "session_storage_unavailable",
-                        "A pending Interaction response is invalid",
-                    );
+        // Probe every ready Session under bounded concurrency and re-sort by directory index afterwards, so
+        // the returned order stays the directory order regardless of which probe resolves first.
+        const probes: { readonly index: number; readonly deliveries: readonly PendingDaemonDelivery[] }[] = [];
+        const cancellation = new AbortController();
+        const probeSignal = AbortSignal.any([signal, cancellation.signal]);
+        let next = 0;
+        const probe = async (): Promise<void> => {
+            for (;;) {
+                const index = next;
+                next += 1;
+                const row = rows[index];
+                if (row === undefined) {
+                    return;
                 }
-                deliveries.push({
-                    interactionId: entry["interactionId"],
-                    payload: entry["payload"],
-                    pendingWork: decodePendingWork(entry["pendingWork"]),
+                probes.push({
+                    deliveries: await this.probePendingDaemonDeliveries(
+                        scope,
+                        row.session_id,
+                        runtimeId,
+                        limit,
+                        probeSignal,
+                    ),
+                    index,
                 });
+            }
+        };
+        try {
+            await Promise.all(Array.from({ length: Math.min(SESSION_PROBE_CONCURRENCY, rows.length) }, probe));
+        } catch (error) {
+            cancellation.abort(error);
+            throw error;
+        }
+        const deliveries: PendingDaemonDelivery[] = [];
+        for (const { deliveries: pending } of probes.sort((left, right) => left.index - right.index)) {
+            for (const delivery of pending) {
+                deliveries.push(delivery);
                 if (deliveries.length === limit) {
                     return deliveries;
                 }
             }
+        }
+        return deliveries;
+    };
+
+    private readonly probePendingDaemonDeliveries = async (
+        scope: ProjectScope,
+        sessionId: string,
+        runtimeId: string,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<readonly PendingDaemonDelivery[]> => {
+        const value = await this.request(scope, sessionId, "pending-daemon-deliveries", { limit, runtimeId }, signal);
+        if (!Array.isArray(value)) {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The pending Interaction response list is invalid",
+            );
+        }
+        const deliveries: PendingDaemonDelivery[] = [];
+        for (const entry of value) {
+            if (
+                !isRecord(entry) ||
+                (entry["interactionId"] !== null && typeof entry["interactionId"] !== "string") ||
+                typeof entry["payload"] !== "string"
+            ) {
+                throw new SessionRuntimeError(
+                    "session_storage_unavailable",
+                    "A pending Interaction response is invalid",
+                );
+            }
+            deliveries.push({
+                interactionId: entry["interactionId"],
+                payload: entry["payload"],
+                pendingWork: decodePendingWork(entry["pendingWork"]),
+            });
         }
         return deliveries;
     };

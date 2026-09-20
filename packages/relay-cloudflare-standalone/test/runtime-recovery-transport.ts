@@ -190,3 +190,32 @@ export function runtimeWithTransport(state: DurableObjectState, sessionTransport
         }),
     );
 }
+
+// A Project must not serialize its Runtime attach behind one Session round trip per Session. This records
+// the greatest number of pending-delivery probes the production Runtime kept in flight at once, so the
+// fan-out bound stays observable through the same production Session port the Relay uses in deployment.
+export class RecordingDeliveryProbeTransport implements SessionTransport {
+    readonly #transport: SessionTransport = {
+        fetch: ({ scope, sessionId }, request) =>
+            env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
+            ).fetch(request),
+    };
+    #inFlight = 0;
+    #maximum = 0;
+
+    readonly maximumConcurrentProbes = (): number => this.#maximum;
+
+    readonly fetch: SessionTransport["fetch"] = async (target, request) => {
+        if (!new URL(request.url).pathname.endsWith("/pending-daemon-deliveries")) {
+            return await this.#transport.fetch(target, request);
+        }
+        this.#inFlight += 1;
+        this.#maximum = Math.max(this.#maximum, this.#inFlight);
+        try {
+            return await this.#transport.fetch(target, request);
+        } finally {
+            this.#inFlight -= 1;
+        }
+    };
+}
