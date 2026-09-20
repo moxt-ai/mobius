@@ -1,6 +1,7 @@
 import {
     decodeMessageKind,
     decodeSessionEventAcknowledgement,
+    decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionStartedEvent,
     encodeAgentMessageDeltaEvent,
@@ -11,6 +12,7 @@ import {
     MOBIUS_API_PREFIX,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
+    SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
     type SessionCapabilities,
@@ -352,6 +354,7 @@ export interface PairDaemonOptions {
 
 export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     readonly channelId: string;
+    readonly close: () => Promise<void>;
     readonly credential: CreatedPairing;
     readonly daemon: StatefulDaemon;
     readonly reconnectDaemon: () => Promise<StatefulDaemon>;
@@ -405,10 +408,16 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     daemonUrl.protocol = "ws:";
     daemonUrl.searchParams.set("token", claimed.daemonToken);
     const reconnectDaemon = async (): Promise<StatefulDaemon> => await StatefulDaemon.connect(daemonUrl);
+    const daemon = await reconnectDaemon();
     return {
         channelId: claimed.channelId,
+        close: async (): Promise<void> => {
+            cleanup();
+            await closeMobiusTransport();
+            daemon.close();
+        },
         credential: created,
-        daemon: await reconnectDaemon(),
+        daemon,
         reconnectDaemon,
     };
 }
@@ -428,14 +437,19 @@ export async function openPairedApplication(options: OpenPairedApplicationOption
     window.localStorage.clear();
     saveBrowserCredential(paired.channelId, paired.credential);
     createTestApplication();
-    return {
-        ...paired,
-        close: async (): Promise<void> => {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        },
-    } as const;
+    return paired;
+}
+
+export async function openReadyApplication(options: OpenPairedApplicationOptions = {}) {
+    const paired = await openPairedApplication(options);
+    try {
+        const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+        await sendReadySession(paired.daemon, preparation);
+        return { ...paired, preparation } as const;
+    } catch (error) {
+        await paired.close();
+        throw error;
+    }
 }
 
 export function saveBrowserCredential(channelId: string, credential: CreatedPairing): void {

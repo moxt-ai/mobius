@@ -24,6 +24,7 @@ import {
     completeRenderedPrompt,
     createTestApplication,
     openPairedApplication,
+    openReadyApplication,
     sendReadySession,
     setupWebIntegrationEnvironment,
     waitForDocumentState,
@@ -58,11 +59,9 @@ const completeReadyAgentDirectory = Array.from(
 
 describe.sequential("Agent interaction boundaries", () => {
     it("Given all eleven supported local Agents are ready, When Web opens the Agent picker, Then every Agent remains selectable", async () => {
-        const paired = await openPairedApplication({ agents: completeReadyAgentDirectory });
+        const paired = await openReadyApplication({ agents: completeReadyAgentDirectory });
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             fireEvent.click(
                 await screen.findByRole("button", {
                     name: "Agent for this conversation",
@@ -79,11 +78,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a paired Agent advertises Session turn configuration, When Web opens its conversation, Then the extended Agent directory remains usable", async () => {
-        const paired = await openPairedApplication({ sessionTurnConfiguration: true });
+        const paired = await openReadyApplication({ sessionTurnConfiguration: true });
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             expect(
                 await screen.findByRole("combobox", {
                     name: "Message the local agent",
@@ -95,11 +92,10 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then its local details are visible and navigation preserves the draft", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
+            const prepare = paired.preparation;
 
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
@@ -130,12 +126,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a paired chat uses compact navigation, When the conversation drawer opens, Then it receives focus and isolates the conversation", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             fireEvent.click(
                 await screen.findByRole("button", {
                     name: "Open conversation sidebar",
@@ -172,11 +165,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given the composer and run settings are open, When a screen reader lists their controls, Then each action is exposed exactly once", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             await screen.findByRole("combobox", { name: "Message the local agent" });
 
             // The visible attach button opens the native picker, so the input itself must stay hidden from
@@ -196,11 +187,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given the sidebar and composer are interactive, When a screen reader lists them, Then the resize handle and command popup expose valid semantics", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             await screen.findByRole("combobox", { name: "Message the local agent" });
 
             // A focusable, value-carrying separator must declare its role explicitly: an `hr` implies a
@@ -223,11 +212,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a new chat starts with a Markdown heading, When the first message is sent, Then the compact header shows a readable title", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             await completeRenderedPrompt(
                 paired.daemon,
                 "## Review the mobile layout\n\nKeep the narrow chat readable and calm.",
@@ -244,12 +231,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a conversation has started, When its Agent becomes immutable, Then the composer presents the Agent as locked instead of selectable", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             expect(
                 await screen.findByRole("button", {
                     name: "Agent for this conversation",
@@ -274,11 +258,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a persisted response snapshot overlaps a streaming delta, When background synchronization and live delivery reconcile, Then the response renders the text once", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
@@ -698,11 +680,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given chat has newer content below the viewport, When the reader is away from the tail, Then the latest control is a centered icon-only action", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             await completeRenderedPrompt(paired.daemon, "Review the latest reply", "Newer reply content.");
 
             const viewport = (await screen.findByRole("log")).parentElement;
@@ -831,12 +811,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given an Agent alternates progress updates and tool work, When the turn completes, Then the chat preserves that timeline before the final answer", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
@@ -1034,12 +1011,9 @@ describe.sequential("Agent interaction boundaries", () => {
     it("Given an Agent streams intermediate work, When its turn ends, Then the chat collapses that work into a reopenable worked-for summary", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-20T08:00:00.000Z"));
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             const promptInput = await screen.findByTestId(dataTestId.promptInput);
             await waitFor(() => {
                 expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
@@ -1161,12 +1135,9 @@ describe.sequential("Agent interaction boundaries", () => {
     it("Given an Agent recovers from a failed step, When its turn ends, Then the chat still collapses that work behind the worked-for summary", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-20T09:00:00.000Z"));
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             const promptInput = await screen.findByTestId(dataTestId.promptInput);
             await waitFor(() => {
                 expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
@@ -1279,11 +1250,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given an Agent returns a Mermaid diagram, When the user opens its fullscreen view, Then the chat renders an accessible diagram with its source action", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             const response = [
                 "Rendering flow:",
                 "",
@@ -1308,11 +1277,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given an Agent returns invalid Mermaid source, When the user opens the diagram, Then the chat announces the error and preserves the source", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             const invalidSource = "this is not a diagram";
             const response = ["Broken rendering example:", "", "```mermaid", invalidSource, "```"].join("\n");
             await completeRenderedPrompt(paired.daemon, "Show a broken diagram", response, "Broken rendering example:");
@@ -1331,12 +1298,9 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given an Agent records Markdown reasoning and a described shell tool, When the completed steps are expanded, Then the shell step uses its description and the details read as formatted work", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
-
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
@@ -1472,11 +1436,10 @@ describe.sequential("Agent interaction boundaries", () => {
     });
 
     it("Given a paired local Agent, When a user answers its form and sends a prompt, Then the Web app exchanges protocol messages and renders the response safely", async () => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
+            const prepare = paired.preparation;
 
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",

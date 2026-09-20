@@ -1,6 +1,5 @@
-import { act, cleanup, screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { closeMobiusTransport } from "@/services/mobius-transport";
 import { readChannelConnection } from "../src/index.ts";
 import {
     createEmbeddedTestApplication,
@@ -44,9 +43,7 @@ describe.sequential("Embedded Mobius chat", () => {
             expect(screen.queryByText("Preparing Mobius chat…")).toBeNull();
             expect(screen.queryByRole("status", { name: "Loading Mobius chat" })).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
             vi.useRealTimers();
         }
     });

@@ -25,6 +25,7 @@ import { readChannelConnection, readConnectionHistory } from "@/services/pairing
 import {
     completeRenderedPrompt,
     createTestApplication,
+    openReadyApplication,
     pairDaemon,
     saveBrowserCredential,
     sendReadySession,
@@ -173,15 +174,9 @@ describe.sequential("Session persistence boundaries", () => {
     it("Given the built-in Web application has an attachment, When a user submits the core chat workflow, Then it uses the public artifact and Turn API instead of placing content in the channel control message", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, preparation);
             const attachFiles = screen.getByTestId(dataTestId.attachPromptFiles);
             await waitFor(() => expect(attachFiles.hasAttribute("disabled")).toBe(false));
             fireEvent.click(attachFiles);
@@ -263,24 +258,16 @@ describe.sequential("Session persistence boundaries", () => {
                 }),
             );
         } finally {
-            await closeMobiusTransport();
-            cleanup();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the Agent accepts image prompts, When a user sends and reloads a pasted image, Then its artifact remains visible without entering the control message", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, preparation);
             const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
@@ -351,9 +338,7 @@ describe.sequential("Session persistence boundaries", () => {
             const restored = await screen.findByRole("img", { name: "shot.png" });
             expect(restored.getAttribute("src")).toMatch(/^blob:/);
         } finally {
-            await closeMobiusTransport();
-            cleanup();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
@@ -543,23 +528,14 @@ describe.sequential("Session persistence boundaries", () => {
             ).toContain("Claude");
             await screen.findByRole("button", { name: /Run settings: Plan/ });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a prompted Session uses an additional workspace, When the Web app reloads, Then preparation retains the immutable workspace identity", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation);
-
             fireEvent.click(await screen.findByRole("button", { name: /Workspace directory:/ }));
             const workspaceRequest = decodeWorkspaceListCommand(await paired.daemon.receive(WORKSPACE_LIST_KIND));
             paired.daemon.send(
@@ -607,22 +583,15 @@ describe.sequential("Session persistence boundaries", () => {
             await sendReadySession(paired.daemon, resumedPreparation);
             await screen.findByRole("button", { name: /Run settings:/ });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given several persisted Sessions, When a user selects an older Session and reloads, Then its route and selection are restored", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const olderPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, olderPreparation);
+            const olderPreparation = paired.preparation;
             await completeRenderedPrompt(paired.daemon, "Older persisted prompt", "OLDER-RESPONSE");
 
             fireEvent.click(
@@ -680,22 +649,15 @@ describe.sequential("Session persistence boundaries", () => {
             expect(restoredConversationButtons[0]?.textContent).not.toContain("default");
             expect(restoredConversationButtons[0]?.textContent).toContain("Default workspace");
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a titled prepared Session has an unsent prompt, When the Web app reloads and sends it, Then the Session and draft are restored before the draft is consumed", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, preparation);
+            const preparation = paired.preparation;
             await paired.daemon.sendSessionEvent(
                 preparation.sessionId,
                 encodeSessionInfoUpdatedEvent({
@@ -746,22 +708,15 @@ describe.sequential("Session persistence boundaries", () => {
                 expect((consumedInput as HTMLTextAreaElement).value).toBe("");
             });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a prepared Session changes configuration, When the next Turn is sent and the page reloads, Then both use the new immutable binding", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation);
+            const initialPreparation = paired.preparation;
             await paired.daemon.sendSessionEvent(
                 initialPreparation.sessionId,
                 encodeSessionConfigUpdatedEvent({
@@ -832,9 +787,7 @@ describe.sequential("Session persistence boundaries", () => {
             });
             await sendReadySession(paired.daemon, resumedPreparation);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
@@ -887,22 +840,15 @@ describe.sequential("Session persistence boundaries", () => {
             expect(cancelled.commandId).toBe(prompt.commandId);
             expect(screen.queryByRole("alert")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a Session is running, When the Web app reloads on a different Session, Then the running one is still marked as running", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const firstPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, firstPreparation);
+            const firstPreparation = paired.preparation;
             await completeRenderedPrompt(paired.daemon, "First conversation", "FIRST-RESPONSE");
 
             // A second Session the reload will land on, so the running one is not the active one.
@@ -955,9 +901,7 @@ describe.sequential("Session persistence boundaries", () => {
             expect(runningRow.textContent).toContain("Run a long tool call");
             expect(within(conversations).getAllByRole("link")).toHaveLength(2);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

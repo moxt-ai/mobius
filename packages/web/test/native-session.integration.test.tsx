@@ -15,6 +15,7 @@ import {
     completeRenderedPrompt,
     createTestApplication,
     openPairedApplication,
+    openReadyApplication,
     sendReadySession,
     setupWebIntegrationEnvironment,
     waitForDocumentState,
@@ -26,11 +27,9 @@ describe.sequential("Native Session boundaries", () => {
     it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async ({
         signal,
     }) => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, preparation);
             const first = await completeRenderedPrompt(
                 paired.daemon,
                 "Establish the implementation plan",
@@ -133,11 +132,10 @@ describe.sequential("Native Session boundaries", () => {
     it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async ({
         signal,
     }) => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, preparation);
+            const preparation = paired.preparation;
             await completeRenderedPrompt(
                 paired.daemon,
                 "Explain the existing workspace",
@@ -271,11 +269,9 @@ describe.sequential("Native Session boundaries", () => {
     it("Given an Agent has saved history with image references, When a user previews that session, Then the Web app shows only a safe recent transcript", async ({
         signal,
     }) => {
-        const paired = await openPairedApplication();
+        const paired = await openReadyApplication();
 
         try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare);
             await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
