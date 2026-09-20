@@ -7,6 +7,7 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         project_id TEXT NOT NULL,
         session_id TEXT NOT NULL,
         created_by TEXT NOT NULL,
+        cloud_retention INTEGER NOT NULL DEFAULT 1 CHECK (cloud_retention IN (0, 1)),
         runtime_id TEXT NOT NULL,
         agent_id TEXT NOT NULL,
         binding_id TEXT NOT NULL,
