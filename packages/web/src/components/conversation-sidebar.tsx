@@ -82,9 +82,11 @@ export function ConversationSidebar({
     // The store keeps conversations in the order they were created and reconciled, which is insertion
     // history rather than activity: a locally created conversation sat at the head until a reconciliation
     // reshuffled it. Sorting by the Session's own activity timestamp matches the Relay's ordering and keeps
-    // a row from moving under the reader.
+    // a row from moving under the reader. Two Sessions can share a timestamp — an unsent draft has none at
+    // all — so the Session id breaks the tie and the order stays deterministic rather than following
+    // whatever order the array happened to hold.
     const byMostRecent = (left: Conversation, right: Conversation): number =>
-        right.session.updatedAt.localeCompare(left.session.updatedAt);
+        right.session.updatedAt.localeCompare(left.session.updatedAt) || left.sessionId.localeCompare(right.sessionId);
     const runningConversations = conversations.filter((conversation) => conversation.isRunning).sort(byMostRecent);
     const recentConversations = conversations.filter((conversation) => !conversation.isRunning).sort(byMostRecent);
     const displayWidth = sidebarDisplayWidth(layout);

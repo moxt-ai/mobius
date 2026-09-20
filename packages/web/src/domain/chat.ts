@@ -201,6 +201,12 @@ export abstract class AgentSessionState {
         elicitations: readonly SessionElicitationRequestedEvent[],
         permissions: readonly SessionPermissionRequestedEvent[],
     ) => AgentSessionState;
+    /**
+     * The Session's last activity time, as the Relay reports it. It is the only ordering signal available
+     * before a Session's turns are read, so a prepared state must carry it forward. States that only exist
+     * while preparation is in flight have no activity time of their own and keep themselves unchanged.
+     */
+    readonly withUpdatedAt = (_updatedAt: string): AgentSessionState => this;
 
     protected constructor(
         agentName: string,
@@ -230,19 +236,24 @@ class UnpreparedSessionState extends AgentSessionState {
     readonly isPreparing = false;
     readonly isReady = false;
     readonly label = "Agent settings not loaded";
-    readonly updatedAt = "";
+    readonly updatedAt: string;
 
     constructor(
         elicitations: readonly SessionElicitationRequestedEvent[] = [],
         permissions: readonly SessionPermissionRequestedEvent[] = [],
+        updatedAt = "",
     ) {
         super("", "", EMPTY_CAPABILITIES, [], [], elicitations, permissions, false, new UnknownSessionUsage());
+        this.updatedAt = updatedAt;
     }
+
+    override readonly withUpdatedAt = (updatedAt: string): UnpreparedSessionState =>
+        new UnpreparedSessionState(this.elicitations, this.permissions, updatedAt);
 
     readonly withInteractions = (
         elicitations: readonly SessionElicitationRequestedEvent[],
         permissions: readonly SessionPermissionRequestedEvent[],
-    ): UnpreparedSessionState => new UnpreparedSessionState(elicitations, permissions);
+    ): UnpreparedSessionState => new UnpreparedSessionState(elicitations, permissions, this.updatedAt);
 }
 
 class PreparingSessionState extends AgentSessionState {
@@ -479,7 +490,7 @@ export class ReadySessionState extends AgentSessionState {
             this.updatedAt,
         );
 
-    readonly withUpdatedAt = (updatedAt: string): ReadySessionState =>
+    override readonly withUpdatedAt = (updatedAt: string): ReadySessionState =>
         new ReadySessionState(
             this.agentName,
             this.agentVersion,
@@ -1423,7 +1434,10 @@ export class Conversation {
             recorded.nativeHistory === null ? base.preview : "Continue Agent context",
             base.draft,
             mergeNativeHistory(recorded.sessionId, recorded.nativeHistory, base.messages),
-            new UnpreparedSessionState(recorded.elicitations, recorded.permissions),
+            // The Relay's `updatedAt` is the only activity signal available before a Session's turns are
+            // read, and the sidebar orders rows by it. Without it every restored row tied at "" and the
+            // list fell back to insertion order.
+            new UnpreparedSessionState(recorded.elicitations, recorded.permissions, recorded.updatedAt),
             recorded.directoryId,
             directoryLabelFromId(recorded.directoryId),
             restoreAdditionalDirectories(recorded.additionalDirectoryIds),
@@ -1499,7 +1513,12 @@ export class Conversation {
             recorded.nativeHistory === null ? this.preview : "Continue Agent context",
             this.draft,
             mergeNativeHistory(this.sessionId, recorded.nativeHistory, this.messages),
-            this.session.withInteractions(recorded.elicitations, recorded.permissions),
+            // Adopt the freshly read activity time so a reconciliation reflects work done since the row was
+            // last seen, while still merging the Session's interactions: dropping the merge here would lose
+            // a pending elicitation or permission prompt.
+            this.session
+                .withInteractions(recorded.elicitations, recorded.permissions)
+                .withUpdatedAt(recorded.updatedAt),
             recorded.directoryId,
             this.directoryId === recorded.directoryId
                 ? this.directoryLabel
