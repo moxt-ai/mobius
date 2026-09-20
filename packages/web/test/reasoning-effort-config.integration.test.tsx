@@ -4,14 +4,16 @@ import {
     AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
     AGENT_SETTINGS_DISCOVER_KIND,
     decodeAgentSettingsDiscoverCommand,
+    decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     encodeAgentSettingsDiscoveredEvent,
     SESSION_CONFIGURE_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
+    type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentOption } from "@/domain/channel";
@@ -336,7 +338,76 @@ function sendDiscoveredCompleteModelSettings(agentId: string, requestId: string)
     });
 }
 
+function groupedModelConfig(): readonly SessionConfigOption[] {
+    return [
+        {
+            booleanValue: false,
+            category: "model",
+            currentValue: "deepseek-official/deepseek-v4-flash",
+            description: "Execution model",
+            id: "model",
+            name: "Model",
+            type: "select",
+            values: [
+                {
+                    description: "Official DeepSeek route",
+                    groupId: "deepseek-official",
+                    groupName: "DeepSeek Official",
+                    name: "DeepSeek V4 Flash",
+                    value: "deepseek-official/deepseek-v4-flash",
+                },
+                {
+                    description: "User-configured model",
+                    groupId: "custom-provider",
+                    groupName: "Custom Provider",
+                    name: "GPT-5.5",
+                    value: "custom-provider/gpt-5.5",
+                },
+                {
+                    description: "User-configured model",
+                    groupId: "custom-provider",
+                    groupName: "Custom Provider",
+                    name: "GPT-5.6 Sol",
+                    value: "custom-provider/gpt-5.6-sol",
+                },
+            ],
+        },
+    ];
+}
+
 describe.sequential("Agent-native run settings", () => {
+    it("Given an Agent advertises grouped models, When the user changes model, Then the picker preserves provider groups and sends the advertised value", async () => {
+        const paired = await openPairedApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare, groupedModelConfig());
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: DeepSeek V4 Flash/ }));
+            const modelPicker = screen.getByRole("combobox", { name: "Model" });
+            fireEvent.pointerDown(modelPicker, { button: 0, pointerType: "mouse" });
+
+            const officialModels = await screen.findByRole("group", { name: "DeepSeek Official" });
+            expect(within(officialModels).getByRole("option", { name: "DeepSeek V4 Flash" })).toBeTruthy();
+            const customModels = screen.getByRole("group", { name: "Custom Provider" });
+            expect(
+                within(customModels)
+                    .getAllByRole("option")
+                    .map((option) => (option.textContent ?? "").trim()),
+            ).toEqual(["GPT-5.5", "GPT-5.6 Sol"]);
+
+            fireEvent.click(within(customModels).getByRole("option", { name: "GPT-5.6 Sol" }));
+            expect(decodeSessionConfigureCommand(await paired.daemon.receive(SESSION_CONFIGURE_KIND))).toMatchObject({
+                agentId: "codex",
+                configId: "model",
+                sessionId: prepare.sessionId,
+                value: "custom-provider/gpt-5.6-sol",
+            });
+        } finally {
+            await paired.close();
+        }
+    });
+
     it("Given an Agent exposes only its native mode, When the user opens run settings, Then Mobius uses cached Agent settings instead of session preparation options", async () => {
         const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 

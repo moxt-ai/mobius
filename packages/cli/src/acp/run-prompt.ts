@@ -2,7 +2,7 @@ import { LocalAgentDefinition } from "../config.ts";
 import type { AcpActivity } from "./activity.ts";
 import { AcpExecutionError, type AcpPromptResult, AcpSessionManager } from "./session-manager.ts";
 
-export interface RunAcpPromptOptions {
+interface RunAcpPromptOptions {
     readonly agentArguments: readonly string[];
     readonly agentCommand: string;
     readonly cwd: string;
@@ -12,7 +12,6 @@ export interface RunAcpPromptOptions {
     readonly signal: AbortSignal;
 }
 
-export type { AcpPromptResult };
 export { AcpExecutionError };
 
 export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPromptResult> {
