@@ -107,9 +107,7 @@ import {
 } from "./agent-installation/agent-installation-manager.ts";
 import { FixedInstallationExecutor } from "./agent-installation/fixed-installation-executor.ts";
 import { streamLocalFile } from "./artifacts/local-file-streamer.ts";
-import { uploadRuntimeArtifact } from "./artifacts/runtime-artifact-uploader.ts";
 import type { AuditStore } from "./audit/audit-store.ts";
-import type { LocalArtifact } from "./authorization/local-artifact.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
@@ -137,19 +135,11 @@ const ACTIVE_TURN_RECONCILIATION_TIMEOUT_MILLISECONDS = 20_000;
 const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
 class DaemonAcpObserver implements AcpSessionObserver {
-    readonly #config: DaemonConfig;
     readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
 
-    constructor(config: DaemonConfig, record: (sessionId: string, event: RecordedSessionEvent) => void) {
-        this.#config = config;
+    constructor(record: (sessionId: string, event: RecordedSessionEvent) => void) {
         this.#record = record;
     }
-
-    readonly importLocalArtifact = async (
-        sessionId: string,
-        artifact: LocalArtifact,
-        signal: AbortSignal,
-    ): Promise<string> => (await uploadRuntimeArtifact(this.#config, sessionId, artifact, signal)).artifactId;
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.#record(event.sessionId, event);
@@ -2911,7 +2901,7 @@ export async function runDaemon(
         }
         publisher.recordAttempt(sessionId, event, attemptId);
     };
-    const sessions = new AcpSessionManager(new DaemonAcpObserver(config, recordSessionEvent), sessionStore);
+    const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore);
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(audit, config.channelId, config.relayUrl);

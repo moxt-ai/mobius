@@ -19,7 +19,6 @@ import { describe, expect, it } from "vitest";
 import type { AcpActivity } from "../src/acp/activity.ts";
 import { AcpSessionManager, type AcpSessionObserver } from "../src/acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
-import type { LocalArtifact } from "../src/authorization/local-artifact.ts";
 import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../src/config.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
@@ -34,20 +33,8 @@ class RecordingObserver implements AcpSessionObserver {
     readonly permissionResolutions: SessionPermissionResolvedEvent[] = [];
     readonly elicitationResolutions: SessionElicitationResolvedEvent[] = [];
     readonly usage: SessionUsageUpdatedEvent[] = [];
-    readonly importedArtifacts: LocalArtifact[] = [];
-    readonly importedImages: LocalArtifact[] = [];
     readonly permissionArrived = Promise.withResolvers<SessionPermissionRequestedEvent>();
     readonly elicitationArrived = Promise.withResolvers<SessionElicitationRequestedEvent>();
-
-    readonly importLocalArtifact = (_sessionId: string, artifact: LocalArtifact): Promise<string> => {
-        this.importedArtifacts.push(artifact);
-        if (artifact.mimeType.startsWith("image/")) {
-            this.importedImages.push(artifact);
-        }
-        return Promise.resolve(
-            artifact.mimeType.startsWith("video/") ? "artifact-inline-video" : "artifact-inline-image",
-        );
-    };
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
         this.commands.push(event);
@@ -184,7 +171,6 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(observer.importedImages).toHaveLength(0);
             expect(
                 activities.some((activity) =>
                     activity.content.some(
@@ -221,7 +207,6 @@ describe("ACP session features", () => {
             });
 
             expect(output.join("")).not.toContain("![Generated image]");
-            expect(observer.importedImages).toHaveLength(0);
             expect(observer.content).toContainEqual(
                 expect.objectContaining({
                     content: expect.objectContaining({
@@ -263,7 +248,6 @@ describe("ACP session features", () => {
             });
 
             expect(output.join("")).not.toContain("Image unavailable");
-            expect(observer.importedImages).toHaveLength(0);
             expect(observer.content).toContainEqual(
                 expect.objectContaining({
                     content: expect.objectContaining({
@@ -283,7 +267,7 @@ describe("ACP session features", () => {
         }
     });
 
-    it("Given an ACP agent returns image and video output, When Mobius records the reply, Then both validated media artifacts remain available by reference", async () => {
+    it("Given an ACP agent returns image and video output, When Mobius records the reply, Then local images stay referenced and inline videos stay inline", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-media-output-"));
         const observer = new RecordingObserver();
         const manager = new AcpSessionManager(observer);
@@ -302,9 +286,6 @@ describe("ACP session features", () => {
                 signal: new AbortController().signal,
             });
 
-            expect(observer.importedArtifacts).toEqual([
-                expect.objectContaining({ mimeType: "video/mp4", name: "generated-video.mp4" }),
-            ]);
             expect(observer.content).toContainEqual(
                 expect.objectContaining({
                     content: expect.objectContaining({
@@ -319,8 +300,8 @@ describe("ACP session features", () => {
             expect(observer.content).toContainEqual(
                 expect.objectContaining({
                     content: expect.objectContaining({
-                        artifactId: "artifact-inline-video",
-                        data: "",
+                        artifactId: "",
+                        data: "AAAAGGZ0eXBpc29tAAACAGlzb21pc28y",
                         mimeType: "video/mp4",
                         name: "generated-video.mp4",
                         type: "video",

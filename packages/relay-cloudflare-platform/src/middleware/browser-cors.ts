@@ -2,7 +2,7 @@ import { createMiddleware } from "hono/factory";
 import { PlatformControlPlaneError } from "../entity/platform-control-plane.ts";
 
 interface BrowserCorsEnvironment {
-    readonly Bindings: { readonly allowedOrigins: ReadonlySet<string> };
+    readonly Bindings: { readonly allowedOrigins?: ReadonlySet<string> };
 }
 
 function browserCorsHeaders(origin: string, methods: readonly string[], headers: readonly string[]): Headers {
@@ -17,10 +17,15 @@ function browserCorsHeaders(origin: string, methods: readonly string[], headers:
     });
 }
 
-export function createBrowserCors(methods: readonly string[], headers: readonly string[]) {
+export function createBrowserCors(
+    methods: readonly string[],
+    headers: readonly string[],
+    configuredOrigins?: ReadonlySet<string>,
+) {
     return createMiddleware<BrowserCorsEnvironment>(async (context, next) => {
         const origin = context.req.header("origin") ?? "";
-        if (origin.length > 0 && !context.env.allowedOrigins.has("*") && !context.env.allowedOrigins.has(origin)) {
+        const allowedOrigins = configuredOrigins ?? context.env.allowedOrigins ?? new Set<string>();
+        if (origin.length > 0 && !allowedOrigins.has("*") && !allowedOrigins.has(origin)) {
             throw new PlatformControlPlaneError("browser_origin_denied", "The browser origin is not allowed", 403);
         }
         if (context.req.method === "OPTIONS") {

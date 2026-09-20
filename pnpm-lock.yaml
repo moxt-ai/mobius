@@ -81,9 +81,6 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
-      '@moxt-ai/mobius-sdk':
-        specifier: workspace:*
-        version: link:../mobius-sdk
       '@types/mdast':
         specifier: 4.0.4
         version: 4.0.4

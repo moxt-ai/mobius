@@ -9,6 +9,7 @@ import {
     PairingDirectoryError,
     type RelayContext,
     RequestAccessMetrics,
+    requestTimeoutMiddleware,
     type WorkerRuntimeGateways,
 } from "@moxt-ai/mobius-relay-core";
 import { type Handler, Hono } from "hono";
@@ -84,6 +85,7 @@ class DisabledPublicProjectBootstrap {
 const projectApplication = createPlatformMobiusApplication();
 const scopedProjectApplication = createProjectApplication();
 const controlApplication = createPlatformControlApplication();
+const PLATFORM_REQUEST_TIMEOUT_MILLISECONDS = 30_000;
 
 type DispatchEnvironment = {
     readonly Bindings: PlatformApplicationBindings;
@@ -96,6 +98,7 @@ type DispatchEnvironment = {
         readonly relay: RelayContext;
         readonly sessionAccess: SessionAccessService;
         readonly sessionAccessTarget: SessionAccessTarget;
+        readonly signal: AbortSignal;
     };
 };
 
@@ -139,7 +142,7 @@ export function createPlatformApplication(
                 ),
         );
     const sessionRoutes = new Hono<DispatchEnvironment>()
-        .route("/", createSessionCredentialRoutes())
+        .route("/", createSessionCredentialRoutes(authentication.allowedOrigins))
         .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
@@ -170,6 +173,7 @@ export function createPlatformApplication(
         .all("/*", projectHandler);
 
     const application = new Hono<DispatchEnvironment>()
+        .use("*", requestTimeoutMiddleware<DispatchEnvironment>(PLATFORM_REQUEST_TIMEOUT_MILLISECONDS))
         .use("*", async (context, next) => {
             const routed = await routeProjectDurableObject(context.req.raw, context.env, authentication.allowedOrigins);
             if (routed !== null) {

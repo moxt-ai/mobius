@@ -48,7 +48,6 @@ import {
     type SessionPermissionResolvedEvent,
     type SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
-import type { LocalArtifact } from "../authorization/local-artifact.ts";
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
@@ -162,7 +161,6 @@ export interface AcpElicitationResponseOptions {
 export type AcpPromptResult = AgentPromptResponse;
 
 export interface AcpSessionObserver {
-    readonly importLocalArtifact: (sessionId: string, artifact: LocalArtifact, signal: AbortSignal) => Promise<string>;
     readonly onCommands: (event: SessionCommandsUpdatedEvent) => Promise<void>;
     readonly onConfig: (event: SessionConfigUpdatedEvent) => Promise<void>;
     readonly onContent: (event: AgentContentEvent) => Promise<void>;
@@ -175,14 +173,6 @@ export interface AcpSessionObserver {
 }
 
 export class NullAcpSessionObserver implements AcpSessionObserver {
-    readonly importLocalArtifact = (
-        _sessionId: string,
-        _artifact: LocalArtifact,
-        signal: AbortSignal,
-    ): Promise<string> => {
-        signal.throwIfAborted();
-        return Promise.resolve("");
-    };
     readonly onCommands = (): Promise<void> => Promise.resolve();
     readonly onConfig = (): Promise<void> => Promise.resolve();
     readonly onContent = (): Promise<void> => Promise.resolve();
@@ -1110,7 +1100,7 @@ class AcpProcessSession implements AcpClientHandler {
             if (video === null) {
                 return { ...content, data: "" };
             }
-            return await this.importVideo(video, AbortSignal.timeout(20_000));
+            return this.importVideo(video);
         }
         return content;
     };
@@ -1173,22 +1163,19 @@ class AcpProcessSession implements AcpClientHandler {
         return imageDisplayContent(raster.mimeType, raster.name, await raster.base64(), "");
     };
 
-    private readonly importVideo = async (video: LocalVideo, signal: AbortSignal): Promise<AgentDisplayContent> => {
-        const artifactId = await this.#getObserver().importLocalArtifact(this.#mobiusSessionId, video, signal);
-        return {
-            artifactId,
-            data: artifactId.length > 0 ? "" : video.base64(),
-            mimeType: video.mimeType,
-            name: video.name,
-            newText: "",
-            oldText: "",
-            path: "",
-            terminalId: "",
-            text: "",
-            type: "video",
-            uri: "",
-        };
-    };
+    private readonly importVideo = (video: LocalVideo): AgentDisplayContent => ({
+        artifactId: "",
+        data: video.base64(),
+        mimeType: video.mimeType,
+        name: video.name,
+        newText: "",
+        oldText: "",
+        path: "",
+        terminalId: "",
+        text: "",
+        type: "video",
+        uri: "",
+    });
 
     async #initializeAgent(signal: AbortSignal): Promise<void> {
         await this.#metrics.measure("agent-initialize", async () => await this.#initializeAgentOperation(signal));

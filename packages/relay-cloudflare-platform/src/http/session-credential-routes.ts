@@ -11,12 +11,9 @@ const issueSessionCredentialSchema = v.strictObject({
 });
 
 interface SessionCredentialRouteEnvironment {
-    readonly Bindings: {
-        readonly allowedOrigins: ReadonlySet<string>;
+    readonly Variables: {
         readonly relay: RelayContext;
         readonly sessionAccess: SessionAccessService;
-    };
-    readonly Variables: {
         readonly sessionAccessTarget: SessionAccessTarget;
         readonly signal: AbortSignal;
     };
@@ -34,11 +31,15 @@ function bearer(request: Request): string {
     return credential;
 }
 
-export function createSessionCredentialRoutes() {
+export function createSessionCredentialRoutes(allowedOrigins: ReadonlySet<string>) {
     return new Hono<SessionCredentialRouteEnvironment>({ strict: false })
         .use(
             "/:sessionId/access-credentials",
-            createBrowserCors(["GET", "POST", "PUT"], ["authorization", "content-type", "x-mobius-upload-token"]),
+            createBrowserCors(
+                ["GET", "POST", "PUT"],
+                ["authorization", "content-type", "x-mobius-upload-token"],
+                allowedOrigins,
+            ),
         )
         .post(
             "/:sessionId/access-credentials",
@@ -48,10 +49,10 @@ export function createSessionCredentialRoutes() {
                 const projectId = validateIdentifier(context.req.param("projectId") ?? "", "project_id");
                 const sessionId = validateIdentifier(context.req.param("sessionId"), "session_id");
                 const token = bearer(context.req.raw);
-                await context.env.relay.services.sessions.readSession(projectId, token, sessionId, context.var.signal);
+                await context.var.relay.services.sessions.readSession(projectId, token, sessionId, context.var.signal);
                 context.header("Cache-Control", "no-store");
                 return context.json(
-                    await context.env.sessionAccess.issue(
+                    await context.var.sessionAccess.issue(
                         projectId,
                         sessionId,
                         token,

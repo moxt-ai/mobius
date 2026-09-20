@@ -1,5 +1,4 @@
 import { basename } from "node:path";
-import type { LocalArtifact } from "./local-artifact.ts";
 
 const MAX_INLINE_VIDEO_BYTES = 3_000_000;
 const MP4_FILE_TYPE = new TextEncoder().encode("ftyp");
@@ -7,7 +6,7 @@ const WEBM_SIGNATURE = Uint8Array.of(0x1a, 0x45, 0xdf, 0xa3);
 
 export type LocalVideoMimeType = "video/mp4" | "video/webm";
 
-export class LocalVideo implements LocalArtifact {
+export class LocalVideo {
     readonly bytes: Uint8Array;
     readonly mimeType: LocalVideoMimeType;
     readonly name: string;
