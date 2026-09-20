@@ -5,14 +5,58 @@ import { environmentProxyDispatcher } from "../network/environment-proxy.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "../relay-connection/runtime-authentication.ts";
 
 const CATALOG_UPDATE_TIMEOUT_MILLISECONDS = 20_000;
+type FetchResponse = Awaited<ReturnType<typeof fetch>>;
 
 class AgentCatalogPublishError extends Error {
     readonly code = "agent_catalog_update_failed";
+    readonly diagnosticDetails: Readonly<Record<string, string>>;
 
-    constructor(message: string, options: ErrorOptions = {}) {
+    constructor(message: string, options: ErrorOptions = {}, diagnosticDetails: Readonly<Record<string, string>> = {}) {
         super(message, options);
+        this.diagnosticDetails = diagnosticDetails;
         this.name = "AgentCatalogPublishError";
     }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSafeRelayErrorMessage(value: string): boolean {
+    return (
+        value.length > 0 &&
+        value.length <= 512 &&
+        Array.from(value).every((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127)
+    );
+}
+
+async function rejectedCatalogError(response: FetchResponse): Promise<AgentCatalogPublishError> {
+    let value: unknown;
+    try {
+        value = await response.json();
+    } catch {
+        return new AgentCatalogPublishError("The Relay rejected the Agent catalog update");
+    }
+    if (!isRecord(value) || !isRecord(value["error"])) {
+        return new AgentCatalogPublishError("The Relay rejected the Agent catalog update");
+    }
+    const code = value["error"]["code"];
+    const message = value["error"]["message"];
+    if (
+        typeof code !== "string" ||
+        !/^[a-z][a-z0-9_]{0,63}$/.test(code) ||
+        typeof message !== "string" ||
+        !isSafeRelayErrorMessage(message)
+    ) {
+        return new AgentCatalogPublishError("The Relay rejected the Agent catalog update");
+    }
+    return new AgentCatalogPublishError(
+        `The Relay rejected the Agent catalog update (${code}): ${message}`,
+        {},
+        {
+            relayErrorCode: code,
+        },
+    );
 }
 
 function catalogEndpoint(config: DaemonConfig): URL {
@@ -33,7 +77,7 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
     signal.throwIfAborted();
     const timeoutSignal = AbortSignal.timeout(CATALOG_UPDATE_TIMEOUT_MILLISECONDS);
     const requestSignal = AbortSignal.any([signal, timeoutSignal]);
-    let response: Awaited<ReturnType<typeof fetch>>;
+    let response: FetchResponse;
     const catalog = config.catalog.read();
     try {
         response = await fetch(catalogEndpoint(config), {
@@ -63,8 +107,8 @@ export async function publishAgentCatalog(config: DaemonConfig, signal: AbortSig
             { cause: error },
         );
     }
-    await response.body?.cancel();
     if (!response.ok) {
-        throw new AgentCatalogPublishError("The Relay rejected the Agent catalog update");
+        throw await rejectedCatalogError(response);
     }
+    await response.body?.cancel();
 }

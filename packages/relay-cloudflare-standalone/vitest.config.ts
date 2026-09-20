@@ -8,6 +8,12 @@ const migrationsPath = fileURLToPath(new URL("../relay-core/migrations/d1", impo
 
 export default defineConfig(async (): Promise<ViteUserConfig> => {
     const migrations = await readD1Migrations(migrationsPath);
+    const legacyAgentCatalogMigration = migrations.find(
+        (migration) => migration.name === "0016_normalize_legacy_agent_catalogs.sql",
+    );
+    if (legacyAgentCatalogMigration === undefined) {
+        throw new Error("The legacy Agent catalog migration is missing");
+    }
 
     return {
         root: packageDirectory,
@@ -29,6 +35,7 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
                         PUBLIC_PROJECT_BOOTSTRAP_TOTAL_LIMIT: "100000",
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
+                        TEST_LEGACY_AGENT_CATALOG_MIGRATION: legacyAgentCatalogMigration.queries,
                         TEST_MIGRATIONS: migrations,
                     },
                 },

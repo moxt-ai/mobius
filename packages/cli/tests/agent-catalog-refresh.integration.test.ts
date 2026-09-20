@@ -17,6 +17,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { discoverLocalAgentInventory } from "../src/agent-catalog/discover-local-agents.ts";
+import { publishAgentCatalog } from "../src/agent-catalog/publish-agent-catalog.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
 import { runDaemon } from "../src/run-daemon.ts";
@@ -120,13 +121,21 @@ class RecordingCatalogRelay {
     readonly #ready = Promise.withResolvers<Duplex>();
     #port = 0;
 
-    private constructor() {
+    readonly #catalogRejection: Readonly<{ code: string; message: string }> | null;
+
+    private constructor(catalogRejection: Readonly<{ code: string; message: string }> | null) {
+        this.#catalogRejection = catalogRejection;
         this.#server = createServer((request, response) => {
             if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
                 const chunks: Buffer[] = [];
                 request.on("data", (chunk: Buffer) => chunks.push(chunk));
                 request.on("end", () => {
                     this.published.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as PublishedCatalog);
+                    if (this.#catalogRejection !== null) {
+                        response.writeHead(400, { "content-type": "application/json" });
+                        response.end(JSON.stringify({ error: this.#catalogRejection }));
+                        return;
+                    }
                     response.writeHead(204);
                     response.end();
                 });
@@ -157,8 +166,10 @@ class RecordingCatalogRelay {
         });
     }
 
-    static readonly open = async (): Promise<RecordingCatalogRelay> => {
-        const relay = new RecordingCatalogRelay();
+    static readonly open = async (
+        catalogRejection: Readonly<{ code: string; message: string }> | null = null,
+    ): Promise<RecordingCatalogRelay> => {
+        const relay = new RecordingCatalogRelay(catalogRejection);
         await listen(relay.#server);
         relay.#port = readPort(relay.#server);
         return relay;
@@ -239,6 +250,39 @@ if (process.argv.includes("--version")) {
 }
 
 describe("daemon Agent catalog refresh boundary", () => {
+    it("Given the Relay rejects an Agent catalog with a typed reason, When the Runtime publishes it, Then the Runtime receives the rejection code and message", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-rejection-"));
+        const workspace = join(stateDirectory, "workspace");
+        await mkdir(workspace);
+        const relay = await RecordingCatalogRelay.open({
+            code: "invalid_agents",
+            message: "The local Agent directory contains an unsupported descriptor",
+        });
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath: join(stateDirectory, "audit", "catalog-rejection.sqlite"),
+                channelId: "catalog_rejection",
+                defaultWorkspace: workspace,
+                relayUrl: relay.daemonUrl("catalog_rejection"),
+            },
+            [],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+
+        try {
+            await expect(publishAgentCatalog(config, new AbortController().signal)).rejects.toMatchObject({
+                code: "agent_catalog_update_failed",
+                diagnosticDetails: { relayErrorCode: "invalid_agents" },
+                message:
+                    "The Relay rejected the Agent catalog update (invalid_agents): The local Agent directory contains an unsupported descriptor",
+            });
+        } finally {
+            await relay.close();
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a ready Agent was verified before a refresh, When the refreshed environment no longer exposes that Agent, Then the Runtime keeps serving the verified Agent instead of dropping it", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-refresh-"));
         const workspace = join(stateDirectory, "workspace");

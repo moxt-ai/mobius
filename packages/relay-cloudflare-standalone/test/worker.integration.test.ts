@@ -1904,6 +1904,44 @@ describe.sequential("Cloudflare session deployment", () => {
         });
     });
 
+    it("Given a persisted Agent catalog carries the removed Bot configuration flag, When project Runtimes are listed, Then the released catalog remains readable", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, authorization } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        await env.DIRECTORY_DATABASE.prepare(
+            `UPDATE pairing_channels
+       SET agents_json = ?
+       WHERE channel_id = ?`,
+        )
+            .bind(
+                JSON.stringify(
+                    readyAgents.map((agent) => ({
+                        ...agent,
+                        botSessionConfiguration: true,
+                    })),
+                ),
+                pairing.created.channelId,
+            )
+            .run();
+        await env.DIRECTORY_DATABASE.batch(
+            env.TEST_LEGACY_AGENT_CATALOG_MIGRATION.map((query) => env.DIRECTORY_DATABASE.prepare(query)),
+        );
+
+        const response = await app.request(
+            `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/runtimes`,
+            { headers: authorization(pairing.created) },
+        );
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toMatchObject({
+            runtimes: [
+                expect.objectContaining({
+                    agents: readyAgents,
+                    runtimeId: pairing.created.runtimeId,
+                }),
+            ],
+        });
+    });
+
     it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);
