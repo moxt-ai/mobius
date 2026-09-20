@@ -4,6 +4,8 @@ import {
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeWorkspaceListCommand,
+    encodeAgentActivityEvent,
+    encodeAgentMessageDeltaEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionInfoUpdatedEvent,
@@ -777,6 +779,97 @@ describe.sequential("Session persistence boundaries", () => {
             const cancelled = decodeSessionCancelCommand(await paired.daemon.receive(SESSION_CANCEL_KIND, signal));
             expect(cancelled.commandId).toBe(prompt.commandId);
             expect(screen.queryByRole("alert")).toBeNull();
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given a recorded tool step exceeds the browser history limit, When the Web app reloads the Session, Then the conversation opens with the step intact", async () => {
+        const paired = await openReadyApplication();
+
+        try {
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, { target: { value: "Run the verbose installer" } });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "oversized-tool-output-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            // The Runtime records the visible tool output at up to the protocol's Agent activity detail
+            // limit, so a step can legitimately outgrow the smaller budgets a restoring client used to
+            // enforce. 150,000 characters crosses both of those older budgets.
+            const oversizedOutput = `begin-${"x".repeat(150_000)}-end`;
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentActivityEvent({
+                    activityId: "oversized-tool-output",
+                    activityType: "tool",
+                    commandId: prompt.commandId,
+                    content: [],
+                    detail: {
+                        content: [],
+                        input: "",
+                        kind: "recorded",
+                        output: oversizedOutput,
+                    },
+                    input: "",
+                    kind: "agent.activity",
+                    locations: [],
+                    name: "terminal",
+                    output: oversizedOutput,
+                    sequence: 0,
+                    sessionId: prompt.sessionId,
+                    status: "completed",
+                    title: "Run the verbose installer",
+                    toolKind: "execute",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeAgentMessageDeltaEvent({
+                    commandId: prompt.commandId,
+                    kind: "agent.message.delta",
+                    messageId: `agent-${prompt.commandId}`,
+                    sessionId: prompt.sessionId,
+                    text: "Installer finished.",
+                }),
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "end_turn",
+                }),
+            );
+            await screen.findByText("Installer finished.");
+
+            // Restoring the Session reads the recorded history back through the relay, which is where an
+            // oversized tool step used to reject the whole conversation as unavailable.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            expect(await screen.findByText("Installer finished.")).toBeTruthy();
+            expect(screen.queryByRole("heading", { name: "Session unavailable" })).toBeNull();
+            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, resumedPreparation);
+
+            const agentMessage = await screen.findByTestId(dataTestId.agentMessage);
+            fireEvent.click(within(agentMessage).getByTestId(dataTestId.turnProcessSummary));
+            const steps = within(agentMessage).getAllByTestId(dataTestId.agentActivity);
+            expect(steps).toHaveLength(1);
+            expect(steps[0]?.textContent).toContain("Run the verbose installer");
+            expect((steps[0]?.textContent ?? "").length).toBeGreaterThan(150_000);
         } finally {
             await paired.close();
         }

@@ -39,6 +39,7 @@ export type {
     WorkspaceEntry,
 } from "@moxt-ai/mobius-protocol";
 export {
+    AGENT_ACTIVITY_DETAIL_LIMIT,
     AGENT_DEFAULT_EXECUTION_SETTING,
     AGENT_PERMISSION_MODE_CONFIG_ID,
     AGENT_PERMISSION_MODES,

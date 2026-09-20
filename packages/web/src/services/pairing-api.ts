@@ -1,4 +1,5 @@
 import {
+    AGENT_ACTIVITY_DETAIL_LIMIT,
     decodeAgentDisplayContentValue,
     decodeMobiusAgentCapabilities,
     decodePromptImagesValue,
@@ -312,10 +313,10 @@ function decodeRecordedActivity(value: unknown): RecordedActivity {
         readIdentifier(value["activityId"], "agent activity"),
         readIdentifier(value["attemptId"], "agent activity Attempt"),
         readAllowedString(value["activityType"], "agent activity type", ACTIVITY_TYPES),
-        readText(value["input"], "agent activity input", 24_000),
+        readText(value["input"], "agent activity input", AGENT_ACTIVITY_DETAIL_LIMIT),
         locations,
         readText(value["name"], "agent activity name", 128),
-        readText(value["output"], "agent activity output", 24_000),
+        readText(value["output"], "agent activity output", AGENT_ACTIVITY_DETAIL_LIMIT),
         sequence,
         readAllowedString(value["status"], "agent activity status", ACTIVITY_STATUSES),
         readString(value["title"], "agent activity title", 500),

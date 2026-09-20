@@ -1,4 +1,5 @@
 import {
+    AGENT_ACTIVITY_DETAIL_LIMIT,
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
@@ -1695,7 +1696,7 @@ export function decodeMobiusActivitySummary(value: unknown): MobiusActivitySumma
         identifierField(activity, "attemptId"),
         stringField(activity, "activityType", 128),
         stringField(activity, "detailAvailability", 32),
-        stringField(activity, "input", 100_000),
+        stringField(activity, "input", AGENT_ACTIVITY_DETAIL_LIMIT),
         arrayField(activity, "locations", 100).map((location) => {
             if (typeof location !== "string" || location.length > 2_048) {
                 throw invalidResponse("The service returned an invalid Activity location");
@@ -1703,7 +1704,7 @@ export function decodeMobiusActivitySummary(value: unknown): MobiusActivitySumma
             return location;
         }),
         stringField(activity, "name", 128),
-        stringField(activity, "output", 100_000),
+        stringField(activity, "output", AGENT_ACTIVITY_DETAIL_LIMIT),
         integerField(activity, "sequence"),
         stringField(activity, "status", 64),
         stringField(activity, "title", 500),
