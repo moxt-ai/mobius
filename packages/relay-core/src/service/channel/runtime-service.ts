@@ -17,6 +17,8 @@ import type { ChannelCredentialService } from "./channel-credential-service.ts";
 import type { RuntimeConnectionService } from "./runtime-connection-service.ts";
 import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from "./runtime-message-scheduler.ts";
 
+const DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS = 30_000;
+
 export type RuntimeSocketIdentity =
     | {
           readonly role: "relay";
@@ -65,7 +67,10 @@ interface RuntimeContext {
     readonly runtimes: {
         readonly sessions: Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
     };
-    readonly utilities: { readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void> };
+    readonly utilities: {
+        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
+        readonly waitUntil: (operation: Promise<void>) => void;
+    };
 }
 
 type RuntimeAcceptance =
@@ -73,10 +78,18 @@ type RuntimeAcceptance =
     | { readonly kind: "revoked" }
     | { readonly kind: "accepted"; readonly response: Response };
 
+type DaemonSocketIdentity = Extract<RuntimeSocketIdentity, { readonly role: "daemon" | "replaced-daemon" }> & {
+    readonly role: "daemon";
+};
+
 export class RuntimeService {
     readonly #cx: RuntimeContext;
     readonly #channels = new Map<string, ChannelActor>();
     readonly #daemonMessages = new RuntimeMessageScheduler();
+    readonly #attachments = new Set<{
+        readonly controller: AbortController;
+        readonly identity: DaemonSocketIdentity;
+    }>();
     #disconnectTail: Promise<void> = Promise.resolve();
     #acceptTail: Promise<void> = Promise.resolve();
     readonly #accepting = new Set<{
@@ -152,6 +165,11 @@ export class RuntimeService {
         const previous = this.#cx.gateways.peers
             .sockets()
             .filter(({ identity, socket }) => identity.role === "daemon" && socket.isOpen());
+        for (const attachment of this.#attachments) {
+            if (attachment.identity.runtimeId === runtimeId && attachment.identity.projectId === scope.projectId) {
+                attachment.controller.abort(new DOMException("Runtime connection replaced", "AbortError"));
+            }
+        }
         for (const { socket } of previous) {
             socket.replaceDaemon();
         }
@@ -171,13 +189,18 @@ export class RuntimeService {
         if (prepared.kind !== "ready") {
             return prepared;
         }
-        const accepted = this.#cx.gateways.peers.accept({
+        const identity: DaemonSocketIdentity = {
             ...prepared.identity,
             deliveryReceipts,
             role: "daemon",
             projectId: scope.projectId,
-        });
+        };
+        const accepted = this.#cx.gateways.peers.accept(identity);
         this.#cx.services.connections.connected(prepared.identity, Date.now());
+        if (liveness) {
+            this.deferDaemonAttachment(identity, accepted.socket, scope);
+            return { kind: "accepted", response: accepted.response };
+        }
         try {
             await this.attachDaemon(runtimeId, scope, false, deliveryReceipts, signal);
         } catch (error) {
@@ -189,10 +212,44 @@ export class RuntimeService {
             return { kind: "revoked" };
         }
         signal.throwIfAborted();
-        if (liveness) {
-            accepted.socket.send(encodeServiceToDaemonMessage({ kind: RUNTIME_LIVENESS_READY_KIND }));
-        }
         return { kind: "accepted", response: accepted.response };
+    };
+
+    private readonly deferDaemonAttachment = (
+        identity: DaemonSocketIdentity,
+        socket: RuntimeSocket,
+        scope: ProjectScope,
+    ): void => {
+        const attachment = { controller: new AbortController(), identity };
+        this.#attachments.add(attachment);
+        const signal = AbortSignal.any([
+            attachment.controller.signal,
+            AbortSignal.timeout(DAEMON_ATTACHMENT_TIMEOUT_MILLISECONDS),
+        ]);
+        const operation = (async () => {
+            try {
+                await this.attachDaemon(identity.runtimeId, scope, false, identity.deliveryReceipts, signal);
+                signal.throwIfAborted();
+                if (!this.#cx.services.connections.isCurrent(identity)) {
+                    return;
+                }
+                if (this.isRevoked(identity.runtimeId, scope)) {
+                    socket.close(1008, "Runtime revoked");
+                    return;
+                }
+                socket.send(encodeServiceToDaemonMessage({ kind: RUNTIME_LIVENESS_READY_KIND }));
+            } catch (error) {
+                if (!attachment.controller.signal.aborted) {
+                    console.error("Runtime attachment failed", error);
+                }
+                if (this.#cx.services.connections.isCurrent(identity)) {
+                    socket.close(1011, "Runtime attachment failed");
+                }
+            } finally {
+                this.#attachments.delete(attachment);
+            }
+        })();
+        this.#cx.utilities.waitUntil(operation);
     };
 
     readonly acceptHost = async (
@@ -250,6 +307,11 @@ export class RuntimeService {
         for (const accepting of this.#accepting) {
             if (accepting.runtimeId === runtimeId && accepting.scope.projectId === scope.projectId) {
                 accepting.controller.abort(new DOMException("Runtime revoked", "AbortError"));
+            }
+        }
+        for (const attachment of this.#attachments) {
+            if (attachment.identity.runtimeId === runtimeId && attachment.identity.projectId === scope.projectId) {
+                attachment.controller.abort(new DOMException("Runtime revoked", "AbortError"));
             }
         }
         const daemons: RuntimeSocket[] = [];
@@ -425,6 +487,14 @@ export class RuntimeService {
     ): Promise<void> => {
         if (identity.role !== "daemon" || !this.#cx.services.connections.isCurrent(identity)) {
             return;
+        }
+        for (const attachment of this.#attachments) {
+            if (
+                attachment.identity.connectionId === identity.connectionId &&
+                attachment.identity.connectionEpoch === identity.connectionEpoch
+            ) {
+                attachment.controller.abort(new DOMException("Runtime connection closed", "AbortError"));
+            }
         }
         if (this.#cx.services.connections.pendingDisconnect() === null) {
             this.#cx.services.connections.saveDisconnect({

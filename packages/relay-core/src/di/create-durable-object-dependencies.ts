@@ -158,6 +158,7 @@ function createRuntimeRelayDependencies(cx: {
     };
     readonly utilities: {
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
+        readonly waitUntil: (operation: Promise<void>) => void;
     };
 }) {
     const credentialService = async (scope: ProjectScope, signal: AbortSignal) => {
@@ -218,7 +219,10 @@ export function createDurableObjectDependencies(cx: {
         readonly peers: RuntimePeers;
         readonly sessionTransport: SessionTransport;
     };
-    readonly utilities: { readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void> };
+    readonly utilities: {
+        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
+        readonly waitUntil: (operation: Promise<void>) => void;
+    };
 }) {
     const sessions = new RemoteSessionRuntime({
         storages: {

@@ -10,6 +10,7 @@ import {
     decodeNativeSessionResult,
     decodeRecordedSessionEvent,
     decodeRuntimeStatusEvent,
+    decodeServiceToDaemonMessage,
     decodeSessionEventAcknowledgement,
     decodeSessionEventDeferred,
     decodeSessionEventRejection,
@@ -1810,7 +1811,20 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
                 ),
             );
             expect(response.status).toBe(101);
-            return transport.maximumConcurrentProbes();
+            if (response.webSocket === null) {
+                throw new Error("Expected the Runtime WebSocket");
+            }
+            const socket = response.webSocket;
+            const ready = receiveMessageBeforeClose(socket);
+            socket.accept();
+            try {
+                expect(decodeServiceToDaemonMessage(await ready)).toEqual({
+                    kind: "runtime.liveness.ready",
+                });
+                return transport.maximumConcurrentProbes();
+            } finally {
+                socket.close(1000, "Concurrent attachment test complete");
+            }
         });
         // Serial probing keeps this at 1 and lets a large Project's Session count push the attach past the
         // daemon's connection deadline; overlapping probes keep the attach bounded by concurrency, not count.

@@ -44,6 +44,9 @@ export function createTestGateways(options: {
                     signal.throwIfAborted();
                     alarms.set(key, timestamp);
                 },
+                waitUntil: (operation) => {
+                    void operation;
+                },
             },
         });
         actors.set(key, context);

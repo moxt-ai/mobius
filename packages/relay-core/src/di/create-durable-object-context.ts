@@ -53,6 +53,7 @@ export function createDurableObjectContext(
                 await state.storage.setAlarm(timestamp);
                 signal.throwIfAborted();
             },
+            waitUntil: (operation) => state.waitUntil(operation),
         },
     });
 }
