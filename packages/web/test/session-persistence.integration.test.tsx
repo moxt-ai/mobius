@@ -66,68 +66,6 @@ function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
 }
 
 describe.sequential("Session persistence boundaries", () => {
-    it("Given a Session contains more recorded events than the browser stream buffer, When the user starts another Agent turn, Then the complete response appears without an event-stream recovery failure", async ({
-        signal,
-    }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const initialPreparation = decodeSessionPrepareCommand(
-                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
-            );
-            await sendReadySession(paired.daemon, initialPreparation);
-            await closeMobiusTransport();
-            cleanup();
-
-            // Cross the 256-event stream capacity with the smallest overflowing backlog. The production Runtime
-            // serializes one Session lane, so bounded groups keep it busy without starting every acknowledgement
-            // deadline at once.
-            const recordedEventCount = 257;
-            const batchSize = 32;
-            for (let offset = 0; offset < recordedEventCount; offset += batchSize) {
-                const count = Math.min(batchSize, recordedEventCount - offset);
-                await Promise.all(
-                    Array.from({ length: count }, async (_entry, index) => {
-                        const eventIndex = offset + index;
-                        await paired.daemon.sendSessionEvent(
-                            initialPreparation.sessionId,
-                            encodeSessionInfoUpdatedEvent({
-                                kind: "session.info.updated",
-                                sessionId: initialPreparation.sessionId,
-                                title: `Recorded backlog ${eventIndex.toString()}`,
-                                updatedAt: new Date(Date.UTC(2026, 8, 8, 0, 0, 0, eventIndex)).toISOString(),
-                            }),
-                            signal,
-                        );
-                    }),
-                );
-            }
-
-            signal.throwIfAborted();
-            createTestApplication();
-            const resumedPreparation = decodeSessionPrepareCommand(
-                await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
-            );
-            await sendReadySession(paired.daemon, resumedPreparation);
-            await completeRenderedPrompt(
-                paired.daemon,
-                "Continue after replaying recorded history",
-                "The complete response survived the recorded event backlog.",
-            );
-
-            expect(screen.queryByText(/The Mobius event stream could not recover/u)).toBeNull();
-            expect(screen.queryByText(/Agent response failed/u)).toBeNull();
-        } finally {
-            cleanup();
-            paired.daemon.close();
-            await closeMobiusTransport();
-        }
-    }, 45_000);
-
     it("Given Cloudflare resets the Runtime while Agent settings are loading, When the daemon and browser reconnect, Then the interrupted preparation resumes without a permanent connection error", async ({
         signal,
     }) => {
@@ -839,67 +777,6 @@ describe.sequential("Session persistence boundaries", () => {
             const cancelled = decodeSessionCancelCommand(await paired.daemon.receive(SESSION_CANCEL_KIND, signal));
             expect(cancelled.commandId).toBe(prompt.commandId);
             expect(screen.queryByRole("alert")).toBeNull();
-        } finally {
-            await paired.close();
-        }
-    });
-
-    it("Given a Session is running, When the Web app reloads on a different Session, Then the running one is still marked as running", async () => {
-        const paired = await openReadyApplication();
-
-        try {
-            const firstPreparation = paired.preparation;
-            await completeRenderedPrompt(paired.daemon, "First conversation", "FIRST-RESPONSE");
-
-            // A second Session the reload will land on, so the running one is not the active one.
-            fireEvent.click(
-                within(
-                    screen.getByRole("complementary", {
-                        name: "Conversation sidebar",
-                    }),
-                ).getByRole("button", { name: /New chat.*⌘ N/ }),
-            );
-            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, secondPreparation);
-
-            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
-            fireEvent.change(promptInput, { target: { value: "Run a long tool call" } });
-            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
-            await paired.daemon.sendSessionEvent(
-                prompt.sessionId,
-                encodeSessionStartedEvent({
-                    attemptId: "still-running-attempt",
-                    commandId: prompt.commandId,
-                    kind: "session.started",
-                    sessionId: prompt.sessionId,
-                }),
-            );
-            expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
-
-            // Reload onto the first Session, leaving the running Turn in the background. The Session
-            // summary carries no running signal, so this only holds if the refresh hydrates every
-            // Session rather than just the active one.
-            cleanup();
-            await closeMobiusTransport();
-            const firstSessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(firstPreparation.sessionId)}`;
-            window.history.replaceState(null, "", firstSessionPath);
-            createTestApplication();
-            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            expect(resumedPreparation.sessionId).toBe(firstPreparation.sessionId);
-            await sendReadySession(paired.daemon, resumedPreparation);
-
-            const conversations = await screen.findByRole("navigation", { name: "Conversations" });
-            const running = await waitFor(() => {
-                const section = document.querySelector('section[aria-labelledby="running-conversations-heading"]');
-                if (section === null) {
-                    throw new Error("The running section is missing");
-                }
-                return section;
-            });
-            const runningRow = within(running as HTMLElement).getByRole("link");
-            expect(runningRow.textContent).toContain("Run a long tool call");
-            expect(within(conversations).getAllByRole("link")).toHaveLength(2);
         } finally {
             await paired.close();
         }

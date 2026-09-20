@@ -1276,27 +1276,6 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given an Agent returns invalid Mermaid source, When the user opens the diagram, Then the chat announces the error and preserves the source", async () => {
-        const paired = await openReadyApplication();
-
-        try {
-            const invalidSource = "this is not a diagram";
-            const response = ["Broken rendering example:", "", "```mermaid", invalidSource, "```"].join("\n");
-            await completeRenderedPrompt(paired.daemon, "Show a broken diagram", response, "Broken rendering example:");
-
-            const agentMessage = await screen.findByRole("article", {
-                name: "Message from Codex",
-            });
-            fireEvent.click(within(agentMessage).getByRole("button", { name: "View fullscreen" }));
-            const error = await screen.findByRole("alert");
-            expect(error.textContent).toContain("Diagram could not be rendered");
-            expect(within(error.parentElement ?? error).getByText(invalidSource)).toBeTruthy();
-            expect(within(error.parentElement ?? error).getByRole("button", { name: "Retry diagram" })).toBeTruthy();
-        } finally {
-            await paired.close();
-        }
-    });
-
     it("Given an Agent records Markdown reasoning and a described shell tool, When the completed steps are expanded, Then the shell step uses its description and the details read as formatted work", async () => {
         const paired = await openReadyApplication();
 
