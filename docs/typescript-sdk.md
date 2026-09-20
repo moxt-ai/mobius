@@ -270,12 +270,15 @@ const outcome = await client.turns.read(
 Turn, not a copy of the option catalog. A current Runtime advertises
 `sessionTurnConfiguration: true` on its Agent descriptor. Relay rejects an
 explicit snapshot when the selected Agent does not advertise that capability.
-The daemon prepares the Session, validates that every current option appears
-exactly once, applies the selections, verifies the final state, and only then
-emits `session.started`. A queued Turn keeps its own snapshot; steering may only
-carry the active Turn's already-applied snapshot and cannot reconfigure a
-running Agent. `MobiusTurn.sessionConfigurations` exposes the accepted snapshot
-on submit and read responses.
+The daemon prepares the Session, applies the selections it recognizes, verifies
+that every selection the live Session exposes now holds the requested value, and
+only then emits `session.started`. Selections the live Session does not expose
+are recorded as ignored rather than failing the Turn, so a snapshot collected
+before a Session existed stays usable. A queued Turn keeps its own snapshot;
+steering may only carry the active Turn's already-applied snapshot and cannot
+reconfigure a running Agent, so the daemon checks the running Session against the
+snapshot without applying anything. `MobiusTurn.sessionConfigurations` exposes
+the accepted snapshot on submit and read responses.
 
 Omitting the field retains the legacy execution behavior for rolling upgrades
 and previously persisted commands. New integrations that depend on deterministic

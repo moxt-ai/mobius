@@ -1398,7 +1398,11 @@ async function executePrompt(
                 signal,
             });
             if (command.disposition === SessionPromptDisposition.Steer) {
-                assertCompleteSessionConfiguration(prepared.configOptions, sessionConfigurations ?? []);
+                // Steering cannot reconfigure a running Agent, so the Turn snapshot
+                // only has to agree with the settings this live Session exposes. The
+                // snapshot comes from Agent settings discovery, so it may name options
+                // that the running Session does not expose at all.
+                assertAppliedSessionConfiguration(prepared.configOptions, sessionConfigurations ?? []);
             } else {
                 await applyCompleteSessionConfiguration(
                     sessions,
@@ -1549,30 +1553,6 @@ function validateSessionConfigurationSelection(
     }
 }
 
-function assertSessionConfigurationSchema(
-    options: readonly SessionConfigOption[],
-    selections: readonly SessionConfigurationSelection[],
-): void {
-    if (options.length !== selections.length) {
-        throw invalidSessionConfiguration("The Turn configuration does not match the Agent settings schema");
-    }
-    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
-    if (selectionsById.size !== selections.length) {
-        throw invalidSessionConfiguration("The Turn configuration contains duplicate Agent settings");
-    }
-    for (const option of options) {
-        const selection = selectionsById.get(option.id);
-        if (
-            selection === undefined ||
-            selection.valueType !== option.type ||
-            (option.type === "boolean" && selection.value.length > 0) ||
-            (option.type === "select" && selection.booleanValue)
-        ) {
-            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
-        }
-    }
-}
-
 function sessionConfigurationSelectionIsAvailable(
     option: SessionConfigOption,
     selection: SessionConfigurationSelection,
@@ -1608,20 +1588,6 @@ function sessionConfigurationPriority(
         return 2;
     }
     return 3;
-}
-
-function assertCompleteSessionConfiguration(
-    options: readonly SessionConfigOption[],
-    selections: readonly SessionConfigurationSelection[],
-): void {
-    assertSessionConfigurationSchema(options, selections);
-    const selectionsById = new Map(selections.map((selection) => [selection.configId, selection]));
-    for (const option of options) {
-        const selection = selectionsById.get(option.id);
-        if (selection === undefined || !sessionConfigurationMatches(option, selection)) {
-            throw invalidSessionConfiguration(`The Turn configuration does not match Agent setting ${option.id}`);
-        }
-    }
 }
 
 function assertAppliedSessionConfiguration(

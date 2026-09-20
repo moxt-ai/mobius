@@ -7,6 +7,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_ACTIVITY_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
@@ -139,7 +140,11 @@ function readStringField(value: unknown, field: string): string {
     return typeof fieldValue === "string" ? fieldValue : "";
 }
 
-async function readTerminalSessionResult(frames: ClientFrames, sessionId: string): Promise<TerminalSessionResult> {
+async function readTerminalSessionResult(
+    frames: ClientFrames,
+    sessionId: string,
+    commandId = "",
+): Promise<TerminalSessionResult> {
     let text = "";
     for (;;) {
         const message = await frames.next();
@@ -152,9 +157,29 @@ async function readTerminalSessionResult(frames: ClientFrames, sessionId: string
         }
         const kind = decodeMessageKind(envelope.payload);
         const payload: unknown = JSON.parse(envelope.payload);
+        if (commandId.length > 0 && readStringField(payload, "commandId") !== commandId) {
+            continue;
+        }
         text += readStringField(payload, "text");
         if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
             return new TerminalSessionResult(kind, text, readStringField(payload, "code"));
+        }
+    }
+}
+
+async function readCommandActivity(frames: ClientFrames, sessionId: string, commandId: string): Promise<void> {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== SESSION_EVENT_KIND) {
+            continue;
+        }
+        const envelope = decodeSessionEventEnvelope(message);
+        if (envelope.sessionId !== sessionId || decodeMessageKind(envelope.payload) !== AGENT_ACTIVITY_KIND) {
+            continue;
+        }
+        const payload: unknown = JSON.parse(envelope.payload);
+        if (readStringField(payload, "commandId") === commandId) {
+            return;
         }
     }
 }
@@ -890,6 +915,124 @@ if (process.argv.includes("--version")) {
                 kind: SESSION_COMPLETED_KIND,
                 text: "DeepSeek Harness turn 2: second configured turn",
             });
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
+
+    it("Given a Turn is running with an Agent settings snapshot, When a steering prompt reuses that snapshot while the live Session exposes fewer settings, Then the Agent receives the steering prompt", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-steer-settings-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((_request, response) => {
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        // The Agent reveals reasoning effort only for test-large, so the settings
+        // snapshot that names it cannot match a Session parked on test-small.
+        const agent = new LocalAgentDefinition(
+            "deepseek-harness",
+            "DeepSeek Harness",
+            process.execPath,
+            [fakeAgentPath, "--agent-name", "DeepSeek Harness", "--reasoning-effort-for-test-large-only"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const sessionId = "steered_configured_conversation";
+            const runningCommandId = "running_configured_turn";
+            const runningPrompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: agent.id,
+                bindingId: config.bindingId,
+                commandId: runningCommandId,
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "wait for steering",
+                resources: [],
+                sessionConfigurations: [
+                    { booleanValue: false, configId: "dsh_access_mode", value: "read-only", valueType: "select" },
+                    { booleanValue: false, configId: "model", value: "test-small", valueType: "select" },
+                    { booleanValue: false, configId: "reasoning_effort", value: "high", valueType: "select" },
+                    { booleanValue: true, configId: "fast_mode", value: "", valueType: "boolean" },
+                    { booleanValue: false, configId: "mode", value: "code", valueType: "select" },
+                ],
+                sessionId,
+                targetCommandId: "",
+            };
+            sendText(socket, encodeSessionPromptCommand(runningPrompt));
+            await readCommandActivity(frames, sessionId, runningCommandId);
+
+            const steeringPrompt: SessionPromptCommand = {
+                ...runningPrompt,
+                commandId: "steering_configured_turn",
+                disposition: SessionPromptDisposition.Steer,
+                prompt: "focus on the requested fix",
+                targetCommandId: runningCommandId,
+            };
+            sendText(socket, encodeSessionPromptCommand(steeringPrompt));
+
+            // The steering Turn is accepted and then injected into the running
+            // Turn, so only the running Turn carries the Agent's reply.
+            const steeringResult = await readTerminalSessionResult(frames, sessionId, steeringPrompt.commandId);
+            expect(steeringResult).toMatchObject({ kind: SESSION_COMPLETED_KIND, text: "" });
+            const runningResult = await readTerminalSessionResult(frames, sessionId, runningCommandId);
+            expect(runningResult.kind).toBe(SESSION_COMPLETED_KIND);
+            expect(runningResult.text).toContain("Steered: focus on the requested fix");
         } finally {
             cancellation.abort();
             await daemon;
