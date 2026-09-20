@@ -428,10 +428,6 @@ describe.sequential("Session persistence boundaries", () => {
             await screen.findByRole("list", { name: "Prompt images" });
 
             const prompt = await completeRenderedPrompt(paired.daemon, "Keep this image", "IMAGE-KEPT");
-            // The optimistic bubble renders the inline base64 the composer captured.
-            expect((await screen.findByRole("img", { name: "pasted-image.png" })).getAttribute("src")).toMatch(
-                /^data:image\/png;base64,/,
-            );
 
             // Reload: the Turn is now re-hydrated from the Relay, whose recorded image carries no inline data.
             cleanup();

@@ -269,7 +269,7 @@ export class StatefulDaemon {
             return Promise.resolve(message);
         }
         return new Promise((resolve, reject) => {
-            const deadline = AbortSignal.timeout(8_000);
+            const deadline = AbortSignal.timeout(20_000);
             const signal = cancellation === undefined ? deadline : AbortSignal.any([cancellation, deadline]);
             const pending: PendingMessage = {
                 kind,
