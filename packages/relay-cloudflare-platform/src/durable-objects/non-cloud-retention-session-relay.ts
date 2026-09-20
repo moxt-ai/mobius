@@ -12,6 +12,9 @@ import {
     type PlatformDurableObjectEnvironment,
 } from "./platform-durable-object-context.ts";
 
+const HIBERNATION_DELAY_MILLISECONDS = 5 * 60_000;
+const HIBERNATION_DEADLINE_KEY = "non-cloud-retention-hibernation-at";
+
 export class NonCloudRetentionSessionRelayDO {
     readonly #environment: PlatformDurableObjectEnvironment;
     #lifecycle:
@@ -93,7 +96,12 @@ export class NonCloudRetentionSessionRelayDO {
         const completion = Promise.withResolvers<void>();
         this.#lifecycle = { kind: "hibernating", completion };
         const failures: unknown[] = [];
+        let hibernationAt = Date.now() + HIBERNATION_DELAY_MILLISECONDS;
         try {
+            const storedHibernationAt: unknown = await this.#state.storage.get(HIBERNATION_DEADLINE_KEY);
+            if (typeof storedHibernationAt === "number" && Number.isSafeInteger(storedHibernationAt)) {
+                hibernationAt = storedHibernationAt;
+            }
             for (const result of await Promise.allSettled(this.#operations.values())) {
                 if (result.status === "rejected") {
                     failures.push(result.reason);
@@ -113,8 +121,26 @@ export class NonCloudRetentionSessionRelayDO {
                     failures.push(cause);
                 }
             }
-            this.#sessions.clear();
-            this.#operations.clear();
+            if (Date.now() >= hibernationAt && failures.length === 0) {
+                this.#sessions.clear();
+                this.#operations.clear();
+                try {
+                    scrubRetainedSessionContent(new DurableObjectSqlDatabase(this.#state.storage));
+                    await this.#state.storage.delete(HIBERNATION_DEADLINE_KEY);
+                    await this.#state.storage.deleteAlarm();
+                } catch (cause) {
+                    failures.push(cause);
+                }
+            } else if (failures.length === 0) {
+                try {
+                    const scheduled = await this.#state.storage.getAlarm();
+                    if (scheduled === null || scheduled > hibernationAt) {
+                        await this.#state.storage.setAlarm(hibernationAt);
+                    }
+                } catch (cause) {
+                    failures.push(cause);
+                }
+            }
         } finally {
             this.#lifecycle = { kind: "active" };
             completion.resolve();
@@ -194,12 +220,87 @@ export class NonCloudRetentionSessionRelayDO {
     };
 
     private readonly armHibernation = async (): Promise<void> => {
-        const hibernationAt = Date.now() + 5 * 60_000;
+        const hibernationAt = Date.now() + HIBERNATION_DELAY_MILLISECONDS;
+        await this.#state.storage.put(HIBERNATION_DEADLINE_KEY, hibernationAt);
         const scheduled = await this.#state.storage.getAlarm();
         if (scheduled === null || scheduled > hibernationAt) {
             await this.#state.storage.setAlarm(hibernationAt);
         }
     };
+}
+
+function scrubRetainedSessionContent(database: DoSqlDatabase): void {
+    database.transaction(() => {
+        database.run(
+            `INSERT INTO session_event_receipts (
+                 scope_key, session_id, source_kind, source_id, event_id,
+                 payload_hash, source_seq, sequence_number, recorded_at
+             )
+             SELECT scope_key, session_id, source_kind, source_id, event_id,
+                    payload_hash, source_seq, sequence_number, recorded_at
+               FROM (
+                   SELECT event.*,
+                          ROW_NUMBER() OVER (
+                              PARTITION BY event.scope_key, event.session_id, event.source_kind, event.source_id
+                              ORDER BY length(event.source_seq) DESC, event.source_seq DESC
+                          ) AS source_rank
+                     FROM session_events event
+               )
+              WHERE source_rank = 1
+             ON CONFLICT(scope_key, session_id, source_kind, source_id) DO UPDATE SET
+                 event_id = excluded.event_id,
+                 payload_hash = excluded.payload_hash,
+                 source_seq = excluded.source_seq,
+                 sequence_number = excluded.sequence_number,
+                 recorded_at = excluded.recorded_at
+             WHERE length(excluded.source_seq) > length(session_event_receipts.source_seq)
+                OR (
+                    length(excluded.source_seq) = length(session_event_receipts.source_seq)
+                    AND excluded.source_seq > session_event_receipts.source_seq
+                )`,
+        );
+        for (const table of [
+            "archive_segments",
+            "archive_work",
+            "artifacts",
+            "immutable_content",
+            "session_content_chunks",
+            "session_events",
+            "session_message_chunks",
+            "session_messages",
+            "session_stream_blocks",
+            "session_stream_event_refs",
+            "session_streams",
+            "tool_call_views",
+            "turn_content_views",
+            "turn_message_anchors",
+            "uploaded_artifacts",
+        ]) {
+            database.run(`DELETE FROM ${table}`);
+        }
+        database.run(
+            `DELETE FROM interactions
+              WHERE state IN ('resolved', 'expired', 'cancelled')`,
+        );
+        database.run(
+            `UPDATE turns
+                SET command_json = json_set(
+                        command_json,
+                        '$.prompt', '',
+                        '$.images', json('[]'),
+                        '$.resources', json('[]')
+                    ),
+                    response = '',
+                    error_message = NULL
+              WHERE state IN ('succeeded', 'failed', 'cancelled')`,
+        );
+        database.run(
+            `UPDATE pending_work
+                SET delivery_payload = NULL
+              WHERE state IN ('completed', 'failed')`,
+        );
+        database.run("UPDATE sessions SET title = '', native_history_json = NULL");
+    });
 }
 
 function initializeNonCloudRetentionSessionRelaySchema(database: DoSqlDatabase): void {

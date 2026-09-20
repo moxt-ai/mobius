@@ -2,6 +2,7 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeServiceToDaemonMessage,
+    encodeDaemonToServiceMessage,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
     SESSION_EVENT_ACK_KIND,
@@ -385,7 +386,7 @@ describe.sequential("Platform Session-only boundary", () => {
 
         expect(response.status).toBe(404);
     });
-    it("Given a non-retained Session committed an event, When it hibernates and is evicted, Then its Runtime can commit the next event", async () => {
+    it("Given a non-retained Session has hibernated, When it resumes, Then delivery remains contiguous and history comes from its Runtime", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -525,7 +526,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     payload: JSON.stringify({
                         kind: SESSION_INFO_UPDATED_KIND,
                         sessionId,
-                        title: "Before eviction",
+                        title: "private content must be scrubbed",
                         updatedAt: "2030-01-01T00:00:00.000Z",
                     }),
                     sessionId,
@@ -545,6 +546,19 @@ describe.sequential("Platform Session-only boundary", () => {
                 }
                 await state.storage.deleteAlarm();
                 await instance.alarm();
+                expect(state.storage.sql.exec("SELECT title FROM sessions").toArray()).toEqual([
+                    { title: "private content must be scrubbed" },
+                ]);
+                vi.setSystemTime(new Date("2030-01-01T00:05:00.000Z"));
+                await state.storage.deleteAlarm();
+                await instance.alarm();
+                expect(state.storage.sql.exec("SELECT payload FROM session_events").toArray()).toEqual([]);
+                expect(state.storage.sql.exec("SELECT title, native_history_json FROM sessions").toArray()).toEqual([
+                    { native_history_json: null, title: "" },
+                ]);
+                expect(
+                    state.storage.sql.exec("SELECT event_id, source_seq FROM session_event_receipts").toArray(),
+                ).toEqual([{ event_id: "private-reconnect-before-eviction", source_seq: "1" }]);
             });
             await evictDurableObject(sessionStub);
             socket.send(
@@ -566,6 +580,42 @@ describe.sequential("Platform Session-only boundary", () => {
                 eventId: "private-reconnect-after-eviction",
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
+            });
+
+            const nativeHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history`,
+                    { headers: credentialHeaders(appCredential) },
+                ),
+                environment,
+            );
+            const load = decodeServiceToDaemonMessage(await messages.next());
+            expect(load).toMatchObject({ kind: "session.live-history.load", sessionId });
+            if (load.kind !== "session.live-history.load") {
+                throw new Error("Expected the live-history request");
+            }
+            socket.send(
+                encodeDaemonToServiceMessage({
+                    history: {
+                        coveredCommandIds: [],
+                        coveredMessageIds: ["daemon-message:agent"],
+                        messages: [
+                            {
+                                role: "assistant",
+                                text: "History owned by the daemon",
+                            },
+                        ],
+                        status: "available",
+                        truncated: false,
+                    },
+                    kind: "session.live-history.loaded",
+                    requestId: load.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await nativeHistoryResponse, 200)).toMatchObject({
+                messages: [{ role: "assistant", text: "History owned by the daemon" }],
+                status: "available",
             });
         } finally {
             socket.close(1000, "Private reconnect test complete");
