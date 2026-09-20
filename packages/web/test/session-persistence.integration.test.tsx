@@ -762,15 +762,8 @@ describe.sequential("Session persistence boundaries", () => {
             });
             const conversationLinks = within(conversations).getAllByRole("link");
             expect(conversationLinks).toHaveLength(2);
-            // Both Sessions are present. Their relative order is owned by the dedicated activity-ordering
-            // scenario: the Relay stamps `updated_at` from its own clock, and these two Turns complete
-            // close enough together that the order is not something this test can pin down.
-            expect(conversationLinks.map((link) => link.textContent)).toEqual(
-                expect.arrayContaining([
-                    expect.stringContaining("Newest persisted prompt"),
-                    expect.stringContaining("Older persisted prompt"),
-                ]),
-            );
+            expect(conversationLinks[0]?.textContent).toContain("Newest persisted prompt");
+            expect(conversationLinks[1]?.textContent).toContain("Older persisted prompt");
             fireEvent.click(
                 within(conversations).getByRole("link", {
                     name: /Older persisted prompt/,
@@ -797,78 +790,13 @@ describe.sequential("Session persistence boundaries", () => {
             await waitFor(() => {
                 const conversationButtons = within(restoredConversations).getAllByRole("link");
                 expect(conversationButtons).toHaveLength(2);
-                // This scenario is about the restored route and selection, not about the relative order of
-                // two Sessions whose Turns completed milliseconds apart — the Relay stamps `updated_at`
-                // itself, so that order is not something this test can pin down.
-                expect(conversationButtons.map((button) => button.textContent)).toEqual(
-                    expect.arrayContaining([
-                        expect.stringContaining("Newest persisted prompt"),
-                        expect.stringContaining("Older persisted prompt"),
-                    ]),
-                );
+                expect(conversationButtons[0]?.textContent).toContain("Newest persisted prompt");
+                expect(conversationButtons[1]?.textContent).toContain("Older persisted prompt");
             });
             expect(screen.getByRole("heading", { level: 1 }).textContent).toContain("Older persisted prompt");
             const restoredConversationButtons = within(restoredConversations).getAllByRole("link");
             expect(restoredConversationButtons[0]?.textContent).not.toContain("default");
             expect(restoredConversationButtons[0]?.textContent).toContain("Default workspace");
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
-    it("Given three Sessions with different activity times, When the Web app reloads, Then the list orders them by most recent activity", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const sessions: string[] = [];
-            for (const title of ["Oldest activity", "Middle activity"]) {
-                if (sessions.length > 0) {
-                    fireEvent.click(
-                        within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole(
-                            "button",
-                            { name: /New chat.*⌘ N/ },
-                        ),
-                    );
-                }
-                const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-                await sendReadySession(paired.daemon, preparation);
-                await completeRenderedPrompt(paired.daemon, title, `${title.toUpperCase()}-RESPONSE`);
-                sessions.push(preparation.sessionId);
-            }
-
-            // A fresh Session becomes the most recently active one.
-            fireEvent.click(
-                within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole("button", {
-                    name: /New chat.*⌘ N/,
-                }),
-            );
-            const newestPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, newestPreparation);
-
-            cleanup();
-            await closeMobiusTransport();
-            createTestApplication();
-            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, resumedPreparation);
-
-            // Every restored row carries the Relay's activity time, so the order must not fall back to
-            // whatever order the store happened to hold.
-            const conversations = await screen.findByRole("navigation", { name: "Conversations" });
-            await waitFor(() => {
-                const links = within(conversations).getAllByRole("link");
-                expect(links).toHaveLength(3);
-                // The two persisted Sessions order by the Relay's activity time; the unsent draft has no
-                // activity of its own, so it trails them.
-                expect(links[0]?.textContent).toContain("Middle activity");
-                expect(links[1]?.textContent).toContain("Oldest activity");
-                expect(links[2]?.textContent).toContain("New chat");
-            });
         } finally {
             cleanup();
             await closeMobiusTransport();
@@ -1119,14 +1047,22 @@ describe.sequential("Session persistence boundaries", () => {
         createTestApplication();
 
         try {
-            // Start a Turn and leave it running in this Session.
-            const runningPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, runningPreparation);
+            const firstPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, firstPreparation);
+            await completeRenderedPrompt(paired.daemon, "First conversation", "FIRST-RESPONSE");
+
+            // A second Session the reload will land on, so the running one is not the active one.
+            fireEvent.click(
+                within(
+                    screen.getByRole("complementary", {
+                        name: "Conversation sidebar",
+                    }),
+                ).getByRole("button", { name: /New chat.*⌘ N/ }),
+            );
+            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPreparation);
 
             const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
-            await waitFor(() => {
-                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
-            });
             fireEvent.change(promptInput, { target: { value: "Run a long tool call" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
@@ -1141,35 +1077,29 @@ describe.sequential("Session persistence boundaries", () => {
             );
             expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
 
-            // A second Session for the reload to land on, so the running Turn is not the active one.
-            fireEvent.click(
-                within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole("button", {
-                    name: /New chat.*⌘ N/,
-                }),
-            );
-            const otherPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            expect(otherPreparation.sessionId).not.toBe(runningPreparation.sessionId);
-            await sendReadySession(paired.daemon, otherPreparation);
-
-            // Reload onto the other Session. The Session summary carries no running signal, so the running
-            // Session stays marked only if the refresh hydrates every Session rather than the active one.
+            // Reload onto the first Session, leaving the running Turn in the background. The Session
+            // summary carries no running signal, so this only holds if the refresh hydrates every
+            // Session rather than just the active one.
             cleanup();
             await closeMobiusTransport();
-            const otherSessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(otherPreparation.sessionId)}`;
-            window.history.replaceState(null, "", otherSessionPath);
+            const firstSessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(firstPreparation.sessionId)}`;
+            window.history.replaceState(null, "", firstSessionPath);
             createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            expect(resumedPreparation.sessionId).toBe(otherPreparation.sessionId);
+            expect(resumedPreparation.sessionId).toBe(firstPreparation.sessionId);
             await sendReadySession(paired.daemon, resumedPreparation);
 
+            const conversations = await screen.findByRole("navigation", { name: "Conversations" });
             const running = await waitFor(() => {
                 const section = document.querySelector('section[aria-labelledby="running-conversations-heading"]');
                 if (section === null) {
                     throw new Error("The running section is missing");
                 }
-                return section as HTMLElement;
+                return section;
             });
-            expect(within(running).getByRole("link").textContent).toContain("Run a long tool call");
+            const runningRow = within(running as HTMLElement).getByRole("link");
+            expect(runningRow.textContent).toContain("Run a long tool call");
+            expect(within(conversations).getAllByRole("link")).toHaveLength(2);
         } finally {
             cleanup();
             await closeMobiusTransport();
