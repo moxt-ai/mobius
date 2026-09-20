@@ -1,3 +1,4 @@
+import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPlatformGateways } from "../packages/relay-cloudflare-platform/src/worker.ts";
@@ -12,7 +13,7 @@ beforeEach(() => {
     vi.setSystemTime(new Date("2026-09-09T00:00:00.000Z"));
 });
 
-it("Given a Platform Project, When its owner pairs a local Runtime, Then that Project exposes the connected Runtime and Agent", async () => {
+it("Given a Platform Project, When its owner pairs a local Runtime and creates a Session, Then the Project Durable Object accepts the Session", async () => {
     const signal = AbortSignal.timeout(10_000);
     await using bindings = await createTestMobiusPlatformBindings();
     const clerk = new FakeClerk();
@@ -56,5 +57,24 @@ it("Given a Platform Project, When its owner pairs a local Runtime, Then that Pr
     expect(await runtime.client.runtimes.list(signal)).toMatchObject([
         { runtimeId: runtime.runtimeId, projectId: project.projectId, online: true, agents: [{ id: "codex" }] },
     ]);
+    const sessionId = `moxt-session:${"a".repeat(64)}`;
+    const bindingId = `moxt-session-binding:${"b".repeat(64)}`;
+    await expect(
+        runtime.client.sessions.create(
+            {
+                agentId: "codex",
+                bindingId,
+                directoryId: "root",
+                policy: new MobiusRecordingPolicy("full", 86_400_000, 100, 100_000),
+                runtimeId: runtime.runtimeId,
+                sessionId,
+                title: "Moxt local Agent Session",
+            },
+            signal,
+        ),
+    ).resolves.toMatchObject({
+        defaultBinding: { bindingId, sessionId },
+        sessionId,
+    });
 });
 afterEach(() => vi.useRealTimers());

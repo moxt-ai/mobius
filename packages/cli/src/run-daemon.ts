@@ -156,7 +156,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import type { LocalArtifact } from "./authorization/local-artifact.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
-import { type DaemonConfig, withDaemonEnvironment } from "./config.ts";
+import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
@@ -1857,7 +1857,8 @@ async function refreshAgentCatalog(
     signal: AbortSignal,
 ): Promise<void> {
     signal.throwIfAborted();
-    const environment = await resolveEnvironment(signal);
+    const shellEnvironment = await resolveEnvironment(signal);
+    const environment = new DaemonLocalContext(config.localContext.stateDirectory, shellEnvironment).environment;
     signal.throwIfAborted();
     const inventory = await discoverLocalAgentInventory({
         defaultWorkspace: config.defaultWorkspace,

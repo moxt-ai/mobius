@@ -28,6 +28,7 @@ import {
     decodeSessionFailedEvent,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
+    decodeWorkspaceListCommand,
     encodeAgentCatalogRefreshedEvent,
     encodeAgentInstallProgressEvent,
     encodeAgentInstallRequestCommand,
@@ -39,6 +40,7 @@ import {
     encodeSessionEventEnvelope,
     encodeSessionPrepareCommand,
     encodeSessionPromptCommand,
+    encodeWorkspaceEntriesEvent,
     MOBIUS_API_PREFIX,
     type NativeSessionResult,
     type RecordedSessionEvent,
@@ -61,6 +63,7 @@ import {
     type SessionPrepareCommand,
     type SessionPromptCommand,
     SessionPromptDisposition,
+    WORKSPACE_ENTRIES_KIND,
 } from "@moxt-ai/mobius-protocol";
 import {
     MobiusArtifactUploadRequest,
@@ -780,6 +783,8 @@ describe.sequential("Cloudflare session deployment", () => {
             expect(command).not.toHaveProperty("directoryId");
             expect(command).not.toHaveProperty("botId");
             expect(command).not.toHaveProperty("sessionId");
+            const runtimeStub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            await evictDurableObject(runtimeStub);
             daemon.socket.send(
                 encodeAgentSettingsDiscoveredEvent({
                     agentId: "codex",
@@ -862,6 +867,8 @@ describe.sequential("Cloudflare session deployment", () => {
             expect(command).not.toHaveProperty("agentId");
             expect(command).not.toHaveProperty("directoryId");
             expect(command).not.toHaveProperty("sessionId");
+            const runtimeStub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            await evictDurableObject(runtimeStub);
             daemon.socket.send(
                 encodeAgentCatalogRefreshedEvent({
                     kind: "agent.catalog.refreshed",
@@ -873,6 +880,56 @@ describe.sequential("Cloudflare session deployment", () => {
             await expect(response.json()).resolves.toStrictEqual({ ok: true });
         } finally {
             daemon.socket.close(1000, "Agent catalog refresh test complete");
+        }
+    });
+
+    it("Given a paired Runtime, When a project owner lists a workspace after Relay hibernation, Then the Runtime directory entries return to the requesting control connection", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { openChannelSocket, pairChannel } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        try {
+            const listing = app.request(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/runtimes/${pairing.created.runtimeId}/workspace`,
+                    {
+                        body: JSON.stringify({ directoryId: "workspace" }),
+                        headers: {
+                            Authorization: `Bearer ${pairing.created.hostToken}`,
+                            "Content-Type": "application/json",
+                        },
+                        method: "POST",
+                    },
+                ),
+            );
+            const command = decodeWorkspaceListCommand(await daemon.messages.next());
+            expect(command).toMatchObject({
+                directoryId: "workspace",
+                kind: "workspace.list",
+            });
+            const runtimeStub = env.RUNTIME_RELAY.get(env.RUNTIME_RELAY.idFromName(pairing.created.channelId));
+            await evictDurableObject(runtimeStub);
+            daemon.socket.send(
+                encodeWorkspaceEntriesEvent({
+                    bindingId: command.bindingId,
+                    directoryId: command.directoryId,
+                    directoryLabel: "/workspace",
+                    entries: [],
+                    kind: WORKSPACE_ENTRIES_KIND,
+                    parentDirectoryId: "",
+                    requestId: command.requestId,
+                }),
+            );
+            const response = await listing;
+            expect(response.status).toBe(200);
+            await expect(response.json()).resolves.toMatchObject({
+                directoryId: "workspace",
+                entries: [],
+            });
+        } finally {
+            daemon.socket.close(1000, "Workspace listing test complete");
         }
     });
 

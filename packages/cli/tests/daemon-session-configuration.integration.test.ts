@@ -1,17 +1,21 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+    AGENT_CATALOG_REFRESH_KIND,
+    AGENT_CATALOG_REFRESHED_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
+    decodeAgentCatalogRefreshedEvent,
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionEventAcknowledgement,
     encodeSessionPromptCommand,
@@ -33,6 +37,10 @@ import { runDaemon } from "../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+
+function executableSource(source: string): string {
+    return `#!${process.execPath}\n${source}`;
+}
 
 function listen(server: Server): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -189,7 +197,186 @@ async function readAgentSettings(frames: ClientFrames, requestId: string) {
     }
 }
 
+async function readAgentCatalogRefresh(frames: ClientFrames, requestId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== AGENT_CATALOG_REFRESHED_KIND) {
+            continue;
+        }
+        const refreshed = decodeAgentCatalogRefreshedEvent(message);
+        if (refreshed.requestId === requestId) {
+            return refreshed;
+        }
+    }
+}
+
 describe("daemon session configuration boundary", () => {
+    it("Given a runtime refreshes its shell environment, When its private Agent cache is needed, Then catalog discovery retains the runtime state directory", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-catalog-state-"));
+        const discardedStateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-discarded-state-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        const executableDirectory = join(stateDirectory, "external");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        const codexPath = join(executableDirectory, "codex");
+        const managedAdapterPath = join(
+            stateDirectory,
+            "adapters",
+            "codex",
+            "1.8.0",
+            "node_modules",
+            "@agentclientprotocol",
+            "codex-acp",
+            "dist",
+            "index.js",
+        );
+        const managedAdapterPackageRoot = dirname(dirname(managedAdapterPath));
+        await Promise.all([
+            mkdir(workspace, { recursive: true }),
+            mkdir(nativeStateDirectory, { recursive: true }),
+            mkdir(executableDirectory, { recursive: true }),
+            mkdir(dirname(managedAdapterPath), { recursive: true }),
+        ]);
+
+        const catalogBodies: string[] = [];
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                let body = "";
+                request.setEncoding("utf8");
+                request.on("data", (chunk: string) => {
+                    body += chunk;
+                });
+                request.on("end", () => {
+                    catalogBodies.push(body);
+                    response.writeHead(204);
+                    response.end();
+                });
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await Promise.all([
+            writeFile(
+                codexPath,
+                executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else {
+  process.argv.push("--agent-name", "Codex");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+                { mode: 0o700 },
+            ),
+            writeFile(
+                managedAdapterPath,
+                executableSource(`
+import { spawn } from "node:child_process";
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex-acp 1.8.0\\n");
+} else {
+  const executable = process.env.CODEX_PATH;
+  if (executable === undefined) process.exit(91);
+  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
+  child.once("error", () => process.exit(92));
+  child.once("exit", (code) => process.exit(code ?? 93));
+}
+`),
+                { mode: 0o700 },
+            ),
+            writeFile(
+                join(managedAdapterPackageRoot, "package.json"),
+                JSON.stringify({
+                    bin: { "codex-acp": "dist/index.js" },
+                    name: "@agentclientprotocol/codex-acp",
+                    version: "1.8.0",
+                }),
+                { mode: 0o600 },
+            ),
+        ]);
+        await Promise.all([chmod(codexPath, 0o700), chmod(managedAdapterPath, 0o700)]);
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const contextEnvironment = {
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
+            PATH: executableDirectory,
+        };
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [new LocalAgentDefinition("seed", "Seed", process.execPath, [fakeAgentPath])],
+            [],
+            new DaemonLocalContext(stateDirectory, contextEnvironment),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
+            resolveAgentCatalogEnvironment: async (signal: AbortSignal): Promise<Readonly<NodeJS.ProcessEnv>> => {
+                signal.throwIfAborted();
+                return {
+                    ...contextEnvironment,
+                    MOBIUS_STATE_DIRECTORY: discardedStateDirectory,
+                };
+            },
+        });
+
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const requestId = "catalog-preserves-runtime-state";
+            writeServerTextFrame(
+                socket,
+                encodeAgentCatalogRefreshCommand({
+                    kind: AGENT_CATALOG_REFRESH_KIND,
+                    requestId,
+                }),
+            );
+            await readAgentCatalogRefresh(frames, requestId);
+
+            expect(config.catalog.read().agents.map((agent) => agent.id)).toContain("codex");
+            expect(catalogBodies.at(-1)).toContain('"id":"codex"');
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            audit.close();
+            await daemon;
+            await Promise.all([
+                rm(stateDirectory, { force: true, recursive: true }),
+                rm(discardedStateDirectory, { force: true, recursive: true }),
+            ]);
+        }
+    });
+
     it("Given an Agent withholds effort for its default model, When settings are discovered without a model, Then the default model's own capability is reported", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-default-effort-"));
         const workspace = join(stateDirectory, "workspace");

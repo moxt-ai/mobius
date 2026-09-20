@@ -24,6 +24,8 @@ export class SocketResponse extends Response {
 
 class TestSocket implements RuntimeSocket {
     #identity: RuntimeSocketIdentity;
+    readonly #agentCatalogRefreshes = new Map<string, number>();
+    readonly #agentSettingsDiscoveries = new Map<string, { readonly agentId: string; readonly expiresAt: number }>();
     readonly #socket: WebSocket;
     constructor(identity: RuntimeSocketIdentity, socket: WebSocket) {
         this.#identity = identity;
@@ -31,9 +33,51 @@ class TestSocket implements RuntimeSocket {
     }
     readonly identity = () => this.#identity;
     readonly close = (code: number, reason: string) => this.#socket.close(code, reason);
+    readonly consumeAgentCatalogRefresh = (requestId: string, now: number): boolean => {
+        let consumed = false;
+        for (const [pendingRequestId, expiresAt] of this.#agentCatalogRefreshes) {
+            if (expiresAt <= now) {
+                this.#agentCatalogRefreshes.delete(pendingRequestId);
+                continue;
+            }
+            if (pendingRequestId === requestId) {
+                this.#agentCatalogRefreshes.delete(pendingRequestId);
+                consumed = true;
+            }
+        }
+        return consumed;
+    };
+    readonly consumeAgentSettingsDiscovery = (requestId: string, agentId: string, now: number): boolean => {
+        const pending = this.#agentSettingsDiscoveries.get(requestId);
+        for (const [pendingRequestId, candidate] of this.#agentSettingsDiscoveries) {
+            if (candidate.expiresAt <= now) {
+                this.#agentSettingsDiscoveries.delete(pendingRequestId);
+            }
+        }
+        if (pending === undefined || pending.expiresAt <= now || pending.agentId !== agentId) {
+            return false;
+        }
+        this.#agentSettingsDiscoveries.delete(requestId);
+        return true;
+    };
+    readonly consumeAgentSettingsDiscoveryFailure = (requestId: string, now: number): boolean => {
+        const pending = this.#agentSettingsDiscoveries.get(requestId);
+        for (const [pendingRequestId, candidate] of this.#agentSettingsDiscoveries) {
+            if (candidate.expiresAt <= now || pendingRequestId === requestId) {
+                this.#agentSettingsDiscoveries.delete(pendingRequestId);
+            }
+        }
+        return pending !== undefined && pending.expiresAt > now;
+    };
     readonly isOpen = () => this.#socket.readyState === 1;
     readonly isSame = (socket: ChannelSocket): boolean => socket === this;
     readonly send = (message: string) => this.#socket.send(message);
+    readonly trackAgentCatalogRefresh = (requestId: string, expiresAt: number): void => {
+        this.#agentCatalogRefreshes.set(requestId, expiresAt);
+    };
+    readonly trackAgentSettingsDiscovery = (requestId: string, agentId: string, expiresAt: number): void => {
+        this.#agentSettingsDiscoveries.set(requestId, { agentId, expiresAt });
+    };
     readonly replaceDaemon = () => {
         if (this.#identity.role === "host") {
             throw new Error("A Host cannot replace a Runtime");

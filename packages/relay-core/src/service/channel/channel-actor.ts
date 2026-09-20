@@ -227,9 +227,14 @@ export class SystemRelayClock implements RelayClock {
 
 export interface ChannelSocket {
     readonly close: (code: number, reason: string) => void;
+    readonly consumeAgentCatalogRefresh: (requestId: string, now: number) => boolean;
+    readonly consumeAgentSettingsDiscovery: (requestId: string, agentId: string, now: number) => boolean;
+    readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
     readonly send: (message: string) => void;
+    readonly trackAgentCatalogRefresh: (requestId: string, expiresAt: number) => void;
+    readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string, expiresAt: number) => void;
 }
 
 export interface ChannelPeers {
@@ -546,35 +551,22 @@ export class ChannelActor {
             }
             if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
                 const discovered = decodeAgentSettingsDiscoveredEvent(message);
-                this.withPendingAgentSettingsDiscovery(discovered.requestId, (pending) => {
-                    if (pending.agentId !== discovered.agentId) {
-                        throw new ProtocolMessageError(
-                            "The Agent settings discovery result does not match the requested Agent",
-                        );
-                    }
-                    this.sendAgentSettingsDiscoveryResult(pending, message);
-                });
+                this.returnAgentSettingsDiscoveryResult(discovered.requestId, discovered.agentId, message);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERY_FAILED_KIND) {
                 const failed = decodeAgentSettingsDiscoveryFailedEvent(message);
-                this.withPendingAgentSettingsDiscovery(failed.requestId, (pending) => {
-                    this.sendAgentSettingsDiscoveryResult(pending, message);
-                });
+                this.returnAgentSettingsDiscoveryFailure(failed.requestId, message);
                 return;
             }
             if (kind === AGENT_CATALOG_REFRESHED_KIND) {
                 const refreshed = decodeAgentCatalogRefreshedEvent(message);
-                this.withPendingAgentCatalogRefresh(refreshed.requestId, (pending) => {
-                    this.sendAgentCatalogRefreshResult(pending, message);
-                });
+                this.returnAgentCatalogRefreshResult(refreshed.requestId, message);
                 return;
             }
             if (kind === AGENT_CATALOG_REFRESH_FAILED_KIND) {
                 const failed = decodeAgentCatalogRefreshFailedEvent(message);
-                this.withPendingAgentCatalogRefresh(failed.requestId, (pending) => {
-                    this.sendAgentCatalogRefreshResult(pending, message);
-                });
+                this.returnAgentCatalogRefreshResult(failed.requestId, message);
                 return;
             }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
@@ -1134,16 +1126,16 @@ export class ChannelActor {
 
     private readonly forwardAgentCatalogRefresh = (socket: ChannelSocket, message: string, requestId: string): void => {
         const now = this.#clock.now();
+        const expiresAt = now + AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS;
         this.expireAgentCatalogRefreshes(now);
         if (this.#pendingAgentCatalogRefreshes.has(requestId)) {
             throw new ProtocolMessageError("Another local Agent catalog refresh is pending");
         }
-        this.#pendingAgentCatalogRefreshes.set(
-            requestId,
-            new PendingAgentCatalogRefresh(now + AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS, socket),
-        );
+        socket.trackAgentCatalogRefresh(requestId, expiresAt);
+        this.#pendingAgentCatalogRefreshes.set(requestId, new PendingAgentCatalogRefresh(expiresAt, socket));
         if (!this.sendToDaemon(message)) {
             this.#pendingAgentCatalogRefreshes.delete(requestId);
+            socket.consumeAgentCatalogRefresh(requestId, now);
             socket.send(
                 encodeAgentCatalogRefreshFailedEvent({
                     code: "runtime_offline",
@@ -1155,17 +1147,20 @@ export class ChannelActor {
         }
     };
 
-    private readonly withPendingAgentCatalogRefresh = (
-        requestId: string,
-        consume: (pending: PendingAgentCatalogRefresh) => void,
-    ): void => {
-        this.expireAgentCatalogRefreshes(this.#clock.now());
+    private readonly returnAgentCatalogRefreshResult = (requestId: string, message: string): void => {
+        const now = this.#clock.now();
+        this.expireAgentCatalogRefreshes(now);
         const pending = this.#pendingAgentCatalogRefreshes.get(requestId);
-        if (pending === undefined) {
+        if (pending !== undefined) {
+            this.#pendingAgentCatalogRefreshes.delete(requestId);
+            pending.socket.consumeAgentCatalogRefresh(requestId, now);
+            this.sendAgentCatalogRefreshResult(pending, message);
             return;
         }
-        this.#pendingAgentCatalogRefreshes.delete(requestId);
-        consume(pending);
+        const recipient = this.#peers.hosts().find((socket) => socket.consumeAgentCatalogRefresh(requestId, now));
+        if (recipient?.isOpen()) {
+            recipient.send(message);
+        }
     };
 
     private readonly sendAgentCatalogRefreshResult = (pending: PendingAgentCatalogRefresh, message: string): void => {
@@ -1178,12 +1173,15 @@ export class ChannelActor {
         for (const [requestId, pending] of this.#pendingAgentCatalogRefreshes) {
             if (pending.expiresAt <= now) {
                 this.#pendingAgentCatalogRefreshes.delete(requestId);
+                pending.socket.consumeAgentCatalogRefresh(requestId, now);
             }
         }
     };
 
     private readonly failPendingAgentCatalogRefreshes = (): void => {
+        const now = this.#clock.now();
         for (const [requestId, pending] of this.#pendingAgentCatalogRefreshes) {
+            pending.socket.consumeAgentCatalogRefresh(requestId, now);
             if (pending.socket.isOpen()) {
                 pending.socket.send(
                     encodeAgentCatalogRefreshFailedEvent({
@@ -1205,16 +1203,19 @@ export class ChannelActor {
         agentId: string,
     ): void => {
         const now = this.#clock.now();
+        const expiresAt = now + AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS;
         this.expireAgentSettingsDiscoveries(now);
         if (this.#pendingAgentSettingsDiscoveries.has(requestId)) {
             throw new ProtocolMessageError("Another Agent settings discovery is pending");
         }
+        socket.trackAgentSettingsDiscovery(requestId, agentId, expiresAt);
         this.#pendingAgentSettingsDiscoveries.set(
             requestId,
-            new PendingAgentSettingsDiscovery(agentId, now + AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS, socket),
+            new PendingAgentSettingsDiscovery(agentId, expiresAt, socket),
         );
         if (!this.sendToDaemon(message)) {
             this.#pendingAgentSettingsDiscoveries.delete(requestId);
+            socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
             socket.send(
                 encodeAgentSettingsDiscoveryFailedEvent({
                     code: "runtime_offline",
@@ -1227,17 +1228,49 @@ export class ChannelActor {
         }
     };
 
-    private readonly withPendingAgentSettingsDiscovery = (
+    private readonly returnAgentSettingsDiscoveryResult = (
         requestId: string,
-        consume: (pending: PendingAgentSettingsDiscovery) => void,
+        agentId: string,
+        message: string,
     ): void => {
-        this.expireAgentSettingsDiscoveries(this.#clock.now());
+        const now = this.#clock.now();
+        this.expireAgentSettingsDiscoveries(now);
         const pending = this.#pendingAgentSettingsDiscoveries.get(requestId);
-        if (pending === undefined) {
+        if (pending !== undefined) {
+            this.#pendingAgentSettingsDiscoveries.delete(requestId);
+            if (pending.agentId !== agentId) {
+                throw new ProtocolMessageError(
+                    "The Agent settings discovery result does not match the requested Agent",
+                );
+            }
+            pending.socket.consumeAgentSettingsDiscovery(requestId, agentId, now);
+            this.sendAgentSettingsDiscoveryResult(pending, message);
             return;
         }
-        this.#pendingAgentSettingsDiscoveries.delete(requestId);
-        consume(pending);
+        const recipient = this.#peers
+            .hosts()
+            .find((socket) => socket.consumeAgentSettingsDiscovery(requestId, agentId, now));
+        if (recipient?.isOpen()) {
+            recipient.send(message);
+        }
+    };
+
+    private readonly returnAgentSettingsDiscoveryFailure = (requestId: string, message: string): void => {
+        const now = this.#clock.now();
+        this.expireAgentSettingsDiscoveries(now);
+        const pending = this.#pendingAgentSettingsDiscoveries.get(requestId);
+        if (pending !== undefined) {
+            this.#pendingAgentSettingsDiscoveries.delete(requestId);
+            pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
+            this.sendAgentSettingsDiscoveryResult(pending, message);
+            return;
+        }
+        const recipient = this.#peers
+            .hosts()
+            .find((socket) => socket.consumeAgentSettingsDiscoveryFailure(requestId, now));
+        if (recipient?.isOpen()) {
+            recipient.send(message);
+        }
     };
 
     private readonly sendAgentSettingsDiscoveryResult = (
@@ -1253,12 +1286,15 @@ export class ChannelActor {
         for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
             if (pending.expiresAt <= now) {
                 this.#pendingAgentSettingsDiscoveries.delete(requestId);
+                pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
             }
         }
     };
 
     private readonly failPendingAgentSettingsDiscoveries = (): void => {
+        const now = this.#clock.now();
         for (const [requestId, pending] of this.#pendingAgentSettingsDiscoveries) {
+            pending.socket.consumeAgentSettingsDiscoveryFailure(requestId, now);
             if (pending.socket.isOpen()) {
                 pending.socket.send(
                     encodeAgentSettingsDiscoveryFailedEvent({
