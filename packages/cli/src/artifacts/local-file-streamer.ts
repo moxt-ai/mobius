@@ -3,9 +3,7 @@ import { realpath, stat } from "node:fs/promises";
 import { basename, isAbsolute, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-    encodeFileBeginEvent,
-    encodeFileChunkEvent,
-    encodeFileEndEvent,
+    type DaemonToServiceMessage,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -47,7 +45,7 @@ async function resolveFile(value: string, signal: AbortSignal): Promise<string |
 
 export async function streamLocalFile(
     command: FileReadCommand,
-    send: (message: string) => void,
+    send: (message: DaemonToServiceMessage) => void,
     signal: AbortSignal,
 ): Promise<void> {
     const target = await resolveFile(command.path, signal);
@@ -60,30 +58,26 @@ export async function streamLocalFile(
         throw new Error("The local file is too large to read");
     }
     const raster = await readLocalRaster(target, signal);
-    send(
-        encodeFileBeginEvent({
-            byteLength: before.size,
-            kind: FILE_BEGIN_KIND,
-            mediaType: raster?.mimeType ?? "application/octet-stream",
-            modifiedAt: before.mtime.toISOString(),
-            name: basename(target) || "file",
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        }),
-    );
+    send({
+        byteLength: before.size,
+        kind: FILE_BEGIN_KIND,
+        mediaType: raster?.mimeType ?? "application/octet-stream",
+        modifiedAt: before.mtime.toISOString(),
+        name: basename(target) || "file",
+        requestId: command.requestId,
+        sessionId: command.sessionId,
+    });
     let sequence = 0;
     const stream = createReadStream(target, { highWaterMark: CHUNK_BYTES, signal });
     for await (const value of stream) {
         const bytes = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBuffer);
-        send(
-            encodeFileChunkEvent({
-                data: Buffer.from(bytes).toString("base64"),
-                kind: FILE_CHUNK_KIND,
-                requestId: command.requestId,
-                sequence,
-                sessionId: command.sessionId,
-            }),
-        );
+        send({
+            data: Buffer.from(bytes).toString("base64"),
+            kind: FILE_CHUNK_KIND,
+            requestId: command.requestId,
+            sequence,
+            sessionId: command.sessionId,
+        });
         sequence += 1;
     }
     const after = await stat(target);
@@ -91,11 +85,9 @@ export async function streamLocalFile(
     if (after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
         throw new Error("The local file changed during transfer");
     }
-    send(
-        encodeFileEndEvent({
-            kind: FILE_END_KIND,
-            requestId: command.requestId,
-            sessionId: command.sessionId,
-        }),
-    );
+    send({
+        kind: FILE_END_KIND,
+        requestId: command.requestId,
+        sessionId: command.sessionId,
+    });
 }

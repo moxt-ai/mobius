@@ -257,6 +257,9 @@ export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEven
     }
 }
 
+export const encodeRecordedSessionEvent = (event: RecordedSessionEvent): string =>
+    JSON.stringify(decodeRecordedSessionEvent(JSON.stringify(event)));
+
 export function validateSessionEventEnvelope(envelope: SessionEventEnvelope): RecordedSessionEvent {
     const event = decodeRecordedSessionEvent(envelope.payload);
     if (event.sessionId !== envelope.sessionId) {

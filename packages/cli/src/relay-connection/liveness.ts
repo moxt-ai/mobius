@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import {
-    encodeRuntimeHeartbeatEvent,
     RUNTIME_HEARTBEAT_KIND,
     type RuntimeHeartbeatAckEvent,
+    type RuntimeHeartbeatEvent,
 } from "@moxt-ai/mobius-protocol";
 
 import type { DaemonScheduledTask, DaemonTimer } from "./timer.ts";
@@ -38,7 +38,7 @@ class WaitingForHeartbeatState extends RelayLivenessState {
 class FinishedRelayLivenessState extends RelayLivenessState {}
 
 export interface RelayLivenessTransport {
-    readonly send: (message: string) => boolean;
+    readonly send: (message: RuntimeHeartbeatEvent) => boolean;
     readonly unresponsive: (heartbeatId: string, timeoutMilliseconds: number) => void;
 }
 
@@ -120,12 +120,10 @@ export class RelayConnectionLiveness {
             heartbeatId,
             this.#timer.schedule(this.#handleTimeout, HEARTBEAT_ACK_TIMEOUT_MILLISECONDS),
         );
-        const sent = this.#transport.send(
-            encodeRuntimeHeartbeatEvent({
-                heartbeatId,
-                kind: RUNTIME_HEARTBEAT_KIND,
-            }),
-        );
+        const sent = this.#transport.send({
+            heartbeatId,
+            kind: RUNTIME_HEARTBEAT_KIND,
+        });
         if (!sent && this.#state instanceof AwaitingHeartbeatAckState && this.#state.heartbeatId === heartbeatId) {
             this.#state.timeout.cancel();
             this.#state = new FinishedRelayLivenessState();

@@ -12,55 +12,32 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+    type DaemonToServiceMessage,
     decodeAgentCatalogRefreshCommand,
-    decodeAgentCatalogRefreshedEvent,
-    decodeAgentCatalogRefreshFailedEvent,
     decodeAgentInstallCancelCommand,
-    decodeAgentInstallCancelledEvent,
-    decodeAgentInstallCompletedEvent,
-    decodeAgentInstallFailedEvent,
-    decodeAgentInstallProgressEvent,
     decodeAgentInstallRequestCommand,
-    decodeAgentInstallStartedEvent,
     decodeAgentSettingsDiscoverCommand,
-    decodeAgentSettingsDiscoveredEvent,
-    decodeAgentSettingsDiscoveryFailedEvent,
-    decodeFileBeginEvent,
-    decodeFileChunkEvent,
-    decodeFileEndEvent,
-    decodeFileFailedEvent,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
-    decodeNativeSessionResult,
     decodeNativeSessionTurnForkRequest,
-    decodeRuntimeDeliveryReceived,
+    decodeServiceToDaemonMessage,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
-    decodeSessionEventEnvelope,
-    decodeSessionOperationFailedEvent,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
-    decodeSessionReadyEvent,
-    decodeWorkspaceEntriesEvent,
     decodeWorkspaceListCommand,
     encodeAgentCatalogRefreshFailedEvent,
     encodeAgentSettingsDiscoveryFailedEvent,
     encodeCommittedSessionEvent,
-    encodeNativeSessionResult,
-    encodeNativeSessionTurnForkCommand,
-    encodeRuntimeDelivery,
-    encodeRuntimeDeliveryCommitted,
+    encodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
-    encodeSessionEventAcknowledgement,
-    encodeSessionEventDeferred,
-    encodeSessionEventRejection,
+    encodeServiceToDaemonMessage,
     encodeSessionFailedEvent,
     encodeSessionOperationFailedEvent,
-    encodeSessionPrepareCommand,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -91,6 +68,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_READY_KIND,
+    type ServiceToDaemonMessage,
     type SessionEventEnvelope,
     SessionEventRejectionCode,
     type SessionPrepareCommand,
@@ -338,20 +316,16 @@ export class ChannelActor {
 
     readonly receiveDaemonMessage = async (
         socket: ChannelSocket,
-        message: unknown,
+        message: DaemonToServiceMessage,
         signal: AbortSignal,
     ): Promise<void> => {
-        if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
-            socket.close(1003, "Bounded text message required");
-            return;
-        }
         try {
-            const kind = decodeMessageKind(message);
+            const kind = message.kind;
             if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
                 if (!this.#deliveryReceipts) {
                     throw new ProtocolMessageError("Runtime delivery receipts were not negotiated");
                 }
-                const receipt = decodeRuntimeDeliveryReceived(message);
+                const receipt = message;
                 try {
                     await this.#commands.markPendingWorkCompleted(
                         this.#scope,
@@ -372,7 +346,7 @@ export class ChannelActor {
                 }
                 this.#removeInFlightDelivery(receipt.deliveryId);
                 socket.send(
-                    encodeRuntimeDeliveryCommitted({
+                    encodeServiceToDaemonMessage({
                         deliveryId: receipt.deliveryId,
                         kind: RUNTIME_DELIVERY_COMMITTED_KIND,
                         sessionId: receipt.sessionId,
@@ -382,7 +356,7 @@ export class ChannelActor {
                 return;
             }
             if (kind === SESSION_EVENT_KIND) {
-                const envelope = decodeSessionEventEnvelope(message);
+                const envelope = message;
                 const sourceKey = this.sessionEventSourceKey(envelope);
                 const backpressuredEventId = this.#backpressuredEventBySource.get(sourceKey);
                 if (backpressuredEventId !== undefined && backpressuredEventId !== envelope.eventId) {
@@ -409,7 +383,7 @@ export class ChannelActor {
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_deleted") {
                         socket.send(
-                            encodeSessionEventRejection({
+                            encodeServiceToDaemonMessage({
                                 code: SessionEventRejectionCode.SessionDeleted,
                                 eventId: envelope.eventId,
                                 kind: SESSION_EVENT_REJECTED_KIND,
@@ -425,7 +399,7 @@ export class ChannelActor {
                             return;
                         }
                         socket.send(
-                            encodeSessionEventRejection({
+                            encodeServiceToDaemonMessage({
                                 code: SessionEventRejectionCode.SessionNotFound,
                                 eventId: envelope.eventId,
                                 kind: SESSION_EVENT_REJECTED_KIND,
@@ -436,7 +410,7 @@ export class ChannelActor {
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && isTerminalSessionEventError(error)) {
                         socket.send(
-                            encodeSessionEventRejection({
+                            encodeServiceToDaemonMessage({
                                 code: SessionEventRejectionCode.SessionRejected,
                                 eventId: envelope.eventId,
                                 kind: SESSION_EVENT_REJECTED_KIND,
@@ -451,7 +425,7 @@ export class ChannelActor {
                     this.#backpressuredEventBySource.delete(sourceKey);
                 }
                 socket.send(
-                    encodeSessionEventAcknowledgement({
+                    encodeServiceToDaemonMessage({
                         cursor: result.committed.cursor,
                         duplicate: result.duplicate,
                         eventId: result.committed.eventId,
@@ -473,8 +447,8 @@ export class ChannelActor {
                 return;
             }
             if (kind === NATIVE_SESSION_RESULT_KIND) {
-                const result = decodeNativeSessionResult(message);
-                let forwardedMessage = message;
+                const result = message;
+                let forwardedMessage: DaemonToServiceMessage = message;
                 if (result.action === "import" || result.action === "fork") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
@@ -525,10 +499,10 @@ export class ChannelActor {
                         this.#clock.now(),
                         signal,
                     );
-                    forwardedMessage = encodeNativeSessionResult({
+                    forwardedMessage = {
                         ...result,
                         history,
-                    });
+                    };
                 } else if (result.action === "preview") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
@@ -545,35 +519,35 @@ export class ChannelActor {
                         throw new ProtocolMessageError("The native preview does not match a pending import");
                     }
                 }
-                this.broadcast(this.#peers.hosts(), forwardedMessage);
+                this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(forwardedMessage));
                 this.#pendingNativeImports.delete(result.requestId);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERED_KIND) {
-                const discovered = decodeAgentSettingsDiscoveredEvent(message);
-                this.returnAgentSettingsDiscoveryResult(discovered.requestId, discovered.agentId, message);
+                this.returnAgentSettingsDiscoveryResult(
+                    message.requestId,
+                    message.agentId,
+                    encodeDaemonToServiceMessage(message),
+                );
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVERY_FAILED_KIND) {
-                const failed = decodeAgentSettingsDiscoveryFailedEvent(message);
-                this.returnAgentSettingsDiscoveryFailure(failed.requestId, message);
+                this.returnAgentSettingsDiscoveryFailure(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
             if (kind === AGENT_CATALOG_REFRESHED_KIND) {
-                const refreshed = decodeAgentCatalogRefreshedEvent(message);
-                this.returnAgentCatalogRefreshResult(refreshed.requestId, message);
+                this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
             if (kind === AGENT_CATALOG_REFRESH_FAILED_KIND) {
-                const failed = decodeAgentCatalogRefreshFailedEvent(message);
-                this.returnAgentCatalogRefreshResult(failed.requestId, message);
+                this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
-                this.#pendingNativeImports.delete(decodeSessionOperationFailedEvent(message).requestId);
+                this.#pendingNativeImports.delete(message.requestId);
             }
-            this.validateDaemonControl(kind, message);
-            this.broadcast(this.#peers.hosts(), message);
+            this.validateDaemonControl(message);
+            this.broadcast(this.#peers.hosts(), encodeDaemonToServiceMessage(message));
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -591,7 +565,7 @@ export class ChannelActor {
 
     private readonly deferSessionEvent = (socket: ChannelSocket, envelope: SessionEventEnvelope): void => {
         socket.send(
-            encodeSessionEventDeferred({
+            encodeServiceToDaemonMessage({
                 eventId: envelope.eventId,
                 kind: SESSION_EVENT_DEFERRED_KIND,
                 retryAfterMilliseconds: SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS,
@@ -673,7 +647,7 @@ export class ChannelActor {
             if (kind === SESSION_PREPARE_KIND) {
                 const command = decodeSessionPrepareCommand(message);
                 if (command.transient === true) {
-                    this.forwardControl(socket, message, command.requestId, command.sessionId);
+                    this.forwardControl(socket, command, command.requestId, command.sessionId);
                     return;
                 }
                 const now = this.#clock.now();
@@ -681,12 +655,7 @@ export class ChannelActor {
                     await this.reconcilePreparedSession(command, now, signal);
                     const { sessionState, ...daemonCommand } = command;
                     void sessionState;
-                    this.forwardControl(
-                        socket,
-                        encodeSessionPrepareCommand(daemonCommand),
-                        command.requestId,
-                        command.sessionId,
-                    );
+                    this.forwardControl(socket, daemonCommand, command.requestId, command.sessionId);
                     return;
                 }
                 try {
@@ -709,17 +678,17 @@ export class ChannelActor {
                     }
                     await this.reconcilePreparedSession(command, now, signal);
                 }
-                this.forwardControl(socket, message, command.requestId, command.sessionId);
+                this.forwardControl(socket, command, command.requestId, command.sessionId);
                 return;
             }
             if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
                 const command = decodeAgentSettingsDiscoverCommand(message);
-                this.forwardAgentSettingsDiscovery(socket, message, command.requestId, command.agentId);
+                this.forwardAgentSettingsDiscovery(socket, command, command.requestId, command.agentId);
                 return;
             }
             if (kind === AGENT_CATALOG_REFRESH_KIND) {
                 const command = decodeAgentCatalogRefreshCommand(message);
-                this.forwardAgentCatalogRefresh(socket, message, command.requestId);
+                this.forwardAgentCatalogRefresh(socket, command, command.requestId);
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
@@ -766,7 +735,7 @@ export class ChannelActor {
                         });
                     }
                 }
-                this.forwardControl(socket, message, command.requestId, command.sessionId);
+                this.forwardControl(socket, command, command.requestId, command.sessionId);
                 return;
             }
             if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
@@ -814,7 +783,7 @@ export class ChannelActor {
                         ),
                         expiresAt: this.#clock.now() + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
                     });
-                    if (!this.sendToDaemon(encodeNativeSessionTurnForkCommand(authorized))) {
+                    if (!this.sendToDaemon(authorized)) {
                         this.#pendingNativeImports.delete(command.requestId);
                         throw new SessionRuntimeError("runtime_offline", "The local runtime went offline");
                     }
@@ -885,7 +854,7 @@ export class ChannelActor {
                 return;
             }
             const control = this.validateHostControl(kind, message);
-            this.forwardControl(socket, message, control.requestId, control.sessionId);
+            this.forwardControl(socket, control.message, control.requestId, control.sessionId);
         } catch (error) {
             if (signal.aborted) {
                 throw error;
@@ -898,58 +867,41 @@ export class ChannelActor {
         }
     };
 
-    private readonly validateDaemonControl = (kind: string, message: string): void => {
-        switch (kind) {
+    private readonly validateDaemonControl = (message: DaemonToServiceMessage): void => {
+        switch (message.kind) {
             case AGENT_CATALOG_REFRESHED_KIND:
-                decodeAgentCatalogRefreshedEvent(message);
                 return;
             case AGENT_CATALOG_REFRESH_FAILED_KIND:
-                decodeAgentCatalogRefreshFailedEvent(message);
                 return;
             case AGENT_SETTINGS_DISCOVERED_KIND:
-                decodeAgentSettingsDiscoveredEvent(message);
                 return;
             case AGENT_SETTINGS_DISCOVERY_FAILED_KIND:
-                decodeAgentSettingsDiscoveryFailedEvent(message);
                 return;
             case FILE_BEGIN_KIND:
-                decodeFileBeginEvent(message);
                 return;
             case FILE_CHUNK_KIND:
-                decodeFileChunkEvent(message);
                 return;
             case FILE_END_KIND:
-                decodeFileEndEvent(message);
                 return;
             case FILE_FAILED_KIND:
-                decodeFileFailedEvent(message);
                 return;
             case NATIVE_SESSION_RESULT_KIND:
-                decodeNativeSessionResult(message);
                 return;
             case WORKSPACE_ENTRIES_KIND:
-                decodeWorkspaceEntriesEvent(message);
                 return;
             case SESSION_OPERATION_FAILED_KIND:
-                decodeSessionOperationFailedEvent(message);
                 return;
             case SESSION_READY_KIND:
-                decodeSessionReadyEvent(message);
                 return;
             case AGENT_INSTALL_STARTED_KIND:
-                decodeAgentInstallStartedEvent(message);
                 return;
             case AGENT_INSTALL_PROGRESS_KIND:
-                decodeAgentInstallProgressEvent(message);
                 return;
             case AGENT_INSTALL_COMPLETED_KIND:
-                decodeAgentInstallCompletedEvent(message);
                 return;
             case AGENT_INSTALL_FAILED_KIND:
-                decodeAgentInstallFailedEvent(message);
                 return;
             case AGENT_INSTALL_CANCELLED_KIND:
-                decodeAgentInstallCancelledEvent(message);
                 return;
             default:
                 throw new ProtocolMessageError("Unsupported daemon message");
@@ -1006,31 +958,36 @@ export class ChannelActor {
     private readonly validateHostControl = (
         kind: string,
         message: string,
-    ): { readonly requestId: string; readonly sessionId: string } => {
+    ): {
+        readonly message: ServiceToDaemonMessage;
+        readonly requestId: string;
+        readonly sessionId: string;
+    } => {
         switch (kind) {
             case NATIVE_SESSION_REQUEST_KIND: {
                 const command = decodeNativeSessionCommand(message);
-                return { requestId: command.requestId, sessionId: command.sessionId };
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case NATIVE_SESSION_CANCEL_KIND: {
                 const command = decodeNativeSessionCancel(message);
-                return { requestId: command.requestId, sessionId: command.sessionId };
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_CANCEL_KIND: {
                 const command = decodeSessionCancelCommand(message);
-                return { requestId: command.commandId, sessionId: command.sessionId };
+                return { message: command, requestId: command.commandId, sessionId: command.sessionId };
             }
             case WORKSPACE_LIST_KIND: {
                 const command = decodeWorkspaceListCommand(message);
-                return { requestId: command.requestId, sessionId: "" };
+                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case SESSION_CONFIGURE_KIND: {
                 const command = decodeSessionConfigureCommand(message);
-                return { requestId: command.requestId, sessionId: command.sessionId };
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             case SESSION_PERMISSION_RESPOND_KIND: {
                 const command = decodeSessionPermissionRespondCommand(message);
                 return {
+                    message: command,
                     requestId: command.interactionId,
                     sessionId: command.sessionId,
                 };
@@ -1038,21 +995,22 @@ export class ChannelActor {
             case SESSION_ELICITATION_RESPOND_KIND: {
                 const command = decodeSessionElicitationRespondCommand(message);
                 return {
+                    message: command,
                     requestId: command.interactionId,
                     sessionId: command.sessionId,
                 };
             }
             case AGENT_INSTALL_REQUEST_KIND: {
                 const command = decodeAgentInstallRequestCommand(message);
-                return { requestId: command.requestId, sessionId: "" };
+                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case AGENT_INSTALL_CANCEL_KIND: {
                 const command = decodeAgentInstallCancelCommand(message);
-                return { requestId: command.requestId, sessionId: "" };
+                return { message: command, requestId: command.requestId, sessionId: "" };
             }
             case FILE_READ_KIND: {
                 const command = decodeFileReadCommand(message);
-                return { requestId: command.requestId, sessionId: command.sessionId };
+                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
             }
             default:
                 throw new ProtocolMessageError("Unsupported host message");
@@ -1105,7 +1063,7 @@ export class ChannelActor {
 
     private readonly forwardControl = (
         socket: ChannelSocket,
-        message: string,
+        message: ServiceToDaemonMessage,
         requestId: string,
         sessionId: string,
     ): void => {
@@ -1121,10 +1079,14 @@ export class ChannelActor {
             );
             return;
         }
-        this.broadcast(this.#peers.hosts(), message);
+        this.broadcast(this.#peers.hosts(), encodeServiceToDaemonMessage(message));
     };
 
-    private readonly forwardAgentCatalogRefresh = (socket: ChannelSocket, message: string, requestId: string): void => {
+    private readonly forwardAgentCatalogRefresh = (
+        socket: ChannelSocket,
+        message: ServiceToDaemonMessage,
+        requestId: string,
+    ): void => {
         const now = this.#clock.now();
         const expiresAt = now + AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS;
         this.expireAgentCatalogRefreshes(now);
@@ -1198,7 +1160,7 @@ export class ChannelActor {
 
     private readonly forwardAgentSettingsDiscovery = (
         socket: ChannelSocket,
-        message: string,
+        message: ServiceToDaemonMessage,
         requestId: string,
         agentId: string,
     ): void => {
@@ -1309,13 +1271,13 @@ export class ChannelActor {
         this.#pendingAgentSettingsDiscoveries.clear();
     };
 
-    private readonly sendToDaemon = (message: string): boolean => {
+    private readonly sendToDaemon = (message: ServiceToDaemonMessage): boolean => {
         const daemon = this.#peers.daemons().find((socket) => socket.isOpen());
         if (daemon === undefined) {
             return false;
         }
         try {
-            daemon.send(message);
+            daemon.send(encodeServiceToDaemonMessage(message));
             return true;
         } catch {
             return false;
@@ -1395,7 +1357,7 @@ export class ChannelActor {
             }
             for (const delivery of batch) {
                 signal.throwIfAborted();
-                if (!this.sendToDaemon(delivery.payload)) {
+                if (!this.sendToDaemon(decodeServiceToDaemonMessage(delivery.payload))) {
                     return;
                 }
                 await this.#commands.markPendingWorkCompleted(
@@ -1422,17 +1384,18 @@ export class ChannelActor {
                 if (this.#inFlightDeliveries.has(delivery.pendingWork.workId)) {
                     continue;
                 }
-                const encoded = encodeRuntimeDelivery({
+                const daemonMessage = {
                     deliveryId: delivery.pendingWork.workId,
                     kind: RUNTIME_DELIVERY_KIND,
                     payload: delivery.payload,
                     sessionId: delivery.pendingWork.sessionId,
-                });
+                } as const;
+                const encoded = encodeServiceToDaemonMessage(daemonMessage);
                 const byteLength = new TextEncoder().encode(encoded).byteLength;
                 if (this.#inFlightDeliveryBytes + byteLength > RUNTIME_DELIVERY_BYTE_LIMIT) {
                     continue;
                 }
-                if (!this.sendToDaemon(encoded)) {
+                if (!this.sendToDaemon(daemonMessage)) {
                     return;
                 }
                 this.#inFlightDeliveries.set(delivery.pendingWork.workId, byteLength);

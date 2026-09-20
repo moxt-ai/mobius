@@ -21,70 +21,25 @@ import {
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+    type AgentActivityEvent,
     type AgentCatalogRefreshCommand,
     type AgentContentEvent,
     type AgentModelEffort,
     type AgentSetting,
     type AgentSettingsDiscoverCommand,
     type AgentSettingsDiscoveredEvent,
-    decodeAgentCatalogRefreshCommand,
-    decodeAgentInstallCancelCommand,
-    decodeAgentInstallRequestCommand,
-    decodeAgentSettingsDiscoverCommand,
-    decodeFileReadCommand,
-    decodeMessageKind,
-    decodeNativeSessionCancel,
-    decodeNativeSessionCommand,
-    decodeNativeSessionTurnForkCommand,
-    decodeRuntimeDelivery,
-    decodeRuntimeDeliveryCommitted,
-    decodeRuntimeHeartbeatAckEvent,
-    decodeRuntimeLivenessReadyEvent,
-    decodeSessionCancelCommand,
-    decodeSessionConfigureCommand,
-    decodeSessionElicitationRespondCommand,
-    decodeSessionEventAcknowledgement,
-    decodeSessionEventDeferred,
+    type DaemonToServiceMessage,
+    decodeServiceToDaemonMessage,
+    type decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
-    decodeSessionEventRejection,
-    decodeSessionPermissionRespondCommand,
-    decodeSessionPrepareCommand,
-    decodeSessionPromptCommand,
-    decodeWorkspaceListCommand,
-    encodeAgentActivityEvent,
-    encodeAgentCatalogRefreshedEvent,
-    encodeAgentCatalogRefreshFailedEvent,
-    encodeAgentContentEvent,
-    encodeAgentInstallCancelledEvent,
-    encodeAgentInstallCompletedEvent,
-    encodeAgentInstallFailedEvent,
-    encodeAgentInstallProgressEvent,
-    encodeAgentInstallStartedEvent,
-    encodeAgentMessageDeltaEvent,
-    encodeAgentSettingsDiscoveredEvent,
-    encodeAgentSettingsDiscoveryFailedEvent,
-    encodeFileFailedEvent,
-    encodeNativeSessionResult,
-    encodeRuntimeDeliveryReceived,
-    encodeSessionCommandsUpdatedEvent,
-    encodeSessionCompletedEvent,
-    encodeSessionConfigUpdatedEvent,
-    encodeSessionElicitationRequestedEvent,
-    encodeSessionElicitationResolvedEvent,
-    encodeSessionFailedEvent,
-    encodeSessionInfoUpdatedEvent,
-    encodeSessionOperationFailedEvent,
-    encodeSessionPermissionRequestedEvent,
-    encodeSessionPermissionResolvedEvent,
-    encodeSessionReadyEvent,
-    encodeSessionStartedEvent,
-    encodeSessionUsageUpdatedEvent,
-    encodeWorkspaceEntriesEvent,
+    encodeDaemonToServiceMessage,
+    encodeRecordedSessionEvent,
     FILE_FAILED_KIND,
     FILE_READ_KIND,
     NATIVE_SESSION_CANCEL_KIND,
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_TURN_FORK_KIND,
+    type RecordedSessionEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
@@ -111,6 +66,7 @@ import {
     type SessionConfigureCommand,
     type SessionElicitationRequestedEvent,
     type SessionElicitationResolvedEvent,
+    type SessionEventEnvelope,
     type SessionInfoUpdatedEvent,
     type SessionPermissionRequestedEvent,
     type SessionPermissionResolvedEvent,
@@ -182,9 +138,9 @@ const ACTIVE_TURN_RECONCILIATION_CLOSE_CODE = 4009;
 
 class DaemonAcpObserver implements AcpSessionObserver {
     readonly #config: DaemonConfig;
-    readonly #record: (sessionId: string, payload: string) => void;
+    readonly #record: (sessionId: string, event: RecordedSessionEvent) => void;
 
-    constructor(config: DaemonConfig, record: (sessionId: string, payload: string) => void) {
+    constructor(config: DaemonConfig, record: (sessionId: string, event: RecordedSessionEvent) => void) {
         this.#config = config;
         this.#record = record;
     }
@@ -196,47 +152,47 @@ class DaemonAcpObserver implements AcpSessionObserver {
     ): Promise<string> => (await uploadRuntimeArtifact(this.#config, sessionId, artifact, signal)).artifactId;
 
     readonly onCommands = (event: SessionCommandsUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionCommandsUpdatedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onConfig = (event: SessionConfigUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionConfigUpdatedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onContent = (event: AgentContentEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeAgentContentEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onElicitation = (event: SessionElicitationRequestedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionElicitationRequestedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onElicitationResolved = (event: SessionElicitationResolvedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionElicitationResolvedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onInfo = (event: SessionInfoUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionInfoUpdatedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onPermission = (event: SessionPermissionRequestedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionPermissionRequestedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onPermissionResolved = (event: SessionPermissionResolvedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionPermissionResolvedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 
     readonly onUsage = (event: SessionUsageUpdatedEvent): Promise<void> => {
-        this.#record(event.sessionId, encodeSessionUsageUpdatedEvent(event));
+        this.#record(event.sessionId, event);
         return Promise.resolve();
     };
 }
@@ -277,7 +233,7 @@ class DaemonInstallationObserver implements InstallationObserver {
         }
     };
 
-    readonly #send = (socket: WebSocket, message: string): void => {
+    readonly #send = (socket: WebSocket, message: DaemonToServiceMessage): void => {
         try {
             send(socket, message);
         } catch {
@@ -298,60 +254,45 @@ class DaemonInstallationObserver implements InstallationObserver {
         if (state instanceof RunningInstallation) {
             if (!this.#started.has(state.requestId)) {
                 this.#started.add(state.requestId);
-                this.#send(
-                    socket,
-                    encodeAgentInstallStartedEvent({
-                        agentId: state.agentId,
-                        kind: AGENT_INSTALL_STARTED_KIND,
-                        requestId: state.requestId,
-                    }),
-                );
-            }
-            this.#send(
-                socket,
-                encodeAgentInstallProgressEvent({
+                this.#send(socket, {
                     agentId: state.agentId,
-                    kind: AGENT_INSTALL_PROGRESS_KIND,
+                    kind: AGENT_INSTALL_STARTED_KIND,
                     requestId: state.requestId,
-                    stage: state.stage,
-                }),
-            );
+                });
+            }
+            this.#send(socket, {
+                agentId: state.agentId,
+                kind: AGENT_INSTALL_PROGRESS_KIND,
+                requestId: state.requestId,
+                stage: state.stage,
+            });
             return Promise.resolve();
         }
         if (state instanceof SucceededInstallation) {
-            this.#send(
-                socket,
-                encodeAgentInstallCompletedEvent({
-                    agentId: state.agentId,
-                    authenticationMayBeRequired: state.authenticationMayBeRequired,
-                    kind: AGENT_INSTALL_COMPLETED_KIND,
-                    requestId: state.requestId,
-                }),
-            );
+            this.#send(socket, {
+                agentId: state.agentId,
+                authenticationMayBeRequired: state.authenticationMayBeRequired,
+                kind: AGENT_INSTALL_COMPLETED_KIND,
+                requestId: state.requestId,
+            });
             return Promise.resolve();
         }
         if (state instanceof FailedInstallation) {
-            this.#send(
-                socket,
-                encodeAgentInstallFailedEvent({
-                    agentId: state.agentId,
-                    code: state.code,
-                    kind: AGENT_INSTALL_FAILED_KIND,
-                    message: state.message,
-                    requestId: state.requestId,
-                }),
-            );
+            this.#send(socket, {
+                agentId: state.agentId,
+                code: state.code,
+                kind: AGENT_INSTALL_FAILED_KIND,
+                message: state.message,
+                requestId: state.requestId,
+            });
             return Promise.resolve();
         }
         if (state instanceof CancelledInstallation) {
-            this.#send(
-                socket,
-                encodeAgentInstallCancelledEvent({
-                    agentId: state.agentId,
-                    kind: AGENT_INSTALL_CANCELLED_KIND,
-                    requestId: state.requestId,
-                }),
-            );
+            this.#send(socket, {
+                agentId: state.agentId,
+                kind: AGENT_INSTALL_CANCELLED_KIND,
+                requestId: state.requestId,
+            });
             return Promise.resolve();
         }
         throw new Error("Unsupported Agent integration installation state");
@@ -527,11 +468,11 @@ async function reconcileActiveTurns(
     await Promise.all(turns.map(async (turn) => await reconcileActiveTurn(config, turn, signal)));
 }
 
-function send(socket: WebSocket, message: string): void {
+function send(socket: WebSocket, message: DaemonToServiceMessage): void {
     if (socket.readyState !== WebSocket.OPEN) {
         throw new Error("Relay connection is not open");
     }
-    socket.send(message);
+    socket.send(encodeDaemonToServiceMessage(message));
 }
 
 function closeRelaySocket(socket: WebSocket, code: number, reason: string): void {
@@ -550,7 +491,7 @@ function closeRelaySocket(socket: WebSocket, code: number, reason: string): void
 abstract class DaemonSessionEventConnectionState {
     abstract readonly disconnect: (socket: WebSocket) => DaemonSessionEventConnectionState;
     abstract readonly matches: (socket: WebSocket) => boolean;
-    abstract readonly send: (message: string) => boolean;
+    abstract readonly send: (message: SessionEventEnvelope) => boolean;
 }
 
 class DisconnectedDaemonSessionEventState extends DaemonSessionEventConnectionState {
@@ -572,12 +513,12 @@ class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState
 
     readonly matches = (socket: WebSocket): boolean => socket === this.#socket;
 
-    readonly send = (message: string): boolean => {
+    readonly send = (message: SessionEventEnvelope): boolean => {
         if (this.#socket.readyState !== WebSocket.OPEN) {
             return false;
         }
         try {
-            this.#socket.send(message);
+            this.#socket.send(encodeDaemonToServiceMessage(message));
             return true;
         } catch {
             // The durable outbox retains the event for the replacement connection.
@@ -633,18 +574,18 @@ class DaemonSessionEventPublisher {
         this.#clearInFlight();
     };
 
-    readonly recordAttempt = (sessionId: string, payload: string, attemptId: string): void => {
-        const kind = decodeMessageKind(payload);
-        if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
-            this.#outbox.enqueueCritical(sessionId, payload, attemptId);
+    readonly recordAttempt = (sessionId: string, event: RecordedSessionEvent, attemptId: string): void => {
+        const encoded = encodeRecordedSessionEvent(event);
+        if (event.kind === SESSION_COMPLETED_KIND || event.kind === SESSION_FAILED_KIND) {
+            this.#outbox.enqueueCritical(sessionId, encoded, attemptId);
         } else {
-            this.#outbox.enqueue(sessionId, payload, attemptId);
+            this.#outbox.enqueue(sessionId, encoded, attemptId);
         }
         this.#publishNextBatch();
     };
 
-    readonly recordRuntime = (sessionId: string, payload: string): void => {
-        this.#outbox.enqueue(sessionId, payload);
+    readonly recordRuntime = (sessionId: string, event: RecordedSessionEvent): void => {
+        this.#outbox.enqueue(sessionId, encodeRecordedSessionEvent(event));
         this.#publishNextBatch();
     };
 
@@ -718,7 +659,7 @@ class DaemonSessionEventPublisher {
                 if (this.#inFlightBytes + byteLength > SESSION_EVENT_REPLAY_BYTE_LIMIT) {
                     continue;
                 }
-                if (!this.#connection.send(encoded)) {
+                if (!this.#connection.send(envelope)) {
                     this.#clearInFlight();
                     return;
                 }
@@ -822,8 +763,8 @@ class CoalescingDaemonActivityPublisher {
     };
 }
 
-function encodeDaemonActivity(command: DaemonTurnCommand, activity: AcpActivity): string {
-    return encodeAgentActivityEvent({
+function daemonActivity(command: DaemonTurnCommand, activity: AcpActivity): AgentActivityEvent {
+    return {
         activityId: activity.activityId,
         activityType: activity.activityType,
         commandId: command.commandId,
@@ -839,7 +780,7 @@ function encodeDaemonActivity(command: DaemonTurnCommand, activity: AcpActivity)
         status: activity.status,
         title: activity.title,
         toolKind: activity.toolKind,
-    });
+    };
 }
 
 function reportFailure(
@@ -851,13 +792,13 @@ function reportFailure(
 ): void {
     publisher.recordAttempt(
         command.sessionId,
-        encodeSessionFailedEvent({
+        {
             code,
             commandId: command.commandId,
             kind: SESSION_FAILED_KIND,
             message,
             sessionId: command.sessionId,
-        }),
+        },
         attemptId,
     );
 }
@@ -896,17 +837,14 @@ function reportOperationFailure(
     if (socket.readyState !== WebSocket.OPEN) {
         return;
     }
-    send(
-        socket,
-        encodeSessionOperationFailedEvent({
-            code: operationErrorCode(error),
-            kind: "session.operation.failed",
-            message: operationErrorMessage(error),
-            requestId,
-            ...(runtimeTimings.length === 0 ? {} : { runtimeTimings }),
-            sessionId,
-        }),
-    );
+    send(socket, {
+        code: operationErrorCode(error),
+        kind: "session.operation.failed",
+        message: operationErrorMessage(error),
+        requestId,
+        ...(runtimeTimings.length === 0 ? {} : { runtimeTimings }),
+        sessionId,
+    });
 }
 
 async function resolveSessionDirectories(
@@ -1169,18 +1107,15 @@ async function executeWorkspaceList(
             event: "workspace_list_authorized",
             sessionId: "workspace-browser",
         });
-        send(
-            socket,
-            encodeWorkspaceEntriesEvent({
-                bindingId: command.bindingId,
-                directoryId: listing.directoryId,
-                directoryLabel: listing.directoryLabel,
-                entries: listing.entries,
-                kind: "workspace.entries",
-                parentDirectoryId: listing.parentDirectoryId,
-                requestId: command.requestId,
-            }),
-        );
+        send(socket, {
+            bindingId: command.bindingId,
+            directoryId: listing.directoryId,
+            directoryLabel: listing.directoryLabel,
+            entries: listing.entries,
+            kind: "workspace.entries",
+            parentDirectoryId: listing.parentDirectoryId,
+            requestId: command.requestId,
+        });
     } catch (error) {
         reportOperationFailure(socket, command.requestId, "", error);
     }
@@ -1253,15 +1188,12 @@ async function executeSessionPrepare(
                     event: "session_configured",
                     sessionId: command.sessionId,
                 });
-                publisher.recordRuntime(
-                    command.sessionId,
-                    encodeSessionConfigUpdatedEvent({
-                        configOptions,
-                        kind: "session.config.updated",
-                        requestId: command.requestId,
-                        sessionId: command.sessionId,
-                    }),
-                );
+                publisher.recordRuntime(command.sessionId, {
+                    configOptions,
+                    kind: "session.config.updated",
+                    requestId: command.requestId,
+                    sessionId: command.sessionId,
+                });
             }
             const event: SessionReadyEvent = {
                 additionalDirectories: resolved.additionalDirectoryEntries,
@@ -1280,17 +1212,14 @@ async function executeSessionPrepare(
                 runtimeTimings: metrics.snapshot(),
             };
             metrics.measureSync("readiness-commit", () => {
-                publisher.recordRuntime(command.sessionId, encodeSessionReadyEvent(event));
+                publisher.recordRuntime(command.sessionId, event);
             });
             return event;
         });
-        send(
-            socket,
-            encodeSessionReadyEvent({
-                ...readyEvent,
-                runtimeTimings: metrics.snapshot(),
-            }),
-        );
+        send(socket, {
+            ...readyEvent,
+            runtimeTimings: metrics.snapshot(),
+        });
     } catch (error) {
         audit.record({
             commandId: command.requestId,
@@ -1340,15 +1269,12 @@ async function executeSessionConfigure(
             event: "session_configured",
             sessionId: command.sessionId,
         });
-        publisher.recordRuntime(
-            command.sessionId,
-            encodeSessionConfigUpdatedEvent({
-                configOptions,
-                kind: "session.config.updated",
-                requestId: command.requestId,
-                sessionId: command.sessionId,
-            }),
-        );
+        publisher.recordRuntime(command.sessionId, {
+            configOptions,
+            kind: "session.config.updated",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
     } catch (error) {
         if (signal.aborted) {
             signal.throwIfAborted();
@@ -1371,20 +1297,20 @@ async function executePrompt(
     signal: AbortSignal,
 ): Promise<void> {
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
-        publisher.recordAttempt(command.sessionId, encodeDaemonActivity(command, activity), attemptId);
+        publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
     });
     const text = new CoalescingTextPublisher(
         timer,
         (messageId, delta) => {
             publisher.recordAttempt(
                 command.sessionId,
-                encodeAgentMessageDeltaEvent({
+                {
                     commandId: command.commandId,
                     kind: AGENT_MESSAGE_DELTA_KIND,
                     messageId,
                     sessionId: command.sessionId,
                     text: delta,
-                }),
+                },
                 attemptId,
             );
         },
@@ -1449,12 +1375,12 @@ async function executePrompt(
         outbox.transitionExecution(command.commandId, "running");
         publisher.recordAttempt(
             command.sessionId,
-            encodeSessionStartedEvent({
+            {
                 commandId: command.commandId,
                 kind: SESSION_STARTED_KIND,
                 attemptId,
                 sessionId: command.sessionId,
-            }),
+            },
             attemptId,
         );
         activateAttempt();
@@ -1500,12 +1426,12 @@ async function executePrompt(
         activities.flush();
         publisher.recordAttempt(
             command.sessionId,
-            encodeSessionCompletedEvent({
+            {
                 commandId: command.commandId,
                 kind: SESSION_COMPLETED_KIND,
                 sessionId: command.sessionId,
                 stopReason,
-            }),
+            },
             attemptId,
         );
         outbox.transitionExecution(command.commandId, stopReason === "cancelled" ? "cancelled" : "succeeded");
@@ -2097,9 +2023,10 @@ async function runRelayConnection(
             };
 
             const processDeliveredPayload = async (delivery: RuntimeDelivery): Promise<void> => {
-                const kind = decodeMessageKind(delivery.payload);
+                const message = decodeServiceToDaemonMessage(delivery.payload);
+                const kind = message.kind;
                 if (kind === SESSION_CANCEL_KIND) {
-                    const cancellation = decodeSessionCancelCommand(delivery.payload);
+                    const cancellation = message;
                     if (cancellation.sessionId !== delivery.sessionId) {
                         throw new Error("Runtime delivery Session identity does not match its payload");
                     }
@@ -2116,7 +2043,7 @@ async function runRelayConnection(
                     return;
                 }
                 if (kind === SESSION_CONFIGURE_KIND) {
-                    const command = decodeSessionConfigureCommand(delivery.payload);
+                    const command = message;
                     if (command.sessionId !== delivery.sessionId) {
                         throw new Error("Runtime delivery Session identity does not match its payload");
                     }
@@ -2133,7 +2060,7 @@ async function runRelayConnection(
                     return;
                 }
                 if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-                    const command = decodeSessionPermissionRespondCommand(delivery.payload);
+                    const command = message;
                     if (command.sessionId !== delivery.sessionId) {
                         throw new Error("Runtime delivery Session identity does not match its payload");
                     }
@@ -2150,7 +2077,7 @@ async function runRelayConnection(
                     return;
                 }
                 if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-                    const command = decodeSessionElicitationRespondCommand(delivery.payload);
+                    const command = message;
                     if (command.sessionId !== delivery.sessionId) {
                         throw new Error("Runtime delivery Session identity does not match its payload");
                     }
@@ -2167,7 +2094,7 @@ async function runRelayConnection(
                     return;
                 }
                 if (kind === SESSION_PROMPT_KIND) {
-                    const command = decodeSessionPromptCommand(delivery.payload);
+                    const command = message;
                     await processDeliveredPrompt(
                         delivery,
                         command,
@@ -2217,18 +2144,19 @@ async function runRelayConnection(
             };
 
             const receiveRuntimeDelivery = (delivery: RuntimeDelivery): void => {
-                const payloadKind = decodeMessageKind(delivery.payload);
+                const payload = decodeServiceToDaemonMessage(delivery.payload);
+                const payloadKind = payload.kind;
                 let payloadSessionId = "";
                 if (payloadKind === SESSION_CANCEL_KIND) {
-                    payloadSessionId = decodeSessionCancelCommand(delivery.payload).sessionId;
+                    payloadSessionId = payload.sessionId;
                 } else if (payloadKind === SESSION_CONFIGURE_KIND) {
-                    payloadSessionId = decodeSessionConfigureCommand(delivery.payload).sessionId;
+                    payloadSessionId = payload.sessionId;
                 } else if (payloadKind === SESSION_PERMISSION_RESPOND_KIND) {
-                    payloadSessionId = decodeSessionPermissionRespondCommand(delivery.payload).sessionId;
+                    payloadSessionId = payload.sessionId;
                 } else if (payloadKind === SESSION_ELICITATION_RESPOND_KIND) {
-                    payloadSessionId = decodeSessionElicitationRespondCommand(delivery.payload).sessionId;
+                    payloadSessionId = payload.sessionId;
                 } else if (payloadKind === SESSION_PROMPT_KIND) {
-                    payloadSessionId = decodeSessionPromptCommand(delivery.payload).sessionId;
+                    payloadSessionId = payload.sessionId;
                 } else {
                     throw new Error("Runtime delivery contains an unsupported protocol message");
                 }
@@ -2236,14 +2164,11 @@ async function runRelayConnection(
                     throw new Error("Runtime delivery Session identity does not match its payload");
                 }
                 const stored = outbox.claimRuntimeDelivery(delivery);
-                send(
-                    socket,
-                    encodeRuntimeDeliveryReceived({
-                        deliveryId: delivery.deliveryId,
-                        kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                        sessionId: delivery.sessionId,
-                    }),
-                );
+                send(socket, {
+                    deliveryId: delivery.deliveryId,
+                    kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                    sessionId: delivery.sessionId,
+                });
                 processRuntimeDelivery(delivery, stored.state);
             };
 
@@ -2256,14 +2181,11 @@ async function runRelayConnection(
                         sessionId: stored.sessionId,
                     };
                     if (stored.state !== "relay_committed") {
-                        send(
-                            socket,
-                            encodeRuntimeDeliveryReceived({
-                                deliveryId: stored.deliveryId,
-                                kind: RUNTIME_DELIVERY_RECEIVED_KIND,
-                                sessionId: stored.sessionId,
-                            }),
-                        );
+                        send(socket, {
+                            deliveryId: stored.deliveryId,
+                            kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                            sessionId: stored.sessionId,
+                        });
                     }
                     processRuntimeDelivery(delivery, stored.state);
                 }
@@ -2325,28 +2247,29 @@ async function runRelayConnection(
                 }
 
                 try {
-                    const kind = decodeMessageKind(encoded);
+                    const message = decodeServiceToDaemonMessage(encoded);
+                    const kind = message.kind;
                     if (kind === RUNTIME_DELIVERY_COMMITTED_KIND) {
-                        const committed = decodeRuntimeDeliveryCommitted(encoded);
+                        const committed = message;
                         if (!outbox.markRuntimeDeliveryCommitted(committed.deliveryId, committed.sessionId)) {
                             console.warn("Mobius daemon ignored confirmation for an unknown Runtime delivery");
                         }
                         return;
                     }
                     if (kind === RUNTIME_DELIVERY_KIND) {
-                        receiveRuntimeDelivery(decodeRuntimeDelivery(encoded));
+                        receiveRuntimeDelivery(message);
                         return;
                     }
                     if (kind === SESSION_EVENT_ACK_KIND) {
-                        publisher.acknowledge(decodeSessionEventAcknowledgement(encoded));
+                        publisher.acknowledge(message);
                         return;
                     }
                     if (kind === SESSION_EVENT_DEFERRED_KIND) {
-                        publisher.defer(decodeSessionEventDeferred(encoded));
+                        publisher.defer(message);
                         return;
                     }
                     if (kind === SESSION_EVENT_REJECTED_KIND) {
-                        const rejection = decodeSessionEventRejection(encoded);
+                        const rejection = message;
                         if (publisher.quarantine(rejection)) {
                             audit.record({
                                 commandId: rejection.eventId,
@@ -2360,7 +2283,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === NATIVE_SESSION_CANCEL_KIND) {
-                        const command = decodeNativeSessionCancel(encoded);
+                        const command = message;
                         const pending = nativeRequests.get(command.requestId);
                         if (pending?.sessionId === command.sessionId) {
                             pending.controller.abort(
@@ -2374,35 +2297,29 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
-                        const command = decodeAgentSettingsDiscoverCommand(encoded);
+                        const command = message;
                         const existing = [...agentSettingsDiscoveries.values()].find(
                             (request) => request.agentId === command.agentId && !request.controller.signal.aborted,
                         );
                         if (agentSettingsDiscoveries.has(command.requestId) || existing !== undefined) {
                             if (socket.readyState === WebSocket.OPEN) {
-                                send(
-                                    socket,
-                                    encodeAgentSettingsDiscoveryFailedEvent({
-                                        code: "agent_settings_discovery_busy",
-                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                        message: "Another settings discovery is already running for this Agent",
-                                        requestId: command.requestId,
-                                    }),
-                                );
+                                send(socket, {
+                                    code: "agent_settings_discovery_busy",
+                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                    message: "Another settings discovery is already running for this Agent",
+                                    requestId: command.requestId,
+                                });
                             }
                             return;
                         }
                         if (agentSettingsDiscoveries.size >= 4) {
                             if (socket.readyState === WebSocket.OPEN) {
-                                send(
-                                    socket,
-                                    encodeAgentSettingsDiscoveryFailedEvent({
-                                        code: "agent_settings_discovery_busy",
-                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                        message: "Too many Agent settings discoveries are running",
-                                        requestId: command.requestId,
-                                    }),
-                                );
+                                send(socket, {
+                                    code: "agent_settings_discovery_busy",
+                                    kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                    message: "Too many Agent settings discoveries are running",
+                                    requestId: command.requestId,
+                                });
                             }
                             return;
                         }
@@ -2435,7 +2352,7 @@ async function runRelayConnection(
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, encodeAgentSettingsDiscoveredEvent(result));
+                                    send(socket, result);
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -2453,15 +2370,12 @@ async function runRelayConnection(
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(
-                                        socket,
-                                        encodeAgentSettingsDiscoveryFailedEvent({
-                                            code: operationErrorCode(failure),
-                                            kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
-                                            message: operationErrorMessage(failure),
-                                            requestId: command.requestId,
-                                        }),
-                                    );
+                                    send(socket, {
+                                        code: operationErrorCode(failure),
+                                        kind: AGENT_SETTINGS_DISCOVERY_FAILED_KIND,
+                                        message: operationErrorMessage(failure),
+                                        requestId: command.requestId,
+                                    });
                                 }
                             } finally {
                                 timeout.cancel();
@@ -2476,18 +2390,15 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === AGENT_CATALOG_REFRESH_KIND) {
-                        const command: AgentCatalogRefreshCommand = decodeAgentCatalogRefreshCommand(encoded);
+                        const command: AgentCatalogRefreshCommand = message;
                         if (agentCatalogRefreshes.has(command.requestId) || agentCatalogRefreshes.size > 0) {
                             if (socket.readyState === WebSocket.OPEN) {
-                                send(
-                                    socket,
-                                    encodeAgentCatalogRefreshFailedEvent({
-                                        code: "agent_catalog_refresh_busy",
-                                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                                        message: "Another local Agent catalog refresh is already running",
-                                        requestId: command.requestId,
-                                    }),
-                                );
+                                send(socket, {
+                                    code: "agent_catalog_refresh_busy",
+                                    kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                                    message: "Another local Agent catalog refresh is already running",
+                                    requestId: command.requestId,
+                                });
                             }
                             return;
                         }
@@ -2513,13 +2424,10 @@ async function runRelayConnection(
                                     sessionId: "agent-catalog",
                                 });
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(
-                                        socket,
-                                        encodeAgentCatalogRefreshedEvent({
-                                            kind: AGENT_CATALOG_REFRESHED_KIND,
-                                            requestId: command.requestId,
-                                        }),
-                                    );
+                                    send(socket, {
+                                        kind: AGENT_CATALOG_REFRESHED_KIND,
+                                        requestId: command.requestId,
+                                    });
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -2537,15 +2445,12 @@ async function runRelayConnection(
                                     sessionId: "agent-catalog",
                                 });
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(
-                                        socket,
-                                        encodeAgentCatalogRefreshFailedEvent({
-                                            code: operationErrorCode(failure),
-                                            kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
-                                            message: operationErrorMessage(failure),
-                                            requestId: command.requestId,
-                                        }),
-                                    );
+                                    send(socket, {
+                                        code: operationErrorCode(failure),
+                                        kind: AGENT_CATALOG_REFRESH_FAILED_KIND,
+                                        message: operationErrorMessage(failure),
+                                        requestId: command.requestId,
+                                    });
                                 }
                             } finally {
                                 timeout.cancel();
@@ -2556,7 +2461,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === NATIVE_SESSION_REQUEST_KIND) {
-                        const command = decodeNativeSessionCommand(encoded);
+                        const command = message;
                         const previous = [...nativeRequests.values()].filter(
                             (request) => request.agentId === command.agentId,
                         );
@@ -2614,7 +2519,7 @@ async function runRelayConnection(
                                 operationSignal.throwIfAborted();
                                 const result = await nativeSessions.execute(command, operationSignal);
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, encodeNativeSessionResult(result));
+                                    send(socket, result);
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -2646,7 +2551,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === NATIVE_SESSION_TURN_FORK_KIND) {
-                        const command = decodeNativeSessionTurnForkCommand(encoded);
+                        const command = message;
                         const previous = [...nativeRequests.values()].filter(
                             (request) => request.agentId === command.agentId,
                         );
@@ -2702,7 +2607,7 @@ async function runRelayConnection(
                                 operationSignal.throwIfAborted();
                                 const result = await nativeSessions.executeTurnFork(command, operationSignal);
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, encodeNativeSessionResult(result));
+                                    send(socket, result);
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -2734,16 +2639,15 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === RUNTIME_LIVENESS_READY_KIND) {
-                        decodeRuntimeLivenessReadyEvent(encoded);
                         connectionLiveness.start();
                         return;
                     }
                     if (kind === RUNTIME_HEARTBEAT_ACK_KIND) {
-                        connectionLiveness.acknowledge(decodeRuntimeHeartbeatAckEvent(encoded));
+                        connectionLiveness.acknowledge(message);
                         return;
                     }
                     if (kind === FILE_READ_KIND) {
-                        const command = decodeFileReadCommand(encoded);
+                        const command = message;
                         void streamLocalFile(
                             command,
                             (message) => send(socket, message),
@@ -2752,21 +2656,18 @@ async function runRelayConnection(
                             if (socket.readyState !== WebSocket.OPEN || connectionController.signal.aborted) {
                                 return;
                             }
-                            send(
-                                socket,
-                                encodeFileFailedEvent({
-                                    code: "file_unavailable",
-                                    kind: FILE_FAILED_KIND,
-                                    message: error instanceof Error ? error.message : "The local file is unavailable",
-                                    requestId: command.requestId,
-                                    sessionId: command.sessionId,
-                                }),
-                            );
+                            send(socket, {
+                                code: "file_unavailable",
+                                kind: FILE_FAILED_KIND,
+                                message: error instanceof Error ? error.message : "The local file is unavailable",
+                                requestId: command.requestId,
+                                sessionId: command.sessionId,
+                            });
                         });
                         return;
                     }
                     if (kind === SESSION_CANCEL_KIND) {
-                        const cancellation = decodeSessionCancelCommand(encoded);
+                        const cancellation = message;
                         const turn = activeTurns.get(cancellation.commandId);
                         if (turn === undefined || !turn.matches(cancellation)) {
                             console.warn("Mobius daemon ignored cancellation for an inactive turn");
@@ -2786,12 +2687,12 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === WORKSPACE_LIST_KIND) {
-                        const command = decodeWorkspaceListCommand(encoded);
+                        const command = message;
                         void executeWorkspaceList(socket, command, directories, audit, connectionController.signal);
                         return;
                     }
                     if (kind === SESSION_PREPARE_KIND) {
-                        const command = decodeSessionPrepareCommand(encoded);
+                        const command = message;
                         void executeSessionPrepare(
                             publisher,
                             socket,
@@ -2805,7 +2706,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === SESSION_CONFIGURE_KIND) {
-                        const command = decodeSessionConfigureCommand(encoded);
+                        const command = message;
                         void executeSessionConfigure(
                             publisher,
                             socket,
@@ -2819,7 +2720,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === SESSION_PERMISSION_RESPOND_KIND) {
-                        const command = decodeSessionPermissionRespondCommand(encoded);
+                        const command = message;
                         void sessions
                             .respondPermission(command)
                             .then(() => {
@@ -2835,7 +2736,7 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === SESSION_ELICITATION_RESPOND_KIND) {
-                        const command = decodeSessionElicitationRespondCommand(encoded);
+                        const command = message;
                         void sessions
                             .respondElicitation(command)
                             .then(() => {
@@ -2851,14 +2752,14 @@ async function runRelayConnection(
                         return;
                     }
                     if (kind === AGENT_INSTALL_REQUEST_KIND) {
-                        const command = decodeAgentInstallRequestCommand(encoded);
+                        const command = message;
                         void installations.request(command, signal).catch((error: unknown) => {
                             console.error("Mobius Agent integration installation failed", error);
                         });
                         return;
                     }
                     if (kind === AGENT_INSTALL_CANCEL_KIND) {
-                        const command = decodeAgentInstallCancelCommand(encoded);
+                        const command = message;
                         void installations.cancel(command.requestId).catch((error: unknown) => {
                             reportOperationFailure(socket, command.requestId, "", error);
                         });
@@ -2867,7 +2768,7 @@ async function runRelayConnection(
                     if (kind !== SESSION_PROMPT_KIND) {
                         throw new Error("Unsupported protocol message");
                     }
-                    const command = decodeSessionPromptCommand(encoded);
+                    const command = message;
                     if (activeTurns.has(command.commandId)) {
                         return;
                     }
@@ -3002,13 +2903,13 @@ export async function runDaemon(
     const publisher = new DaemonSessionEventPublisher(outbox, timer);
     const activeTurns = new Map<string, ActiveDaemonTurn>();
     const activeAttemptIds = new Map<string, string>();
-    const recordSessionEvent = (sessionId: string, payload: string): void => {
+    const recordSessionEvent = (sessionId: string, event: RecordedSessionEvent): void => {
         const attemptId = activeAttemptIds.get(sessionId);
         if (attemptId === undefined) {
-            publisher.recordRuntime(sessionId, payload);
+            publisher.recordRuntime(sessionId, event);
             return;
         }
-        publisher.recordAttempt(sessionId, payload, attemptId);
+        publisher.recordAttempt(sessionId, event, attemptId);
     };
     const sessions = new AcpSessionManager(new DaemonAcpObserver(config, recordSessionEvent), sessionStore);
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);

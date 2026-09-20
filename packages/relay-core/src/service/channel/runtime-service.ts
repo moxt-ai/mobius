@@ -1,11 +1,8 @@
 import {
-    decodeMessageKind,
-    decodeRuntimeDeliveryReceived,
-    decodeRuntimeHeartbeatEvent,
-    decodeSessionEventEnvelope,
-    encodeRuntimeHeartbeatAckEvent,
-    encodeRuntimeLivenessReadyEvent,
+    type DaemonToServiceMessage,
+    decodeDaemonToServiceMessage,
     encodeRuntimeStatusEvent,
+    encodeServiceToDaemonMessage,
     RUNTIME_DELIVERY_RECEIVED_KIND,
     RUNTIME_HEARTBEAT_ACK_KIND,
     RUNTIME_HEARTBEAT_KIND,
@@ -184,7 +181,7 @@ export class RuntimeService {
         }
         signal.throwIfAborted();
         if (liveness) {
-            accepted.socket.send(encodeRuntimeLivenessReadyEvent({ kind: RUNTIME_LIVENESS_READY_KIND }));
+            accepted.socket.send(encodeServiceToDaemonMessage({ kind: RUNTIME_LIVENESS_READY_KIND }));
         }
         return { kind: "accepted", response: accepted.response };
     };
@@ -318,29 +315,32 @@ export class RuntimeService {
             await channel.receiveHostMessage(socket, message, signal);
             return;
         }
+        if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
+            socket.close(1003, "Bounded text message required");
+            return;
+        }
+        let daemonMessage: DaemonToServiceMessage;
+        try {
+            daemonMessage = decodeDaemonToServiceMessage(message);
+        } catch {
+            socket.close(1008, "Invalid protocol message");
+            return;
+        }
         // Heartbeats must bypass the durable-write queue.
-        if (identity.role === "daemon" && typeof message === "string") {
-            try {
-                if (decodeMessageKind(message) === RUNTIME_HEARTBEAT_KIND) {
-                    if (!this.#cx.services.connections.isCurrent(identity)) {
-                        socket.replaceDaemon();
-                        return;
-                    }
-                    const heartbeat = decodeRuntimeHeartbeatEvent(message);
-                    socket.send(
-                        encodeRuntimeHeartbeatAckEvent({
-                            heartbeatId: heartbeat.heartbeatId,
-                            kind: RUNTIME_HEARTBEAT_ACK_KIND,
-                        }),
-                    );
-                    return;
-                }
-            } catch {
-                socket.close(1008, "Invalid protocol message");
+        if (identity.role === "daemon" && daemonMessage.kind === RUNTIME_HEARTBEAT_KIND) {
+            if (!this.#cx.services.connections.isCurrent(identity)) {
+                socket.replaceDaemon();
                 return;
             }
+            socket.send(
+                encodeServiceToDaemonMessage({
+                    heartbeatId: daemonMessage.heartbeatId,
+                    kind: RUNTIME_HEARTBEAT_ACK_KIND,
+                }),
+            );
+            return;
         }
-        const lane = this.daemonMessageLane(message);
+        const lane = this.daemonMessageLane(daemonMessage);
         try {
             await this.#daemonMessages.run(lane, signal, async () => {
                 signal.throwIfAborted();
@@ -354,7 +354,7 @@ export class RuntimeService {
                 }
                 const channel = this.channel(identity.runtimeId, scope);
                 channel.configureDaemonDelivery(identity.deliveryReceipts);
-                await channel.receiveDaemonMessage(socket, message, signal);
+                await channel.receiveDaemonMessage(socket, daemonMessage, signal);
             });
         } catch (error) {
             if (error instanceof RuntimeMessageSchedulerCapacityError) {
@@ -365,20 +365,9 @@ export class RuntimeService {
         }
     };
 
-    private readonly daemonMessageLane = (message: unknown): string => {
-        if (typeof message !== "string") {
-            return "runtime";
-        }
-        try {
-            const kind = decodeMessageKind(message);
-            if (kind === SESSION_EVENT_KIND) {
-                return `session:${decodeSessionEventEnvelope(message).sessionId}`;
-            }
-            if (kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
-                return `session:${decodeRuntimeDeliveryReceived(message).sessionId}`;
-            }
-        } catch {
-            return "runtime";
+    private readonly daemonMessageLane = (message: DaemonToServiceMessage): string => {
+        if (message.kind === SESSION_EVENT_KIND || message.kind === RUNTIME_DELIVERY_RECEIVED_KIND) {
+            return `session:${message.sessionId}`;
         }
         return "runtime";
     };

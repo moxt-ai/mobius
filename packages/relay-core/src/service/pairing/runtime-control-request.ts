@@ -20,7 +20,7 @@ import {
     decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
     decodeWorkspaceEntriesEvent,
-    encodeNativeSessionCancel,
+    encodeServiceToDaemonMessage,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
@@ -188,7 +188,7 @@ export async function requestRuntimeFile(
         try {
             deadline.throwIfAborted();
             socket.accept();
-            socket.send(JSON.stringify(command));
+            socket.send(encodeServiceToDaemonMessage(command));
         } catch (cause) {
             fail(cause);
         }
@@ -257,7 +257,7 @@ export async function requestRuntimeAgentSettings(
             socket.addEventListener("error", onClose);
             deadline.addEventListener("abort", onAbort, { once: true });
             socket.accept();
-            socket.send(JSON.stringify(command));
+            socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
         cleanup();
@@ -326,7 +326,7 @@ export async function requestRuntimeAgentCatalogRefresh(
             socket.addEventListener("error", onClose);
             deadline.addEventListener("abort", onAbort, { once: true });
             socket.accept();
-            socket.send(JSON.stringify(command));
+            socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
         cleanup();
@@ -348,7 +348,7 @@ export async function requestRuntimeControl(
             const onAbort = () => {
                 if (command.kind === "native.session.request" && socket.readyState === WebSocket.OPEN) {
                     socket.send(
-                        encodeNativeSessionCancel({
+                        encodeServiceToDaemonMessage({
                             kind: "native.session.cancel",
                             requestId: command.requestId,
                             sessionId: command.sessionId,
@@ -421,7 +421,7 @@ export async function requestRuntimeControl(
             socket.addEventListener("error", onClose);
             deadline.addEventListener("abort", onAbort, { once: true });
             socket.accept();
-            socket.send(JSON.stringify(command));
+            socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
         cleanup();
@@ -495,7 +495,7 @@ export async function requestRuntimeWorkspace(
             socket.addEventListener("error", onClose);
             deadline.addEventListener("abort", onAbort, { once: true });
             socket.accept();
-            socket.send(JSON.stringify(command));
+            socket.send(encodeServiceToDaemonMessage(command));
         });
     } finally {
         cleanup();
