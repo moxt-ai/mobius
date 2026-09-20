@@ -188,6 +188,7 @@ export const agentModelEffortSchema = z
         effortSettingId: z.string().max(128),
         modelSettingId: z.string().max(128),
         resolution: agentModelEffortResolutionSchema,
+        unsupportedModelIds: z.array(z.string().min(1).max(500)).max(500).readonly().default([]),
         valuesByModel: z.record(z.string().min(1).max(500), z.array(configValueSchema).max(500).readonly()).readonly(),
     })
     .readonly();

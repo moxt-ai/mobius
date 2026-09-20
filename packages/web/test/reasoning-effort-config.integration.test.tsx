@@ -50,6 +50,7 @@ function sendDiscoveredNativeMode(agentId: string, requestId: string): string {
             effortSettingId: "",
             modelSettingId: "",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
+            unsupportedModelIds: [],
             valuesByModel: {},
         },
         requestId,
@@ -114,6 +115,7 @@ function sendDiscoveredModelSettings(agentId: string, requestId: string, model: 
             effortSettingId: "reasoning_effort",
             modelSettingId: "model",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            unsupportedModelIds: [],
             valuesByModel: model.length === 0 ? {} : { [selectedModel]: selectedEffortValues },
         },
         requestId,
@@ -143,6 +145,47 @@ function sendDiscoveredModelSettings(agentId: string, requestId: string, model: 
     });
 }
 
+function sendDiscoveredUnsupportedModel(agentId: string, requestId: string): string {
+    const effortValues = [modelValue("Low", "low"), modelValue("Medium", "medium")];
+    return encodeAgentSettingsDiscoveredEvent({
+        agentId,
+        agentName: "Codex",
+        agentVersion: "integration",
+        kind: "agent.settings.discovered",
+        modelEffort: {
+            effortSettingId: "reasoning_effort",
+            modelSettingId: "model",
+            resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            unsupportedModelIds: ["model-b"],
+            valuesByModel: {},
+        },
+        requestId,
+        settings: [
+            {
+                booleanValue: false,
+                category: "model",
+                defaultValue: "model-a",
+                description: "Execution model",
+                id: "model",
+                name: "Model",
+                type: "select",
+                values: [modelValue("Model A", "model-a")],
+            },
+            {
+                booleanValue: false,
+                category: "thought_level",
+                defaultValue: "low",
+                description: "Reasoning effort",
+                id: "reasoning_effort",
+                name: "Reasoning effort",
+                type: "select",
+                values: effortValues,
+            },
+        ],
+        settingsRevision: "5".repeat(64),
+    });
+}
+
 function sendDiscoveredProviderDefaultEffortSettings(agentId: string, requestId: string): string {
     // A custom provider route reports the effort it will actually use as the
     // empty provider-default id rather than one of its own levels.
@@ -156,6 +199,7 @@ function sendDiscoveredProviderDefaultEffortSettings(agentId: string, requestId:
             effortSettingId: "reasoning_effort",
             modelSettingId: "model",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            unsupportedModelIds: [],
             valuesByModel: {},
         },
         requestId,
@@ -197,6 +241,7 @@ function sendDiscoveredDeferredEffortSettings(agentId: string, requestId: string
                 effortSettingId: "",
                 modelSettingId: "model",
                 resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+                unsupportedModelIds: [],
                 valuesByModel: model.length === 0 ? {} : { [selectedModel]: [] },
             },
             requestId,
@@ -225,6 +270,7 @@ function sendDiscoveredDeferredEffortSettings(agentId: string, requestId: string
             effortSettingId: "reasoning_effort",
             modelSettingId: "model",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            unsupportedModelIds: [],
             valuesByModel: { [selectedModel]: effortValues },
         },
         requestId,
@@ -265,6 +311,7 @@ function sendDiscoveredDefaultModelEffort(agentId: string, requestId: string): s
             effortSettingId: "reasoning_effort",
             modelSettingId: "model",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            unsupportedModelIds: [],
             valuesByModel: { "model-a": effortValues },
         },
         requestId,
@@ -306,6 +353,7 @@ function sendDiscoveredCompleteModelSettings(agentId: string, requestId: string)
             effortSettingId: "reasoning_effort",
             modelSettingId: "model",
             resolution: AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE,
+            unsupportedModelIds: [],
             valuesByModel: {
                 "model-a": modelAEfforts,
                 "model-b": modelBEfforts,
@@ -559,6 +607,45 @@ describe.sequential("Agent-native run settings", () => {
                     valueType: "select",
                 },
             ]);
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given a model becomes unsupported during selection, When discovery completes, Then Mobius falls back to a supported model", async () => {
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const prepare = decodeSessionPrepareCommand(encodedPrepare);
+            paired.daemon.send(sendDiscoveredModelSettings(discovery.agentId, discovery.requestId, ""));
+            await sendReadySession(paired.daemon, prepare, []);
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+
+            const selectedModel = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            expect(selectedModel).toMatchObject({ agentId: "codex", model: "model-b" });
+            paired.daemon.send(sendDiscoveredUnsupportedModel(selectedModel.agentId, selectedModel.requestId));
+
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model A, Low/ })).toBeTruthy();
+            });
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            expect(screen.queryByRole("option", { name: "Model B" })).toBeNull();
         } finally {
             await paired.close();
         }

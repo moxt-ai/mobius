@@ -231,6 +231,22 @@ export class AcpExecutionError extends Error {
     }
 }
 
+export class AcpConfigurationValueUnavailableError extends AcpExecutionError {
+    readonly configId: string;
+    readonly offeredValueCount: number;
+    readonly offeredValues: readonly string[];
+    readonly requestedValue: string;
+
+    constructor(configId: string, requestedValue: string, offeredValues: readonly string[]) {
+        super("The requested ACP configuration value is unavailable", {}, "invalid_session_configuration");
+        this.name = "AcpConfigurationValueUnavailableError";
+        this.configId = configId.slice(0, 128);
+        this.requestedValue = requestedValue.slice(0, 128);
+        this.offeredValueCount = offeredValues.length;
+        this.offeredValues = Object.freeze(offeredValues.slice(0, 32).map((value) => value.slice(0, 128)));
+    }
+}
+
 class RetryableAcpInitializationError extends AcpExecutionError {
     constructor(cause: unknown) {
         super("ACP agent initialization failed", { cause });
@@ -1472,10 +1488,10 @@ class AcpProcessSession implements AcpClientHandler {
                 );
             }
             if (!existing.values.some((entry) => entry.value === options.value)) {
-                throw new AcpExecutionError(
-                    "The requested ACP configuration value is unavailable",
-                    {},
-                    "invalid_session_configuration",
+                throw new AcpConfigurationValueUnavailableError(
+                    options.configId,
+                    options.value,
+                    existing.values.map((entry) => entry.value),
                 );
             }
         }

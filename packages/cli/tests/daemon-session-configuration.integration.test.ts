@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -224,6 +225,117 @@ async function readSessionLiveHistory(frames: ClientFrames, requestId: string) {
 }
 
 describe("daemon session configuration boundary", () => {
+    it("Given Codex removes a model between capability probes, When settings are discovered, Then the daemon returns supported settings and records the unavailable value", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-changing-model-catalog-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new LocalAgentDefinition(
+            "codex",
+            "Codex",
+            process.execPath,
+            [fakeAgentPath, "--change-model-catalog-after-first-process"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            const frames = new ClientFrames(await socketReady.promise);
+            const requestId = "codex-changing-model-catalog";
+            sendText(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId,
+                }),
+            );
+            const discovered = await readAgentSettings(frames, requestId);
+            expect(discovered.modelEffort).toMatchObject({
+                resolution: "complete",
+                unsupportedModelIds: ["test-large"],
+                valuesByModel: { "test-small": expect.any(Array) },
+            });
+            const model = discovered.settings.find((setting) => setting.id === "model");
+            expect(model?.values.map((value) => value.value)).toEqual(["test-small"]);
+
+            const database = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const event = database
+                    .prepare("SELECT details_json FROM audit_events WHERE command_id = ? AND event = ?")
+                    .get(requestId, "agent_settings_model_unsupported");
+                expect(JSON.parse(readStringField(event, "details_json"))).toEqual({
+                    agentId: "codex",
+                    code: "invalid_session_configuration",
+                    configId: "model",
+                    offeredValueCount: "2",
+                    offeredValues: '["test-small","test-medium"]',
+                    requestedValue: "test-large",
+                });
+            } finally {
+                database.close();
+            }
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            audit.close();
+            await daemon;
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given a cloud-disabled Session uses an application binding, When Mobius reloads its native history, Then the daemon returns the saved conversation", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
         const workspace = join(stateDirectory, "workspace");
@@ -596,6 +708,7 @@ if (process.argv.includes("--version")) {
                 effortSettingId: "",
                 modelSettingId: "model",
                 resolution: "on_model_selection",
+                unsupportedModelIds: [],
                 valuesByModel: { "test-small": [] },
             });
             expect(withoutEffort.settings).not.toEqual(
@@ -702,6 +815,7 @@ if (process.argv.includes("--version")) {
                 effortSettingId: "reasoning_effort",
                 modelSettingId: "model",
                 resolution: "on_model_selection",
+                unsupportedModelIds: [],
                 valuesByModel: {
                     "test-small": expect.arrayContaining([expect.objectContaining({ value: "medium" })]),
                 },
@@ -801,6 +915,7 @@ if (process.argv.includes("--version")) {
                 effortSettingId: "",
                 modelSettingId: "model",
                 resolution: "on_model_selection",
+                unsupportedModelIds: [],
                 valuesByModel: { "test-small": [] },
             });
             expect(discovered.settings).toEqual(
@@ -827,6 +942,7 @@ if (process.argv.includes("--version")) {
                 effortSettingId: "reasoning_effort",
                 modelSettingId: "model",
                 resolution: "on_model_selection",
+                unsupportedModelIds: [],
                 valuesByModel: {
                     "test-large": expect.arrayContaining([expect.objectContaining({ value: "high" })]),
                 },

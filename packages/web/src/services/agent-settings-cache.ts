@@ -153,8 +153,12 @@ function eventWithCachedModelEffortValues(
         cached !== undefined &&
         cached.event.settingsRevision === event.settingsRevision &&
         cached.event.modelEffort.resolution === MODEL_EFFORT_ON_MODEL_SELECTION;
-    const previousValues =
-        canReuseCachedCapability && cached !== undefined ? cached.event.modelEffort.valuesByModel : {};
+    const unsupportedModels = new Set(event.modelEffort.unsupportedModelIds);
+    const previousValues = Object.fromEntries(
+        Object.entries(
+            canReuseCachedCapability && cached !== undefined ? cached.event.modelEffort.valuesByModel : {},
+        ).filter(([model]) => !unsupportedModels.has(model)),
+    );
     const effortSettingId =
         event.modelEffort.effortSettingId.length > 0
             ? event.modelEffort.effortSettingId

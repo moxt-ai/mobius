@@ -279,6 +279,7 @@ describe("ACP session control protocol contract", () => {
                 effortSettingId: "reasoning_effort",
                 modelSettingId: "model",
                 resolution: "complete",
+                unsupportedModelIds: ["retired-codex"],
                 valuesByModel: {
                     "codex-1": [
                         {

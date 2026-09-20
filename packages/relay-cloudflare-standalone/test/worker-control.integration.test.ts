@@ -100,6 +100,7 @@ describe.sequential("Cloudflare session deployment: control and public API", () 
                         effortSettingId: "reasoning_effort",
                         modelSettingId: "model",
                         resolution: "complete",
+                        unsupportedModelIds: [],
                         valuesByModel: {
                             "codex-mini": [],
                         },
@@ -163,6 +164,7 @@ describe.sequential("Cloudflare session deployment: control and public API", () 
                         effortSettingId: "reasoning_effort",
                         modelSettingId: "model",
                         resolution: "complete",
+                        unsupportedModelIds: [],
                         valuesByModel: {
                             "codex-mini": [],
                         },

@@ -353,6 +353,25 @@ function persistState(sessionId: string, state: FakeSessionState): void {
     );
 }
 
+function usesReducedModelCatalog(): boolean {
+    if (!process.argv.includes("--change-model-catalog-after-first-process")) {
+        return false;
+    }
+    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    if (directory === undefined) {
+        throw new Error("Changing the fake model catalog requires a shared state directory");
+    }
+    mkdirSync(directory, { recursive: true });
+    const marker = join(directory, "changing-model-catalog-started");
+    if (existsSync(marker)) {
+        return true;
+    }
+    writeFileSync(marker, "started", { flag: "wx" });
+    return false;
+}
+
+const reducedModelCatalog = usesReducedModelCatalog();
+
 function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
     let options: acp.SessionConfigOption[] = [
         {
@@ -361,10 +380,15 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
             description: "Model used by the fake ACP agent",
             id: "model",
             name: "Model",
-            options: [
-                { name: "Test Small", value: "test-small" },
-                { name: "Test Large", value: "test-large" },
-            ],
+            options: reducedModelCatalog
+                ? [
+                      { name: "Test Small", value: "test-small" },
+                      { name: "Test Medium", value: "test-medium" },
+                  ]
+                : [
+                      { name: "Test Small", value: "test-small" },
+                      { name: "Test Large", value: "test-large" },
+                  ],
             type: "select",
         },
         {

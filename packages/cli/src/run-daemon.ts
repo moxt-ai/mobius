@@ -83,7 +83,12 @@ import {
 import { fetch, type MessageEvent, WebSocket } from "undici";
 
 import type { AcpActivity } from "./acp/activity.ts";
-import { AcpExecutionError, AcpSessionManager, type AcpSessionObserver } from "./acp/session-manager.ts";
+import {
+    AcpConfigurationValueUnavailableError,
+    AcpExecutionError,
+    AcpSessionManager,
+    type AcpSessionObserver,
+} from "./acp/session-manager.ts";
 import { SqliteAcpSessionStore } from "./acp/session-store.ts";
 import { agentSettingsAdapterForAgent, applyAgentLaunchSettings } from "./agent-catalog/agent-settings-adapter.ts";
 import {
@@ -819,6 +824,20 @@ function operationErrorMessage(error: unknown): string {
     return "The local agent operation could not be completed";
 }
 
+function agentSettingsFailureDetails(agentId: string, failure: unknown): Readonly<Record<string, string>> {
+    const details = { agentId, code: operationErrorCode(failure) };
+    if (!(failure instanceof AcpConfigurationValueUnavailableError)) {
+        return details;
+    }
+    return {
+        ...details,
+        configId: failure.configId,
+        offeredValueCount: failure.offeredValueCount.toString(),
+        offeredValues: JSON.stringify(failure.offeredValues),
+        requestedValue: failure.requestedValue,
+    };
+}
+
 function reportOperationFailure(
     socket: WebSocket,
     requestId: string,
@@ -868,13 +887,34 @@ async function resolveSessionDirectories(
     return new ResolvedSessionDirectories(cwd, additionalDirectories, additionalDirectoryEntries);
 }
 
+interface AgentSettingsDiscovery {
+    readonly event: AgentSettingsDiscoveredEvent;
+    readonly unsupportedModels: readonly AcpConfigurationValueUnavailableError[];
+}
+
+function isUnavailableModel(
+    cause: unknown,
+    modelSettingId: string,
+    requestedModel: string,
+): cause is AcpConfigurationValueUnavailableError {
+    return (
+        cause instanceof AcpConfigurationValueUnavailableError &&
+        cause.configId === modelSettingId &&
+        cause.requestedValue === requestedModel
+    );
+}
+
+function unsupportedModelIds(unsupportedModels: readonly AcpConfigurationValueUnavailableError[]): readonly string[] {
+    return [...new Set(unsupportedModels.map((item) => item.requestedValue))];
+}
+
 async function discoverAgentSettings(
     command: AgentSettingsDiscoverCommand,
     config: DaemonConfig,
     directories: WorkspaceDirectoryService,
     sessions: AcpSessionManager,
     signal: AbortSignal,
-): Promise<AgentSettingsDiscoveredEvent> {
+): Promise<AgentSettingsDiscovery> {
     const agent = config.catalog.find(command.agentId);
     const cwd = await directories.resolve(config.bindingId, "default", signal);
     const baseSnapshot = await sessions.inspectAgentSettings({
@@ -883,38 +923,74 @@ async function discoverAgentSettings(
         cwd,
         signal,
     });
-    const selectedSnapshot =
-        command.model === undefined
-            ? baseSnapshot
-            : await sessions.inspectAgentSettings({
-                  additionalDirectories: [],
-                  agent,
-                  cwd,
-                  model: command.model,
-                  signal,
-              });
+    const baseModel = modelOption(baseSnapshot.configOptions);
+    const unsupportedModels: AcpConfigurationValueUnavailableError[] = [];
+    let selectedSnapshot = baseSnapshot;
+    if (command.model !== undefined) {
+        if (
+            baseModel === undefined ||
+            baseModel.type !== "select" ||
+            !baseModel.values.some((value) => value.value === command.model)
+        ) {
+            unsupportedModels.push(
+                new AcpConfigurationValueUnavailableError(
+                    baseModel?.id ?? "model",
+                    command.model,
+                    baseModel?.values.map((value) => value.value) ?? [],
+                ),
+            );
+        } else {
+            try {
+                selectedSnapshot = await sessions.inspectAgentSettings({
+                    additionalDirectories: [],
+                    agent,
+                    cwd,
+                    model: command.model,
+                    signal,
+                });
+            } catch (cause) {
+                signal.throwIfAborted();
+                if (!isUnavailableModel(cause, baseModel.id, command.model)) {
+                    throw cause;
+                }
+                unsupportedModels.push(cause);
+            }
+        }
+    }
     const adapter = agentSettingsAdapterForAgent(agent.id);
-    const baseSettings = settingsFromSnapshot(agent, baseSnapshot.configOptions);
-    const settings = settingsFromSnapshot(agent, selectedSnapshot.configOptions);
     const modelEffort = await discoverModelEffort(
         command,
         agent,
         adapter.modelEffortResolution,
         baseSnapshot.configOptions,
         selectedSnapshot.configOptions,
+        unsupportedModels,
         cwd,
         sessions,
         signal,
     );
+    const baseSettings = withoutUnsupportedModels(
+        settingsFromSnapshot(agent, baseSnapshot.configOptions),
+        baseModel?.id ?? "",
+        modelEffort.unsupportedModelIds,
+    );
+    const settings = withoutUnsupportedModels(
+        settingsFromSnapshot(agent, selectedSnapshot.configOptions),
+        baseModel?.id ?? "",
+        modelEffort.unsupportedModelIds,
+    );
     return {
-        agentId: command.agentId,
-        agentName: selectedSnapshot.agentName,
-        agentVersion: selectedSnapshot.agentVersion,
-        kind: AGENT_SETTINGS_DISCOVERED_KIND,
-        modelEffort,
-        requestId: command.requestId,
-        settings,
-        settingsRevision: settingsRevision(agent, baseSnapshot.agentVersion, baseSettings, modelEffort),
+        event: {
+            agentId: command.agentId,
+            agentName: selectedSnapshot.agentName,
+            agentVersion: selectedSnapshot.agentVersion,
+            kind: AGENT_SETTINGS_DISCOVERED_KIND,
+            modelEffort,
+            requestId: command.requestId,
+            settings,
+            settingsRevision: settingsRevision(agent, baseSnapshot.agentVersion, baseSettings, modelEffort),
+        },
+        unsupportedModels,
     };
 }
 
@@ -956,6 +1032,27 @@ function settingsFromSnapshot(
     return settings;
 }
 
+function withoutUnsupportedModels(
+    settings: readonly AgentSetting[],
+    modelSettingId: string,
+    unsupportedModelIds: readonly string[],
+): readonly AgentSetting[] {
+    if (modelSettingId.length === 0 || unsupportedModelIds.length === 0) {
+        return settings;
+    }
+    const unsupported = new Set(unsupportedModelIds);
+    return settings.map((setting) => {
+        if (setting.id !== modelSettingId || setting.type !== "select") {
+            return setting;
+        }
+        return {
+            ...setting,
+            defaultValue: unsupported.has(setting.defaultValue) ? "" : setting.defaultValue,
+            values: setting.values.filter((value) => !unsupported.has(value.value)),
+        };
+    });
+}
+
 function modelOption(options: readonly SessionConfigOption[]): SessionConfigOption | undefined {
     return options.find((option) => option.id === "model" || option.category === "model");
 }
@@ -969,6 +1066,7 @@ function unavailableModelEffort(): AgentModelEffort {
         effortSettingId: "",
         modelSettingId: "",
         resolution: AGENT_MODEL_EFFORT_RESOLUTION_UNAVAILABLE,
+        unsupportedModelIds: [],
         valuesByModel: {},
     };
 }
@@ -979,19 +1077,21 @@ async function discoverModelEffort(
     resolution: string,
     initialOptions: readonly SessionConfigOption[],
     selectedOptions: readonly SessionConfigOption[],
+    initiallyUnsupportedModels: AcpConfigurationValueUnavailableError[],
     cwd: string,
     sessions: AcpSessionManager,
     signal: AbortSignal,
 ): Promise<AgentModelEffort> {
     const model = modelOption(initialOptions);
+    const unsupportedModels = initiallyUnsupportedModels;
     if (
         resolution !== AGENT_MODEL_EFFORT_RESOLUTION_COMPLETE &&
         resolution !== AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION
     ) {
-        return unavailableModelEffort();
+        return { ...unavailableModelEffort(), unsupportedModelIds: unsupportedModelIds(unsupportedModels) };
     }
     if (model === undefined || model.type !== "select" || model.values.length === 0) {
-        return unavailableModelEffort();
+        return { ...unavailableModelEffort(), unsupportedModelIds: unsupportedModelIds(unsupportedModels) };
     }
     const inspectModel = async (modelValue: string): Promise<readonly SessionConfigOption[]> =>
         (
@@ -1007,29 +1107,45 @@ async function discoverModelEffort(
     if (resolution === "complete") {
         const effort = effortOption(initialOptions);
         if (effort === undefined || effort.type !== "select" || effort.values.length < 2) {
-            return unavailableModelEffort();
+            return {
+                ...unavailableModelEffort(),
+                unsupportedModelIds: unsupportedModelIds(unsupportedModels),
+            };
         }
         for (const value of model.values) {
-            const selectedEffort = effortOption(await inspectModel(value.value));
-            valuesByModel[value.value] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+            if (unsupportedModels.some((diagnostic) => diagnostic.requestedValue === value.value)) {
+                continue;
+            }
+            try {
+                const selectedEffort = effortOption(await inspectModel(value.value));
+                valuesByModel[value.value] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+            } catch (cause) {
+                signal.throwIfAborted();
+                if (!isUnavailableModel(cause, model.id, value.value)) {
+                    throw cause;
+                }
+                unsupportedModels.push(cause);
+            }
         }
         return {
             effortSettingId: effort.id,
             modelSettingId: model.id,
             resolution: "complete",
+            unsupportedModelIds: unsupportedModelIds(unsupportedModels),
             valuesByModel,
         };
     }
     if (command.model !== undefined) {
-        if (!model.values.some((value) => value.value === command.model)) {
-            throw new AcpExecutionError("The selected Agent model is unavailable", {}, "invalid_session_configuration");
-        }
+        const modelUnsupported = unsupportedModels.some((diagnostic) => diagnostic.requestedValue === command.model);
         const selectedEffort = effortOption(selectedOptions);
-        valuesByModel[command.model] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+        if (!modelUnsupported) {
+            valuesByModel[command.model] = selectedEffort?.type === "select" ? selectedEffort.values : [];
+        }
         return {
             effortSettingId: selectedEffort?.id ?? "",
             modelSettingId: model.id,
             resolution: "on_model_selection",
+            unsupportedModelIds: unsupportedModelIds(unsupportedModels),
             valuesByModel,
         };
     }
@@ -1038,17 +1154,29 @@ async function discoverModelEffort(
     // too, or a session that never switches models can never offer an effort.
     const defaultModel = model.type === "select" ? model.currentValue : "";
     const reportedEffort = effortOption(selectedOptions);
-    const selectedEffort =
-        defaultModel.length > 0 && reportedEffort === undefined
-            ? effortOption(await inspectModel(defaultModel))
-            : reportedEffort;
-    if (defaultModel.length > 0) {
+    let selectedEffort = reportedEffort;
+    if (defaultModel.length > 0 && reportedEffort === undefined) {
+        try {
+            selectedEffort = effortOption(await inspectModel(defaultModel));
+        } catch (cause) {
+            signal.throwIfAborted();
+            if (!isUnavailableModel(cause, model.id, defaultModel)) {
+                throw cause;
+            }
+            unsupportedModels.push(cause);
+        }
+    }
+    if (
+        defaultModel.length > 0 &&
+        !unsupportedModels.some((diagnostic) => diagnostic.requestedValue === defaultModel)
+    ) {
         valuesByModel[defaultModel] = selectedEffort?.type === "select" ? selectedEffort.values : [];
     }
     return {
         effortSettingId: selectedEffort?.id ?? "",
         modelSettingId: model.id,
         resolution: "on_model_selection",
+        unsupportedModelIds: unsupportedModelIds(unsupportedModels),
         valuesByModel,
     };
 }
@@ -1069,6 +1197,7 @@ function settingsRevision(
                   effortSettingId: "",
                   modelSettingId: modelEffort.modelSettingId,
                   resolution: modelEffort.resolution,
+                  unsupportedModelIds: modelEffort.unsupportedModelIds,
                   valuesByModel: {},
               };
     return createHash("sha256")
@@ -2371,14 +2500,29 @@ async function runRelayConnection(
                                     sessions,
                                     operationSignal,
                                 );
+                                for (const diagnostic of result.unsupportedModels) {
+                                    const details = agentSettingsFailureDetails(command.agentId, diagnostic);
+                                    audit.record({
+                                        commandId: command.requestId,
+                                        details,
+                                        event: "agent_settings_model_unsupported",
+                                        sessionId: `agent-settings:${command.agentId}`,
+                                    });
+                                    process.stderr.write(
+                                        `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_model_unsupported", requestId: command.requestId, ...details })}\n`,
+                                    );
+                                }
                                 audit.record({
                                     commandId: command.requestId,
-                                    details: { agentId: command.agentId },
+                                    details: {
+                                        agentId: command.agentId,
+                                        unsupportedModelCount: result.unsupportedModels.length.toString(),
+                                    },
                                     event: "agent_settings_discovered",
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });
                                 if (socket.readyState === WebSocket.OPEN) {
-                                    send(socket, result);
+                                    send(socket, result.event);
                                 }
                             } catch (error) {
                                 const failure: unknown = operationSignal.aborted
@@ -2389,12 +2533,18 @@ async function runRelayConnection(
                                           "agent_settings_discovery_cancelled",
                                       ))
                                     : error;
+                                const details = agentSettingsFailureDetails(command.agentId, failure);
                                 audit.record({
                                     commandId: command.requestId,
-                                    details: { agentId: command.agentId, code: operationErrorCode(failure) },
+                                    details,
                                     event: "agent_settings_discovery_failed",
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });
+                                if (failure instanceof AcpConfigurationValueUnavailableError) {
+                                    process.stderr.write(
+                                        `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_discovery_failed", requestId: command.requestId, ...details })}\n`,
+                                    );
+                                }
                                 if (socket.readyState === WebSocket.OPEN) {
                                     send(socket, {
                                         code: operationErrorCode(failure),

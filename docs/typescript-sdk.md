@@ -180,9 +180,11 @@ nor used for discovery. The response contains only settings that Agent exposes
 or that its dedicated adapter owns; Mobius does not synthesize a common
 permission, model, or reasoning-effort setting.
 
-The `modelEffort` metadata states how effort choices are available. When its
-`resolution` is `complete`, `valuesByModel` contains every model mapping. When
-it is `on_model_selection`, fetch the one selected model with
+The `modelEffort` metadata states how effort choices are available. Models that
+an Agent advertised but refused during capability inspection are omitted from
+the returned model setting and listed in `unsupportedModelIds`. When
+`resolution` is `complete`, `valuesByModel` contains every supported model
+mapping. When it is `on_model_selection`, fetch the one selected model with
 `client.runtimes.discoverAgentSettings(runtimeId, agentId, { model }, signal)`.
 When it is `unavailable`, do not render or submit an effort setting. Cache the
 base response and any selected-model response after the user opens or reloads
