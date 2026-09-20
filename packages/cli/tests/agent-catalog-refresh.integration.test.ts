@@ -1,0 +1,371 @@
+import { createHash } from "node:crypto";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer, type Server } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Duplex } from "node:stream";
+import { fileURLToPath } from "node:url";
+
+import {
+    AGENT_CATALOG_REFRESH_KIND,
+    AGENT_CATALOG_REFRESHED_KIND,
+    decodeAgentCatalogRefreshedEvent,
+    decodeMessageKind,
+    encodeAgentCatalogRefreshCommand,
+    MOBIUS_API_PREFIX,
+} from "@moxt-ai/mobius-protocol";
+import { describe, expect, it } from "vitest";
+
+import { discoverLocalAgentInventory } from "../src/agent-catalog/discover-local-agents.ts";
+import { AuditStore } from "../src/audit/audit-store.ts";
+import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
+import { runDaemon } from "../src/run-daemon.ts";
+
+const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+
+function listen(server: Server): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const fail = (error: Error): void => reject(error);
+        server.once("error", fail);
+        server.listen(0, "127.0.0.1", () => {
+            server.removeListener("error", fail);
+            resolve();
+        });
+    });
+}
+
+function readPort(server: Server): number {
+    const address = server.address();
+    if (address === null || typeof address === "string") {
+        throw new Error("Test relay did not bind to a TCP port");
+    }
+    return address.port;
+}
+
+function writeServerTextFrame(socket: Duplex, text: string): void {
+    const payload = Buffer.from(text, "utf8");
+    const header =
+        payload.byteLength < 126
+            ? Buffer.from([0x81, payload.byteLength])
+            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
+    socket.write(Buffer.concat([header, payload]));
+}
+
+class ClientFrames {
+    #buffered = Buffer.alloc(0);
+    readonly #messages: string[] = [];
+    readonly #resolvers: Array<(message: string) => void> = [];
+
+    constructor(socket: Duplex) {
+        socket.on("data", (chunk: Buffer) => {
+            this.#buffered = Buffer.concat([this.#buffered, chunk]);
+            this.decode();
+        });
+    }
+
+    readonly next = (): Promise<string> => {
+        const message = this.#messages.shift();
+        if (message !== undefined) {
+            return Promise.resolve(message);
+        }
+        return new Promise((resolve) => this.#resolvers.push(resolve));
+    };
+
+    private readonly decode = (): void => {
+        while (this.#buffered.byteLength >= 6) {
+            const encodedLength = this.#buffered.readUInt8(1) & 0x7f;
+            if (encodedLength === 127) {
+                throw new Error("Test relay received an oversized daemon frame");
+            }
+            const headerLength = encodedLength === 126 ? 4 : 2;
+            if (this.#buffered.byteLength < headerLength + 4) {
+                return;
+            }
+            const payloadLength = encodedLength === 126 ? this.#buffered.readUInt16BE(2) : encodedLength;
+            const frameLength = headerLength + 4 + payloadLength;
+            if (this.#buffered.byteLength < frameLength) {
+                return;
+            }
+            const opcode = this.#buffered.readUInt8(0) & 0x0f;
+            const mask = this.#buffered.subarray(headerLength, headerLength + 4);
+            const payload = Buffer.from(this.#buffered.subarray(headerLength + 4, frameLength));
+            this.#buffered = this.#buffered.subarray(frameLength);
+            for (let index = 0; index < payload.byteLength; index += 1) {
+                payload.writeUInt8(payload.readUInt8(index) ^ mask.readUInt8(index % 4), index);
+            }
+            if (opcode !== 1) {
+                continue;
+            }
+            const message = payload.toString("utf8");
+            const resolve = this.#resolvers.shift();
+            if (resolve === undefined) {
+                this.#messages.push(message);
+            } else {
+                resolve(message);
+            }
+        }
+    };
+}
+
+interface PublishedCatalog {
+    readonly agents: readonly { readonly id: string }[];
+    readonly installableAgents: readonly { readonly id: string }[];
+}
+
+class RecordingCatalogRelay {
+    readonly published: PublishedCatalog[] = [];
+    readonly #server: Server;
+    readonly #sockets = new Set<Duplex>();
+    readonly #ready = Promise.withResolvers<Duplex>();
+    #port = 0;
+
+    private constructor() {
+        this.#server = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                const chunks: Buffer[] = [];
+                request.on("data", (chunk: Buffer) => chunks.push(chunk));
+                request.on("end", () => {
+                    this.published.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as PublishedCatalog);
+                    response.writeHead(204);
+                    response.end();
+                });
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        this.#server.on("connection", (socket) => {
+            this.#sockets.add(socket);
+            socket.once("close", () => this.#sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        this.#server.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            this.#ready.resolve(socket);
+        });
+    }
+
+    static readonly open = async (): Promise<RecordingCatalogRelay> => {
+        const relay = new RecordingCatalogRelay();
+        await listen(relay.#server);
+        relay.#port = readPort(relay.#server);
+        return relay;
+    };
+
+    readonly socket = (): Promise<Duplex> => this.#ready.promise;
+
+    readonly daemonUrl = (channelId: string): URL => {
+        const url = new URL(`ws://127.0.0.1:${this.#port}${MOBIUS_API_PREFIX}/channels/${channelId}/daemon`);
+        url.searchParams.set("token", "d".repeat(43));
+        return url;
+    };
+
+    readonly close = async (): Promise<void> => {
+        for (const socket of this.#sockets) {
+            socket.destroy();
+        }
+        await new Promise<void>((resolve) => this.#server.close(() => resolve()));
+    };
+}
+
+// The daemon publishes its catalog on every connect as well as on every refresh.
+async function readPublishedCatalog(relay: RecordingCatalogRelay, minimum: number): Promise<PublishedCatalog> {
+    for (;;) {
+        if (relay.published.length >= minimum) {
+            const catalog = relay.published[minimum - 1];
+            if (catalog !== undefined) {
+                return catalog;
+            }
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+}
+
+async function readRefreshed(frames: ClientFrames, requestId: string): Promise<void> {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== AGENT_CATALOG_REFRESHED_KIND) {
+            continue;
+        }
+        if (decodeAgentCatalogRefreshedEvent(message).requestId === requestId) {
+            return;
+        }
+    }
+}
+
+function executableSource(source: string): string {
+    return `#!${process.execPath}\n${source}`;
+}
+
+// A DirectAcpAgentDefinition exposes one real ACP executable, so the fake ACP agent can stand in
+// for an installed Agent without any managed adapter or network access. The flags select exactly
+// the capability set the DeepSeek Harness specification verifies.
+async function writeFakeHarnessAgent(path: string): Promise<void> {
+    await writeFile(
+        path,
+        executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("0.1.2-rc.1\\n");
+} else {
+  process.argv.push(
+    "--agent-name", "DeepSeek Harness",
+    "--agent-version", "0.1.2-rc.1",
+    "--no-load-session",
+    "--http-mcp",
+    "--no-additional-directories",
+    "--no-delete-session",
+    "--no-fork-session",
+    "--no-embedded-context",
+    "--no-image-prompt",
+  );
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+        { mode: 0o700 },
+    );
+    await chmod(path, 0o700);
+}
+
+describe("daemon Agent catalog refresh boundary", () => {
+    it("Given a ready Agent was verified before a refresh, When the refreshed environment no longer exposes that Agent, Then the Runtime keeps serving the verified Agent instead of dropping it", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-refresh-"));
+        const workspace = join(stateDirectory, "workspace");
+        const executableDirectory = join(stateDirectory, "external");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_refresh.sqlite");
+        await Promise.all([mkdir(workspace), mkdir(executableDirectory)]);
+        await writeFakeHarnessAgent(join(executableDirectory, "dsh"));
+
+        const relay = await RecordingCatalogRelay.open();
+        const cancellation = new AbortController();
+        // The paired Runtime verifies its Agents before it starts, so the initial catalog holds a
+        // genuinely verified Agent. A refresh then observes an environment whose executable search
+        // path lost that Agent, which is what a supervisor or login-shell environment change looks
+        // like in practice.
+        const pairedEnvironment: Readonly<NodeJS.ProcessEnv> = {
+            MOBIUS_STATE_DIRECTORY: stateDirectory,
+            PATH: executableDirectory,
+        };
+        const verifiedInventory = await discoverLocalAgentInventory({
+            defaultWorkspace: workspace,
+            environment: pairedEnvironment,
+            signal: cancellation.signal,
+        });
+        expect(verifiedInventory.readyAgents().map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+
+        let refreshEnvironment: Readonly<NodeJS.ProcessEnv> = pairedEnvironment;
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_refresh",
+                defaultWorkspace: workspace,
+                relayUrl: relay.daemonUrl("channel_refresh"),
+            },
+            verifiedInventory.readyAgents(),
+            verifiedInventory.installable,
+            new DaemonLocalContext(stateDirectory),
+        );
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
+            resolveAgentCatalogEnvironment: async () => refreshEnvironment,
+        });
+
+        try {
+            const frames = new ClientFrames(await relay.socket());
+            const initial = await readPublishedCatalog(relay, 1);
+            expect(initial.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+
+            refreshEnvironment = { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: join(stateDirectory, "empty") };
+            const requestId = "refresh-with-degraded-environment";
+            writeServerTextFrame(
+                await relay.socket(),
+                encodeAgentCatalogRefreshCommand({ kind: AGENT_CATALOG_REFRESH_KIND, requestId }),
+            );
+            await readRefreshed(frames, requestId);
+
+            const refreshed = await readPublishedCatalog(relay, 2);
+            expect(refreshed.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+            expect(refreshed.installableAgents.map((agent) => agent.id)).not.toContain("deepseek-harness");
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            await relay.close();
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
+
+    it("Given a ready Agent was verified before a refresh, When the Agent executable is genuinely removed and not replaced by a managed install, Then the Runtime stops serving that Agent", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-catalog-uninstall-"));
+        const workspace = join(stateDirectory, "workspace");
+        const executableDirectory = join(stateDirectory, "external");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_uninstall.sqlite");
+        await Promise.all([mkdir(workspace), mkdir(executableDirectory)]);
+        const executablePath = join(executableDirectory, "dsh");
+        await writeFakeHarnessAgent(executablePath);
+
+        const relay = await RecordingCatalogRelay.open();
+        const cancellation = new AbortController();
+        const pairedEnvironment: Readonly<NodeJS.ProcessEnv> = {
+            MOBIUS_STATE_DIRECTORY: stateDirectory,
+            PATH: executableDirectory,
+        };
+        const verifiedInventory = await discoverLocalAgentInventory({
+            defaultWorkspace: workspace,
+            environment: pairedEnvironment,
+            signal: cancellation.signal,
+        });
+        expect(verifiedInventory.readyAgents().map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_uninstall",
+                defaultWorkspace: workspace,
+                relayUrl: relay.daemonUrl("channel_uninstall"),
+            },
+            verifiedInventory.readyAgents(),
+            verifiedInventory.installable,
+            new DaemonLocalContext(stateDirectory),
+        );
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal, undefined, {
+            resolveAgentCatalogEnvironment: async () => pairedEnvironment,
+        });
+
+        try {
+            const frames = new ClientFrames(await relay.socket());
+            const initial = await readPublishedCatalog(relay, 1);
+            expect(initial.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
+
+            await rm(executablePath, { force: true });
+            const requestId = "refresh-after-uninstall";
+            writeServerTextFrame(
+                await relay.socket(),
+                encodeAgentCatalogRefreshCommand({ kind: AGENT_CATALOG_REFRESH_KIND, requestId }),
+            );
+            await readRefreshed(frames, requestId);
+
+            const refreshed = await readPublishedCatalog(relay, 2);
+            expect(refreshed.agents.map((agent) => agent.id)).not.toContain("deepseek-harness");
+            expect(refreshed.installableAgents.map((agent) => agent.id)).toContain("deepseek-harness");
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            await relay.close();
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
+});

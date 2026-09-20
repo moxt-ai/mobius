@@ -160,6 +160,7 @@ import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
+import { revalidateExecutable } from "./process/executable.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
 import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
@@ -1851,6 +1852,31 @@ export interface RunDaemonOptions {
     readonly resolveAgentCatalogEnvironment?: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>;
 }
 
+// A refresh observes the machine through executable discovery, which depends on ambient state such
+// as PATH and the managed state directory. An Agent that was verified a moment ago is therefore not
+// necessarily uninstalled just because one discovery attempt failed to re-verify it. Keep the last
+// verified definition while the exact executable it was verified against still exists unchanged on
+// disk, so a transient probe failure cannot silently drop a working Agent. A genuine removal, or a
+// replaced executable, stops satisfying that check and is still reflected in the catalog.
+async function retainStillInstalledAgents(
+    previous: readonly LocalAgentDefinition[],
+    refreshed: readonly LocalAgentDefinition[],
+    signal: AbortSignal,
+): Promise<readonly LocalAgentDefinition[]> {
+    const refreshedIdentifiers = new Set(refreshed.map((agent) => agent.id));
+    const retained: LocalAgentDefinition[] = [];
+    for (const agent of previous) {
+        if (refreshedIdentifiers.has(agent.id)) {
+            continue;
+        }
+        signal.throwIfAborted();
+        if (await revalidateExecutable(agent.agentIdentity)) {
+            retained.push(agent);
+        }
+    }
+    return Object.freeze([...refreshed, ...retained]);
+}
+
 async function refreshAgentCatalog(
     config: DaemonConfig,
     resolveEnvironment: (signal: AbortSignal) => Promise<Readonly<NodeJS.ProcessEnv>>,
@@ -1866,9 +1892,12 @@ async function refreshAgentCatalog(
         signal,
     });
     const previousCatalog = config.catalog.read();
+    const refreshedAgents = inventory.readyAgents().map((agent) => withDaemonEnvironment(agent, environment));
+    const agents = await retainStillInstalledAgents(previousCatalog.agents, refreshedAgents, signal);
+    const verifiedIdentifiers = new Set(agents.map((agent) => agent.id));
     config.catalog.transition(
-        inventory.readyAgents().map((agent) => withDaemonEnvironment(agent, environment)),
-        inventory.installable,
+        agents,
+        inventory.installable.filter((agent) => !verifiedIdentifiers.has(agent.id)),
     );
     try {
         await publishAgentCatalog(config, signal);
