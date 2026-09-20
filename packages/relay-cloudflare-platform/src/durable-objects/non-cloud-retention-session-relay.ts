@@ -115,11 +115,6 @@ export class NonCloudRetentionSessionRelayDO {
             }
             this.#sessions.clear();
             this.#operations.clear();
-            try {
-                await this.#state.storage.deleteAll();
-            } catch (cause) {
-                failures.push(cause);
-            }
         } finally {
             this.#lifecycle = { kind: "active" };
             completion.resolve();

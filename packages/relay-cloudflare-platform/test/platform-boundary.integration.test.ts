@@ -2,7 +2,6 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeServiceToDaemonMessage,
-    encodeDaemonToServiceMessage,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
     SESSION_EVENT_ACK_KIND,
@@ -386,7 +385,7 @@ describe.sequential("Platform Session-only boundary", () => {
 
         expect(response.status).toBe(404);
     });
-    it("Given a non-retained Session has hibernated, When its Runtime connects, Then the WebSocket opens before live history is restored", async () => {
+    it("Given a non-retained Session committed an event, When it hibernates and is evicted, Then its Runtime can commit the next event", async () => {
         vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
@@ -498,14 +497,6 @@ describe.sequential("Platform Session-only boundary", () => {
         const sessionStub = environment.NON_CLOUD_RETENTION_SESSION_RELAY.getByName(
             `platform:${projectId}:${sessionId}`,
         );
-        await runInDurableObject(sessionStub, async (instance, state) => {
-            if (instance.alarm === undefined) {
-                throw new Error("Expected the non-retained Session alarm handler");
-            }
-            await state.storage.deleteAlarm();
-            await instance.alarm();
-        });
-
         const response = await worker.fetch(
             new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/runtimes/connect?deliveryReceipts=1&liveness=1`, {
                 headers: {
@@ -523,25 +514,6 @@ describe.sequential("Platform Session-only boundary", () => {
         const messages = new SocketMessages(socket);
         socket.accept();
         try {
-            const load = decodeServiceToDaemonMessage(await messages.next());
-            expect(load).toMatchObject({ kind: "session.live-history.load", sessionId });
-            if (load.kind !== "session.live-history.load") {
-                throw new Error("Expected the live-history request");
-            }
-            socket.send(
-                encodeDaemonToServiceMessage({
-                    history: {
-                        coveredCommandIds: [],
-                        coveredMessageIds: [],
-                        messages: [],
-                        status: "available",
-                        truncated: false,
-                    },
-                    kind: "session.live-history.loaded",
-                    requestId: load.requestId,
-                    sessionId,
-                }),
-            );
             expect(decodeServiceToDaemonMessage(await messages.next())).toEqual({
                 kind: "runtime.liveness.ready",
             });
@@ -560,30 +532,20 @@ describe.sequential("Platform Session-only boundary", () => {
                     source: { kind: "runtime", sourceSeq: "1" },
                 }),
             );
-            let beforeEviction = decodeServiceToDaemonMessage(await messages.next());
-            if (beforeEviction.kind === "session.live-history.load") {
-                socket.send(
-                    encodeDaemonToServiceMessage({
-                        history: {
-                            coveredCommandIds: [],
-                            coveredMessageIds: [],
-                            messages: [],
-                            status: "available",
-                            truncated: false,
-                        },
-                        kind: "session.live-history.loaded",
-                        requestId: beforeEviction.requestId,
-                        sessionId,
-                    }),
-                );
-                beforeEviction = decodeServiceToDaemonMessage(await messages.next());
-            }
+            const beforeEviction = decodeServiceToDaemonMessage(await messages.next());
             expect(beforeEviction).toMatchObject({
                 eventId: "private-reconnect-before-eviction",
                 kind: SESSION_EVENT_ACK_KIND,
                 sessionId,
             });
 
+            await runInDurableObject(sessionStub, async (instance, state) => {
+                if (instance.alarm === undefined) {
+                    throw new Error("Expected the non-retained Session alarm handler");
+                }
+                await state.storage.deleteAlarm();
+                await instance.alarm();
+            });
             await evictDurableObject(sessionStub);
             socket.send(
                 encodeSessionEventEnvelope({
@@ -599,24 +561,7 @@ describe.sequential("Platform Session-only boundary", () => {
                     source: { kind: "runtime", sourceSeq: "2" },
                 }),
             );
-            let committed = decodeServiceToDaemonMessage(await messages.next());
-            if (committed.kind === "session.live-history.load") {
-                socket.send(
-                    encodeDaemonToServiceMessage({
-                        history: {
-                            coveredCommandIds: [],
-                            coveredMessageIds: [],
-                            messages: [],
-                            status: "available",
-                            truncated: false,
-                        },
-                        kind: "session.live-history.loaded",
-                        requestId: committed.requestId,
-                        sessionId,
-                    }),
-                );
-                committed = decodeServiceToDaemonMessage(await messages.next());
-            }
+            const committed = decodeServiceToDaemonMessage(await messages.next());
             expect(committed).toMatchObject({
                 eventId: "private-reconnect-after-eviction",
                 kind: SESSION_EVENT_ACK_KIND,
