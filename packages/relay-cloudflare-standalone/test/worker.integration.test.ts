@@ -1942,6 +1942,31 @@ describe.sequential("Cloudflare session deployment", () => {
         });
     });
 
+    it("Given a Session directory predates cloud-retention policy, When the exact storage migration runs, Then existing Sessions default to cloud retention", async () => {
+        const projectId = "legacy-retention-project";
+        const sessionId = "legacy-retention-session";
+        const runtimeId = "legacy-retention-runtime";
+        await env.DIRECTORY_DATABASE.prepare("ALTER TABLE session_directory DROP COLUMN cloud_retention").run();
+        await env.DIRECTORY_DATABASE.prepare(
+            `INSERT INTO session_directory (
+                project_id, session_id, runtime_id, lifecycle, updated_at, summary_json
+             ) VALUES (?, ?, ?, 'ready', ?, ?)`,
+        )
+            .bind(projectId, sessionId, runtimeId, Date.now(), JSON.stringify({ projectId, runtimeId, sessionId }))
+            .run();
+
+        await env.DIRECTORY_DATABASE.batch(
+            env.TEST_SESSION_CLOUD_RETENTION_MIGRATION.map((query) => env.DIRECTORY_DATABASE.prepare(query)),
+        );
+
+        const row = await env.DIRECTORY_DATABASE.prepare(
+            "SELECT cloud_retention FROM session_directory WHERE project_id = ? AND session_id = ?",
+        )
+            .bind(projectId, sessionId)
+            .first<{ readonly cloud_retention: number }>();
+        expect(row?.cloud_retention).toBe(1);
+    });
+
     it("Given an owned Channel, When a one-time access grant is redeemed, Then the linked credential is independently authorized and revocable", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization } = createSessionRequests(app);

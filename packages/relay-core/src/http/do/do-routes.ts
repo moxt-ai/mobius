@@ -329,6 +329,10 @@ class DoRoutes {
             }
             const operation = operationFromPath(new URL(request.url).pathname);
             const body = await readBody(request);
+            if (operation === "migrate-cloud-retention") {
+                assertExactKeys(body, []);
+                return new Response(null, { status: 204 });
+            }
             const scope = readScope(body);
             if (operation === "event-stream") {
                 assertExactKeys(body, ["cursor", "scope", "sessionId"]);

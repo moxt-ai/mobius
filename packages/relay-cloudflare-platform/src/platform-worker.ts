@@ -37,6 +37,7 @@ import {
     sessionAccessTargetMiddleware,
 } from "./middleware/session-access-target.ts";
 import { AppCredentialAuthenticationService } from "./service/app-credential-authentication-service.ts";
+import { CloudRetentionMigrationService } from "./service/cloud-retention-migration-service.ts";
 import { OrganizationInviteService } from "./service/organization-invite-service.ts";
 import { PlatformControlPlaneService } from "./service/platform-control-plane-service.ts";
 import { SessionAccessService, type SessionAccessTarget } from "./service/session-access-service.ts";
@@ -113,6 +114,10 @@ export function createPlatformApplication(
             control: context.var.control,
             appAuthentication: context.var.appAuthentication,
             allowedOrigins: authentication.allowedOrigins,
+            cloudRetentionMigration: new CloudRetentionMigrationService(
+                new PlatformControlPlaneStorage(context.env.PLATFORM_DIRECTORY_DATABASE, context.var.databases),
+                context.env.PROJECT_RELAY,
+            ),
             invites: new OrganizationInviteService(
                 new OrganizationInviteStorage(context.env.PLATFORM_DIRECTORY_DATABASE),
                 organizations(context.env),

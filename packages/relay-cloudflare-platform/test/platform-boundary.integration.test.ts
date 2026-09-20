@@ -124,6 +124,147 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
+    it("Given an existing Platform Project has a Session, When an operator runs the cloud-retention migration, Then the Project and Session stores are migrated", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const values = tenants["tenants"];
+        if (!Array.isArray(values) || values.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const tenantId = text(record(values[0]), "tenantId");
+        const app = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Migration App", tenantId }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const project = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(app, "appId")}/projects`, {
+                    body: JSON.stringify({
+                        clientReference: "migration-project",
+                        displayName: "Migration Project",
+                        idempotencyKey: "migration-project",
+                        locationHint: "apac",
+                    }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        const projectId = text(project, "projectId");
+        const sessionId = "migration-session";
+        const runtimeId = "migration-runtime";
+        const insert = await environment.PROJECT_RELAY.getByName(projectId).fetch(
+            `https://project.internal/mobius/internal/projects/${encodeURIComponent(projectId)}/database`,
+            {
+                body: JSON.stringify({
+                    kind: "run",
+                    statement: {
+                        sql: `INSERT INTO session_directory (
+                            project_id, session_id, runtime_id, lifecycle, updated_at, summary_json
+                        ) VALUES (?, ?, ?, 'ready', ?, ?)`,
+                        values: [
+                            projectId,
+                            sessionId,
+                            runtimeId,
+                            Date.now(),
+                            JSON.stringify({ projectId, runtimeId, sessionId }),
+                        ],
+                    },
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            },
+        );
+        expect(insert.status).toBe(200);
+
+        const beforeStatus = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/migrations/cloud-retention`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        expect(beforeStatus).toMatchObject({
+            complete: false,
+            completedProjects: 0,
+            nextIncompleteProjectId: projectId,
+            totalProjects: 1,
+        });
+
+        const firstPage = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/migrations/cloud-retention`, {
+                    body: JSON.stringify({ cursor: { kind: "projects", afterProjectId: "" } }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            200,
+        );
+        expect(firstPage).toMatchObject({
+            cursor: { kind: "projects", afterProjectId: projectId },
+            migratedProjectId: projectId,
+            migratedSessions: 1,
+            state: "in_progress",
+        });
+
+        const completion = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/migrations/cloud-retention`, {
+                    body: JSON.stringify({ cursor: { kind: "projects", afterProjectId: projectId } }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            200,
+        );
+        expect(completion).toMatchObject({ completedProjects: 1, state: "complete", totalProjects: 1 });
+
+        const sessionMigration = await environment.PROJECT_RELAY.getByName(projectId).fetch(
+            `https://project.internal/mobius/internal/projects/${encodeURIComponent(projectId)}/database`,
+            {
+                body: JSON.stringify({
+                    kind: "all",
+                    statement: {
+                        sql: "SELECT cloud_retention FROM session_directory WHERE session_id = ?",
+                        values: [sessionId],
+                    },
+                }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            },
+        );
+        expect(sessionMigration.status).toBe(200);
+        expect((await sessionMigration.json()) as unknown).toMatchObject({
+            results: [{ cloud_retention: 1 }],
+        });
+    });
+
     it("Given a Session-only Platform Relay, When a client reaches a retired Bot endpoint, Then the endpoint is unavailable", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set()),

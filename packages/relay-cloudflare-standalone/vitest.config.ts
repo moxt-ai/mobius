@@ -14,6 +14,12 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
     if (legacyAgentCatalogMigration === undefined) {
         throw new Error("The legacy Agent catalog migration is missing");
     }
+    const sessionCloudRetentionMigration = migrations.find(
+        (migration) => migration.name === "0017_add_session_cloud_retention.sql",
+    );
+    if (sessionCloudRetentionMigration === undefined) {
+        throw new Error("The Session cloud-retention migration is missing");
+    }
 
     return {
         root: packageDirectory,
@@ -36,6 +42,7 @@ export default defineConfig(async (): Promise<ViteUserConfig> => {
                         SESSION_ACTIVE_SESSIONS_PER_PROJECT: "2",
                         SESSION_ARCHIVE_BYTES_PER_SESSION: "16384",
                         TEST_LEGACY_AGENT_CATALOG_MIGRATION: legacyAgentCatalogMigration.queries,
+                        TEST_SESSION_CLOUD_RETENTION_MIGRATION: sessionCloudRetentionMigration.queries,
                         TEST_MIGRATIONS: migrations,
                     },
                 },

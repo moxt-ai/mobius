@@ -3,6 +3,7 @@ import type { RelayBindings } from "../src/worker.ts";
 
 interface RelayTestBindings extends RelayBindings {
     readonly TEST_LEGACY_AGENT_CATALOG_MIGRATION: readonly string[];
+    readonly TEST_SESSION_CLOUD_RETENTION_MIGRATION: readonly string[];
     readonly TEST_MIGRATIONS: D1Migration[];
 }
 

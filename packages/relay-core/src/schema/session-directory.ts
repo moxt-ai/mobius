@@ -7,6 +7,7 @@ export const sessionDirectory = sqliteTable(
         projectId: text("project_id").notNull(),
         sessionId: text("session_id").notNull(),
         runtimeId: text("runtime_id").notNull(),
+        cloudRetention: integer("cloud_retention", { mode: "boolean" }).notNull().default(true),
         lifecycle: text("lifecycle", { enum: ["ready", "deleting", "deleted"] }).notNull(),
         updatedAt: integer("updated_at").notNull(),
         summaryJson: text("summary_json").notNull(),

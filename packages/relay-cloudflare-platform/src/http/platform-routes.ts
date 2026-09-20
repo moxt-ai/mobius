@@ -12,6 +12,10 @@ import {
 } from "../middleware/authentication.ts";
 import { bodyParser } from "../middleware/body-parser.ts";
 import { createBrowserCors } from "../middleware/browser-cors.ts";
+import type {
+    CloudRetentionMigrationCursor,
+    CloudRetentionMigrationService,
+} from "../service/cloud-retention-migration-service.ts";
 import type { OrganizationInviteService } from "../service/organization-invite-service.ts";
 
 const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
@@ -33,9 +37,19 @@ const issueCredentialBody = v.strictObject({
 const rotateCredentialBody = v.strictObject({ overlapSeconds: safeInteger });
 const emptyBody = v.strictObject({});
 const inviteBody = v.strictObject({ token: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)) });
+const cloudRetentionMigrationBody = v.strictObject({
+    cursor: v.variant("kind", [
+        v.strictObject({ kind: v.literal("projects"), afterProjectId: v.string() }),
+        v.strictObject({ kind: v.literal("sessions"), projectId: requiredString, afterSessionId: v.string() }),
+    ]),
+});
 
 type PlatformHttpEnvironment = PlatformAuthenticationEnvironment & {
-    readonly Bindings: { readonly allowedOrigins: ReadonlySet<string>; readonly invites: OrganizationInviteService };
+    readonly Bindings: {
+        readonly allowedOrigins: ReadonlySet<string>;
+        readonly cloudRetentionMigration: CloudRetentionMigrationService;
+        readonly invites: OrganizationInviteService;
+    };
 };
 
 async function authenticateDeveloper(context: {
@@ -113,6 +127,17 @@ export function createPlatformControlApplication() {
         .get("/v1/platform/configuration", async (context) => {
             const identity = await authenticateDeveloper(context);
             return context.json(await context.env.control.readPlatformConfiguration(identity, context.var.signal));
+        })
+        .get("/v1/platform/migrations/cloud-retention", async (context) => {
+            const identity = await authenticateDeveloper(context);
+            await context.env.control.readPlatformConfiguration(identity, context.var.signal);
+            return context.json(await context.env.cloudRetentionMigration.status(context.var.signal));
+        })
+        .post("/v1/platform/migrations/cloud-retention", bodyParser(cloudRetentionMigrationBody), async (context) => {
+            const identity = await authenticateDeveloper(context);
+            await context.env.control.readPlatformConfiguration(identity, context.var.signal);
+            const cursor: CloudRetentionMigrationCursor = context.req.valid("json").cursor;
+            return context.json(await context.env.cloudRetentionMigration.migrate(cursor, context.var.signal));
         })
         .post("/v1/platform/tenants/:tenantId/invite-links", bodyParser(emptyBody), async (context) => {
             const identity = await authenticateDeveloper(context);

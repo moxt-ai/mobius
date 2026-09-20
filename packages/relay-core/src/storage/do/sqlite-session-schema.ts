@@ -341,4 +341,11 @@ export function initializeSessionSchema(database: DoSqlDatabase): void {
         PRIMARY KEY (scope_key, session_id, target_id)
       ) STRICT;
     `);
+
+    const sessionColumns = database.query("PRAGMA table_info(sessions)");
+    if (!sessionColumns.some((column) => column["name"] === "cloud_retention")) {
+        database.exec(
+            "ALTER TABLE sessions ADD COLUMN cloud_retention INTEGER NOT NULL DEFAULT 1 CHECK (cloud_retention IN (0, 1))",
+        );
+    }
 }

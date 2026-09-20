@@ -1,5 +1,5 @@
 import { relayDrizzle } from "@moxt-ai/mobius-relay-core/database";
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, isNull } from "drizzle-orm";
 import {
     type ActiveCountRow,
     ActiveCountRowSchema,
@@ -24,7 +24,12 @@ import {
     type TenantRow,
     TenantRowSchema,
 } from "../entity/platform-records.ts";
-import { platformAuditEvent, platformDashboardAuditEvent } from "../schema/index.ts";
+import {
+    platformAuditEvent,
+    platformCloudRetentionMigration,
+    platformDashboardAuditEvent,
+    platformProject,
+} from "../schema/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { type PlatformDatabaseResolver, projectDatabase, projectSqlDatabase } from "./platform-database-resolver.ts";
@@ -668,6 +673,92 @@ export class PlatformControlPlaneStorage {
         );
         const projects: readonly ProjectIdRow[] = decodeStorageRecords(ProjectIdRowSchema, rows.results);
         return projects.map((project) => project.project_id);
+    };
+
+    readonly readNextProjectId = async (afterProjectId: string, signal: AbortSignal): Promise<string | null> => {
+        const rows = await waitForD1(
+            () =>
+                platformDrizzle(this.#database)
+                    .select({ projectId: platformProject.projectId })
+                    .from(platformProject)
+                    .leftJoin(
+                        platformCloudRetentionMigration,
+                        eq(platformCloudRetentionMigration.projectId, platformProject.projectId),
+                    )
+                    .where(
+                        and(
+                            gt(platformProject.projectId, afterProjectId),
+                            isNull(platformCloudRetentionMigration.projectId),
+                        ),
+                    )
+                    .orderBy(asc(platformProject.projectId))
+                    .limit(1),
+            signal,
+        );
+        return rows[0]?.projectId ?? null;
+    };
+
+    readonly recordCloudRetentionMigration = async (
+        projectId: string,
+        sessionCount: number,
+        signal: AbortSignal,
+    ): Promise<void> => {
+        await waitForD1(
+            () =>
+                platformDrizzle(this.#database)
+                    .insert(platformCloudRetentionMigration)
+                    .values({ completedAt: Date.now(), projectId, sessionCount })
+                    .onConflictDoUpdate({
+                        target: platformCloudRetentionMigration.projectId,
+                        set: { sessionCount },
+                    }),
+            signal,
+        );
+    };
+
+    readonly readCloudRetentionMigrationStatus = async (
+        signal: AbortSignal,
+    ): Promise<
+        Readonly<{
+            completedProjects: number;
+            nextIncompleteProjectId: string | null;
+            totalProjects: number;
+        }>
+    > => {
+        const database = platformDrizzle(this.#database);
+        const [totalRows, completedRows, incompleteRows] = await Promise.all([
+            waitForD1(() => database.select({ value: count() }).from(platformProject), signal),
+            waitForD1(
+                () =>
+                    database
+                        .select({ value: count() })
+                        .from(platformCloudRetentionMigration)
+                        .innerJoin(
+                            platformProject,
+                            eq(platformProject.projectId, platformCloudRetentionMigration.projectId),
+                        ),
+                signal,
+            ),
+            waitForD1(
+                () =>
+                    database
+                        .select({ projectId: platformProject.projectId })
+                        .from(platformProject)
+                        .leftJoin(
+                            platformCloudRetentionMigration,
+                            eq(platformCloudRetentionMigration.projectId, platformProject.projectId),
+                        )
+                        .where(isNull(platformCloudRetentionMigration.projectId))
+                        .orderBy(asc(platformProject.projectId))
+                        .limit(1),
+                signal,
+            ),
+        ]);
+        return {
+            completedProjects: completedRows[0]?.value ?? 0,
+            nextIncompleteProjectId: incompleteRows[0]?.projectId ?? null,
+            totalProjects: totalRows[0]?.value ?? 0,
+        };
     };
 
     readonly listScopedActiveProjectIds = async (
