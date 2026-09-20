@@ -19,11 +19,30 @@ import {
 } from "../../entity/do/session.ts";
 import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
-import { encodeStorageDuration, STORAGE_TIMING_HEADER } from "../../infra/operation-timing.ts";
+import { compressJsonBody } from "../../infra/compressed-json.ts";
+import { DO_TIMING_HEADER, encodeDoTiming, type OperationTimingMetric } from "../../infra/operation-timing.ts";
 import type { DoService } from "../../service/do/do-service.ts";
 import type { SqliteSessionRuntime } from "../../service/do/sqlite-session-runtime.ts";
 
 const MAX_INTERNAL_BODY_LENGTH = 96 * 1024 * 1024;
+
+/**
+ * Times one stage of an internal operation and appends it to `segments`, so the Durable Object can report a
+ * breakdown instead of one opaque total that hides which stage the time went to.
+ */
+async function measureSegment<T>(
+    segments: OperationTimingMetric[],
+    name: string,
+    description: string,
+    operation: () => Promise<T>,
+): Promise<T> {
+    const startedAt = performance.now();
+    try {
+        return await operation();
+    } finally {
+        segments.push({ description, durationMilliseconds: Math.max(0, performance.now() - startedAt), name });
+    }
+}
 
 class InternalRequestError extends Error implements HttpError {
     readonly code: string;
@@ -649,16 +668,27 @@ class DoRoutes {
             }
             if (operation === "messages") {
                 assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
-                const startedAt = performance.now();
-                const page = await this.#runtime.readMessages(
-                    scope,
-                    readString(body, "sessionId"),
-                    readNullableString(body, "cursor"),
-                    readInteger(body, "limit"),
-                    request.signal,
+                const segments: OperationTimingMetric[] = [];
+                const page = await measureSegment(segments, "query", "Session message query", () =>
+                    this.#runtime.readMessages(
+                        scope,
+                        readString(body, "sessionId"),
+                        readNullableString(body, "cursor"),
+                        readInteger(body, "limit"),
+                        request.signal,
+                    ),
                 );
-                return Response.json(page, {
-                    headers: { [STORAGE_TIMING_HEADER]: encodeStorageDuration(performance.now() - startedAt) },
+                // Serialization must be measured on its own: it is the cost that grows with the page, and the
+                // previous single "storage" timer stopped before it ran.
+                const encoded = await measureSegment(segments, "serialize", "Session message serialization", () =>
+                    compressJsonBody(page, request.signal),
+                );
+                return new Response(Uint8Array.from(encoded.body).buffer, {
+                    headers: {
+                        "content-encoding": encoded.contentEncoding,
+                        "content-type": "application/json",
+                        [DO_TIMING_HEADER]: encodeDoTiming(segments),
+                    },
                 });
             }
             if (operation === "events") {

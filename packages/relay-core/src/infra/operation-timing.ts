@@ -51,18 +51,42 @@ export const unmeasuredOperationTiming: OperationTiming = {
 };
 
 /**
- * Carries the time an internal Durable Object spent on an operation back to the Worker that called it, so the
- * Worker can separate its own round trip cost from the storage work it waited on.
+ * Carries the segments an internal Durable Object measured on its own side back to the Worker that called it.
+ * The Durable Object cannot append to the caller's `Server-Timing` header, so it reports its segments through
+ * this header and the Worker re-emits them alongside its own.
  */
-export const STORAGE_TIMING_HEADER = "x-mobius-storage-duration";
+export const DO_TIMING_HEADER = "x-mobius-do-timing";
 
-export const encodeStorageDuration = (durationMilliseconds: number): string =>
-    Math.max(0, durationMilliseconds).toFixed(1);
+/**
+ * Prefixes the Durable Object's segments so they never collide with the Worker's own names.
+ */
+export const DO_TIMING_NAME_PREFIX = "do-";
 
-export function decodeStorageDuration(value: string | null): number | undefined {
+export const encodeDoTiming = (metrics: readonly OperationTimingMetric[]): string => encodeOperationTiming(metrics);
+
+/**
+ * Parses a `Server-Timing` field value into its segments. Values that do not match the emitted shape are
+ * ignored rather than rejected, because this header crosses a process boundary.
+ */
+export function decodeOperationTiming(value: string | null): readonly OperationTimingMetric[] {
     if (value === null) {
-        return undefined;
+        return [];
     }
-    const duration = Number.parseFloat(value);
-    return Number.isFinite(duration) && duration >= 0 ? duration : undefined;
+    const metrics: OperationTimingMetric[] = [];
+    for (const entry of value.split(",")) {
+        const match = /^\s*([a-z0-9-]+);dur=([0-9.]+)(?:;desc="([^"]*)")?\s*$/u.exec(entry);
+        if (match === null) {
+            continue;
+        }
+        const duration = Number.parseFloat(match[2] as string);
+        if (!Number.isFinite(duration) || duration < 0) {
+            continue;
+        }
+        metrics.push({
+            description: match[3] ?? "",
+            durationMilliseconds: duration,
+            name: match[1] as string,
+        });
+    }
+    return metrics;
 }

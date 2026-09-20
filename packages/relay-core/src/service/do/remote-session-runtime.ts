@@ -67,11 +67,13 @@ import type {
     SessionTransferGateway,
 } from "../../gateway/index.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
+import { COMPRESSED_JSON_ENCODING, decompressJsonBody } from "../../infra/compressed-json.ts";
 import type { DatabaseResolver } from "../../infra/database-resolver.ts";
 import {
-    decodeStorageDuration,
+    DO_TIMING_HEADER,
+    DO_TIMING_NAME_PREFIX,
+    decodeOperationTiming,
     type OperationTiming,
-    STORAGE_TIMING_HEADER,
     unmeasuredOperationTiming,
 } from "../../infra/operation-timing.ts";
 import type { ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
@@ -656,38 +658,60 @@ function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
     }
 }
 
-async function responseJson(response: Response): Promise<unknown> {
-    const encoded = await response.text();
-    if (encoded.length === 0 || encoded.length > MAX_INTERNAL_RESPONSE_LENGTH) {
+/**
+ * Internal responses may be gzip encoded so that large Session pages do not spend the Worker's body budget on
+ * verbatim text. The Durable Object transport does not negotiate encoding, so honour the declared one explicitly.
+ */
+async function readResponseBytes(response: Response): Promise<Uint8Array> {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_INTERNAL_RESPONSE_LENGTH) {
         throw new SessionRuntimeError(
             "session_storage_unavailable",
             "The Session Durable Object returned an invalid response",
         );
     }
+    return bytes;
+}
+
+async function decodeResponseBytes(response: Response, bytes: Uint8Array): Promise<unknown> {
     let value: unknown;
-    try {
-        value = JSON.parse(encoded);
-    } catch (cause) {
-        throw new SessionRuntimeError(
-            "session_storage_unavailable",
-            "The Session Durable Object returned invalid JSON",
-            { cause },
-        );
-    }
-    if (!response.ok) {
-        if (isRecord(value) && isRecord(value["error"])) {
-            const code = value["error"]["code"];
-            const message = value["error"]["message"];
-            if (typeof code === "string" && typeof message === "string") {
-                throw new SessionRuntimeError(runtimeErrorCode(code), message);
-            }
+    if (response.headers.get("content-encoding") === COMPRESSED_JSON_ENCODING) {
+        try {
+            value = await decompressJsonBody(bytes, MAX_INTERNAL_RESPONSE_LENGTH);
+        } catch (cause) {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The Session Durable Object returned an invalid response",
+                { cause },
+            );
         }
-        throw new SessionRuntimeError(
-            "session_storage_unavailable",
-            "The Session Durable Object rejected the operation",
-        );
+    } else {
+        try {
+            value = JSON.parse(new TextDecoder().decode(bytes));
+        } catch (cause) {
+            throw new SessionRuntimeError(
+                "session_storage_unavailable",
+                "The Session Durable Object returned invalid JSON",
+                { cause },
+            );
+        }
     }
-    return value;
+    return rejectFailedResponse(response, value);
+}
+
+/** Translates a Durable Object error payload into the typed Session error contract. */
+function rejectFailedResponse(response: Response, value: unknown): unknown {
+    if (response.ok) {
+        return value;
+    }
+    if (isRecord(value) && isRecord(value["error"])) {
+        const code = value["error"]["code"];
+        const message = value["error"]["message"];
+        if (typeof code === "string" && typeof message === "string") {
+            throw new SessionRuntimeError(runtimeErrorCode(code), message);
+        }
+    }
+    throw new SessionRuntimeError("session_storage_unavailable", "The Session Durable Object rejected the operation");
 }
 
 function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId: string): string {
@@ -1358,12 +1382,7 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
         timing: OperationTiming = unmeasuredOperationTiming,
     ): Promise<SessionMessagePage> =>
-        decodeMessages(
-            await this.request(scope, sessionId, "messages", { cursor, limit, sessionId }, signal, timing, {
-                description: "Session Durable Object message query",
-                name: "messages-storage",
-            }),
-        );
+        decodeMessages(await this.request(scope, sessionId, "messages", { cursor, limit, sessionId }, signal, timing));
 
     readonly readEvents = async (
         scope: ProjectScope,
@@ -1512,7 +1531,6 @@ export class RemoteSessionRuntime
         body: Readonly<Record<string, unknown>>,
         signal: AbortSignal,
         timing: OperationTiming = unmeasuredOperationTiming,
-        storageMetric?: Readonly<{ description: string; name: string }>,
     ): Promise<unknown> => {
         signal.throwIfAborted();
         const timeout = AbortSignal.timeout(SESSION_OPERATION_TIMEOUT_MILLISECONDS);
@@ -1547,18 +1565,27 @@ export class RemoteSessionRuntime
             );
         }
         operationSignal.throwIfAborted();
-        if (storageMetric !== undefined) {
-            const reported = decodeStorageDuration(response.headers.get(STORAGE_TIMING_HEADER));
-            if (reported !== undefined) {
-                timing.record(storageMetric.name, storageMetric.description, reported);
-            }
+        // The Durable Object reports its own stages. Re-emit them prefixed so a reader can tell which side a
+        // segment belongs to, and so they never collide with the Worker's names.
+        for (const segment of decodeOperationTiming(response.headers.get(DO_TIMING_HEADER))) {
+            timing.record(
+                `${DO_TIMING_NAME_PREFIX}${segment.name}`,
+                `Session Durable Object ${segment.description}`,
+                segment.durationMilliseconds,
+            );
         }
-        // `fetch` resolves once the Durable Object returns its headers, so reading and parsing the body is a
-        // separate cost that only shows up here.
-        return await timing.measure(
+        // `fetch` resolves once the Durable Object returns its headers, so reading and decoding the body is a
+        // separate cost that only shows up here. The read and the parse are split because they scale differently:
+        // the read tracks the transferred size, the parse tracks the object graph.
+        const bytes = await timing.measure(
             `${operation}-body`,
-            `Session Durable Object ${operation} response body`,
-            async () => await responseJson(response),
+            `Session Durable Object ${operation} response body transfer`,
+            async () => await readResponseBytes(response),
+        );
+        return await timing.measure(
+            `${operation}-decode`,
+            `Session Durable Object ${operation} response decoding`,
+            async () => await decodeResponseBytes(response, bytes),
         );
     };
 
