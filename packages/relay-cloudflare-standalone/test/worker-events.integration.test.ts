@@ -16,6 +16,7 @@ import {
     decodeSessionEventAcknowledgement,
     decodeSessionEventDeferred,
     decodeSessionEventRejection,
+    decodeSessionFailedEvent,
     decodeSessionPromptCommand,
     encodeAgentInstallRequestCommand,
     encodeRuntimeDeliveryReceived,
@@ -31,6 +32,7 @@ import {
     RUNTIME_LIVENESS_READY_KIND,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_DEFERRED_KIND,
+    SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
@@ -829,6 +831,56 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
             });
         } finally {
             daemon.socket.close(1000, "Session isolation test complete");
+        }
+    });
+
+    it("Given a client is waiting for a turn, When its Runtime event is terminally rejected, Then the client receives a Session failure", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "rejected-turn-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            const command = prompt(sessionId, "rejected-turn-command", "answer me");
+            await submitPrompt(host, daemon, command);
+            const rejectedEvent: SessionEventEnvelope = {
+                eventId: "rejected-turn-delta",
+                kind: "session.event",
+                payload: JSON.stringify({
+                    commandId: command.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "rejected-turn-message",
+                    sessionId,
+                    text: "uncommitted",
+                }),
+                sessionId,
+                source: { attemptId: "unknown-attempt", kind: "attempt", sourceSeq: "1" },
+            };
+            daemon.socket.send(encodeSessionEventEnvelope(rejectedEvent));
+
+            expect(decodeSessionEventRejection(await daemon.messages.next())).toMatchObject({
+                code: "session_rejected",
+                eventId: rejectedEvent.eventId,
+                sessionId,
+            });
+            expect(decodeSessionFailedEvent(await host.messages.next())).toEqual({
+                code: "session_event_rejected",
+                commandId: command.commandId,
+                kind: SESSION_FAILED_KIND,
+                message: "The Runtime response was rejected by the Session",
+                sessionId,
+            });
+        } finally {
+            host.socket.close(1000, "Rejected turn test complete");
+            daemon.socket.close(1000, "Rejected turn test complete");
         }
     });
 

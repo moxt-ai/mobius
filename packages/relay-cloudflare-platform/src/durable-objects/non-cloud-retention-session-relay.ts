@@ -139,8 +139,6 @@ export class NonCloudRetentionSessionRelayDO {
             return await existing;
         }
         const created = (async () => {
-            await this.#state.storage.deleteAll();
-            signal.throwIfAborted();
             const database = new DurableObjectSqlDatabase(this.#state.storage);
             const relay = new SessionRelayImplementation(
                 createPlatformDurableObjectContext(this.#state, this.#environment, {
@@ -149,7 +147,15 @@ export class NonCloudRetentionSessionRelayDO {
                     initializeSessionSchema: initializeNonCloudRetentionSessionRelaySchema,
                 }),
             );
-            if (!creating) {
+            const persisted =
+                database.query(
+                    `SELECT 1 AS present
+                     FROM sessions
+                     WHERE project_id = ? AND runtime_id = ? AND session_id = ? AND lifecycle = 'ready'
+                     LIMIT 1`,
+                    [identity.projectId, identity.runtimeId, identity.sessionId],
+                ).length > 0;
+            if (!creating && !persisted) {
                 const restored = await this.#liveHistory.restore(
                     identity.projectId,
                     identity.runtimeId,

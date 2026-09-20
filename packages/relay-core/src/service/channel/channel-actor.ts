@@ -52,6 +52,7 @@ import {
     type NativeSessionTurnForkCommand,
     type NativeSessionTurnForkRequest,
     ProtocolMessageError,
+    type RecordedSessionEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
     RUNTIME_DELIVERY_RECEIVED_KIND,
@@ -73,8 +74,10 @@ import {
     SESSION_READY_KIND,
     type ServiceToDaemonMessage,
     type SessionEventEnvelope,
+    type SessionEventRejection,
     SessionEventRejectionCode,
     type SessionPrepareCommand,
+    validateSessionEventEnvelope,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -374,6 +377,7 @@ export class ChannelActor {
                     this.deferSessionEvent(socket, envelope);
                     return;
                 }
+                const event = validateSessionEventEnvelope(envelope);
                 let result: Awaited<ReturnType<SessionCommandRuntime["commitEvent"]>>;
                 try {
                     result = await this.#commands.commitEvent(
@@ -393,14 +397,7 @@ export class ChannelActor {
                         this.#backpressuredEventBySource.delete(sourceKey);
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_deleted") {
-                        socket.send(
-                            encodeServiceToDaemonMessage({
-                                code: SessionEventRejectionCode.SessionDeleted,
-                                eventId: envelope.eventId,
-                                kind: SESSION_EVENT_REJECTED_KIND,
-                                sessionId: envelope.sessionId,
-                            }),
-                        );
+                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionDeleted);
                         return;
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && error.code === "session_not_found") {
@@ -409,25 +406,11 @@ export class ChannelActor {
                             this.deferSessionEvent(socket, envelope);
                             return;
                         }
-                        socket.send(
-                            encodeServiceToDaemonMessage({
-                                code: SessionEventRejectionCode.SessionNotFound,
-                                eventId: envelope.eventId,
-                                kind: SESSION_EVENT_REJECTED_KIND,
-                                sessionId: envelope.sessionId,
-                            }),
-                        );
+                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionNotFound);
                         return;
                     }
                     if (!signal.aborted && error instanceof SessionRuntimeError && isTerminalSessionEventError(error)) {
-                        socket.send(
-                            encodeServiceToDaemonMessage({
-                                code: SessionEventRejectionCode.SessionRejected,
-                                eventId: envelope.eventId,
-                                kind: SESSION_EVENT_REJECTED_KIND,
-                                sessionId: envelope.sessionId,
-                            }),
-                        );
+                        this.rejectSessionEvent(socket, envelope, event, SessionEventRejectionCode.SessionRejected);
                         return;
                     }
                     throw error;
@@ -607,6 +590,34 @@ export class ChannelActor {
         envelope.source.kind === "attempt"
             ? `attempt:${envelope.sessionId}:${envelope.source.attemptId}`
             : `runtime:${envelope.sessionId}`;
+
+    private readonly rejectSessionEvent = (
+        socket: ChannelSocket,
+        envelope: SessionEventEnvelope,
+        event: RecordedSessionEvent,
+        code: SessionEventRejection["code"],
+    ): void => {
+        socket.send(
+            encodeServiceToDaemonMessage({
+                code,
+                eventId: envelope.eventId,
+                kind: SESSION_EVENT_REJECTED_KIND,
+                sessionId: envelope.sessionId,
+            }),
+        );
+        if ("commandId" in event) {
+            this.broadcast(
+                this.#peers.hosts(),
+                encodeSessionFailedEvent({
+                    code: "session_event_rejected",
+                    commandId: event.commandId,
+                    kind: SESSION_FAILED_KIND,
+                    message: "The Runtime response was rejected by the Session",
+                    sessionId: envelope.sessionId,
+                }),
+            );
+        }
+    };
 
     readonly receiveHostMessage = async (
         scope: ProjectScope,

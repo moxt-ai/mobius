@@ -1,9 +1,12 @@
-import { runInDurableObject } from "cloudflare:test";
+import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     decodeServiceToDaemonMessage,
     encodeDaemonToServiceMessage,
+    encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
+    SESSION_EVENT_ACK_KIND,
+    SESSION_INFO_UPDATED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -384,6 +387,7 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(response.status).toBe(404);
     });
     it("Given a non-retained Session has hibernated, When its Runtime connects, Then the WebSocket opens before live history is restored", async () => {
+        vi.setSystemTime(new Date("2030-01-01T00:00:00.000Z"));
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
             createPlatformGateways,
@@ -540,6 +544,83 @@ describe.sequential("Platform Session-only boundary", () => {
             );
             expect(decodeServiceToDaemonMessage(await messages.next())).toEqual({
                 kind: "runtime.liveness.ready",
+            });
+
+            socket.send(
+                encodeSessionEventEnvelope({
+                    eventId: "private-reconnect-before-eviction",
+                    kind: "session.event",
+                    payload: JSON.stringify({
+                        kind: SESSION_INFO_UPDATED_KIND,
+                        sessionId,
+                        title: "Before eviction",
+                        updatedAt: "2030-01-01T00:00:00.000Z",
+                    }),
+                    sessionId,
+                    source: { kind: "runtime", sourceSeq: "1" },
+                }),
+            );
+            let beforeEviction = decodeServiceToDaemonMessage(await messages.next());
+            if (beforeEviction.kind === "session.live-history.load") {
+                socket.send(
+                    encodeDaemonToServiceMessage({
+                        history: {
+                            coveredCommandIds: [],
+                            coveredMessageIds: [],
+                            messages: [],
+                            status: "available",
+                            truncated: false,
+                        },
+                        kind: "session.live-history.loaded",
+                        requestId: beforeEviction.requestId,
+                        sessionId,
+                    }),
+                );
+                beforeEviction = decodeServiceToDaemonMessage(await messages.next());
+            }
+            expect(beforeEviction).toMatchObject({
+                eventId: "private-reconnect-before-eviction",
+                kind: SESSION_EVENT_ACK_KIND,
+                sessionId,
+            });
+
+            await evictDurableObject(sessionStub);
+            socket.send(
+                encodeSessionEventEnvelope({
+                    eventId: "private-reconnect-after-eviction",
+                    kind: "session.event",
+                    payload: JSON.stringify({
+                        kind: SESSION_INFO_UPDATED_KIND,
+                        sessionId,
+                        title: "After eviction",
+                        updatedAt: "2030-01-01T00:00:01.000Z",
+                    }),
+                    sessionId,
+                    source: { kind: "runtime", sourceSeq: "2" },
+                }),
+            );
+            let committed = decodeServiceToDaemonMessage(await messages.next());
+            if (committed.kind === "session.live-history.load") {
+                socket.send(
+                    encodeDaemonToServiceMessage({
+                        history: {
+                            coveredCommandIds: [],
+                            coveredMessageIds: [],
+                            messages: [],
+                            status: "available",
+                            truncated: false,
+                        },
+                        kind: "session.live-history.loaded",
+                        requestId: committed.requestId,
+                        sessionId,
+                    }),
+                );
+                committed = decodeServiceToDaemonMessage(await messages.next());
+            }
+            expect(committed).toMatchObject({
+                eventId: "private-reconnect-after-eviction",
+                kind: SESSION_EVENT_ACK_KIND,
+                sessionId,
             });
         } finally {
             socket.close(1000, "Private reconnect test complete");
