@@ -17,6 +17,7 @@ import {
     decodeNativeSessionHistory,
     decodeNativeSessionTurnForkCommand,
     decodeNativeSessionTurnForkRequest,
+    decodeSessionConfigOptions,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRequestedEvent,
     decodeSessionOperationFailedEvent,
@@ -525,5 +526,32 @@ describe("workspace directory protocol", () => {
         };
 
         expect(decodeWorkspaceListCommand(encodeWorkspaceListCommand(command))).toEqual(command);
+    });
+});
+
+describe("session configuration value protocol", () => {
+    it("Given an Agent names its provider default with an empty value id, When the options are decoded, Then the empty id is a value like any other", () => {
+        const options = decodeSessionConfigOptions([
+            {
+                booleanValue: false,
+                category: "thought_level",
+                currentValue: "",
+                description: "Reasoning effort",
+                id: "reasoning_effort",
+                name: "Reasoning effort",
+                type: "select",
+                values: [
+                    { description: "", groupId: "", groupName: "", name: "Provider default", value: "" },
+                    { description: "", groupId: "", groupName: "", name: "High", value: "high" },
+                ],
+            },
+        ]);
+
+        expect(options).toEqual([
+            expect.objectContaining({
+                currentValue: "",
+                values: [expect.objectContaining({ value: "" }), expect.objectContaining({ value: "high" })],
+            }),
+        ]);
     });
 });

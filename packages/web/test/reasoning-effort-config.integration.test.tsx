@@ -148,6 +148,48 @@ function sendDiscoveredModelSettings(agentId: string, requestId: string, model: 
     });
 }
 
+function sendDiscoveredProviderDefaultEffortSettings(agentId: string, requestId: string): string {
+    // A custom provider route reports the effort it will actually use as the
+    // empty provider-default id rather than one of its own levels.
+    const values = [modelValue("Provider default", ""), modelValue("Low", "low"), modelValue("High", "high")];
+    return encodeAgentSettingsDiscoveredEvent({
+        agentId,
+        agentName: "DeepSeek Harness",
+        agentVersion: "integration",
+        kind: "agent.settings.discovered",
+        modelEffort: {
+            effortSettingId: "reasoning_effort",
+            modelSettingId: "model",
+            resolution: AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION,
+            valuesByModel: {},
+        },
+        requestId,
+        settings: [
+            {
+                booleanValue: false,
+                category: "model",
+                defaultValue: "model-a",
+                description: "Execution model",
+                id: "model",
+                name: "Model",
+                type: "select",
+                values: [modelValue("Model A", "model-a"), modelValue("Model B", "model-b")],
+            },
+            {
+                booleanValue: false,
+                category: "thought_level",
+                defaultValue: "",
+                description: "Reasoning effort",
+                id: "reasoning_effort",
+                name: "Reasoning effort",
+                type: "select",
+                values,
+            },
+        ],
+        settingsRevision: "2".repeat(64),
+    });
+}
+
 function sendDiscoveredDeferredEffortSettings(agentId: string, requestId: string, model: string): string {
     const selectedModel = model.length === 0 ? "model-a" : model;
     if (model.length === 0 || selectedModel === "model-a") {
@@ -379,6 +421,41 @@ describe.sequential("Agent-native run settings", () => {
             const effort = await screen.findByRole("combobox", { name: "Reasoning effort" });
             expect(effort).toBeTruthy();
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given an Agent reports effort as the provider default, When the user opens run settings, Then the picker offers that default and the Agent's own levels", async () => {
+        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const prepare = decodeSessionPrepareCommand(encodedPrepare);
+            paired.daemon.send(sendDiscoveredProviderDefaultEffortSettings(discovery.agentId, discovery.requestId));
+            await sendReadySession(paired.daemon, prepare, []);
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A, Provider default/ }));
+
+            const effort = await screen.findByRole("combobox", { name: "Reasoning effort" });
+            fireEvent.pointerDown(effort, { button: 0, pointerType: "mouse" });
+            expect(await screen.findByRole("option", { name: "Provider default" })).toBeTruthy();
+            expect(await screen.findByRole("option", { name: "High" })).toBeTruthy();
+
+            fireEvent.click(screen.getByRole("option", { name: "High" }));
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model A, High/ })).toBeTruthy();
+            });
         } finally {
             cleanup();
             await closeMobiusTransport();

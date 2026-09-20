@@ -155,7 +155,13 @@ class FakeSessionState {
     readonly reasoningEffort: string;
     readonly turnCount: number;
 
-    constructor(turnCount: number, model = "test-small", reasoningEffort = "medium", fastMode = false, mode = "code") {
+    constructor(
+        turnCount: number,
+        model = "test-small",
+        reasoningEffort = process.argv.includes("--effort-provider-default") ? "" : "medium",
+        fastMode = false,
+        mode = "code",
+    ) {
         this.fastMode = fastMode;
         this.mode = mode;
         this.model = model;
@@ -367,11 +373,18 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
             description: "Reasoning effort used by the fake ACP agent",
             id: "reasoning_effort",
             name: "Reasoning effort",
-            options: [
-                { name: "Low", value: "low" },
-                { name: "Medium", value: "medium" },
-                { name: "High", value: "high" },
-            ],
+            options: process.argv.includes("--effort-provider-default")
+                ? [
+                      { name: "Provider default", value: "" },
+                      { name: "Low", value: "low" },
+                      { name: "Medium", value: "medium" },
+                      { name: "High", value: "high" },
+                  ]
+                : [
+                      { name: "Low", value: "low" },
+                      { name: "Medium", value: "medium" },
+                      { name: "High", value: "high" },
+                  ],
             type: "select",
         },
         {

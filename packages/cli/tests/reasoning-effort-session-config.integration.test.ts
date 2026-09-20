@@ -14,6 +14,57 @@ import { LocalAgentDefinition } from "../src/config.ts";
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 describe("Agent setting capabilities", () => {
+    it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {
+        const manager = new AcpSessionManager();
+        const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [
+            fakeAgentPath,
+            "--effort-provider-default",
+        ]);
+        const session = {
+            additionalDirectories: [],
+            agent,
+            cwd: process.cwd(),
+            sessionId: "deepseek-provider-default-effort",
+            signal: new AbortController().signal,
+        };
+
+        try {
+            const prepared = await manager.prepareSession(session);
+            expect(prepared.configOptions).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({
+                        currentValue: "",
+                        id: "reasoning_effort",
+                        type: "select",
+                        values: expect.arrayContaining([expect.objectContaining({ value: "" })]),
+                    }),
+                ]),
+            );
+            const effort = prepared.configOptions.find((option) => option.id === "reasoning_effort");
+            expect(effort?.type === "select" ? effort.values.map((value) => value.value) : []).toEqual([
+                "",
+                "low",
+                "medium",
+                "high",
+            ]);
+            const configured = await manager.configureSession({
+                ...session,
+                booleanValue: false,
+                configId: "reasoning_effort",
+                requestId: "provider-default-to-high",
+                value: "high",
+                valueType: "select",
+            });
+            expect(configured).toEqual(
+                expect.arrayContaining([
+                    expect.objectContaining({ currentValue: "high", id: "reasoning_effort", type: "select" }),
+                ]),
+            );
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given an Agent does not expose adjustable reasoning effort, When a session is prepared, Then Mobius does not invent an effort setting", async () => {
         const manager = new AcpSessionManager();
         const agent = new LocalAgentDefinition("deepseek-harness", "DeepSeek Harness", process.execPath, [

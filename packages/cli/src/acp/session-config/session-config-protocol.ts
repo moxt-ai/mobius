@@ -63,13 +63,20 @@ function normalizeConfigValue(
     option: Readonly<Record<string, unknown>>,
     groupId = "",
     groupName = "",
-): SessionConfigValue {
+): SessionConfigValue | undefined {
+    // A value id must be a string. The empty string is a real id — an Agent
+    // names the provider default that way — so only a non-string value, which
+    // carries no id at all, is refused.
+    const value = option["value"];
+    if (typeof value !== "string") {
+        return undefined;
+    }
     return {
         description: truncate(readString(option["description"]), 500),
         groupId: truncate(groupId, 128),
         groupName: truncate(groupName, 255),
-        name: truncate(readString(option["name"], readString(option["value"])), 255),
-        value: truncate(readString(option["value"]), 500),
+        name: truncate(readString(option["name"], value), 255),
+        value: truncate(value, 500),
     };
 }
 
@@ -88,14 +95,20 @@ function normalizeConfigValues(value: unknown): readonly SessionConfigValue[] {
             const groupName = readString(entry["name"]);
             for (const groupedOption of groupedOptions) {
                 if (isRecord(groupedOption)) {
-                    normalized.push(normalizeConfigValue(groupedOption, groupId, groupName));
+                    const normalizedValue = normalizeConfigValue(groupedOption, groupId, groupName);
+                    if (normalizedValue !== undefined) {
+                        normalized.push(normalizedValue);
+                    }
                 }
             }
             continue;
         }
-        normalized.push(normalizeConfigValue(entry));
+        const normalizedEntry = normalizeConfigValue(entry);
+        if (normalizedEntry !== undefined) {
+            normalized.push(normalizedEntry);
+        }
     }
-    return normalized.filter((entry) => entry.value.length > 0).slice(0, 500);
+    return normalized.slice(0, 500);
 }
 
 export function normalizeConfigOptions(value: unknown, modes: unknown): readonly SessionConfigOption[] {
@@ -127,7 +140,9 @@ export function normalizeConfigOptions(value: unknown, modes: unknown): readonly
             if (option["type"] === "select") {
                 const values = normalizeConfigValues(option["options"]);
                 const currentValue = truncate(readString(option["currentValue"]), 500);
-                if (currentValue.length > 0 && values.some((entry) => entry.value === currentValue)) {
+                // The selected value must be one the Agent offers. It may be
+                // empty, which is how an Agent reports the provider default.
+                if (values.some((entry) => entry.value === currentValue)) {
                     normalized.push({
                         booleanValue: false,
                         category,

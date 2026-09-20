@@ -129,7 +129,11 @@ const configValueSchema = z
         groupId: z.string().max(128),
         groupName: z.string().max(255),
         name: z.string().min(1).max(255),
-        value: z.string().min(1).max(500),
+        // ACP types a select value id as any string, and Agents use the empty
+        // id to mean "the provider's own default" — no explicit setting is
+        // sent. Refusing it would drop the whole option, so the id is bounded
+        // by length alone.
+        value: z.string().max(500),
     })
     .readonly();
 
