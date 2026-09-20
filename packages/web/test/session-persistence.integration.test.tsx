@@ -593,6 +593,72 @@ describe.sequential("Session persistence boundaries", () => {
         }
     });
 
+    it("Given a restored Session carries a Relay title, When the Agent reports no title, Then that title survives both the empty string and null", async () => {
+        const paired = await openReadyApplication();
+
+        try {
+            const initialPreparation = paired.preparation;
+            const prompt = await completeRenderedPrompt(
+                paired.daemon,
+                "Explain the deployment pipeline",
+                "The pipeline builds and deploys.",
+            );
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionInfoUpdatedEvent({
+                    kind: "session.info.updated",
+                    sessionId: prompt.sessionId,
+                    title: "Deployment pipeline walkthrough",
+                    updatedAt: "2026-09-06T12:00:00.000Z",
+                }),
+            );
+            await waitFor(() => {
+                expect(screen.getByTestId(dataTestId.conversationTitle).textContent).toBe(
+                    "Deployment pipeline walkthrough",
+                );
+            });
+
+            // Reload so the conversation is rebuilt from the Relay directory: its title now comes from
+            // the server instead of from the first rendered prompt, and its Turns are restored.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(resumedPreparation.sessionId).toBe(initialPreparation.sessionId);
+            await sendReadySession(paired.daemon, resumedPreparation);
+            await waitFor(() => {
+                expect(screen.getByTestId(dataTestId.conversationTitle).textContent).toBe(
+                    "Deployment pipeline walkthrough",
+                );
+            });
+
+            // An adapter without native title support reports that absence, which must not replace the
+            // authoritative Relay title with one derived from the restored first prompt.
+            for (const title of ["", null]) {
+                await paired.daemon.sendSessionEvent(
+                    prompt.sessionId,
+                    encodeSessionInfoUpdatedEvent({
+                        kind: "session.info.updated",
+                        sessionId: prompt.sessionId,
+                        title,
+                        updatedAt: "2026-09-06T12:00:01.000Z",
+                    }),
+                );
+            }
+
+            await waitFor(() => {
+                expect(screen.getAllByTestId(dataTestId.conversationTitle).map((node) => node.textContent)).toEqual([
+                    "Deployment pipeline walkthrough",
+                ]);
+                expect(screen.getByTestId(dataTestId.conversationTitleHeader).textContent).toBe(
+                    "Deployment pipeline walkthrough",
+                );
+            });
+        } finally {
+            await paired.close();
+        }
+    });
+
     it("Given a titled prepared Session has an unsent prompt, When the Web app reloads and sends it, Then the Session and draft are restored before the draft is consumed", async () => {
         const paired = await openReadyApplication();
 

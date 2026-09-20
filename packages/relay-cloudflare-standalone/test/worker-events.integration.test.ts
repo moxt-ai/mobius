@@ -1248,4 +1248,58 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
             host.socket.close(1000, "Batched message projection test complete");
         }
     });
+
+    it("Given an Agent reports an empty title, When the browser reads the Session directory, Then the existing title is preserved", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "empty-title-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        try {
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "empty-title-kept", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId,
+                    title: "Title from the Agent",
+                    updatedAt: "2026-09-06T00:00:00.000Z",
+                }),
+            );
+            await commitBatch(host, daemon, [
+                envelope(sessionId, "empty-title-blank", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId,
+                    title: "",
+                    updatedAt: "2026-09-06T00:00:01.000Z",
+                }),
+                envelope(sessionId, "empty-title-null", {
+                    kind: SESSION_INFO_UPDATED_KIND,
+                    sessionId,
+                    title: null,
+                    updatedAt: "2026-09-06T00:00:02.000Z",
+                }),
+            ]);
+
+            const directory = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions?limit=1`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(directory.status).toBe(200);
+            await expect(directory.json()).resolves.toMatchObject({
+                sessions: [{ sessionId, title: "Title from the Agent" }],
+            });
+        } finally {
+            host.socket.close(1000, "Empty title test complete");
+            daemon.socket.close(1000, "Empty title test complete");
+        }
+    });
 });

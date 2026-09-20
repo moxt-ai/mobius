@@ -347,7 +347,11 @@ export class SessionEventProjector {
             };
         }
         if (event.kind === SESSION_INFO_UPDATED_KIND) {
-            return { kind: "title", title: event.title ?? "" };
+            // An Agent that omits the optional ACP title reports null or an empty string, which means
+            // "no title in this update" rather than "clear the title". Projecting it would erase the
+            // fallback title derived from the first prompt.
+            const title = event.title ?? "";
+            return title.length === 0 ? { kind: "unchanged" } : { kind: "title", title };
         }
         return { kind: "unchanged" };
     };

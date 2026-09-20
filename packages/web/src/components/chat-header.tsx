@@ -1,6 +1,7 @@
 import { Menu, PanelLeftClose, PanelLeftOpen, Plus } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { dataTestId } from "@/data-testid";
 import { OfflineRuntimeState, UnavailableRuntimeState } from "@/domain/chat";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
@@ -43,7 +44,10 @@ export function ChatHeader({ desktopSidebarCollapsed, onCreateConversation, onTo
             >
                 {desktopSidebarCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
             </Button>
-            <h1 className="min-w-0 truncate text-sm leading-5 font-semibold tracking-[-0.01em]">
+            <h1
+                className="min-w-0 truncate text-sm leading-5 font-semibold tracking-[-0.01em]"
+                data-testid={dataTestId.conversationTitleHeader}
+            >
                 {conversation.title}
             </h1>
             <Button

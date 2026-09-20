@@ -7,6 +7,7 @@ import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
+import { dataTestId } from "@/data-testid";
 import type { Conversation } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
@@ -188,7 +189,10 @@ export function ConversationSidebar({
                     )}
                 </span>
                 <span className="min-w-0">
-                    <strong className="block truncate text-[13px] leading-[18px] font-medium text-foreground">
+                    <strong
+                        className="block truncate text-[13px] leading-[18px] font-medium text-foreground"
+                        data-testid={dataTestId.conversationTitle}
+                    >
                         {conversation.title}
                     </strong>
                     <span

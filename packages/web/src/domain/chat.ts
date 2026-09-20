@@ -1940,20 +1940,17 @@ export class Conversation {
     };
 
     readonly updateTitle = (title: string | null): Conversation => {
-        if (title === null) {
+        // An Agent that omits the optional ACP title reports null or an empty string. Both mean the
+        // update carries no title, so the locally derived title must survive either one.
+        if (title === null || title.length === 0) {
             return this;
         }
-        const firstPrompt = this.messages.find((message) => message instanceof UserChatMessage);
-        const fallbackTitle =
-            firstPrompt instanceof UserChatMessage
-                ? titleFromTurn(firstPrompt.text, firstPrompt.images, firstPrompt.resources)
-                : "New chat";
         return new Conversation(
             this.agentId,
             this.agentLabel,
             this.id,
             this.sessionId,
-            title.length > 0 ? title : fallbackTitle,
+            title,
             this.preview,
             this.draft,
             this.messages,
