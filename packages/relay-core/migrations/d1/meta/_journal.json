@@ -1,0 +1,20 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "entries": [
+        {
+            "idx": 16,
+            "version": "6",
+            "when": 1789883001829,
+            "tag": "0016_normalize_legacy_agent_catalogs",
+            "breakpoints": true
+        },
+        {
+            "idx": 17,
+            "version": "6",
+            "when": 1789886283708,
+            "tag": "0017_add_session_cloud_retention",
+            "breakpoints": true
+        }
+    ]
+}

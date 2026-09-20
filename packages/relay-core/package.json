@@ -8,9 +8,11 @@
         "./contracts": "./src/contracts.ts",
         "./gateway": "./src/gateway/index.ts",
         "./database": "./src/infra/sql-database.ts",
-        "./schema": "./src/schema/index.ts"
+        "./schema": "./src/schema/d1/index.ts"
     },
     "scripts": {
+        "prebuild": "pnpm --dir ../.. db:codegen",
+        "pretypecheck": "pnpm --dir ../.. db:codegen",
         "build": "tsc --project tsconfig.json",
         "typecheck": "tsc --project tsconfig.json"
     },

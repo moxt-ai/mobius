@@ -71,7 +71,7 @@ export async function createTestMobiusPlatformBindings() {
         const env = await runtime.getBindings<PlatformRelayBindings>();
         await migrate(
             env.PLATFORM_DIRECTORY_DATABASE,
-            new NodeURL("../../packages/relay-cloudflare-platform/migrations/dashboard", import.meta.url),
+            new NodeURL("../../packages/relay-cloudflare-platform/migrations/d1", import.meta.url),
         );
         return { env, [Symbol.asyncDispose]: () => runtime.dispose() };
     } catch (cause) {

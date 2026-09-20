@@ -1,7 +1,9 @@
 import * as v from "valibot";
 import type { RuntimeConnectionIdentity, RuntimeDisconnect } from "../entity/channel/runtime-connection.ts";
 import type { ProjectScope } from "../entity/do/session.ts";
+import { runtimeConnectionDurableObjectMigrations } from "../generated/runtime-connection-do-migrations.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
+import { applyDurableObjectMigrations } from "../infra/durable-object-migrations.ts";
 import { DatabaseError } from "../infra/sql-database.ts";
 
 const disconnectSchema = v.object({
@@ -21,25 +23,7 @@ export class RuntimeConnectionStorage {
 
     constructor(database: DoSqlDatabase) {
         this.#database = database;
-        database.exec(`CREATE TABLE IF NOT EXISTS runtime_connection_state (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            runtime_id TEXT NOT NULL,
-            connection_epoch INTEGER NOT NULL,
-            connection_id TEXT NOT NULL,
-            state TEXT NOT NULL CHECK (state IN ('online', 'offline')),
-            connected_at INTEGER NOT NULL,
-            disconnected_at INTEGER
-        ) STRICT;`);
-        database.exec(`CREATE TABLE IF NOT EXISTS runtime_disconnect (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            job_json TEXT NOT NULL
-        ) STRICT;`);
-        database.exec(`CREATE TABLE IF NOT EXISTS runtime_revocations (
-            runtime_id TEXT NOT NULL,
-            project_id TEXT NOT NULL,
-            revoked_at INTEGER NOT NULL,
-            PRIMARY KEY (runtime_id, project_id)
-        ) STRICT;`);
+        applyDurableObjectMigrations(database, "runtime-connection-do", runtimeConnectionDurableObjectMigrations);
     }
 
     readonly isRevoked = (runtimeId: string, scope: ProjectScope): boolean =>

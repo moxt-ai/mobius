@@ -1,0 +1,2273 @@
+{
+    "version": "6",
+    "dialect": "sqlite",
+    "id": "f911462c-29c1-4687-8671-20ad6d5cf4ff",
+    "prevId": "00000000-0000-0000-0000-000000000000",
+    "tables": {
+        "archive_segments": {
+            "name": "archive_segments",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "segment_id": {
+                    "name": "segment_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "first_sequence": {
+                    "name": "first_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "last_sequence": {
+                    "name": "last_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_count": {
+                    "name": "event_count",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "media_type": {
+                    "name": "media_type",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sha256": {
+                    "name": "sha256",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "chunks_json": {
+                    "name": "chunks_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "archive_segments_range": {
+                    "name": "archive_segments_range",
+                    "columns": ["scope_key", "session_id", "first_sequence", "last_sequence"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "archive_segments_scope_key_session_id_segment_id_pk": {
+                    "columns": ["scope_key", "session_id", "segment_id"],
+                    "name": "archive_segments_scope_key_session_id_segment_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "archive_segments_state_check": {
+                    "name": "archive_segments_state_check",
+                    "value": "state IN ('pending', 'uploaded', 'published', 'deleting', 'deleted')"
+                },
+                "archive_segments_table_check_3": {
+                    "name": "archive_segments_table_check_3",
+                    "value": "first_sequence <= last_sequence"
+                },
+                "archive_segments_table_check_4": {
+                    "name": "archive_segments_table_check_4",
+                    "value": "event_count = last_sequence - first_sequence + 1"
+                }
+            }
+        },
+        "archive_work": {
+            "name": "archive_work",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "target_id": {
+                    "name": "target_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "archive_kind": {
+                    "name": "archive_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "owner_id": {
+                    "name": "owner_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "media_type": {
+                    "name": "media_type",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "hot_payload": {
+                    "name": "hot_payload",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "attempts": {
+                    "name": "attempts",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "last_error": {
+                    "name": "last_error",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "''"
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "archive_work_scope_key_session_id_target_id_pk": {
+                    "columns": ["scope_key", "session_id", "target_id"],
+                    "name": "archive_work_scope_key_session_id_target_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "archive_work_archive_kind_check": {
+                    "name": "archive_work_archive_kind_check",
+                    "value": "archive_kind IN ('activity', 'event')"
+                }
+            }
+        },
+        "artifacts": {
+            "name": "artifacts",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "artifact_id": {
+                    "name": "artifact_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "owner_id": {
+                    "name": "owner_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "media_type": {
+                    "name": "media_type",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sha256": {
+                    "name": "sha256",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "chunks_json": {
+                    "name": "chunks_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "artifacts_scope_key_session_id_artifact_id_pk": {
+                    "columns": ["scope_key", "session_id", "artifact_id"],
+                    "name": "artifacts_scope_key_session_id_artifact_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "artifacts_state_check": {
+                    "name": "artifacts_state_check",
+                    "value": "state IN ('uploading', 'available', 'deleting', 'deleted', 'failed', 'expired')"
+                }
+            }
+        },
+        "attempts": {
+            "name": "attempts",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "attempt_id": {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_id": {
+                    "name": "turn_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "binding_id": {
+                    "name": "binding_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "started_at": {
+                    "name": "started_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "waiting_interaction_ids_json": {
+                    "name": "waiting_interaction_ids_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "'[]'"
+                },
+                "completed_at": {
+                    "name": "completed_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "stop_reason": {
+                    "name": "stop_reason",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "error_code": {
+                    "name": "error_code",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "error_message": {
+                    "name": "error_message",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "attempts_scope_key_session_id_turn_id_attempt_id_unique": {
+                    "name": "attempts_scope_key_session_id_turn_id_attempt_id_unique",
+                    "columns": ["scope_key", "session_id", "turn_id", "attempt_id"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "attempts_scope_key_session_id_attempt_id_pk": {
+                    "columns": ["scope_key", "session_id", "attempt_id"],
+                    "name": "attempts_scope_key_session_id_attempt_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "attempts_state_check": {
+                    "name": "attempts_state_check",
+                    "value": "state IN ('dispatching', 'running', 'waiting_input', 'succeeded', 'failed', 'cancelled', 'indeterminate')"
+                }
+            }
+        },
+        "command_receipts": {
+            "name": "command_receipts",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_kind": {
+                    "name": "command_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "idempotency_key": {
+                    "name": "idempotency_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "request_hash": {
+                    "name": "request_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "result_id": {
+                    "name": "result_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "accepted_at": {
+                    "name": "accepted_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "command_receipts_scope_key_session_id_command_kind_idempotency_key_pk": {
+                    "columns": ["scope_key", "session_id", "command_kind", "idempotency_key"],
+                    "name": "command_receipts_scope_key_session_id_command_kind_idempotency_key_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "interactions": {
+            "name": "interactions",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "interaction_id": {
+                    "name": "interaction_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_id": {
+                    "name": "turn_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "attempt_id": {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "request_json": {
+                    "name": "request_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "response_json": {
+                    "name": "response_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "responder_id": {
+                    "name": "responder_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "responded_at": {
+                    "name": "responded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "resolved_at": {
+                    "name": "resolved_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "interactions_scope_key_session_id_interaction_id_pk": {
+                    "columns": ["scope_key", "session_id", "interaction_id"],
+                    "name": "interactions_scope_key_session_id_interaction_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "interactions_state_check": {
+                    "name": "interactions_state_check",
+                    "value": "state IN ('pending', 'responded', 'resolved', 'expired', 'cancelled')"
+                }
+            }
+        },
+        "pending_work": {
+            "name": "pending_work",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "work_id": {
+                    "name": "work_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "work_kind": {
+                    "name": "work_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "interaction_id": {
+                    "name": "interaction_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "delivery_payload": {
+                    "name": "delivery_payload",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "queued_at": {
+                    "name": "queued_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "started_at": {
+                    "name": "started_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "completed_at": {
+                    "name": "completed_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "next_attempt_at": {
+                    "name": "next_attempt_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "attempt_count": {
+                    "name": "attempt_count",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "error_code": {
+                    "name": "error_code",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "error_message": {
+                    "name": "error_message",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "pending_work_delivery": {
+                    "name": "pending_work_delivery",
+                    "columns": ["scope_key", "runtime_id", "state", "queued_at", "work_id"],
+                    "isUnique": false
+                },
+                "pending_work_scope_key_session_id_interaction_id_unique": {
+                    "name": "pending_work_scope_key_session_id_interaction_id_unique",
+                    "columns": ["scope_key", "session_id", "interaction_id"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "pending_work_scope_key_session_id_work_id_pk": {
+                    "columns": ["scope_key", "session_id", "work_id"],
+                    "name": "pending_work_scope_key_session_id_work_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "pending_work_work_kind_check": {
+                    "name": "pending_work_work_kind_check",
+                    "value": "work_kind IN ('archive', 'delete', 'dispatch', 'interaction_response', 'projection')"
+                },
+                "pending_work_state_check": {
+                    "name": "pending_work_state_check",
+                    "value": "state IN ('pending', 'running', 'completed', 'retryable', 'failed')"
+                }
+            }
+        },
+        "session_bindings": {
+            "name": "session_bindings",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "binding_id": {
+                    "name": "binding_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "agent_ref": {
+                    "name": "agent_ref",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "workspace_ref": {
+                    "name": "workspace_ref",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "config_revision": {
+                    "name": "config_revision",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_bindings_scope_key_session_id_binding_id_pk": {
+                    "columns": ["scope_key", "session_id", "binding_id"],
+                    "name": "session_bindings_scope_key_session_id_binding_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "session_configuration_snapshots": {
+            "name": "session_configuration_snapshots",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "config_revision": {
+                    "name": "config_revision",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "config_options_json": {
+                    "name": "config_options_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_configuration_snapshots_scope_key_session_id_pk": {
+                    "columns": ["scope_key", "session_id"],
+                    "name": "session_configuration_snapshots_scope_key_session_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "session_content_chunks": {
+            "name": "session_content_chunks",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_id": {
+                    "name": "content_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "chunk_index": {
+                    "name": "chunk_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "payload": {
+                    "name": "payload",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_content_chunks_scope_key_session_id_content_id_chunk_index_pk": {
+                    "columns": ["scope_key", "session_id", "content_id", "chunk_index"],
+                    "name": "session_content_chunks_scope_key_session_id_content_id_chunk_index_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_content_chunks_chunk_index_check": {
+                    "name": "session_content_chunks_chunk_index_check",
+                    "value": "chunk_index >= 0"
+                },
+                "session_content_chunks_byte_length_check": {
+                    "name": "session_content_chunks_byte_length_check",
+                    "value": "byte_length >= 0"
+                }
+            }
+        },
+        "session_event_receipts": {
+            "name": "session_event_receipts",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_kind": {
+                    "name": "source_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_id": {
+                    "name": "source_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_id": {
+                    "name": "event_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "payload_hash": {
+                    "name": "payload_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_seq": {
+                    "name": "source_seq",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence_number": {
+                    "name": "sequence_number",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_event_receipts_event": {
+                    "name": "session_event_receipts_event",
+                    "columns": ["scope_key", "session_id", "event_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_event_receipts_scope_key_session_id_source_kind_source_id_pk": {
+                    "columns": ["scope_key", "session_id", "source_kind", "source_id"],
+                    "name": "session_event_receipts_scope_key_session_id_source_kind_source_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_event_receipts_source_kind_check": {
+                    "name": "session_event_receipts_source_kind_check",
+                    "value": "source_kind IN ('attempt', 'runtime')"
+                }
+            }
+        },
+        "session_events": {
+            "name": "session_events",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence_number": {
+                    "name": "sequence_number",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_id": {
+                    "name": "event_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "payload_hash": {
+                    "name": "payload_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_kind": {
+                    "name": "source_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_id": {
+                    "name": "source_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "source_seq": {
+                    "name": "source_seq",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "payload": {
+                    "name": "payload",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "archive_segment_id": {
+                    "name": "archive_segment_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "recorded_at": {
+                    "name": "recorded_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_events_scope_key_session_id_event_id_unique": {
+                    "name": "session_events_scope_key_session_id_event_id_unique",
+                    "columns": ["scope_key", "session_id", "event_id"],
+                    "isUnique": true
+                },
+                "session_events_scope_key_session_id_source_kind_source_id_source_seq_unique": {
+                    "name": "session_events_scope_key_session_id_source_kind_source_id_source_seq_unique",
+                    "columns": ["scope_key", "session_id", "source_kind", "source_id", "source_seq"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_events_scope_key_session_id_sequence_number_pk": {
+                    "columns": ["scope_key", "session_id", "sequence_number"],
+                    "name": "session_events_scope_key_session_id_sequence_number_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_events_source_kind_check": {
+                    "name": "session_events_source_kind_check",
+                    "value": "source_kind IN ('attempt', 'runtime')"
+                }
+            }
+        },
+        "session_message_chunks": {
+            "name": "session_message_chunks",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "message_id": {
+                    "name": "message_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "chunk_index": {
+                    "name": "chunk_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content": {
+                    "name": "content",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_message_chunks_scope_key_session_id_message_id_chunk_index_pk": {
+                    "columns": ["scope_key", "session_id", "message_id", "chunk_index"],
+                    "name": "session_message_chunks_scope_key_session_id_message_id_chunk_index_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_message_chunks_chunk_index_check": {
+                    "name": "session_message_chunks_chunk_index_check",
+                    "value": "chunk_index > 0"
+                },
+                "session_message_chunks_byte_length_check": {
+                    "name": "session_message_chunks_byte_length_check",
+                    "value": "byte_length >= 0"
+                }
+            }
+        },
+        "session_messages": {
+            "name": "session_messages",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "message_id": {
+                    "name": "message_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "role": {
+                    "name": "role",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "parent_id": {
+                    "name": "parent_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "content": {
+                    "name": "content",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_chunks": {
+                    "name": "content_chunks",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "token_estimate": {
+                    "name": "token_estimate",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "completed_at": {
+                    "name": "completed_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_messages_page": {
+                    "name": "session_messages_page",
+                    "columns": ["scope_key", "session_id", "created_at", "command_id"],
+                    "isUnique": false
+                },
+                "session_messages_scope_key_session_id_command_id_role_unique": {
+                    "name": "session_messages_scope_key_session_id_command_id_role_unique",
+                    "columns": ["scope_key", "session_id", "command_id", "role"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_messages_scope_key_session_id_message_id_pk": {
+                    "columns": ["scope_key", "session_id", "message_id"],
+                    "name": "session_messages_scope_key_session_id_message_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_messages_role_check": {
+                    "name": "session_messages_role_check",
+                    "value": "role IN ('user', 'assistant')"
+                },
+                "session_messages_content_chunks_check": {
+                    "name": "session_messages_content_chunks_check",
+                    "value": "content_chunks >= 0"
+                },
+                "session_messages_token_estimate_check": {
+                    "name": "session_messages_token_estimate_check",
+                    "value": "token_estimate >= 0"
+                }
+            }
+        },
+        "session_stream_blocks": {
+            "name": "session_stream_blocks",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "stream_id": {
+                    "name": "stream_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "block_index": {
+                    "name": "block_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence_from": {
+                    "name": "sequence_from",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence_to": {
+                    "name": "sequence_to",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "payload": {
+                    "name": "payload",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_stream_blocks_scope_key_session_id_stream_id_block_index_pk": {
+                    "columns": ["scope_key", "session_id", "stream_id", "block_index"],
+                    "name": "session_stream_blocks_scope_key_session_id_stream_id_block_index_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_stream_blocks_block_index_check": {
+                    "name": "session_stream_blocks_block_index_check",
+                    "value": "block_index >= 0"
+                },
+                "session_stream_blocks_byte_length_check": {
+                    "name": "session_stream_blocks_byte_length_check",
+                    "value": "byte_length >= 0"
+                },
+                "session_stream_blocks_table_check_4": {
+                    "name": "session_stream_blocks_table_check_4",
+                    "value": "sequence_from <= sequence_to"
+                }
+            }
+        },
+        "session_stream_event_refs": {
+            "name": "session_stream_event_refs",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sequence_number": {
+                    "name": "sequence_number",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "stream_id": {
+                    "name": "stream_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "block_index": {
+                    "name": "block_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_index": {
+                    "name": "event_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_stream_event_refs_stream": {
+                    "name": "session_stream_event_refs_stream",
+                    "columns": ["scope_key", "session_id", "stream_id", "block_index"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_stream_event_refs_scope_key_session_id_sequence_number_pk": {
+                    "columns": ["scope_key", "session_id", "sequence_number"],
+                    "name": "session_stream_event_refs_scope_key_session_id_sequence_number_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_stream_event_refs_block_index_check": {
+                    "name": "session_stream_event_refs_block_index_check",
+                    "value": "block_index >= 0"
+                },
+                "session_stream_event_refs_event_index_check": {
+                    "name": "session_stream_event_refs_event_index_check",
+                    "value": "event_index >= 0"
+                }
+            }
+        },
+        "session_streams": {
+            "name": "session_streams",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "stream_id": {
+                    "name": "stream_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "message_id": {
+                    "name": "message_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "first_sequence": {
+                    "name": "first_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "last_sequence": {
+                    "name": "last_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "next_block_index": {
+                    "name": "next_block_index",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "session_streams_scope_key_session_id_command_id_unique": {
+                    "name": "session_streams_scope_key_session_id_command_id_unique",
+                    "columns": ["scope_key", "session_id", "command_id"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "session_streams_scope_key_session_id_stream_id_pk": {
+                    "columns": ["scope_key", "session_id", "stream_id"],
+                    "name": "session_streams_scope_key_session_id_stream_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "session_streams_state_check": {
+                    "name": "session_streams_state_check",
+                    "value": "state IN ('streaming')"
+                }
+            }
+        },
+        "sessions": {
+            "name": "sessions",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "project_id": {
+                    "name": "project_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_by": {
+                    "name": "created_by",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "runtime_id": {
+                    "name": "runtime_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "agent_id": {
+                    "name": "agent_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "binding_id": {
+                    "name": "binding_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "directory_id": {
+                    "name": "directory_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "config_revision": {
+                    "name": "config_revision",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "binding_created_at": {
+                    "name": "binding_created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "title": {
+                    "name": "title",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "native_history_json": {
+                    "name": "native_history_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "recording_level": {
+                    "name": "recording_level",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "retention_milliseconds": {
+                    "name": "retention_milliseconds",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "idempotency_retention_milliseconds": {
+                    "name": "idempotency_retention_milliseconds",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "hot_event_limit": {
+                    "name": "hot_event_limit",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_limit_bytes": {
+                    "name": "content_limit_bytes",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "lifecycle": {
+                    "name": "lifecycle",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "delete_requested_at": {
+                    "name": "delete_requested_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "delete_completed_at": {
+                    "name": "delete_completed_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "next_sequence": {
+                    "name": "next_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 1
+                },
+                "minimum_sequence": {
+                    "name": "minimum_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 1
+                }
+            },
+            "indexes": {
+                "sessions_directory": {
+                    "name": "sessions_directory",
+                    "columns": ["scope_key", "updated_at", "session_id"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "sessions_scope_key_session_id_pk": {
+                    "columns": ["scope_key", "session_id"],
+                    "name": "sessions_scope_key_session_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "sessions_recording_level_check": {
+                    "name": "sessions_recording_level_check",
+                    "value": "recording_level IN ('full', 'summary')"
+                },
+                "sessions_lifecycle_check": {
+                    "name": "sessions_lifecycle_check",
+                    "value": "lifecycle IN ('ready', 'deleting', 'deleted')"
+                }
+            }
+        },
+        "tool_call_views": {
+            "name": "tool_call_views",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "attempt_id": {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "activity_id": {
+                    "name": "activity_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "summary_json": {
+                    "name": "summary_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "detail_kind": {
+                    "name": "detail_kind",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "detail_artifact_id": {
+                    "name": "detail_artifact_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "hot_detail": {
+                    "name": "hot_detail",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "captured_bytes": {
+                    "name": "captured_bytes",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "original_bytes": {
+                    "name": "original_bytes",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": 0
+                },
+                "event_sequence": {
+                    "name": "event_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "tool_call_views_command_event": {
+                    "name": "tool_call_views_command_event",
+                    "columns": ["scope_key", "session_id", "command_id", "event_sequence"],
+                    "isUnique": false
+                },
+                "tool_call_views_detail_artifact": {
+                    "name": "tool_call_views_detail_artifact",
+                    "columns": ["scope_key", "session_id", "detail_artifact_id"],
+                    "isUnique": false,
+                    "where": "detail_artifact_id IS NOT NULL"
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "tool_call_views_scope_key_session_id_attempt_id_activity_id_pk": {
+                    "columns": ["scope_key", "session_id", "attempt_id", "activity_id"],
+                    "name": "tool_call_views_scope_key_session_id_attempt_id_activity_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "tool_call_views_detail_kind_check": {
+                    "name": "tool_call_views_detail_kind_check",
+                    "value": "detail_kind IN ('available', 'truncated', 'unrecorded')"
+                }
+            }
+        },
+        "turn_content_views": {
+            "name": "turn_content_views",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_id": {
+                    "name": "content_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_json": {
+                    "name": "content_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_sequence": {
+                    "name": "event_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "turn_content_views_command_event": {
+                    "name": "turn_content_views_command_event",
+                    "columns": ["scope_key", "session_id", "command_id", "event_sequence"],
+                    "isUnique": false
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "turn_content_views_scope_key_session_id_command_id_content_id_pk": {
+                    "columns": ["scope_key", "session_id", "command_id", "content_id"],
+                    "name": "turn_content_views_scope_key_session_id_command_id_content_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "turn_message_anchors": {
+            "name": "turn_message_anchors",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "message_id": {
+                    "name": "message_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "event_sequence": {
+                    "name": "event_sequence",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "turn_message_anchors_scope_key_session_id_command_id_pk": {
+                    "columns": ["scope_key", "session_id", "command_id"],
+                    "name": "turn_message_anchors_scope_key_session_id_command_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {}
+        },
+        "turns": {
+            "name": "turns",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_id": {
+                    "name": "command_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "turn_id": {
+                    "name": "turn_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "binding_id": {
+                    "name": "binding_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "idempotency_key": {
+                    "name": "idempotency_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "request_hash": {
+                    "name": "request_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "command_json": {
+                    "name": "command_json",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "response": {
+                    "name": "response",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false,
+                    "default": "''"
+                },
+                "attempt_id": {
+                    "name": "attempt_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "started_at": {
+                    "name": "started_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "completed_at": {
+                    "name": "completed_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "stop_reason": {
+                    "name": "stop_reason",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "error_code": {
+                    "name": "error_code",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "error_message": {
+                    "name": "error_message",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "updated_at": {
+                    "name": "updated_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {
+                "turns_page": {
+                    "name": "turns_page",
+                    "columns": ["scope_key", "session_id", "created_at", "command_id"],
+                    "isUnique": false
+                },
+                "turns_scope_key_session_id_turn_id_unique": {
+                    "name": "turns_scope_key_session_id_turn_id_unique",
+                    "columns": ["scope_key", "session_id", "turn_id"],
+                    "isUnique": true
+                },
+                "turns_scope_key_session_id_idempotency_key_unique": {
+                    "name": "turns_scope_key_session_id_idempotency_key_unique",
+                    "columns": ["scope_key", "session_id", "idempotency_key"],
+                    "isUnique": true
+                }
+            },
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "turns_scope_key_session_id_command_id_pk": {
+                    "columns": ["scope_key", "session_id", "command_id"],
+                    "name": "turns_scope_key_session_id_command_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "turns_state_check": {
+                    "name": "turns_state_check",
+                    "value": "state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled', 'indeterminate')"
+                }
+            }
+        },
+        "uploaded_artifacts": {
+            "name": "uploaded_artifacts",
+            "columns": {
+                "scope_key": {
+                    "name": "scope_key",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "session_id": {
+                    "name": "session_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "artifact_id": {
+                    "name": "artifact_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "file_name": {
+                    "name": "file_name",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "media_type": {
+                    "name": "media_type",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "state": {
+                    "name": "state",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "byte_length": {
+                    "name": "byte_length",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "sha256": {
+                    "name": "sha256",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "content_target_id": {
+                    "name": "content_target_id",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "upload_token_hash": {
+                    "name": "upload_token_hash",
+                    "type": "text",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "upload_expires_at": {
+                    "name": "upload_expires_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "created_at": {
+                    "name": "created_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": true,
+                    "autoincrement": false
+                },
+                "available_at": {
+                    "name": "available_at",
+                    "type": "integer",
+                    "primaryKey": false,
+                    "notNull": false,
+                    "autoincrement": false
+                }
+            },
+            "indexes": {},
+            "foreignKeys": {},
+            "compositePrimaryKeys": {
+                "uploaded_artifacts_scope_key_session_id_artifact_id_pk": {
+                    "columns": ["scope_key", "session_id", "artifact_id"],
+                    "name": "uploaded_artifacts_scope_key_session_id_artifact_id_pk"
+                }
+            },
+            "uniqueConstraints": {},
+            "checkConstraints": {
+                "uploaded_artifacts_state_check": {
+                    "name": "uploaded_artifacts_state_check",
+                    "value": "state IN ('uploading', 'available', 'expired')"
+                },
+                "uploaded_artifacts_byte_length_check": {
+                    "name": "uploaded_artifacts_byte_length_check",
+                    "value": "byte_length > 0"
+                },
+                "uploaded_artifacts_sha256_check": {
+                    "name": "uploaded_artifacts_sha256_check",
+                    "value": "length(sha256) = 64"
+                }
+            }
+        }
+    },
+    "views": {},
+    "enums": {},
+    "_meta": {
+        "schemas": {},
+        "tables": {},
+        "columns": {}
+    },
+    "internal": {
+        "indexes": {}
+    }
+}

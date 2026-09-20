@@ -4,7 +4,7 @@ import { defineConfig, type ViteUserConfig } from "vitest/config";
 
 const packageDirectory = fileURLToPath(new URL(".", import.meta.url));
 const wranglerConfigPath = fileURLToPath(new URL("./wrangler.jsonc", import.meta.url));
-const platformMigrationsPath = fileURLToPath(new URL("./migrations/dashboard", import.meta.url));
+const platformMigrationsPath = fileURLToPath(new URL("./migrations/d1", import.meta.url));
 
 export default defineConfig(async (): Promise<ViteUserConfig> => {
     const platformMigrations = await readD1Migrations(platformMigrationsPath);

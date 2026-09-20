@@ -3,7 +3,7 @@ import { hashSecret, PairingDirectoryError } from "../../entity/pairing/pairing.
 import { D1DatabaseAdapter } from "../../infra/d1-database.ts";
 import { relayDrizzle } from "../../infra/drizzle-database.ts";
 import type { SqlDatabase } from "../../infra/sql-database.ts";
-import { publicProjectBootstrapEvent } from "../../schema/public-project-bootstrap-event.ts";
+import { publicProjectBootstrapEvent } from "../../schema/d1/public-project-bootstrap-event.ts";
 
 const DEFAULT_CLIENT_LIMIT = 10;
 const DEFAULT_TOTAL_LIMIT = 100;

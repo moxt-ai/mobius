@@ -1,0 +1,1 @@
+ALTER TABLE `sessions` ADD `cloud_retention` integer DEFAULT 1 NOT NULL;

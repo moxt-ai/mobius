@@ -29,10 +29,6 @@ export class ProjectRelay {
         this.#environment = environment;
         this.#sqlite = new DurableObjectSqlDatabase(state.storage);
         initializeProjectDurableObjectSchema(this.#sqlite);
-        this.#sqlite.exec(`CREATE TABLE IF NOT EXISTS project_object_identity (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            project_id TEXT NOT NULL UNIQUE
-        ) STRICT;`);
         this.#database = new DurableObjectDatabaseAdapter(state.storage);
     }
 

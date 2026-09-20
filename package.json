@@ -11,6 +11,15 @@
     "scripts": {
         "db:shard": "bash scripts/migrate-shard.sh",
         "db:environment": "bash scripts/migrate-environment.sh",
+        "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
+        "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",
+        "db:generate:relay-d1": "drizzle-kit generate --config drizzle/drizzle.relay-d1.config.ts",
+        "db:generate:runtime-connection-do": "drizzle-kit generate --config drizzle/drizzle.runtime-connection-do.config.ts && pnpm db:codegen",
+        "db:generate:session-do": "drizzle-kit generate --config drizzle/drizzle.session-do.config.ts && pnpm db:codegen",
+        "db:codegen": "node scripts/generate-sql-modules.ts",
+        "prebuild": "pnpm db:codegen",
+        "pretypecheck": "pnpm db:codegen",
+        "pretest": "pnpm db:codegen",
         "dev": "pnpm dev:relay",
         "dev:cli": "pnpm --filter @moxt-ai/mobius dev",
         "dev:web": "pnpm --filter @moxt-ai/mobius-web dev",
@@ -65,7 +74,7 @@
         "knip": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k knip",
         "check:static": "pnpm --filter mobius-workspace run --parallel '/^(lint|typecheck|knip)$/'",
         "ci:check": "pnpm check:static && pnpm test:coverage",
-        "postinstall": "simple-git-hooks"
+        "postinstall": "pnpm db:codegen && simple-git-hooks"
     },
     "simple-git-hooks": {
         "pre-commit": "pnpm biome check --staged --error-on-warnings --files-ignore-unknown=true --no-errors-on-unmatched && pnpm check:no-chinese && pnpm typecheck"
@@ -75,6 +84,7 @@
         "@types/node": "^24.13.4",
         "@vitest/coverage-istanbul": "4.1.11",
         "dependency-cruiser": "18.2.0",
+        "drizzle-kit": "0.31.8",
         "happy-dom": "20.14.3",
         "istanbul-lib-coverage": "3.2.2",
         "istanbul-lib-report": "3.0.1",

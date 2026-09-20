@@ -1,0 +1,1 @@
+ALTER TABLE `session_directory` ADD `cloud_retention` integer DEFAULT true NOT NULL;

@@ -1,0 +1,40 @@
+import { sql } from "drizzle-orm";
+import { check, index, integer, primaryKey, sqliteTable, text } from "drizzle-orm/sqlite-core";
+
+export const sessions = sqliteTable(
+    "sessions",
+    {
+        scopeKey: text("scope_key").notNull(),
+        projectId: text("project_id").notNull(),
+        sessionId: text("session_id").notNull(),
+        createdBy: text("created_by").notNull(),
+        cloudRetention: integer("cloud_retention").notNull().default(1),
+        runtimeId: text("runtime_id").notNull(),
+        agentId: text("agent_id").notNull(),
+        bindingId: text("binding_id").notNull(),
+        directoryId: text("directory_id").notNull(),
+        configRevision: integer("config_revision").notNull(),
+        bindingCreatedAt: integer("binding_created_at").notNull(),
+        title: text("title").notNull(),
+        nativeHistoryJson: text("native_history_json"),
+        recordingLevel: text("recording_level", { enum: ["full", "summary"] }).notNull(),
+        retentionMilliseconds: integer("retention_milliseconds").notNull(),
+        idempotencyRetentionMilliseconds: integer("idempotency_retention_milliseconds").notNull(),
+        hotEventLimit: integer("hot_event_limit").notNull(),
+        contentLimitBytes: integer("content_limit_bytes").notNull(),
+        lifecycle: text("lifecycle", { enum: ["ready", "deleting", "deleted"] }).notNull(),
+        deleteRequestedAt: integer("delete_requested_at").notNull().default(0),
+        deleteCompletedAt: integer("delete_completed_at").notNull().default(0),
+        createdAt: integer("created_at").notNull(),
+        updatedAt: integer("updated_at").notNull(),
+        nextSequence: integer("next_sequence").notNull().default(1),
+        minimumSequence: integer("minimum_sequence").notNull().default(1),
+    },
+    (table) => [
+        check("sessions_cloud_retention_check", sql`cloud_retention IN (0, 1)`),
+        check("sessions_recording_level_check", sql`recording_level IN ('full', 'summary')`),
+        check("sessions_lifecycle_check", sql`lifecycle IN ('ready', 'deleting', 'deleted')`),
+        primaryKey({ columns: [table.scopeKey, table.sessionId] }),
+        index("sessions_directory").on(table.scopeKey, table.updatedAt, table.sessionId),
+    ],
+);

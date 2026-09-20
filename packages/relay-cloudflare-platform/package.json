@@ -6,10 +6,13 @@
         ".": "./src/worker.ts"
     },
     "scripts": {
+        "prebuild": "pnpm --dir ../.. db:codegen",
         "build": "pnpm --filter @moxt-ai/mobius-platform-app build && wrangler deploy --dry-run --config wrangler.jsonc --outdir dist",
         "db:migrate": "wrangler d1 migrations apply PLATFORM_DIRECTORY_DATABASE --remote --config wrangler.jsonc",
         "deploy": "pnpm --dir ../.. wrangler deploy --config packages/relay-cloudflare-platform/wrangler.jsonc",
         "dev": "pnpm --filter @moxt-ai/mobius-platform-app build --mode development && pnpm --dir ../.. wrangler dev --config packages/relay-cloudflare-platform/wrangler.jsonc",
+        "pretest:integration": "pnpm --dir ../.. db:codegen",
+        "pretypecheck": "pnpm --dir ../.. db:codegen",
         "test:integration": "vitest run --config vitest.config.ts --max-workers=1 --no-isolate",
         "typecheck": "tsc --project tsconfig.json && tsc --project tsconfig.vitest.json && tsc --project test/tsconfig.json"
     },

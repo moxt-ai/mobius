@@ -1,0 +1,20 @@
+{
+    "version": "7",
+    "dialect": "sqlite",
+    "entries": [
+        {
+            "idx": 12,
+            "version": "6",
+            "when": 1789883001818,
+            "tag": "0012_remove_bot_conversation_access",
+            "breakpoints": true
+        },
+        {
+            "idx": 13,
+            "version": "6",
+            "when": 1789886326795,
+            "tag": "0013_record_cloud_retention_migrations",
+            "breakpoints": true
+        }
+    ]
+}

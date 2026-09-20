@@ -58,8 +58,9 @@ Make illegal states unrepresentable.
 
 ## Abstraction
 
-- Drizzle schema modules are the authoritative typed description of current SQLite tables. Keep one table per file under the owning package's `src/schema`, preserve SQL names, indexes, defaults, enum typing, and check constraints, and do not declare foreign-key relations. Storage adapters use Drizzle's schema-backed query builder; do not use tagged or raw SQL to imitate ORM queries. Historical migrations remain the deployment mechanism.
-- Generate schema migrations with the Drizzle CLI from schema changes; do not hand-write migration SQL.
+- Drizzle schema modules are the authoritative typed description of current SQLite tables. Keep one table per file under the owning package's `src/schema/<target>` (for example, `schema/d1`, `schema/session-do`, or `schema/runtime-connection-do`), preserve SQL names, indexes, defaults, enum typing, and check constraints, and do not declare foreign-key relations. Never place Durable Object tables in `schema/d1`, and never use one target's schema as the implicit schema for another target. Storage adapters use Drizzle's schema-backed query builder; do not use tagged or raw SQL to imitate ORM queries. Historical migrations remain the deployment mechanism.
+- Keep Drizzle configuration in the repository-level `drizzle/` directory. Generate each target's migrations into `migrations/<target>` with the repository's pinned Drizzle CLI; do not hand-write migration SQL.
+- Durable Object runtime code must execute committed `.sql` migrations generated for its target; do not embed application-table DDL or migration SQL in TypeScript. Prefer importing the SQL directly with `?raw`. Where the build pipeline cannot import SQL, use a committed code-generation script that copies the generated SQL verbatim into a gitignored module and keep `.sql` as the source of truth.
 - Storage must not import any upper layer: services, HTTP/routes, composition/DI, application gateways, or platform adapters. This includes type-only imports and re-exports through package barrels. Shared values and records belong in `entity`; execution contracts belong in `infra`. Those lower-level modules must not depend on upper layers either.
 
 - Prefer direct, local, linear code.

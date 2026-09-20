@@ -3,7 +3,7 @@ import type { ProjectScope, SessionQuotaPolicy, SessionSummary } from "../entity
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import { relayDrizzle } from "../infra/drizzle-database.ts";
 import type { ProjectStorageContext } from "../infra/project-storage-directory.ts";
-import { sessionDirectory, sessionQuotaReservation } from "../schema/index.ts";
+import { sessionDirectory, sessionQuotaReservation } from "../schema/d1/index.ts";
 
 interface DirectoryRow {
     readonly session_id: string;

@@ -1,5 +1,5 @@
 import { drizzle, type SqliteRemoteDatabase } from "drizzle-orm/sqlite-proxy";
-import * as schema from "../schema/index.ts";
+import * as schema from "../schema/d1/index.ts";
 import type { SqlDatabase, SqlResult } from "./sql-database.ts";
 
 export type RelayDrizzleDatabase = SqliteRemoteDatabase<typeof schema>;

@@ -53,5 +53,5 @@ permissions are checked on each request. Event streams are bounded by credential
 expiry; reconnecting reauthorizes access. Runtime-local execution authorization
 continues to govern agent actions.
 
-Apply Platform `migrations/sharding/0001_platform_project_credentials.sql` before
+Apply Platform `migrations/project-do/sharding/0001_platform_project_credentials.sql` before
 deployment.

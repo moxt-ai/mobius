@@ -1,14 +1,20 @@
 {
     "$schema": "https://unpkg.com/knip@6/schema.json",
     "workspaces": {
+        ".": {
+            "entry": ["drizzle/*.config.ts"]
+        },
         "packages/cli": {
             "entry": ["src/index.ts", "src/runtime.ts"]
+        },
+        "packages/relay-core": {
+            "entry": ["src/schema/*/index.ts"]
         },
         "packages/relay-cloudflare-standalone": {
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/relay-cloudflare-platform": {
-            "entry": ["src/schema/index.ts"],
+            "entry": ["src/schema/*/index.ts"],
             "ignoreDependencies": ["cloudflare"]
         },
         "packages/mobius-sdk": {

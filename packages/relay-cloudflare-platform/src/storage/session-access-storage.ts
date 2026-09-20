@@ -3,7 +3,7 @@ import { platformProjectAuthorization } from "@moxt-ai/mobius-relay-core/schema"
 import { and, eq, gt, isNull } from "drizzle-orm";
 import * as v from "valibot";
 import { type SessionAccessRecord, sessionAccessRecordSchema } from "../entity/session-access-record.ts";
-import { platformAuditEvent, sessionAccessCredential } from "../schema/index.ts";
+import { platformAuditEvent, sessionAccessCredential } from "../schema/d1/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { PlatformControlPlaneStorage } from "./platform-control-plane-storage.ts";
 import { type PlatformDatabaseResolver, projectSqlDatabase } from "./platform-database-resolver.ts";

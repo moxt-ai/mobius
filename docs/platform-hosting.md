@@ -22,7 +22,7 @@ Create the directory database and R2 buckets before the first remote deployment:
   `apac-se`, and `oc` use APAC; every other supported location hint uses WNAM.
 - `PLATFORM_DIRECTORY_DATABASE` stores Tenant, App, AppCredential,
   and dashboard audit records and uses
-  `packages/relay-cloudflare-platform/migrations/dashboard`.
+  `packages/relay-cloudflare-platform/migrations/d1`.
   Session access credentials, App credential Project scopes, and
   Project audit events belong to the Project Durable Object.
 - `mobius-platform-<environment>-web-assets` stores append-only,

@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, isNull } from "drizzle-orm";
 import { type OrganizationInviteRow, organizationInviteRowSchema } from "../entity/organization-invite.ts";
-import { platformDashboardAuditEvent, platformOrganizationInviteLink } from "../schema/index.ts";
+import { platformDashboardAuditEvent, platformOrganizationInviteLink } from "../schema/d1/index.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { type PlatformDrizzleDatabase, platformDrizzle } from "./platform-drizzle-database.ts";
 

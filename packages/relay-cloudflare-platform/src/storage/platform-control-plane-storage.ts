@@ -29,7 +29,7 @@ import {
     platformCloudRetentionMigration,
     platformDashboardAuditEvent,
     platformProject,
-} from "../schema/index.ts";
+} from "../schema/d1/index.ts";
 import { waitForD1 } from "./d1-operation.ts";
 import { decodeOptionalStorageRecord, decodeStorageRecord, decodeStorageRecords } from "./decode-storage-record.ts";
 import { type PlatformDatabaseResolver, projectDatabase, projectSqlDatabase } from "./platform-database-resolver.ts";

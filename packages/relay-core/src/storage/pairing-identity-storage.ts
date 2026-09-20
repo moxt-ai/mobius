@@ -11,7 +11,7 @@ import {
     pairingChannel,
     projectBrowserCredential,
     projectOwnerCredential,
-} from "../schema/index.ts";
+} from "../schema/d1/index.ts";
 
 export interface IdentityDatabaseSource {
     readonly sourceId: string;

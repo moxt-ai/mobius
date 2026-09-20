@@ -59,16 +59,6 @@ export class SqliteContentStore implements ContentPersistence {
 
     constructor(database: DoSqlDatabase) {
         this.#database = database;
-        this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS immutable_content (
-        object_key TEXT PRIMARY KEY,
-        bytes BLOB NOT NULL,
-        byte_length INTEGER NOT NULL CHECK (byte_length >= 0),
-        content_encoding TEXT NOT NULL CHECK (content_encoding IN ('gzip', 'identity')),
-        media_type TEXT NOT NULL,
-        sha256 TEXT NOT NULL CHECK (length(sha256) = 64)
-      ) STRICT;
-    `);
     }
 
     readonly delete = async (target: ContentTarget, signal: AbortSignal): Promise<void> => {
