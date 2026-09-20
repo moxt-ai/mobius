@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -21,7 +21,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-
+import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 import { LocalAgentDefinition } from "../src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
@@ -29,34 +29,6 @@ import { runDaemon } from "../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
-}
-
-function writeServerTextFrame(socket: Duplex, text: string): void {
-    const payload = Buffer.from(text, "utf8");
-    const header =
-        payload.byteLength < 126
-            ? Buffer.from([0x81, payload.byteLength])
-            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
-    socket.write(Buffer.concat([header, payload]));
-}
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
@@ -166,7 +138,7 @@ describe("daemon assistant text coalescing", () => {
         });
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const agent = new LocalAgentDefinition(
             "deepseek-harness",
@@ -207,7 +179,7 @@ describe("daemon assistant text coalescing", () => {
                 sessionId: "burst_conversation",
                 targetCommandId: "",
             };
-            writeServerTextFrame(socket, encodeSessionPromptCommand(prompt));
+            sendText(socket, encodeSessionPromptCommand(prompt));
 
             let deltaCount = 0;
             let deltaText = "";
@@ -220,7 +192,7 @@ describe("daemon assistant text coalescing", () => {
                 }
                 const envelope = decodeSessionEventEnvelope(message);
                 eventSequence += 1;
-                writeServerTextFrame(
+                sendText(
                     socket,
                     encodeSessionEventAcknowledgement({
                         cursor: `cursor-${eventSequence.toString()}`,

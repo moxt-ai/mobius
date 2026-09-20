@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -8,6 +8,7 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listen, port as readPort, sendText as writeServerTextFrame } from "../../../tests/infra/websocket.ts";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
@@ -62,25 +63,6 @@ function restoreEnvironmentVariable(name: string, previous: string | undefined):
         return;
     }
     process.env[name] = previous;
-}
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
 }
 
 class ClientWebSocketFrame {
@@ -223,18 +205,6 @@ function observeClientFrames(socket: Duplex, observe: (frame: ClientWebSocketFra
     };
     socket.on("data", handleData);
     return () => socket.removeListener("data", handleData);
-}
-
-function writeServerTextFrame(socket: Duplex, text: string): void {
-    const payload = Buffer.from(text, "utf8");
-    if (payload.byteLength > 65_535) {
-        throw new Error("Test relay message is too large");
-    }
-    const header =
-        payload.byteLength < 126
-            ? Buffer.from([0x81, payload.byteLength])
-            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
-    socket.write(Buffer.concat([header, payload]));
 }
 
 function writeServerCloseFrame(socket: Duplex, code: number, reason: string): void {

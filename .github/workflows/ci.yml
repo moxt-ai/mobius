@@ -88,18 +88,9 @@ jobs:
       - uses: ./.github/actions/setup
 
       - name: Run ${{ matrix.group }} suites
-        run: pnpm "test:coverage:$TEST_GROUP"
+        run: pnpm "test:ci:$TEST_GROUP"
         env:
           TEST_GROUP: ${{ matrix.group }}
-
-      - name: Save coverage maps
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: coverage-${{ matrix.group }}
-          path: coverage/*/coverage-final.json
-          if-no-files-found: error
-          retention-days: 14
 
   agent-daemon-plan:
     name: Plan Agent and daemon tests

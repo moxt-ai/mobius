@@ -7,27 +7,9 @@ import { join } from "node:path";
 
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { listen, port } from "../../../tests/infra/websocket.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test server did not bind to a TCP port");
-    }
-    return address.port;
-}
 
 function trackConnections(server: Server, sockets: Set<Socket>): void {
     server.on("connection", (socket) => {
@@ -161,7 +143,7 @@ describe("CLI environment proxy", () => {
         const previousLowerNoProxy = process.env["no_proxy"];
         const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
         const previousPath = process.env["PATH"];
-        const proxyOrigin = `http://127.0.0.1:${readPort(proxyServer)}`;
+        const proxyOrigin = `http://127.0.0.1:${port(proxyServer)}`;
         const proxyUrl = proxyOrigin.replace("http://", "http://mobius:proxy-secret@");
 
         process.env["HTTP_PROXY"] = proxyUrl;
@@ -180,7 +162,7 @@ describe("CLI environment proxy", () => {
                 "../src/network/environment-proxy.ts"
             );
 
-            const pairingPort = readPort(pairingServer);
+            const pairingPort = port(pairingServer);
             const installation = await openRuntimeInstallationStore(
                 {
                     applicationId: "dev.mobius.proxy-test",
@@ -202,7 +184,7 @@ describe("CLI environment proxy", () => {
             expect(paired.config.auditDatabasePath).toBe(installation.auditDatabasePath(paired.connectionId));
             expect(paired.config.localContext.stateDirectory).toBe(installation.stateDirectory);
 
-            const relayPort = readPort(relayServer);
+            const relayPort = port(relayServer);
             expect(describeEnvironmentProxyRoute(new URL(`ws://127.0.0.1:${relayPort}/daemon`))).toEqual({
                 proxyOrigin,
                 proxyRoute: "proxy",

@@ -3,9 +3,9 @@
 [![CI](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml/badge.svg)](https://github.com/moxt-ai/mobius/actions/workflows/ci.yml)
 
 The engineering-quality target is 100% across lines, statements, functions, and
-branches, as an advisory target. CI uses `pnpm ci:check` for the complete verification suites,
-reports combined production TS/TSX coverage, and enforces architecture constraints.
-CI saves the three test groups' coverage maps as downloadable artifacts. See [Testing](TESTING.md)
+branches, as an advisory target. CI runs static checks and the deterministic test
+suites in parallel, and enforces architecture constraints. Coverage is an
+explicit diagnostic rather than a required CI artifact. See [Testing](TESTING.md)
 for scope and commands.
 
 ## Project direction

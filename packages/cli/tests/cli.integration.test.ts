@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 
 import { MOBIUS_API_PREFIX } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { listen, port } from "../../../tests/infra/websocket.ts";
 import packageMetadata from "../package.json" with { type: "json" };
 
 const executeFile = promisify(execFile);
@@ -20,25 +21,6 @@ const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
-}
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
 }
 
 describe("Mobius CLI", () => {
@@ -166,7 +148,7 @@ if (process.argv.includes("--version")) {
                         defaultWorkspace,
                         channelId,
                         daemonToken,
-                        relayOrigin: `http://127.0.0.1:${readPort(relay)}/`,
+                        relayOrigin: `http://127.0.0.1:${port(relay)}/`,
                     },
                     null,
                     2,
@@ -399,7 +381,7 @@ chmodSync(adapterPath, 0o700);
                         defaultWorkspace,
                         channelId,
                         daemonToken,
-                        relayOrigin: `http://127.0.0.1:${readPort(relay)}/`,
+                        relayOrigin: `http://127.0.0.1:${port(relay)}/`,
                     },
                     null,
                     2,

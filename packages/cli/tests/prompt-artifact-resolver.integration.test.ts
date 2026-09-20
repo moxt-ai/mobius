@@ -3,28 +3,10 @@ import { createServer, type Server } from "node:http";
 import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { listen, port } from "../../../tests/infra/websocket.ts";
 import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "../../protocol/src/index.ts";
 import { createDaemonConfig } from "../src/config.ts";
 import { resolvePromptArtifacts } from "../src/prompt-artifact-resolver.ts";
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function port(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("The artifact test server did not bind to a port");
-    }
-    return address.port;
-}
 
 function digest(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");

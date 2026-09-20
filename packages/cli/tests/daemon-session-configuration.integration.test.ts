@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
@@ -32,7 +32,7 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-
+import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 import { LocalAgentDefinition } from "../src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
@@ -43,34 +43,6 @@ const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agen
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
-}
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
-}
-
-function writeServerTextFrame(socket: Duplex, text: string): void {
-    const payload = Buffer.from(text, "utf8");
-    const header =
-        payload.byteLength < 126
-            ? Buffer.from([0x81, payload.byteLength])
-            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
-    socket.write(Buffer.concat([header, payload]));
 }
 
 class ClientFrames {
@@ -125,7 +97,7 @@ class ClientFrames {
             if (decodeMessageKind(message) === SESSION_EVENT_KIND) {
                 const envelope = decodeSessionEventEnvelope(message);
                 this.#eventSequence += 1;
-                writeServerTextFrame(
+                sendText(
                     this.#socket,
                     encodeSessionEventAcknowledgement({
                         cursor: `cursor-${this.#eventSequence.toString()}`,
@@ -268,7 +240,7 @@ describe("daemon session configuration boundary", () => {
         });
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [fakeAgentPath], {
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
@@ -308,14 +280,14 @@ describe("daemon session configuration boundary", () => {
                 sessionId,
                 targetCommandId: "",
             };
-            writeServerTextFrame(socket, encodeSessionPromptCommand(prompt));
+            sendText(socket, encodeSessionPromptCommand(prompt));
             await expect(readTerminalSessionResult(frames, sessionId)).resolves.toMatchObject({
                 kind: SESSION_COMPLETED_KIND,
                 text: "Echo from ACP: private conversation",
             });
 
             const requestId = "reload_native_history";
-            writeServerTextFrame(
+            sendText(
                 socket,
                 encodeSessionLiveHistoryLoad({
                     additionalDirectoryIds: [],
@@ -456,7 +428,7 @@ if (process.argv.includes("--version")) {
         await Promise.all([chmod(codexPath, 0o700), chmod(managedAdapterPath, 0o700)]);
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const contextEnvironment = {
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
@@ -489,7 +461,7 @@ if (process.argv.includes("--version")) {
             const socket = await socketReady.promise;
             const frames = new ClientFrames(socket);
             const requestId = "catalog-preserves-runtime-state";
-            writeServerTextFrame(
+            sendText(
                 socket,
                 encodeAgentCatalogRefreshCommand({
                     kind: AGENT_CATALOG_REFRESH_KIND,
@@ -554,7 +526,7 @@ if (process.argv.includes("--version")) {
         });
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         // The Agent withholds reasoning effort for its default model, so a
         // session that never switches models must still learn that model's
@@ -586,7 +558,7 @@ if (process.argv.includes("--version")) {
         try {
             const frames = new ClientFrames(await socketReady.promise);
             const noEffortRequestId = "deepseek-settings-without-effort";
-            writeServerTextFrame(
+            sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
                     agentId: agent.id,
@@ -655,7 +627,7 @@ if (process.argv.includes("--version")) {
         });
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const agent = new LocalAgentDefinition(
             "deepseek-harness",
@@ -684,7 +656,7 @@ if (process.argv.includes("--version")) {
         try {
             const frames = new ClientFrames(await socketReady.promise);
             const requestId = "deepseek-default-model-effort";
-            writeServerTextFrame(
+            sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
                     agentId: agent.id,
@@ -762,7 +734,7 @@ if (process.argv.includes("--version")) {
         });
         await listen(relay);
 
-        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
         const agent = new LocalAgentDefinition(
             "deepseek-harness",
@@ -791,7 +763,7 @@ if (process.argv.includes("--version")) {
         try {
             const frames = new ClientFrames(await socketReady.promise);
             const discoveryRequestId = "deepseek-settings";
-            writeServerTextFrame(
+            sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
                     agentId: agent.id,
@@ -816,7 +788,7 @@ if (process.argv.includes("--version")) {
                 expect.arrayContaining([expect.objectContaining({ id: "reasoning_effort" })]),
             );
             const selectedDiscoveryRequestId = "deepseek-large-model-settings";
-            writeServerTextFrame(
+            sendText(
                 await socketReady.promise,
                 encodeAgentSettingsDiscoverCommand({
                     agentId: agent.id,
@@ -884,7 +856,7 @@ if (process.argv.includes("--version")) {
                 sessionId: "configured_conversation",
                 targetCommandId: "",
             };
-            writeServerTextFrame(await socketReady.promise, encodeSessionPromptCommand(firstPrompt));
+            sendText(await socketReady.promise, encodeSessionPromptCommand(firstPrompt));
             const firstResult = await readTerminalSessionResult(frames, firstPrompt.sessionId);
             expect(firstResult).toMatchObject({
                 kind: SESSION_COMPLETED_KIND,
@@ -912,7 +884,7 @@ if (process.argv.includes("--version")) {
                 prompt: "second configured turn",
                 sessionConfigurations: secondSessionConfigurations,
             };
-            writeServerTextFrame(await socketReady.promise, encodeSessionPromptCommand(secondPrompt));
+            sendText(await socketReady.promise, encodeSessionPromptCommand(secondPrompt));
             const secondResult = await readTerminalSessionResult(frames, secondPrompt.sessionId);
             expect(secondResult).toMatchObject({
                 kind: SESSION_COMPLETED_KIND,

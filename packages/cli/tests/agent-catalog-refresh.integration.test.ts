@@ -15,7 +15,7 @@ import {
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-
+import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 import { discoverLocalAgentInventory } from "../src/agent-catalog/discover-local-agents.ts";
 import { publishAgentCatalog } from "../src/agent-catalog/publish-agent-catalog.ts";
 import { AuditStore } from "../src/audit/audit-store.ts";
@@ -24,34 +24,6 @@ import { runDaemon } from "../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
-}
-
-function writeServerTextFrame(socket: Duplex, text: string): void {
-    const payload = Buffer.from(text, "utf8");
-    const header =
-        payload.byteLength < 126
-            ? Buffer.from([0x81, payload.byteLength])
-            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
-    socket.write(Buffer.concat([header, payload]));
-}
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);
@@ -183,7 +155,7 @@ class RecordingCatalogRelay {
     ): Promise<RecordingCatalogRelay> => {
         const relay = new RecordingCatalogRelay(catalogRejection);
         await listen(relay.#server);
-        relay.#port = readPort(relay.#server);
+        relay.#port = port(relay.#server);
         return relay;
     };
 
@@ -339,7 +311,7 @@ describe("daemon Agent catalog refresh boundary", () => {
 
             refreshEnvironment = { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: join(stateDirectory, "empty") };
             const requestId = "refresh-with-degraded-environment";
-            writeServerTextFrame(
+            sendText(
                 await relay.socket(),
                 encodeAgentCatalogRefreshCommand({ kind: AGENT_CATALOG_REFRESH_KIND, requestId }),
             );
@@ -402,7 +374,7 @@ describe("daemon Agent catalog refresh boundary", () => {
 
             await rm(executablePath, { force: true });
             const requestId = "refresh-after-uninstall";
-            writeServerTextFrame(
+            sendText(
                 await relay.socket(),
                 encodeAgentCatalogRefreshCommand({ kind: AGENT_CATALOG_REFRESH_KIND, requestId }),
             );

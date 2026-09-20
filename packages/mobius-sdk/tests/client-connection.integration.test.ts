@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { createHash } from "node:crypto";
-import { createServer, type Server } from "node:http";
+import { createServer } from "node:http";
 import type { Duplex } from "node:stream";
 
 import {
@@ -24,40 +24,10 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { listen, port as readPort, sendText as writeServerTextFrame } from "../../../tests/infra/websocket.ts";
 import { connectMobiusClient, type MobiusClient } from "../src/client.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-
-function listen(server: Server): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const fail = (error: Error): void => reject(error);
-        server.once("error", fail);
-        server.listen(0, "127.0.0.1", () => {
-            server.removeListener("error", fail);
-            resolve();
-        });
-    });
-}
-
-function readPort(server: Server): number {
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-        throw new Error("Test relay did not bind to a TCP port");
-    }
-    return address.port;
-}
-
-function writeServerTextFrame(socket: Duplex, text: string): void {
-    const payload = Buffer.from(text, "utf8");
-    if (payload.byteLength > 65_535) {
-        throw new Error("Test relay message is too large");
-    }
-    const header =
-        payload.byteLength < 126
-            ? Buffer.from([0x81, payload.byteLength])
-            : Buffer.from([0x81, 126, payload.byteLength >> 8, payload.byteLength & 0xff]);
-    socket.write(Buffer.concat([header, payload]));
-}
 
 function closeServerSocket(socket: Duplex): void {
     const payload = Buffer.alloc(2);

@@ -71,9 +71,11 @@ pnpm test:e2e
 pnpm test:agent-daemon
 ```
 
-Package-specific integration commands exist only for focused iteration. Coverage
-and `client`, `relay`, and `hosting` partitions are CI plumbing and do not define
-new kinds of tests.
+`pnpm test` runs the same `client`, `relay`, and `hosting` partitions that CI runs
+in parallel. Those partitions are execution plumbing, not new kinds of tests.
+Package-specific integration commands exist only for focused iteration. Run
+`pnpm test:coverage` explicitly when coverage is useful for investigation;
+normal test execution does not collect it.
 
 Run `pnpm lint`, `pnpm typecheck`, and the affected test command locally. Reserve
 `pnpm ci:check` for CI.
@@ -81,8 +83,9 @@ Run `pnpm lint`, `pnpm typecheck`, and the affected test command locally. Reserv
 ## CI
 
 CI partitions deterministic tests by runtime so they can run in parallel. Real
-Agent compatibility cases use a diff-selected matrix. Coverage is advisory and
-cannot prove an end-to-end path, especially when code runs in a subprocess or a
-separately bundled Worker.
+Agent compatibility cases use a diff-selected matrix. CI runs normal tests rather
+than producing coverage artifacts that no check consumes. Coverage remains an
+explicit, advisory diagnostic because it cannot prove an end-to-end path,
+especially when code runs in a subprocess or a separately bundled Worker.
 
 Architecture rules remain executable in `dependency-cruiser.config.cjs`.
