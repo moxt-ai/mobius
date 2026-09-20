@@ -1266,6 +1266,15 @@ export class Conversation {
         return this.id !== this.sessionId && !this.contextLocked;
     }
 
+    /**
+     * Whether this conversation already holds its Session's turns. A directory restore leaves a Session
+     * with no messages until its own read completes, so the difference tells a history refresh which
+     * Sessions still need hydrating instead of re-reading every one of them.
+     */
+    get hasLoadedTurns(): boolean {
+        return this.messages.length > 0;
+    }
+
     readonly matchesPreparation = (
         agentId: string,
         sessionId: string,
@@ -1735,8 +1744,13 @@ export class Conversation {
             this.draft,
             this.messages,
             session,
-            event.directoryId,
-            event.directoryLabel,
+            // The workspace the Relay declares for this Session stays authoritative. The daemon sends the
+            // declared `directoryId` alongside the label it resolved from its own listing, so the two
+            // describe the same workspace by id while only the label is resolved. Adopting that label made
+            // an opened Session show a resolved path while an unopened one showed the declared workspace,
+            // and a row renamed itself the moment the user clicked it.
+            this.directoryId,
+            this.directoryLabel,
             event.additionalDirectories,
             this.draftImages,
             this.draftResources,

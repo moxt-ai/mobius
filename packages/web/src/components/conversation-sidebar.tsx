@@ -7,6 +7,7 @@ import { SidebarResizeHandle } from "@/components/sidebar-resize-handle";
 import { SidebarRuntimeStatus } from "@/components/sidebar-runtime-status";
 import { Button } from "@/components/ui/button";
 import { useWorkspaceRoutes } from "@/components/workspace-route-provider";
+import type { Conversation } from "@/domain/chat";
 import { cn } from "@/lib/utils";
 import {
     type DesktopSidebarLayoutState,
@@ -78,8 +79,14 @@ export function ConversationSidebar({
     const closeButtonRef = useRef<HTMLButtonElement>(null);
     const sidebarRef = useRef<HTMLDivElement>(null);
     const machineName = useChatStore((state) => state.machineName);
-    const runningConversations = conversations.filter((conversation) => conversation.isRunning);
-    const recentConversations = conversations.filter((conversation) => !conversation.isRunning);
+    // The store keeps conversations in the order they were created and reconciled, which is insertion
+    // history rather than activity: a locally created conversation sat at the head until a reconciliation
+    // reshuffled it. Sorting by the Session's own activity timestamp matches the Relay's ordering and keeps
+    // a row from moving under the reader.
+    const byMostRecent = (left: Conversation, right: Conversation): number =>
+        right.session.updatedAt.localeCompare(left.session.updatedAt);
+    const runningConversations = conversations.filter((conversation) => conversation.isRunning).sort(byMostRecent);
+    const recentConversations = conversations.filter((conversation) => !conversation.isRunning).sort(byMostRecent);
     const displayWidth = sidebarDisplayWidth(layout);
     const access = routes.access;
     const runtimesPath = routes.runtimesPath;

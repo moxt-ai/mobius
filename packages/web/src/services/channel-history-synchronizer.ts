@@ -28,9 +28,11 @@ export class ChannelHistorySynchronizer {
             return;
         }
         this.#active = true;
-        if (this.#port.hasActiveTurns()) {
-            this.#schedule(ACTIVE_TURN_REFRESH_DELAY_MILLISECONDS);
-        }
+        // Always read once on start. The route's initial history is the directory only, and a Session
+        // summary carries no running signal, so a Session with a Turn in flight is discoverable only by
+        // reading its turns. Gating on `hasActiveTurns` never fired on a fresh load, because nothing was
+        // hydrated yet that could report a running Turn.
+        this.#schedule(ACTIVE_TURN_REFRESH_DELAY_MILLISECONDS);
     };
 
     readonly notifyActivity = (): void => {

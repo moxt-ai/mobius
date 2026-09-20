@@ -183,7 +183,18 @@ function ChannelWorkspace({
                     active !== undefined && (active.id === active.sessionId || active.messages.length > 0)
                         ? active.sessionId
                         : "";
-                return await readChannelHistoryForSynchronization(connection, activeSessionId, signal);
+                // A Session whose turns are already loaded does not need re-reading on every refresh; the
+                // active one always does. The first refresh therefore hydrates the whole directory, which
+                // is what marks a running Session that is not the active one.
+                const hydratedSessionIds = store.conversations
+                    .filter((conversation) => conversation.hasLoadedTurns)
+                    .map((conversation) => conversation.sessionId);
+                return await readChannelHistoryForSynchronization(
+                    connection,
+                    activeSessionId,
+                    hydratedSessionIds,
+                    signal,
+                );
             },
             reportFailure: (error) => {
                 const message =

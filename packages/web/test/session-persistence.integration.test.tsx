@@ -1106,4 +1106,72 @@ describe.sequential("Session persistence boundaries", () => {
             paired.daemon.close();
         }
     });
+
+    it("Given a Session is running, When the Web app reloads on a different Session, Then the running one is still marked as running", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const firstPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, firstPreparation);
+            await completeRenderedPrompt(paired.daemon, "First conversation", "FIRST-RESPONSE");
+
+            // A second Session the reload will land on, so the running one is not the active one.
+            fireEvent.click(
+                within(
+                    screen.getByRole("complementary", {
+                        name: "Conversation sidebar",
+                    }),
+                ).getByRole("button", { name: /New chat.*⌘ N/ }),
+            );
+            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPreparation);
+
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
+            fireEvent.change(promptInput, { target: { value: "Run a long tool call" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "still-running-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+            );
+            expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
+
+            // Reload onto the first Session, leaving the running Turn in the background. The Session
+            // summary carries no running signal, so this only holds if the refresh hydrates every
+            // Session rather than just the active one.
+            cleanup();
+            await closeMobiusTransport();
+            const firstSessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(firstPreparation.sessionId)}`;
+            window.history.replaceState(null, "", firstSessionPath);
+            createTestApplication();
+            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(resumedPreparation.sessionId).toBe(firstPreparation.sessionId);
+            await sendReadySession(paired.daemon, resumedPreparation);
+
+            const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+            const running = await waitFor(() => {
+                const section = document.querySelector('section[aria-labelledby="running-conversations-heading"]');
+                if (section === null) {
+                    throw new Error("The running section is missing");
+                }
+                return section;
+            });
+            const runningRow = within(running as HTMLElement).getByRole("link");
+            expect(runningRow.textContent).toContain("Run a long tool call");
+            expect(within(conversations).getAllByRole("link")).toHaveLength(2);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
 });

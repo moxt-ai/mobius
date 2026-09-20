@@ -1910,29 +1910,57 @@ export async function readToolCallDetail(
     }
 }
 
+/**
+ * The Session summary carries no running signal — `lifecycle` is only ready/deleting/deleted — so a Turn
+ * in flight is visible only through that Session's own turns. Reading the active Session alone left every
+ * other running Session unmarked after a reload, which is why its spinner and Stop agent disappeared.
+ *
+ * Hydrating every Session on every refresh would be wasteful, because refreshes also fire on a short delay
+ * after each activity. The caller passes the Sessions it already has turns for, so this reads only the
+ * ones still missing: the first refresh hydrates the whole directory, and later refreshes stay bounded to
+ * the Sessions whose turns the caller does not already hold.
+ */
 export async function readChannelHistoryForSynchronization(
     connection: ChannelConnection,
     activeSessionId: string,
+    hydratedSessionIds: readonly string[],
     cancellationSignal: AbortSignal,
 ): Promise<ChannelHistory> {
     const signal = AbortSignal.any([cancellationSignal, AbortSignal.timeout(REQUEST_TIMEOUT_MILLISECONDS)]);
     const directory = await readConnectionDirectoryWithSignal(connection, signal);
-    if (activeSessionId.length === 0) {
-        return directory;
+    const known = new Set(hydratedSessionIds);
+    if (activeSessionId.length > 0) {
+        known.delete(activeSessionId);
     }
-    const activeHistory = await readSessionHistoryWithSignal(connection, activeSessionId, signal);
-    const activeSession = activeHistory.sessions[0];
-    if (activeSession === undefined) {
-        return directory;
+    const sessionIds = directory.sessions
+        .map((session) => session.sessionId)
+        .filter((sessionId) => !known.has(sessionId));
+    if (activeSessionId.length > 0 && !sessionIds.includes(activeSessionId)) {
+        sessionIds.push(activeSessionId);
     }
-    const existing = directory.sessions.some((session) => session.sessionId === activeSession.sessionId);
+    const results = await Promise.allSettled(
+        sessionIds.map(async (sessionId) => await readSessionHistoryWithSignal(connection, sessionId, signal)),
+    );
+    signal.throwIfAborted();
+    const turns: RecordedTurn[] = [];
+    const sessionsById = new Map(directory.sessions.map((session) => [session.sessionId, session]));
+    for (const result of results) {
+        if (result.status !== "fulfilled") {
+            continue;
+        }
+        const restored = result.value.sessions[0];
+        if (restored !== undefined) {
+            sessionsById.set(restored.sessionId, restored);
+        }
+        turns.push(...result.value.turns);
+    }
+    const ordered = directory.sessions.map((session) => sessionsById.get(session.sessionId) ?? session);
+    const active = activeSessionId.length > 0 ? sessionsById.get(activeSessionId) : undefined;
     return new ChannelHistory(
-        activeHistory.turns,
-        existing
-            ? directory.sessions.map((session) =>
-                  session.sessionId === activeSession.sessionId ? activeSession : session,
-              )
-            : [activeSession, ...directory.sessions],
+        turns,
+        active !== undefined && !directory.sessions.some((session) => session.sessionId === activeSessionId)
+            ? [active, ...ordered]
+            : ordered,
     );
 }
 

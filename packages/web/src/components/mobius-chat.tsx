@@ -99,7 +99,15 @@ function ConnectedMobiusChat({
                     active !== undefined && (active.id === active.sessionId || active.messages.length > 0)
                         ? active.sessionId
                         : "";
-                return await readChannelHistoryForSynchronization(connection, activeSessionId, signal);
+                const hydratedSessionIds = store.conversations
+                    .filter((conversation) => conversation.hasLoadedTurns)
+                    .map((conversation) => conversation.sessionId);
+                return await readChannelHistoryForSynchronization(
+                    connection,
+                    activeSessionId,
+                    hydratedSessionIds,
+                    signal,
+                );
             },
             reportFailure: (error) => {
                 const message =
