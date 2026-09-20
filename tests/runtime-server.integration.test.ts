@@ -36,7 +36,7 @@ it("Given a Platform Project, When its owner pairs a local Runtime and creates a
     if (tenant === undefined) {
         throw new Error("Missing organization");
     }
-    const application = await developer.createApp(tenant.tenantId, "Runtime test", signal);
+    const application = await developer.createApp(tenant.tenantId, "Runtime test", signal, true);
     const project = await developer.createProject(
         application.appId,
         {

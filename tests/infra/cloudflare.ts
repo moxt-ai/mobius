@@ -4,6 +4,7 @@ import { readD1Migrations } from "@cloudflare/vitest-plugin";
 import { build } from "esbuild";
 import { convertV4MiniflareOptions, Miniflare } from "miniflare";
 import type { PlatformRelayBindings, RelayBindings } from "./app.ts";
+import { miniflareDurableObjects } from "./miniflare-durable-objects.ts";
 
 /** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
 async function createCloudflareRuntime(profile: "standalone" | "platform") {
@@ -34,14 +35,7 @@ async function createCloudflareRuntime(profile: "standalone" | "platform") {
                           MOBIUS_PLATFORM_OIDC_PROVIDERS: "[]",
                           MOBIUS_PLATFORM_OPERATOR_SUBJECTS: "[]",
                       },
-            durableObjects: {
-                RUNTIME_RELAY: { className: "RuntimeRelay", useSQLite: true },
-                SESSION_RELAY: {
-                    className: profile === "standalone" ? "LiteSessionRelay" : "PlatformSessionRelay",
-                    useSQLite: true,
-                },
-                ...(profile === "platform" ? { PROJECT_RELAY: { className: "ProjectRelay", useSQLite: true } } : {}),
-            },
+            durableObjects: miniflareDurableObjects(new NodeURL("wrangler.jsonc", packageDirectory)),
         }),
     );
     return runtime;

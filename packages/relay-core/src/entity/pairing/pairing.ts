@@ -145,20 +145,34 @@ export class VerifiedChannelAccess {
     readonly channelId: string;
     readonly projectId: string;
     readonly runtimeId: string;
+    readonly cloudRetention: boolean;
 
-    constructor(channelId: string, runtimeId: string, projectId: string, agents: readonly AgentDescriptor[] = []) {
+    constructor(
+        channelId: string,
+        runtimeId: string,
+        projectId: string,
+        agents: readonly AgentDescriptor[],
+        cloudRetention: boolean,
+    ) {
         this.agents = agents;
         this.channelId = channelId;
         this.projectId = projectId;
         this.runtimeId = runtimeId;
+        this.cloudRetention = cloudRetention;
     }
 }
 
 export class ChannelHostCredential extends VerifiedChannelAccess {
     readonly credentialId: string;
 
-    constructor(channelId: string, runtimeId: string, projectId: string, credentialId: string) {
-        super(channelId, runtimeId, projectId);
+    constructor(
+        channelId: string,
+        runtimeId: string,
+        projectId: string,
+        credentialId: string,
+        cloudRetention: boolean,
+    ) {
+        super(channelId, runtimeId, projectId, [], cloudRetention);
         this.credentialId = credentialId;
     }
 }

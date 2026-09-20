@@ -117,6 +117,7 @@ export class SessionAccessService {
             }
             return new ProjectAccessContext(
                 new ProjectScope(projectId),
+                true,
                 permissions,
                 new AuditActor(AuditActorKind.BrowserAccess, row.credential_id),
                 row.credential_id,

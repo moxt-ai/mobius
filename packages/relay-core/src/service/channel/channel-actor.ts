@@ -26,6 +26,7 @@ import {
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionElicitationRespondCommand,
+    decodeSessionLiveHistoryLoad,
     decodeSessionPermissionRespondCommand,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
@@ -63,6 +64,8 @@ import {
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_LOAD_KIND,
+    SESSION_LIVE_HISTORY_LOADED_KIND,
     SESSION_OPERATION_FAILED_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
@@ -210,6 +213,7 @@ export interface ChannelSocket {
     readonly consumeAgentSettingsDiscoveryFailure: (requestId: string, now: number) => boolean;
     readonly isOpen: () => boolean;
     readonly isSame: (socket: ChannelSocket) => boolean;
+    readonly permitsLiveSessionHistory: () => boolean;
     readonly send: (message: string) => void;
     readonly trackAgentCatalogRefresh: (requestId: string, expiresAt: number) => void;
     readonly trackAgentSettingsDiscovery: (requestId: string, agentId: string, expiresAt: number) => void;
@@ -223,18 +227,25 @@ export interface ChannelPeers {
 export class ChannelActor {
     readonly #pendingAgentCatalogRefreshes = new Map<string, PendingAgentCatalogRefresh>();
     readonly #pendingAgentSettingsDiscoveries = new Map<string, PendingAgentSettingsDiscovery>();
+    readonly #pendingLiveSessionHistory = new Map<
+        string,
+        { readonly expiresAt: number; readonly socket: ChannelSocket }
+    >();
     readonly #pendingNativeImports = new Map<
         string,
         | {
               readonly action: "import" | "fork";
+              readonly cloudRetention: boolean;
               readonly request: CreateSessionRequest;
               readonly expiresAt: number;
+              readonly scope: ProjectScope;
           }
         | {
               readonly action: "preview";
               readonly sessionId: string;
               readonly entryId: string;
               readonly expiresAt: number;
+              readonly scope: ProjectScope;
           }
     >();
     readonly #backpressuredEventBySource = new Map<string, string>();
@@ -461,8 +472,14 @@ export class ChannelActor {
                     ) {
                         throw new ProtocolMessageError("The native session result does not match a pending import");
                     }
-                    await this.#commands.createSession(this.#scope, pending.request, this.#clock.now(), signal);
-                    const target = await this.#queries.readSession(this.#scope, result.targetSessionId, signal);
+                    await this.#commands.createSession(
+                        pending.scope,
+                        pending.request,
+                        pending.cloudRetention,
+                        this.#clock.now(),
+                        signal,
+                    );
+                    const target = await this.#queries.readSession(pending.scope, result.targetSessionId, signal);
                     if (
                         target.runtimeId !== this.#runtimeId ||
                         target.agentId !== result.ready.agentId ||
@@ -471,38 +488,40 @@ export class ChannelActor {
                         throw new ProtocolMessageError("The native session result resolved to a different binding");
                     }
                     if (result.ready.sessionId !== result.targetSessionId) {
-                        const existing = await this.#queries.readSession(this.#scope, result.ready.sessionId, signal);
+                        const existing = await this.#queries.readSession(pending.scope, result.ready.sessionId, signal);
                         if (existing.runtimeId !== this.#runtimeId || existing.agentId !== result.ready.agentId) {
                             throw new ProtocolMessageError("The native session result resolved to a different binding");
                         }
                         await this.#commands.deleteSession(
-                            this.#scope,
+                            pending.scope,
                             result.targetSessionId,
                             this.#clock.now(),
                             signal,
                         );
                     }
-                    const messages = await this.#queries.readMessages(
-                        this.#scope,
-                        result.ready.sessionId,
-                        null,
-                        100,
-                        signal,
-                    );
-                    const history = reconcileNativeHistoryCoverage(result.history, messages.messages);
-                    await this.#commands.recordNativeHistory(
-                        this.#scope,
-                        this.#runtimeId,
-                        result.ready.sessionId,
-                        result.title,
-                        history,
-                        this.#clock.now(),
-                        signal,
-                    );
-                    forwardedMessage = {
-                        ...result,
-                        history,
-                    };
+                    if (pending.cloudRetention) {
+                        const messages = await this.#queries.readMessages(
+                            pending.scope,
+                            result.ready.sessionId,
+                            null,
+                            100,
+                            signal,
+                        );
+                        const history = reconcileNativeHistoryCoverage(result.history, messages.messages);
+                        await this.#commands.recordNativeHistory(
+                            pending.scope,
+                            this.#runtimeId,
+                            result.ready.sessionId,
+                            result.title,
+                            history,
+                            this.#clock.now(),
+                            signal,
+                        );
+                        forwardedMessage = {
+                            ...result,
+                            history,
+                        };
+                    }
                 } else if (result.action === "preview") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
                     if (
@@ -543,6 +562,16 @@ export class ChannelActor {
                 this.returnAgentCatalogRefreshResult(message.requestId, encodeDaemonToServiceMessage(message));
                 return;
             }
+            if (kind === SESSION_LIVE_HISTORY_LOADED_KIND) {
+                const result = message;
+                const pending = this.#pendingLiveSessionHistory.get(result.requestId);
+                if (pending === undefined || pending.expiresAt <= this.#clock.now()) {
+                    throw new ProtocolMessageError("The live Session history response is not pending");
+                }
+                pending.socket.send(encodeDaemonToServiceMessage(message));
+                this.#pendingLiveSessionHistory.delete(result.requestId);
+                return;
+            }
             if (kind === SESSION_OPERATION_FAILED_KIND) {
                 this.#pendingNativeImports.delete(message.requestId);
             }
@@ -580,6 +609,8 @@ export class ChannelActor {
             : `runtime:${envelope.sessionId}`;
 
     readonly receiveHostMessage = async (
+        scope: ProjectScope,
+        cloudRetention: boolean,
         socket: ChannelSocket,
         message: unknown,
         signal: AbortSignal,
@@ -607,7 +638,7 @@ export class ChannelActor {
                 let acceptance: Awaited<ReturnType<SessionCommandGateway["acceptTurn"]>>;
                 try {
                     acceptance = await this.#commands.acceptTurn(
-                        this.#scope,
+                        scope,
                         this.#runtimeId,
                         command,
                         this.#clock.now(),
@@ -652,7 +683,7 @@ export class ChannelActor {
                 }
                 const now = this.#clock.now();
                 if (command.sessionState === "provisioned") {
-                    await this.reconcilePreparedSession(command, now, signal);
+                    await this.reconcilePreparedSession(scope, command, now, signal);
                     const { sessionState, ...daemonCommand } = command;
                     void sessionState;
                     this.forwardControl(socket, daemonCommand, command.requestId, command.sessionId);
@@ -660,7 +691,7 @@ export class ChannelActor {
                 }
                 try {
                     await this.#commands.createSession(
-                        this.#scope,
+                        scope,
                         new CreateSessionRequest(
                             command.sessionId,
                             this.#runtimeId,
@@ -669,6 +700,7 @@ export class ChannelActor {
                             command.directoryId,
                             new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
                         ),
+                        cloudRetention,
                         now,
                         signal,
                     );
@@ -676,7 +708,7 @@ export class ChannelActor {
                     if (!(error instanceof SessionRuntimeError) || error.code !== "session_conflict") {
                         throw error;
                     }
-                    await this.reconcilePreparedSession(command, now, signal);
+                    await this.reconcilePreparedSession(scope, command, now, signal);
                 }
                 this.forwardControl(socket, command, command.requestId, command.sessionId);
                 return;
@@ -708,6 +740,7 @@ export class ChannelActor {
                             sessionId: command.sessionId,
                             entryId: command.entryId,
                             expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                            scope,
                         });
                     }
                 }
@@ -723,6 +756,7 @@ export class ChannelActor {
                     if (this.hasOnlineDaemon()) {
                         this.#pendingNativeImports.set(command.requestId, {
                             action: command.action,
+                            cloudRetention,
                             request: new CreateSessionRequest(
                                 command.targetSessionId,
                                 this.#runtimeId,
@@ -732,6 +766,7 @@ export class ChannelActor {
                                 new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
                             ),
                             expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                            scope,
                         });
                     }
                 }
@@ -744,7 +779,7 @@ export class ChannelActor {
                     if (!this.hasOnlineDaemon()) {
                         throw new SessionRuntimeError("runtime_offline", "The local runtime is offline");
                     }
-                    const source = await this.#queries.readSession(this.#scope, command.sessionId, signal);
+                    const source = await this.#queries.readSession(scope, command.sessionId, signal);
                     if (
                         source.runtimeId !== this.#runtimeId ||
                         source.agentId !== command.agentId ||
@@ -756,7 +791,7 @@ export class ChannelActor {
                             "The source Session binding changed before it could be forked",
                         );
                     }
-                    const authorized = await this.resolveTurnForkCommand(command, signal);
+                    const authorized = await this.resolveTurnForkCommand(scope, command, signal);
                     this.expireNativeImports(this.#clock.now());
                     if (
                         this.#pendingNativeImports.has(command.requestId) ||
@@ -766,6 +801,7 @@ export class ChannelActor {
                     }
                     this.#pendingNativeImports.set(command.requestId, {
                         action: "fork",
+                        cloudRetention,
                         request: new CreateSessionRequest(
                             command.targetSessionId,
                             this.#runtimeId,
@@ -782,6 +818,7 @@ export class ChannelActor {
                             source.title,
                         ),
                         expiresAt: this.#clock.now() + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
+                        scope,
                     });
                     if (!this.sendToDaemon(authorized)) {
                         this.#pendingNativeImports.delete(command.requestId);
@@ -803,10 +840,36 @@ export class ChannelActor {
                 }
                 return;
             }
+            if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
+                if (!socket.permitsLiveSessionHistory()) {
+                    throw new ProtocolMessageError("Live Session history requires an internal connection");
+                }
+                const command = decodeSessionLiveHistoryLoad(message);
+                const now = this.#clock.now();
+                for (const [requestId, pending] of this.#pendingLiveSessionHistory) {
+                    if (pending.expiresAt <= now) {
+                        this.#pendingLiveSessionHistory.delete(requestId);
+                    }
+                }
+                if (
+                    this.#pendingLiveSessionHistory.has(command.requestId) ||
+                    this.#pendingLiveSessionHistory.size >= 16
+                ) {
+                    throw new ProtocolMessageError("Too many live Session history operations are pending");
+                }
+                this.#pendingLiveSessionHistory.set(command.requestId, { expiresAt: now + 30_000, socket });
+                if (!this.sendToDaemon(command)) {
+                    this.#pendingLiveSessionHistory.delete(command.requestId);
+                    socket.close(1013, "Runtime offline");
+                    return;
+                }
+                return;
+            }
             if (kind === SESSION_PERMISSION_RESPOND_KIND) {
                 const command = decodeSessionPermissionRespondCommand(message);
                 try {
                     await this.acceptAndDeliverInteractionResponse(
+                        scope,
                         command.sessionId,
                         command.interactionId,
                         {
@@ -832,6 +895,7 @@ export class ChannelActor {
                 const command = decodeSessionElicitationRespondCommand(message);
                 try {
                     await this.acceptAndDeliverInteractionResponse(
+                        scope,
                         command.sessionId,
                         command.interactionId,
                         {
@@ -909,6 +973,7 @@ export class ChannelActor {
     };
 
     private readonly resolveTurnForkCommand = async (
+        scope: ProjectScope,
         command: NativeSessionTurnForkRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionTurnForkCommand> => {
@@ -918,7 +983,7 @@ export class ChannelActor {
         let response = "";
         let occurrence = 0;
         do {
-            const page = await this.#queries.readMessages(this.#scope, command.sessionId, cursor, 100, signal);
+            const page = await this.#queries.readMessages(scope, command.sessionId, cursor, 100, signal);
             for (const message of page.messages) {
                 if (!found && message.commandId === command.sourceCommandId) {
                     if (
@@ -951,7 +1016,7 @@ export class ChannelActor {
             messageFingerprint: `sha256:${await sha256(new TextEncoder().encode(response))}`,
             messageId: messageId.length > 0 ? messageId : `mobius-${command.sourceCommandId}`,
             messageOccurrence: occurrence,
-            title: (await this.#queries.readSession(this.#scope, command.sessionId, signal)).title,
+            title: (await this.#queries.readSession(scope, command.sessionId, signal)).title,
         };
     };
 
@@ -1018,11 +1083,12 @@ export class ChannelActor {
     };
 
     private readonly reconcilePreparedSession = async (
+        scope: ProjectScope,
         command: SessionPrepareCommand,
         now: number,
         signal: AbortSignal,
     ): Promise<void> => {
-        const existing = await this.#queries.readSession(this.#scope, command.sessionId, signal);
+        const existing = await this.#queries.readSession(scope, command.sessionId, signal);
         if (
             existing.defaultBinding.bindingId !== command.bindingId ||
             existing.defaultBinding.runtimeId !== this.#runtimeId ||
@@ -1030,7 +1096,7 @@ export class ChannelActor {
             existing.defaultBinding.workspaceRef !== command.directoryId
         ) {
             await this.#commands.setDefaultBinding(
-                this.#scope,
+                scope,
                 command.sessionId,
                 new CreateSessionBindingRequest(
                     command.bindingId,
@@ -1285,6 +1351,7 @@ export class ChannelActor {
     };
 
     private readonly acceptAndDeliverInteractionResponse = async (
+        scope: ProjectScope,
         sessionId: string,
         interactionId: string,
         response: Readonly<{
@@ -1295,7 +1362,7 @@ export class ChannelActor {
         signal: AbortSignal,
     ): Promise<void> => {
         const accepted = await this.#commands.acceptInteractionResponse(
-            this.#scope,
+            scope,
             sessionId,
             interactionId,
             "project-client",

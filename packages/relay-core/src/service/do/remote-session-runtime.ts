@@ -171,6 +171,7 @@ function decodeSessionSummary(value: unknown): SessionSummary {
         agentId: readString(value, "agentId"),
         createdAt: readString(value, "createdAt"),
         createdBy: readString(value, "createdBy"),
+        cloudRetention: readBoolean(value, "cloudRetention"),
         defaultBinding: {
             agentRef: readString(defaultBinding, "agentRef"),
             bindingId: readString(defaultBinding, "bindingId"),
@@ -704,9 +705,7 @@ function encodeDirectoryCursor(scope: ProjectScope, updatedAt: number, sessionId
 }
 
 function infrastructureScope(scope: ProjectScope): Readonly<Record<string, string>> {
-    return {
-        projectId: scope.projectId,
-    };
+    return { projectId: scope.projectId };
 }
 
 function decodeDirectoryCursor(
@@ -769,13 +768,22 @@ export class RemoteSessionRuntime
     readonly createSession = async (
         scope: ProjectScope,
         request: CreateSessionRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
         validateCreateSessionRequest(request);
         await this.reserveSession(scope, request.sessionId, now, signal);
         const summary = decodeSessionSummary(
-            await this.request(scope, request.sessionId, "create", { now, request }, signal),
+            await this.requestCreating(
+                scope,
+                request.sessionId,
+                "create",
+                { cloudRetention, now, request },
+                request.runtimeId,
+                cloudRetention,
+                signal,
+            ),
         );
         await this.updateDirectory(summary, signal);
         return summary;
@@ -1078,6 +1086,10 @@ export class RemoteSessionRuntime
         sessionId: string,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
+        const existing = await this.readDirectorySummary(scope, sessionId, signal);
+        if (existing?.cloudRetention === false) {
+            return { ...existing, hasNativeHistory: true };
+        }
         const summary = decodeSessionSummary(await this.request(scope, sessionId, "read", { sessionId }, signal));
         await this.updateDirectory(summary, signal);
         return summary;
@@ -1098,9 +1110,12 @@ export class RemoteSessionRuntime
     ): Promise<Response> => {
         signal.throwIfAborted();
         try {
+            const existing = await this.readDirectorySummary(scope, sessionId, signal);
+            if (existing === null) {
+                throw new SessionRuntimeError("session_not_found", "The Session does not exist");
+            }
             const response = await this.#transport.fetch(
-                scope,
-                sessionId,
+                { cloudRetention: existing.cloudRetention, runtimeId: existing.runtimeId, scope, sessionId },
                 new Request("https://session.internal/internal/sessions/event-stream", {
                     body: JSON.stringify({ cursor, scope: infrastructureScope(scope), sessionId }),
                     headers: { "content-type": "application/json" },
@@ -1345,7 +1360,8 @@ export class RemoteSessionRuntime
                         { cause },
                     );
                 }
-                return decodeSessionSummary(value);
+                const summary = decodeSessionSummary(value);
+                return summary.cloudRetention ? summary : { ...summary, hasNativeHistory: true };
             }),
         };
     };
@@ -1405,6 +1421,7 @@ export class RemoteSessionRuntime
         scope: ProjectScope,
         exported: unknown,
         targetBinding: CreateSessionBindingRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
@@ -1419,7 +1436,15 @@ export class RemoteSessionRuntime
         let summary: SessionSummary;
         try {
             summary = decodeSessionSummary(
-                await this.request(scope, sessionId, "import", { binding: targetBinding, exported, now }, signal),
+                await this.requestCreating(
+                    scope,
+                    sessionId,
+                    "import",
+                    { binding: targetBinding, cloudRetention, exported, now },
+                    targetBinding.runtimeId,
+                    cloudRetention,
+                    signal,
+                ),
             );
         } catch (error) {
             if (
@@ -1492,6 +1517,10 @@ export class RemoteSessionRuntime
         signal: AbortSignal,
     ): Promise<void> => {
         try {
+            const summary = await this.readDirectorySummary(scope, sessionId, signal);
+            if (summary?.cloudRetention === false) {
+                return;
+            }
             await this.request(scope, sessionId, "disconnect", { now, runtimeId }, signal);
         } catch (error) {
             signal.throwIfAborted();
@@ -1515,6 +1544,46 @@ export class RemoteSessionRuntime
         storageMetric?: Readonly<{ description: string; name: string }>,
     ): Promise<unknown> => {
         signal.throwIfAborted();
+        const existing = await this.readDirectorySummary(scope, sessionId, signal);
+        if (existing === null) {
+            throw new SessionRuntimeError("session_not_found", "The Session does not exist");
+        }
+        return await this.requestTarget(
+            scope,
+            existing.runtimeId,
+            existing.cloudRetention,
+            sessionId,
+            operation,
+            body,
+            signal,
+            timing,
+            storageMetric,
+        );
+    };
+
+    private readonly requestCreating = async (
+        scope: ProjectScope,
+        sessionId: string,
+        operation: string,
+        body: Readonly<Record<string, unknown>>,
+        runtimeId: string,
+        cloudRetention: boolean,
+        signal: AbortSignal,
+    ): Promise<unknown> =>
+        await this.requestTarget(scope, runtimeId, cloudRetention, sessionId, operation, body, signal);
+
+    private readonly requestTarget = async (
+        scope: ProjectScope,
+        runtimeId: string,
+        cloudRetention: boolean,
+        sessionId: string,
+        operation: string,
+        body: Readonly<Record<string, unknown>>,
+        signal: AbortSignal,
+        timing: OperationTiming = unmeasuredOperationTiming,
+        storageMetric?: Readonly<{ description: string; name: string }>,
+    ): Promise<unknown> => {
+        signal.throwIfAborted();
         const timeout = AbortSignal.timeout(SESSION_OPERATION_TIMEOUT_MILLISECONDS);
         const operationSignal = AbortSignal.any([signal, timeout]);
         let response: Response;
@@ -1524,8 +1593,7 @@ export class RemoteSessionRuntime
                 `Session Durable Object ${operation} round trip`,
                 async () =>
                     await this.#transport.fetch(
-                        scope,
-                        sessionId,
+                        { cloudRetention, runtimeId, scope, sessionId },
                         new Request(`https://session.internal/internal/sessions/${operation}`, {
                             body: JSON.stringify({ ...body, scope: infrastructureScope(scope) }),
                             headers: { "content-type": "application/json" },

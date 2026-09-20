@@ -228,6 +228,7 @@ export class SessionTransferService {
         scope: ProjectScope,
         exported: unknown,
         targetBinding: CreateSessionBindingRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
         createSession: SessionCommandGateway["createSession"],
@@ -285,6 +286,7 @@ export class SessionTransferService {
                     title,
                     "session-import",
                 ),
+                cloudRetention,
                 now,
                 signal,
             );

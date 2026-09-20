@@ -43,6 +43,7 @@ export class SessionLifecycleService {
     readonly createSession = async (
         scope: ProjectScope,
         request: CreateSessionRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> => {
@@ -77,6 +78,7 @@ export class SessionLifecycleService {
                 projectId: scope.projectId,
                 sessionId: request.sessionId,
                 createdBy: request.createdBy,
+                cloudRetention,
                 runtimeId: request.runtimeId,
                 agentId: request.agentId,
                 bindingId: request.bindingId,

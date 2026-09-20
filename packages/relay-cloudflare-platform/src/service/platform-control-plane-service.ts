@@ -290,6 +290,7 @@ function appResource(row: AppRow): object {
         deletedAt: typeof row.deleted_at === "number" ? iso(row.deleted_at) : "",
         displayName: row.display_name,
         lifecycle: row.lifecycle,
+        cloudRetention: row.cloud_retention === 1,
         suspendedAt: typeof row.suspended_at === "number" ? iso(row.suspended_at) : "",
         tenantId: row.tenant_id,
         updatedAt: iso(row.updated_at),
@@ -534,6 +535,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
     readonly createApp = async (
         access: PlatformDeveloperAccess,
         requestedDisplayName: string,
+        cloudRetention: boolean,
         signal: AbortSignal,
     ): Promise<object> => {
         signal.throwIfAborted();
@@ -562,6 +564,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
             deleted_at: null,
             display_name: normalizedDisplayName,
             lifecycle: "active",
+            cloud_retention: cloudRetention ? 1 : 0,
             suspended_at: null,
             tenant_id: access.tenantId,
             updated_at: now,
@@ -604,6 +607,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         access: PlatformDeveloperAccess,
         app: AppRow,
         requestedDisplayName: string,
+        cloudRetention: boolean | undefined,
         signal: AbortSignal,
     ): Promise<object> => {
         this.requireOwner(access);
@@ -614,6 +618,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         const updated = await this.#storage.updateApp(
             app.app_id,
             displayName(requestedDisplayName),
+            cloudRetention ?? app.cloud_retention === 1,
             now,
             this.auditRecord(
                 access.tenantId,
@@ -632,6 +637,9 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         );
         if (!updated) {
             throw new PlatformControlPlaneError("platform_write_failed", "The App could not be updated", 503);
+        }
+        for (const credential of await this.#storage.listAppCredentials(app.app_id, signal)) {
+            await this.#appAuthentication.invalidate(credential, signal);
         }
         return appResource(await this.readApp(app.app_id, signal));
     };
@@ -1232,6 +1240,7 @@ export class PlatformControlPlaneService implements ProjectAccessAuthorizer, Ses
         const now = Date.now();
         return new ProjectAccessContext(
             new ProjectScope(project.project_id),
+            row.app_cloud_retention === 1,
             granted,
             new AuditActor(PlatformAuditActorKind.Application, row.app_id),
             row.credential_id,

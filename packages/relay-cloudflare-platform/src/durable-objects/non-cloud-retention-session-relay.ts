@@ -1,0 +1,255 @@
+import { DurableObjectSqlDatabase, SessionRelay as SessionRelayImplementation } from "@moxt-ai/mobius-relay-core";
+import { Hono } from "hono";
+import { PlatformSessionLiveHistoryClient } from "../gateway/platform-session-live-history-client.ts";
+import {
+    createPlatformDurableObjectContext,
+    type PlatformDurableObjectEnvironment,
+} from "./platform-durable-object-context.ts";
+
+export class NonCloudRetentionSessionRelayDO {
+    readonly #environment: PlatformDurableObjectEnvironment;
+    #lifecycle:
+        | { readonly kind: "active" }
+        | { readonly kind: "hibernating"; readonly completion: PromiseWithResolvers<void> } = { kind: "active" };
+    readonly #sessions = new Map<string, Promise<{ readonly relay: SessionRelayImplementation }>>();
+    readonly #operations = new Map<string, Promise<void>>();
+    readonly #routes: Hono;
+    readonly #liveHistory: PlatformSessionLiveHistoryClient;
+    readonly #state: DurableObjectState;
+
+    constructor(state: DurableObjectState, environment: PlatformDurableObjectEnvironment) {
+        this.#environment = environment;
+        this.#liveHistory = new PlatformSessionLiveHistoryClient(environment);
+        this.#state = state;
+        this.#routes = new Hono().all(
+            "/internal/projects/:projectId/runtimes/:runtimeId/sessions/:sessionId/:operation",
+            (context) =>
+                this.handleRequest(context.req.raw, {
+                    projectId: context.req.param("projectId"),
+                    runtimeId: context.req.param("runtimeId"),
+                    sessionId: context.req.param("sessionId"),
+                    operation: context.req.param("operation"),
+                }),
+        );
+    }
+
+    readonly fetch = async (request: Request): Promise<Response> => await this.#routes.fetch(request);
+
+    private readonly handleRequest = async (request: Request, route: SessionRequestRoute): Promise<Response> => {
+        const identity = sessionRequestIdentity(route);
+        const relayEndpoint = new URL(request.url);
+        relayEndpoint.pathname = `/internal/sessions/${route.operation}`;
+        const relayRequest = new Request(relayEndpoint, request);
+        if (this.#lifecycle.kind === "hibernating") {
+            await waitForCompletion(this.#lifecycle.completion.promise, request.signal);
+        }
+        if (route.operation === "native-history") {
+            const restored = await this.#liveHistory.restore(
+                identity.projectId,
+                identity.runtimeId,
+                identity.sessionId,
+                request.signal,
+            );
+            return Response.json(restored.history);
+        }
+        const previous = this.#operations.get(identity.sessionId) ?? Promise.resolve();
+        const operation = previous
+            .catch(() => {})
+            .then(async () => {
+                const session = await this.session(
+                    identity,
+                    route.operation === "create" || route.operation === "import" || route.operation === "bot-provision",
+                    request.signal,
+                );
+                const response = await session.relay.fetch(relayRequest);
+                await this.armHibernation();
+                return response;
+            });
+        this.#operations.set(
+            identity.sessionId,
+            operation.then(
+                () => {},
+                () => {},
+            ),
+        );
+        return await operation;
+    };
+
+    readonly alarm = async (): Promise<void> => {
+        if (this.#lifecycle.kind === "hibernating") {
+            await this.#lifecycle.completion.promise;
+            return;
+        }
+        const completion = Promise.withResolvers<void>();
+        this.#lifecycle = { kind: "hibernating", completion };
+        const failures: unknown[] = [];
+        try {
+            for (const result of await Promise.allSettled(this.#operations.values())) {
+                if (result.status === "rejected") {
+                    failures.push(result.reason);
+                }
+            }
+            for (const pending of this.#sessions.values()) {
+                let session: Awaited<typeof pending>;
+                try {
+                    session = await pending;
+                } catch (cause) {
+                    failures.push(cause);
+                    continue;
+                }
+                try {
+                    await session.relay.alarm();
+                } catch (cause) {
+                    failures.push(cause);
+                }
+            }
+            this.#sessions.clear();
+            this.#operations.clear();
+            try {
+                await this.#state.storage.deleteAll();
+            } catch (cause) {
+                failures.push(cause);
+            }
+        } finally {
+            this.#lifecycle = { kind: "active" };
+            completion.resolve();
+        }
+        if (failures.length > 0) {
+            throw new AggregateError(failures, "The non-cloud-retention Session relay could not hibernate");
+        }
+    };
+
+    private readonly session = async (
+        identity: SessionRequestIdentity,
+        creating: boolean,
+        signal: AbortSignal,
+    ): Promise<{ readonly relay: SessionRelayImplementation }> => {
+        const existing = this.#sessions.get(identity.sessionId);
+        if (existing !== undefined) {
+            return await existing;
+        }
+        const created = (async () => {
+            await this.#state.storage.deleteAll();
+            signal.throwIfAborted();
+            const database = new DurableObjectSqlDatabase(this.#state.storage);
+            const relay = new SessionRelayImplementation(
+                createPlatformDurableObjectContext(this.#state, this.#environment, {
+                    content: { kind: "sqlite" },
+                    database,
+                }),
+            );
+            if (!creating) {
+                const restored = await this.#liveHistory.restore(
+                    identity.projectId,
+                    identity.runtimeId,
+                    identity.sessionId,
+                    signal,
+                );
+                await requireSuccessfulRelayResponse(
+                    relay,
+                    "create",
+                    {
+                        cloudRetention: false,
+                        now: restored.createdAt,
+                        request: restored.request,
+                        scope: { projectId: identity.projectId },
+                    },
+                    signal,
+                );
+                await requireSuccessfulRelayResponse(
+                    relay,
+                    "record-native-history",
+                    {
+                        history: restored.history,
+                        now: Date.now(),
+                        runtimeId: identity.runtimeId,
+                        sessionId: identity.sessionId,
+                        scope: { projectId: identity.projectId },
+                        title: "",
+                    },
+                    signal,
+                );
+            }
+            return { relay };
+        })();
+        this.#sessions.set(identity.sessionId, created);
+        try {
+            return await created;
+        } catch (cause) {
+            this.#sessions.delete(identity.sessionId);
+            throw cause;
+        }
+    };
+
+    private readonly armHibernation = async (): Promise<void> => {
+        const hibernationAt = Date.now() + 5 * 60_000;
+        const scheduled = await this.#state.storage.getAlarm();
+        if (scheduled === null || scheduled > hibernationAt) {
+            await this.#state.storage.setAlarm(hibernationAt);
+        }
+    };
+}
+
+async function requireSuccessfulRelayResponse(
+    relay: SessionRelayImplementation,
+    operation: string,
+    body: Readonly<Record<string, unknown>>,
+    signal: AbortSignal,
+): Promise<void> {
+    const response = await relay.fetch(
+        new Request(`https://session.internal/internal/sessions/${operation}`, {
+            body: JSON.stringify(body),
+            headers: { "content-type": "application/json" },
+            method: "POST",
+            signal,
+        }),
+    );
+    if (!response.ok) {
+        throw new Error("The live Session history could not be restored");
+    }
+}
+
+interface SessionRequestIdentity {
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly sessionId: string;
+}
+
+interface SessionRequestRoute {
+    readonly operation: string;
+    readonly projectId: string;
+    readonly runtimeId: string;
+    readonly sessionId: string;
+}
+
+function identifier(value: unknown): string | null {
+    return typeof value === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/.test(value) ? value : null;
+}
+
+async function waitForCompletion(completion: Promise<void>, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    let stop = () => {};
+    try {
+        await Promise.race([
+            completion,
+            new Promise<void>((_resolve, reject) => {
+                const aborted = () => reject(signal.reason);
+                stop = () => signal.removeEventListener("abort", aborted);
+                signal.addEventListener("abort", aborted, { once: true });
+            }),
+        ]);
+    } finally {
+        stop();
+    }
+}
+
+function sessionRequestIdentity(route: SessionRequestRoute): SessionRequestIdentity {
+    const operation = identifier(route.operation);
+    const projectId = identifier(route.projectId);
+    const runtimeId = identifier(route.runtimeId);
+    const sessionId = identifier(route.sessionId);
+    if (operation === null || projectId === null || runtimeId === null || sessionId === null) {
+        throw new Error("The non-cloud-retention Session request identity is invalid");
+    }
+    return { projectId, runtimeId, sessionId };
+}

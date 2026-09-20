@@ -24,6 +24,7 @@ export interface PairingOperations {
     readonly openProjectScopeControlHost: (
         scope: ProjectScope,
         runtimeId: string,
+        cloudRetention: boolean,
         signal: AbortSignal,
     ) => Promise<ChannelHostCredential>;
     readonly openControlHost: (
@@ -59,6 +60,7 @@ export interface PairingOperations {
     readonly authorizeProjectScopeRuntime: (
         scope: ProjectScope,
         runtimeId: string,
+        cloudRetention: boolean,
         signal: AbortSignal,
     ) => Promise<VerifiedChannelAccess>;
     readonly claimPairing: (

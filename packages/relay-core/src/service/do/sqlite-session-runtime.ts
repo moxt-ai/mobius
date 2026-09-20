@@ -204,10 +204,19 @@ export class SqliteSessionRuntime
         scope: ProjectScope,
         exported: unknown,
         targetBinding: CreateSessionBindingRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ): Promise<SessionSummary> =>
-        await this.#transfer.importSession(scope, exported, targetBinding, now, signal, this.createSession);
+        await this.#transfer.importSession(
+            scope,
+            exported,
+            targetBinding,
+            cloudRetention,
+            now,
+            signal,
+            this.createSession,
+        );
 
     readonly hasPendingArchiveWork = (scope: ProjectScope, sessionId: string): boolean =>
         this.#archive.hasPendingWork(scope, sessionId);

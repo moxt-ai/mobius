@@ -15,6 +15,10 @@
                 "class_name": "PlatformSessionRelay"
             },
             {
+                "name": "NON_CLOUD_RETENTION_SESSION_RELAY",
+                "class_name": "NonCloudRetentionSessionRelayDO"
+            },
+            {
                 "name": "PROJECT_RELAY",
                 "class_name": "ProjectRelay"
             }
@@ -32,6 +36,10 @@
         {
             "tag": "platform-remove-bot-connections",
             "deleted_classes": ["BotConnectionActor"]
+        },
+        {
+            "tag": "platform-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
         }
     ],
     "d1_databases": [
@@ -70,6 +78,7 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
+                    { "name": "NON_CLOUD_RETENTION_SESSION_RELAY", "class_name": "NonCloudRetentionSessionRelayDO" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },
@@ -97,6 +106,7 @@
                 "bindings": [
                     { "name": "RUNTIME_RELAY", "class_name": "RuntimeRelay" },
                     { "name": "SESSION_RELAY", "class_name": "PlatformSessionRelay" },
+                    { "name": "NON_CLOUD_RETENTION_SESSION_RELAY", "class_name": "NonCloudRetentionSessionRelayDO" },
                     { "name": "PROJECT_RELAY", "class_name": "ProjectRelay" }
                 ]
             },

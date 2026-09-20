@@ -3195,6 +3195,15 @@ export class AcpSessionManager {
         }
     };
 
+    readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> => {
+        this.#beginSessionUse(options.sessionId);
+        try {
+            return await (await this.ensureSession(options)).loadHistory(options.signal);
+        } finally {
+            this.#endSessionUse(options.sessionId);
+        }
+    };
+
     readonly openNativeSession = async (
         options: AcpPrepareOptions,
         origin: NativeSessionOrigin,

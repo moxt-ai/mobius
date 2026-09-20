@@ -127,6 +127,7 @@ export class ExpiringProjectAccessLifetime extends ProjectAccessLifetime {
 export class ProjectAccessContext {
     readonly actor: AuditActor;
     readonly authenticatedAtEpochMilliseconds: number;
+    readonly cloudRetention: boolean;
     readonly credentialId: string;
     readonly lifetime: ProjectAccessLifetime;
     readonly permissions: ReadonlySet<ProjectPermission>;
@@ -138,6 +139,7 @@ export class ProjectAccessContext {
 
     constructor(
         scope: ProjectScope,
+        cloudRetention: boolean,
         permissions: ReadonlySet<ProjectPermission>,
         actor: AuditActor,
         credentialId: string,
@@ -145,6 +147,7 @@ export class ProjectAccessContext {
         lifetime: ProjectAccessLifetime,
     ) {
         this.scope = scope;
+        this.cloudRetention = cloudRetention;
         this.permissions = new Set(permissions);
         this.actor = actor;
         this.credentialId = credentialId;
@@ -438,7 +441,7 @@ export class RuntimeAccessContext extends VerifiedChannelAccess {
     readonly scope: ProjectScope;
 
     constructor(scope: ProjectScope, runtimeId: string, channelId: string, credentialId: string, leaseId: string) {
-        super(channelId, runtimeId, scope.projectId);
+        super(channelId, runtimeId, scope.projectId, [], true);
         this.scope = scope;
         this.credentialId = credentialId;
         this.leaseId = leaseId;

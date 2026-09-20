@@ -5,6 +5,7 @@ export interface SessionTransferGateway {
         scope: ProjectScope,
         exported: unknown,
         targetBinding: CreateSessionBindingRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ) => Promise<SessionSummary>;
