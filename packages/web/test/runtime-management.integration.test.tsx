@@ -6,9 +6,8 @@ import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
     createTestApplication,
-    pairDaemon,
+    openPairedApplication,
     StatefulDaemon,
-    saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
 } from "./app-integration-harness.ts";
@@ -104,12 +103,9 @@ setupWebIntegrationEnvironment();
 
 describe.sequential("Project Runtime management", () => {
     it("Given an owned Project with two paired machines, When the user starts a chat on the second machine, Then its Agent responds in a Project Runtime route", async () => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -155,22 +151,17 @@ describe.sequential("Project Runtime management", () => {
                 "I am running on the second integration machine.",
             );
         } finally {
-            cleanup();
-            await closeMobiusTransport();
             for (const daemon of additionalDaemons) {
                 daemon.close();
             }
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the owner is already in a Project Runtime, When the browser reloads that URL without navigation state, Then device access still opens the owning channel", async () => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -222,22 +213,17 @@ describe.sequential("Project Runtime management", () => {
             await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
             expect(screen.queryByText("Channel unavailable")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
             for (const daemon of additionalDaemons) {
                 daemon.close();
             }
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given another paired machine has no ready Agent, When the owner opens it, Then Web enters that Runtime and shows Agent setup", async () => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -274,24 +260,19 @@ describe.sequential("Project Runtime management", () => {
                 `/projects/${paired.credential.projectId}/runtimes/${claimed.runtimeId}`,
             );
         } finally {
-            cleanup();
-            await closeMobiusTransport();
             for (const daemon of additionalDaemons) {
                 daemon.close();
             }
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an owned Project with one paired Runtime, When another machine is paired and revoked from Web, Then both machines are shown independently and the current machine stays online", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -346,22 +327,17 @@ describe.sequential("Project Runtime management", () => {
                 expect(within(remainingDirectory).getByText("Online")).toBeTruthy();
             });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
             for (const daemon of additionalDaemons) {
                 daemon.close();
             }
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a browser linked by one-time access, When it opens Local machines, Then it can see Runtimes without owner pairing or revocation controls", async () => {
-        const paired = await pairDaemon();
-        const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
-        window.history.replaceState(null, "", accessPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/access`,
+        });
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
@@ -397,19 +373,14 @@ describe.sequential("Project Runtime management", () => {
             expect(screen.queryByRole("button", { name: "Pair another machine" })).toBeNull();
             expect(within(directory).queryByRole("button", { name: /Revoke/ })).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a browser linked by one-time access, When it opens another paired machine, Then that machine's Agent responds", async () => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const additionalDaemons: StatefulDaemon[] = [];
 
         try {
@@ -476,12 +447,10 @@ describe.sequential("Project Runtime management", () => {
                 "I am running on the second integration machine.",
             );
         } finally {
-            cleanup();
-            await closeMobiusTransport();
             for (const daemon of additionalDaemons) {
                 daemon.close();
             }
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

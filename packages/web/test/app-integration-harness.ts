@@ -413,6 +413,31 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     };
 }
 
+export interface OpenPairedApplicationOptions extends PairDaemonOptions {
+    readonly path?: (channelId: string) => string;
+}
+
+export async function openPairedApplication(options: OpenPairedApplicationOptions = {}) {
+    const { path, ...pairingOptions } = options;
+    const paired = await pairDaemon(pairingOptions);
+    window.history.replaceState(
+        null,
+        "",
+        path?.(paired.channelId) ?? `/channels/${encodeURIComponent(paired.channelId)}`,
+    );
+    window.localStorage.clear();
+    saveBrowserCredential(paired.channelId, paired.credential);
+    createTestApplication();
+    return {
+        ...paired,
+        close: async (): Promise<void> => {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        },
+    } as const;
+}
+
 export function saveBrowserCredential(channelId: string, credential: CreatedPairing): void {
     expect(credential.channelId).toBe(channelId);
     window.localStorage.setItem(

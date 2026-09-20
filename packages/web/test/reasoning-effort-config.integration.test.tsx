@@ -11,18 +11,11 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentOption } from "@/domain/channel";
-import { closeMobiusTransport } from "@/services/mobius-transport";
-import {
-    createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
-    sendReadySession,
-    setupWebIntegrationEnvironment,
-} from "./app-integration-harness.ts";
+import { openPairedApplication, sendReadySession, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
@@ -345,11 +338,7 @@ function sendDiscoveredCompleteModelSettings(agentId: string, requestId: string)
 
 describe.sequential("Agent-native run settings", () => {
     it("Given an Agent exposes only its native mode, When the user opens run settings, Then Mobius uses cached Agent settings instead of session preparation options", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -391,18 +380,12 @@ describe.sequential("Agent-native run settings", () => {
                 },
             ]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the default model itself exposes effort, When the user opens run settings, Then the picker is available without switching models", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -422,18 +405,12 @@ describe.sequential("Agent-native run settings", () => {
             expect(effort).toBeTruthy();
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent reports effort as the provider default, When the user opens run settings, Then the picker offers that default and the Agent's own levels", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -457,18 +434,12 @@ describe.sequential("Agent-native run settings", () => {
                 expect(screen.getByRole("button", { name: /Run settings: Model A, High/ })).toBeTruthy();
             });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given effort is available only after model selection, When the user selects a model, Then Mobius fetches only that model's effort and snapshots the cached selections", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -518,18 +489,12 @@ describe.sequential("Agent-native run settings", () => {
                 },
             ]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the default model has no effort setting, When the user switches to a model that exposes effort, Then the picker appears without a reload or protocol error", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -610,18 +575,12 @@ describe.sequential("Agent-native run settings", () => {
                 },
             ]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent returns a complete model-to-effort map, When the user selects another model, Then Mobius uses the cached map without another discovery", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -662,20 +621,14 @@ describe.sequential("Agent-native run settings", () => {
                 },
             ]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a channel offers several discovery-capable Agents, When a conversation opens, Then Mobius discovers settings only for that conversation's Agent", async () => {
-        const paired = await pairDaemon({
+        const paired = await openPairedApplication({
             agents: [discoveryAgent("codex", "Codex"), discoveryAgent("hermes", "Hermes Agent")],
         });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -691,9 +644,7 @@ describe.sequential("Agent-native run settings", () => {
             await screen.findByRole("button", { name: /Run settings: Default/ });
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

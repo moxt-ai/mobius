@@ -6,7 +6,7 @@ import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
     createTestApplication,
-    pairDaemon,
+    openPairedApplication,
     saveBrowserCredential,
     sendReadySession,
     setupWebIntegrationEnvironment,
@@ -16,13 +16,10 @@ setupWebIntegrationEnvironment();
 
 describe.sequential("Channel access boundaries", () => {
     it("Given an owned paired Channel, When device access is opened from the conversation sidebar, Then it appears outside Agent settings", async () => {
-        const paired = await pairDaemon();
-        const settingsPath = `/channels/${encodeURIComponent(paired.channelId)}/settings`;
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
+        });
         const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
-        window.history.replaceState(null, "", settingsPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -45,19 +42,15 @@ describe.sequential("Channel access boundaries", () => {
                 }),
             ).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an owned paired Channel, When its one-time access link is opened in another browser, Then that browser receives revocable access without a Mobius account", async () => {
-        const paired = await pairDaemon();
+        const paired = await openPairedApplication({
+            path: (channelId) => `/channels/${encodeURIComponent(channelId)}/access`,
+        });
         const accessPath = `/channels/${encodeURIComponent(paired.channelId)}/access`;
-        window.history.replaceState(null, "", accessPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -157,18 +150,12 @@ describe.sequential("Channel access boundaries", () => {
                 linkedCredential,
             );
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a one-time access link opens an existing Session, When the linked browser sends a follow-up, Then the local Agent response appears", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const ownerPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -209,9 +196,7 @@ describe.sequential("Channel access boundaries", () => {
 
             expect(screen.queryByText(/owner_access_required/u)).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

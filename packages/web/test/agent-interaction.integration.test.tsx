@@ -23,8 +23,7 @@ import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
     createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
+    openPairedApplication,
     sendReadySession,
     setupWebIntegrationEnvironment,
     waitForDocumentState,
@@ -59,11 +58,7 @@ const completeReadyAgentDirectory = Array.from(
 
 describe.sequential("Agent interaction boundaries", () => {
     it("Given all eleven supported local Agents are ready, When Web opens the Agent picker, Then every Agent remains selectable", async () => {
-        const paired = await pairDaemon({ agents: completeReadyAgentDirectory });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agents: completeReadyAgentDirectory });
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -79,18 +74,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 expect(within(localAgents).getByRole("button", { name: agent.label })).toBeTruthy();
             }
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a paired Agent advertises Session turn configuration, When Web opens its conversation, Then the extended Agent directory remains usable", async () => {
-        const paired = await pairDaemon({ sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ sessionTurnConfiguration: true });
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -101,18 +90,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 }),
             ).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a paired Agent has an unsent chat draft, When Agent settings is opened and closed, Then its local details are visible and navigation preserves the draft", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -142,18 +125,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(screen.getByDisplayValue("Keep this draft while viewing settings")).toBe(restoredPromptInput);
             expect(window.location.pathname).toBe(sessionPath);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a paired chat uses compact navigation, When the conversation drawer opens, Then it receives focus and isolates the conversation", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -190,18 +167,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 }),
             ).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the composer and run settings are open, When a screen reader lists their controls, Then each action is exposed exactly once", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -220,18 +191,12 @@ describe.sequential("Agent interaction boundaries", () => {
             await screen.findByRole("dialog", { name: "Run settings" });
             expect(screen.getAllByRole("button", { name: "Close run settings" })).toHaveLength(1);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given the sidebar and composer are interactive, When a screen reader lists them, Then the resize handle and command popup expose valid semantics", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -253,18 +218,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(composer.getAttribute("aria-autocomplete")).toBe("list");
             expect(composer.getAttribute("aria-controls")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a new chat starts with a Markdown heading, When the first message is sent, Then the compact header shows a readable title", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -280,18 +239,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 name: "Review the mobile layout",
             });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a conversation has started, When its Agent becomes immutable, Then the composer presents the Agent as locked instead of selectable", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -316,18 +269,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 }).textContent,
             ).toContain("Codex");
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a persisted response snapshot overlaps a streaming delta, When background synchronization and live delivery reconcile, Then the response renders the text once", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -410,18 +357,12 @@ describe.sequential("Agent interaction boundaries", () => {
             });
         } finally {
             vi.useRealTimers();
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent is working, When a queued follow-up is steered, Then it stays last while running and moves before the final response after completion", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -562,20 +503,14 @@ describe.sequential("Agent interaction boundaries", () => {
                 screen.getAllByLabelText("Message from you").map((message) => message.getAttribute("data-delivery")),
             ).toEqual(["sent", "steered"]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent lacks native prompt queueing, When follow-ups are sent during a running Turn, Then Mobius runs them in order after the current Turn", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -758,18 +693,12 @@ describe.sequential("Agent interaction boundaries", () => {
             ]);
             expect(screen.queryByText("The agent completed without returning text.")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given chat has newer content below the viewport, When the reader is away from the tail, Then the latest control is a centered icon-only action", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -792,18 +721,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(latestButton.querySelector("svg")).not.toBeNull();
             expect(latestButton.getAttribute("title")).toBe("Scroll to latest message");
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given one New chat already exists, When a user requests New chat from another conversation, Then the existing draft is reopened without creating another", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -848,19 +771,13 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(screen.getByDisplayValue("Keep the existing New chat draft")).toBeTruthy();
             expect(within(conversations).getAllByRole("link", { name: /New chat/ })).toHaveLength(1);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given conversations restored from the relay without loaded turns, When the user requests New chat, Then a conversation is created instead of an existing one being reopened", async () => {
-        const paired = await pairDaemon();
+        const paired = await openPairedApplication();
         const channelPath = `/channels/${encodeURIComponent(paired.channelId)}`;
-        window.history.replaceState(null, "", channelPath);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             // Two conversations exist on the paired machine.
@@ -909,18 +826,12 @@ describe.sequential("Agent interaction boundaries", () => {
                 .map((link) => link.getAttribute("href"));
             expect(after.filter((href) => !before.includes(href))).toHaveLength(1);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent alternates progress updates and tool work, When the turn completes, Then the chat preserves that timeline before the final answer", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1116,20 +1027,14 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(agentMessage).getByText("typescript")).toBeTruthy();
             expect(agentMessage.textContent).toContain("preserveLongLines");
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent streams intermediate work, When its turn ends, Then the chat collapses that work into a reopenable worked-for summary", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-20T08:00:00.000Z"));
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1248,9 +1153,7 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(settledProcess).getByText("Inspect the failing check")).toBeTruthy();
             expect(within(settledProcess).getByText("Reproducing the ordering bug locally.")).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
             vi.useRealTimers();
         }
     });
@@ -1258,11 +1161,7 @@ describe.sequential("Agent interaction boundaries", () => {
     it("Given an Agent recovers from a failed step, When its turn ends, Then the chat still collapses that work behind the worked-for summary", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-20T09:00:00.000Z"));
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1374,19 +1273,13 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(settledProcess).getByText("Run the test suite")).toBeTruthy();
             expect(within(settledProcess).getByText("Rerun the test suite")).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
             vi.useRealTimers();
         }
     });
 
     it("Given an Agent returns a Mermaid diagram, When the user opens its fullscreen view, Then the chat renders an accessible diagram with its source action", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1410,18 +1303,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(agentMessage).getByRole("button", { name: "Copy code" })).toBeTruthy();
             expect(within(agentMessage).queryByText("flowchart LR")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent returns invalid Mermaid source, When the user opens the diagram, Then the chat announces the error and preserves the source", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1439,18 +1326,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(error.parentElement ?? error).getByText(invalidSource)).toBeTruthy();
             expect(within(error.parentElement ?? error).getByRole("button", { name: "Retry diagram" })).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent records Markdown reasoning and a described shell tool, When the completed steps are expanded, Then the shell step uses its description and the details read as formatted work", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1586,18 +1467,12 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(agentMessage.textContent).not.toContain("formatted_output");
             expect(agentMessage.textContent).not.toContain("\\n");
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a paired local Agent, When a user answers its form and sends a prompt, Then the Web app exchanges protocol messages and renders the response safely", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -1819,9 +1694,7 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(within(usagePanel).getByText("23,779")).toBeTruthy();
             expect(within(usagePanel).getByText("12,160")).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

@@ -157,6 +157,13 @@ Only write end-to-end tests for representative happy paths. Business logic must 
 Integration tests exercise behavior through user-visible mouse and keyboard interactions. They must not read from, write to, or invoke application stores directly. Test infrastructure may create and destroy the production application around those interactions.
 Integration tests bootstrap the entire application; rendering individual React components or views is forbidden.
 
+Prepare state through the cheapest production business operation available at
+the tested boundary. Each composition level has one shared journey harness that
+owns startup, credentials, and cleanup; tests vary only the business state they
+need. Direct persistence setup is reserved for storage and migration boundaries,
+or for state owned by an upstream component outside the test, and must remain
+explicit.
+
 A lower-level test is not acceptance if the supported user path could break while the test still passes. Boundary tests may support a slice, but they cannot replace its user-visible acceptance scenario.
 
 Likewise, a test is not end-to-end when it invokes an internal service or helper

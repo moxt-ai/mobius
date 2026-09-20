@@ -13,8 +13,7 @@ import { dataTestId } from "@/data-testid";
 import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
+    openPairedApplication,
     sendReadySession,
     setupWebIntegrationEnvironment,
 } from "./app-integration-harness.ts";
@@ -67,11 +66,7 @@ function discoveredModeSettings(agentId: string, requestId: string, modeName: st
 
 describe.sequential("Persisted Agent settings", () => {
     it("Given a user already loaded Agent settings, When the Web app reloads, Then run settings open from the persisted cache without rediscovering them", async () => {
-        const paired = await pairDaemon({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
 
         try {
             const [encodedDiscovery, encodedPrepare] = await Promise.all([
@@ -97,9 +92,7 @@ describe.sequential("Persisted Agent settings", () => {
             expect(await screen.findByRole("combobox", { name: "Mode" })).toBeTruthy();
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

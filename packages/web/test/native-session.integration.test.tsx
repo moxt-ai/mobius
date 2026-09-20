@@ -14,8 +14,7 @@ import { closeMobiusTransport } from "@/services/mobius-transport";
 import {
     completeRenderedPrompt,
     createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
+    openPairedApplication,
     sendReadySession,
     setupWebIntegrationEnvironment,
     waitForDocumentState,
@@ -27,11 +26,7 @@ describe.sequential("Native Session boundaries", () => {
     it("Given a conversation has multiple completed turns, When a user forks from the first answer, Then a new conversation opens with context ending at that turn", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -131,20 +126,14 @@ describe.sequential("Native Session boundaries", () => {
             expect(screen.getByText("The implementation plan is established.")).toBeTruthy();
             expect(screen.queryByText("The second-stage changes are applied.")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a native Session returns truncated assistant fragments for an existing Mobius conversation, When a user opens it again, Then each visible message stays singular and background synchronization stays healthy", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -275,20 +264,14 @@ describe.sequential("Native Session boundaries", () => {
             expect(within(transcript).getAllByText(/CLAUDE_FRAGMENTED_OK/)).toHaveLength(1);
             expect(screen.queryAllByText(/history_sync_failed:/)).toHaveLength(0);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given an Agent has saved history with image references, When a user previews that session, Then the Web app shows only a safe recent transcript", async ({
         signal,
     }) => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -410,18 +393,12 @@ describe.sequential("Native Session boundaries", () => {
             expect(agentImage.getAttribute("src")).toBe(`data:image/png;base64,${imageData}`);
             expect(history.querySelector('img[src^="http"]')).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a native Session is opened, When the Web app reloads, Then its title and transcript are restored from the canonical Session", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -550,9 +527,7 @@ describe.sequential("Native Session boundaries", () => {
             expect(await screen.findByText("Persisted native question")).toBeTruthy();
             expect(await screen.findByText("Persisted native answer")).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

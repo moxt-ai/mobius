@@ -5,33 +5,23 @@ import {
     encodeAgentInstallFailedEvent,
     encodeAgentInstallProgressEvent,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { AgentIntegrationOption } from "@/domain/channel";
-import { closeMobiusTransport } from "@/services/mobius-transport";
-import {
-    createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
-    setupWebIntegrationEnvironment,
-} from "./app-integration-harness.ts";
+import { openPairedApplication, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
 describe.sequential("Agent integration installation", () => {
     it("Given a paired machine has not detected multiple local Agents, When the Web user checks again, Then Web rechecks every Agent and keeps integration setup automatic", async () => {
-        const paired = await pairDaemon({
+        const paired = await openPairedApplication({
             agents: [],
             installableAgents: [
                 { id: "codex", label: "Codex", status: "agent_not_installed" },
                 { id: "pi", label: "Pi", status: "agent_not_installed" },
             ],
         });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -84,21 +74,15 @@ describe.sequential("Agent integration installation", () => {
                 await screen.findByText("Install Codex on this machine, then check local Agents again."),
             ).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a local Agent is detected but its integration is unavailable, When the Web user opens the channel, Then Web shows automatic setup without a manual integration action", async () => {
-        const paired = await pairDaemon({
+        const paired = await openPairedApplication({
             agents: [],
             installableAgents: [new AgentIntegrationOption("codex", "Codex", "/opt/local/bin/codex", "codex 0.153.0")],
         });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             await screen.findByRole("heading", {
@@ -116,29 +100,21 @@ describe.sequential("Agent integration installation", () => {
             expect(screen.queryByRole("button", { name: "Install integration" })).toBeNull();
             expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given chat has a ready Agent and other local Agents need setup, When the conversation sidebar opens, Then setup cards stay out of the sidebar", async () => {
-        const paired = await pairDaemon({
+        const paired = await openPairedApplication({
             installableAgents: [{ id: "pi", label: "Pi", status: "agent_not_installed" }],
         });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
 
         try {
             await screen.findByRole("button", { name: "New chat" });
             expect(screen.queryByRole("heading", { name: "Agent integrations" })).toBeNull();
             expect(screen.queryByText("Pi")).toBeNull();
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });

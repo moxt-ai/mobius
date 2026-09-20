@@ -7,17 +7,10 @@ import {
     SESSION_PROMPT_KIND,
     type SessionConfigOption,
 } from "@moxt-ai/mobius-protocol";
-import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { closeMobiusTransport } from "@/services/mobius-transport";
-import {
-    createTestApplication,
-    pairDaemon,
-    saveBrowserCredential,
-    sendReadySession,
-    setupWebIntegrationEnvironment,
-} from "./app-integration-harness.ts";
+import { openPairedApplication, sendReadySession, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
@@ -60,11 +53,7 @@ function groupedModelConfig(): readonly SessionConfigOption[] {
 
 describe.sequential("Session configuration", () => {
     it("Given an Agent advertises models from multiple provider groups, When the user opens the model picker, Then Mobius presents accessible provider groups and submits only the advertised model value", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication();
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -107,18 +96,12 @@ describe.sequential("Session configuration", () => {
                 value: "custom-provider/gpt-5.6-sol",
             });
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 
     it("Given a configuration-capable Runtime has prepared a Session, When the user sends a prompt, Then the public Turn carries every current setting as an immutable snapshot", async () => {
-        const paired = await pairDaemon({ sessionTurnConfiguration: true });
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
+        const paired = await openPairedApplication({ sessionTurnConfiguration: true });
 
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
@@ -139,9 +122,7 @@ describe.sequential("Session configuration", () => {
                 },
             ]);
         } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
+            await paired.close();
         }
     });
 });
