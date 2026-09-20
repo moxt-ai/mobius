@@ -1,4 +1,5 @@
 import { decodeSessionPrepareCommand, MOBIUS_API_PREFIX, SESSION_PREPARE_KIND } from "@moxt-ai/mobius-protocol";
+import { type AgentDaemonSocket, FakeAgentDaemon } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -7,7 +8,6 @@ import {
     completeRenderedPrompt,
     createTestApplication,
     openPairedApplication,
-    StatefulDaemon,
     sendReadySession,
     setupWebIntegrationEnvironment,
 } from "./app-integration-harness.ts";
@@ -20,7 +20,7 @@ interface ClaimedRuntimePairing {
 
 interface ClaimedRuntime {
     readonly channelId: string;
-    readonly daemon: StatefulDaemon;
+    readonly daemon: FakeAgentDaemon;
     readonly runtimeId: string;
 }
 
@@ -94,7 +94,7 @@ async function claimRuntimePairing(pairingCode: string, readyAgent = true): Prom
     daemonUrl.searchParams.set("token", claimed.daemonToken);
     return {
         channelId: claimed.channelId,
-        daemon: await StatefulDaemon.connect(daemonUrl),
+        daemon: await FakeAgentDaemon.connect(daemonUrl, (url) => new WebSocket(url) as unknown as AgentDaemonSocket),
         runtimeId: claimed.runtimeId,
     };
 }
@@ -106,7 +106,7 @@ describe.sequential("Project Runtime management", () => {
         const paired = await openPairedApplication({
             path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
         });
-        const additionalDaemons: StatefulDaemon[] = [];
+        const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -162,7 +162,7 @@ describe.sequential("Project Runtime management", () => {
         const paired = await openPairedApplication({
             path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
         });
-        const additionalDaemons: StatefulDaemon[] = [];
+        const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -224,7 +224,7 @@ describe.sequential("Project Runtime management", () => {
         const paired = await openPairedApplication({
             path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
         });
-        const additionalDaemons: StatefulDaemon[] = [];
+        const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -273,7 +273,7 @@ describe.sequential("Project Runtime management", () => {
         const paired = await openPairedApplication({
             path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
         });
-        const additionalDaemons: StatefulDaemon[] = [];
+        const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });
@@ -381,7 +381,7 @@ describe.sequential("Project Runtime management", () => {
         const paired = await openPairedApplication({
             path: (channelId) => `/channels/${encodeURIComponent(channelId)}/settings`,
         });
-        const additionalDaemons: StatefulDaemon[] = [];
+        const additionalDaemons: FakeAgentDaemon[] = [];
 
         try {
             await screen.findByRole("heading", { level: 1, name: "Agent settings" });

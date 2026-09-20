@@ -7,18 +7,17 @@
         "typecheck": "tsc --project tsconfig.json"
     },
     "exports": {
+        "./agent-daemon": "./infra/agent-daemon.ts",
         "./app": "./infra/app.ts",
         "./clerk": "./infra/clerk.ts",
-        "./agent": "./infra/agent.ts",
         "./cloudflare": "./infra/cloudflare.ts",
-        "./gateways": "./infra/gateways.ts",
-        "./runtime": "./infra/runtime.ts"
+        "./gateways": "./infra/gateways.ts"
     },
     "dependencies": {
         "@cloudflare/vitest-plugin": "^1.1.7",
         "@cloudflare/workers-types": "^5.20260911.1",
         "@moxt-ai/mobius-sdk": "workspace:*",
-        "@moxt-ai/mobius-fake-acp-agent": "workspace:*",
+        "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/ws": "^8.18.1",
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",

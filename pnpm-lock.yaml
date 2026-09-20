@@ -297,6 +297,9 @@ importers:
       '@moxt-ai/mobius-protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@moxt-ai/mobius-test':
+        specifier: workspace:*
+        version: link:../../tests
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@8.3.0(@types/node@24.13.4)(esbuild@0.28.2)(jiti@2.7.0)(yaml@2.9.0))
@@ -333,9 +336,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^5.20260911.1
         version: 5.20260911.1
-      '@moxt-ai/mobius-fake-acp-agent':
+      '@moxt-ai/mobius-protocol':
         specifier: workspace:*
-        version: link:../e2e/fixtures/fake-acp-agent
+        version: link:../packages/protocol
       '@moxt-ai/mobius-relay-cloudflare-platform':
         specifier: workspace:*
         version: link:../packages/relay-cloudflare-platform

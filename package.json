@@ -48,7 +48,7 @@
         "check:architecture": "depcruise --config dependency-cruiser.config.cjs packages/*/src",
         "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
         "format": "biome format --write",
-        "build:e2e": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm --recursive --workspace-concurrency=3 --filter '@moxt-ai/mobius...' --filter '@moxt-ai/mobius-relay-cloudflare-standalone...' --if-present build",
+        "build:e2e": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm --recursive --workspace-concurrency=3 --filter '@moxt-ai/mobius-relay-cloudflare-standalone...' --if-present build",
         "test": "pnpm test:ci:client && pnpm test:ci:relay && pnpm test:ci:hosting",
         "test:agent-daemon": "vitest run --config vitest.agent-daemon.config.ts",
         "test:e2e": "pnpm build:e2e && vitest run e2e",

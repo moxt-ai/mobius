@@ -7,6 +7,8 @@ VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm build
 pnpm test:e2e
 ```
 
-The `*.e2e.test.ts` scenarios themselves are the authoritative description of
-what the suite proves. See [TESTING.md](../TESTING.md) for the entrypoint,
-composition, fixture, and signal-to-noise requirements.
+The normal journey uses the production Relay and public SDK with the shared
+protocol-level `FakeAgentDaemon`; real Agent and production daemon compatibility
+belongs to `tests/agent-daemon`. The `*.e2e.test.ts` scenario itself is the
+authoritative description of what the suite proves. See
+[TESTING.md](../TESTING.md) for the boundary and exception rules.

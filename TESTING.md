@@ -3,7 +3,7 @@
 Tests are a small executable control surface for Mobius. Keep four shapes and no
 more:
 
-1. `e2e/mobius.e2e.test.ts` owns the critical successful product journey.
+1. `e2e/mobius.e2e.test.ts` owns the critical successful server product journey.
 2. Boundary tests enter through one production boundary and own its failures.
 3. `packages/protocol/tests` owns serialization and trust-boundary contracts.
 4. `tests/agent-daemon/cases` owns compatibility with real third-party Agents.
@@ -11,12 +11,44 @@ more:
 Runner, package, and CI partition names are implementation details, not additional
 test levels.
 
+## Agent and daemon boundary
+
+Treat a third-party Agent and the production Mobius daemon as one integration
+unit. Only `tests/agent-daemon/cases` tests that unit. Those cases use a real
+Agent executable, its production ACP adapter and provider client, the production
+daemon, and a permissive local fake LLM provider.
+
+Every suite that consumes the Agent-daemon unit talks to a shared protocol-level
+`FakeAgentDaemon`. The fake claims a Runtime, connects through the production
+daemon/server WebSocket protocol, and emits normal workspace, Session, event,
+and file-transfer messages. It does not start an Agent, ACP adapter, daemon
+process, or `MobiusRuntimeEngine`. Do not introduce another fake ACP Agent or
+embed a private daemon simulator in one package's harness.
+
+This boundary keeps responsibility unambiguous:
+
+- Agent-daemon cases prove Agent discovery, configuration, provider access,
+  tool execution, ACP translation, and daemon delivery.
+- Web, SDK, Relay, Platform, and hosting tests prove their behavior against the
+  public daemon/server protocol without retesting the Agent-daemon unit.
+- Protocol contract tests prove message validation and round trips without a
+  process or network.
+
+CLI boundary tests are inside the unit: when daemon behavior itself is under
+test, they may use the one controlled ACP fixture. They must not be copied into a
+consumer suite.
+
+An exceptional E2E may start the production daemon only when that executable
+assembly is itself the behavior being proved. Keep such cases rare, explicit,
+and separate from the normal server journey. Needing an Agent response is not a
+reason to take the exception.
+
 ## Product journey
 
-The E2E journey enters through the public SDK and production CLI and crosses the
-Relay, daemon, ACP, filesystem, and Agent boundaries. Extend this journey before
-adding another E2E case. It should prove a long path instead of enumerating edge
-cases.
+The normal E2E journey enters through the public SDK, crosses the production
+Relay, and uses `FakeAgentDaemon` at the daemon/server boundary. Extend this
+journey before adding another E2E case. It should prove a long server path
+instead of enumerating edge cases or repeating Agent-daemon compatibility.
 
 ## Boundary tests
 
@@ -27,7 +59,8 @@ directory does not define a new test level:
   process, filesystem, or SQLite tests are reserved for security, corruption, and
   recovery behavior that the outer boundary cannot create cheaply.
 - SDK tests use the public client and transport.
-- Web tests mount the complete application against the local Relay.
+- Web tests mount the complete application against the local Relay and shared
+  `FakeAgentDaemon`.
 - hosting tests use the production Worker with local Cloudflare bindings.
 - `tests/runtime-server.integration.test.ts` uses the embedding API and SDK.
 
@@ -56,6 +89,9 @@ Direct persistence setup is reserved for storage and migration tests or state
 owned by an upstream system. Name that setup explicitly. Use a stateful fake only
 for an external dependency that cannot run safely or deterministically; connect to
 it through the production port.
+
+Shared fakes replace shared boundaries. Do not create package-local mocks of the
+Agent-daemon protocol.
 
 Use fixed clocks and explicit advancement for time-dependent behavior. Wait for
 the event or visible state that proves progress. A bounded timeout is failure

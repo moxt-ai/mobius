@@ -2,11 +2,10 @@ import { MobiusRecordingPolicy } from "@moxt-ai/mobius-sdk";
 import { MobiusOidcCredentialProvider, MobiusPlatformDeveloperClient } from "@moxt-ai/mobius-sdk/platform";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createPlatformGateways } from "../packages/relay-cloudflare-platform/src/worker.ts";
-import { createTestAgent } from "./infra/agent.ts";
 import { createTestMobiusPlatformApp } from "./infra/app.ts";
 import { FakeClerk } from "./infra/clerk.ts";
 import { createTestMobiusPlatformBindings } from "./infra/cloudflare.ts";
-import { createTestRuntime } from "./infra/runtime.ts";
+import { createFakeAgentDaemonRuntime } from "./infra/platform-agent-daemon.ts";
 
 beforeEach(() => {
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -47,12 +46,11 @@ it("Given a Platform Project, When its owner pairs a local Runtime and creates a
         },
         signal,
     );
-    await using agent = await createTestAgent({ signal });
-    await using runtime = await createTestRuntime({
+    await using runtime = await createFakeAgentDaemonRuntime({
+        credential: application.defaultCredential.credential,
+        projectId: project.projectId,
         server: app,
-        agent,
         signal,
-        project: { projectId: project.projectId, credential: application.defaultCredential.credential },
     });
     expect(await runtime.client.runtimes.list(signal)).toMatchObject([
         { runtimeId: runtime.runtimeId, projectId: project.projectId, online: true, agents: [{ id: "codex" }] },

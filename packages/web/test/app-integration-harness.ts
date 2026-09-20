@@ -1,25 +1,19 @@
 import {
-    decodeMessageKind,
-    decodeSessionEventAcknowledgement,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
-    decodeSessionStartedEvent,
     encodeAgentMessageDeltaEvent,
     encodeSessionCompletedEvent,
-    encodeSessionEventEnvelope,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
     MOBIUS_API_PREFIX,
-    SESSION_EVENT_ACK_KIND,
-    SESSION_EVENT_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
-    SESSION_STARTED_KIND,
     type SessionCapabilities,
     type SessionConfigOption,
     type SessionPrepareCommand,
     type SessionPromptCommand,
 } from "@moxt-ai/mobius-protocol";
+import { type AgentDaemonSocket, FakeAgentDaemon } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterAll, beforeAll, expect } from "vitest";
@@ -59,42 +53,9 @@ interface ClaimedPairing {
     readonly daemonToken: string;
 }
 
-interface PendingMessage {
-    readonly kind: string;
-    readonly reject: (reason: Error) => void;
-    readonly resolve: (message: string) => void;
-}
-
 const ASYNC_UI_TIMEOUT_MS = 8_000;
 
 configure({ asyncUtilTimeout: ASYNC_UI_TIMEOUT_MS });
-
-async function waitForOperation<T>(operation: Promise<T>, cancellation: AbortSignal): Promise<T> {
-    cancellation.throwIfAborted();
-    return await new Promise<T>((resolve, reject) => {
-        const cleanupListener = (): void => {
-            cancellation.removeEventListener("abort", handleAbort);
-        };
-        const handleAbort = (): void => {
-            cleanupListener();
-            reject(cancellation.reason);
-        };
-        cancellation.addEventListener("abort", handleAbort, { once: true });
-        if (cancellation.aborted) {
-            handleAbort();
-        }
-        void operation.then(
-            (value) => {
-                cleanupListener();
-                resolve(value);
-            },
-            (error: unknown) => {
-                cleanupListener();
-                reject(error);
-            },
-        );
-    });
-}
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -179,172 +140,6 @@ export async function waitForDocumentState(predicate: () => boolean, signal: Abo
     });
 }
 
-export class StatefulDaemon {
-    readonly #attemptIdsByCommand = new Map<string, string>();
-    readonly #closed: Promise<void>;
-    readonly #messages: string[] = [];
-    readonly #pending: PendingMessage[] = [];
-    readonly #socket: WebSocket;
-    readonly #sourceSequences = new Map<string, number>();
-
-    private constructor(socket: WebSocket) {
-        this.#socket = socket;
-        this.#closed = new Promise((resolve) => {
-            if (socket.readyState === WebSocket.CLOSED) {
-                resolve();
-                return;
-            }
-            socket.addEventListener("close", () => resolve(), { once: true });
-        });
-        socket.addEventListener("message", (event) => {
-            if (typeof event.data !== "string") {
-                return;
-            }
-            const kind = decodeMessageKind(event.data);
-            const pendingIndex = this.#pending.findIndex((candidate) => candidate.kind === kind);
-            const pending = pendingIndex < 0 ? undefined : this.#pending.splice(pendingIndex, 1)[0];
-            if (pending === undefined) {
-                this.#messages.push(event.data);
-                return;
-            }
-            pending.resolve(event.data);
-        });
-        socket.addEventListener("error", () => {
-            for (const pending of this.#pending.splice(0)) {
-                pending.reject(new Error("The local daemon WebSocket failed"));
-            }
-        });
-    }
-
-    static async connect(url: URL): Promise<StatefulDaemon> {
-        const socket = new WebSocket(url);
-        await new Promise<void>((resolve, reject) => {
-            const signal = AbortSignal.timeout(8_000);
-            const cleanupListeners = (): void => {
-                socket.removeEventListener("close", handleClose);
-                socket.removeEventListener("open", handleOpen);
-                socket.removeEventListener("error", handleError);
-                signal.removeEventListener("abort", handleAbort);
-            };
-            const handleAbort = (): void => {
-                cleanupListeners();
-                reject(new Error("The local daemon WebSocket did not open"));
-            };
-            const handleError = (): void => {
-                cleanupListeners();
-                reject(new Error("The local daemon WebSocket failed while opening"));
-            };
-            const handleClose = (): void => {
-                cleanupListeners();
-                reject(new Error("The local daemon WebSocket closed while opening"));
-            };
-            const handleOpen = (): void => {
-                cleanupListeners();
-                resolve();
-            };
-            socket.addEventListener("close", handleClose, { once: true });
-            socket.addEventListener("open", handleOpen, { once: true });
-            socket.addEventListener("error", handleError, { once: true });
-            signal.addEventListener("abort", handleAbort, { once: true });
-        });
-        return new StatefulDaemon(socket);
-    }
-
-    readonly close = (): void => {
-        this.#socket.close(1000, "Web integration complete");
-    };
-
-    readonly available = (kind: string): number =>
-        this.#messages.filter((message) => decodeMessageKind(message) === kind).length;
-
-    readonly waitForClose = async (cancellation: AbortSignal): Promise<void> =>
-        await waitForOperation(this.#closed, cancellation);
-
-    readonly receive = (kind: string, cancellation?: AbortSignal): Promise<string> => {
-        cancellation?.throwIfAborted();
-        const existingIndex = this.#messages.findIndex((message) => decodeMessageKind(message) === kind);
-        if (existingIndex >= 0) {
-            const message = this.#messages.splice(existingIndex, 1)[0];
-            if (message === undefined) {
-                return Promise.reject(new Error(`Missing queued ${kind} message`));
-            }
-            return Promise.resolve(message);
-        }
-        return new Promise((resolve, reject) => {
-            const deadline = AbortSignal.timeout(20_000);
-            const signal = cancellation === undefined ? deadline : AbortSignal.any([cancellation, deadline]);
-            const pending: PendingMessage = {
-                kind,
-                reject: (error) => {
-                    signal.removeEventListener("abort", handleAbort);
-                    reject(error);
-                },
-                resolve: (message) => {
-                    signal.removeEventListener("abort", handleAbort);
-                    resolve(message);
-                },
-            };
-            const handleAbort = (): void => {
-                const index = this.#pending.indexOf(pending);
-                if (index >= 0) {
-                    this.#pending.splice(index, 1);
-                }
-                reject(
-                    cancellation?.aborted ? cancellation.reason : new Error(`The local daemon did not receive ${kind}`),
-                );
-            };
-            this.#pending.push(pending);
-            signal.addEventListener("abort", handleAbort, { once: true });
-        });
-    };
-
-    readonly send = (message: string): void => {
-        this.#socket.send(message);
-    };
-
-    readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
-        signal?.throwIfAborted();
-        const eventId = crypto.randomUUID();
-        if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
-            const started = decodeSessionStartedEvent(payload);
-            this.#attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
-        }
-        const decoded: unknown = JSON.parse(payload);
-        const commandId =
-            isRecord(decoded) && typeof decoded["commandId"] === "string" ? decoded["commandId"] : undefined;
-        const attemptId =
-            commandId === undefined ? undefined : this.#attemptIdsByCommand.get(`${sessionId}:${commandId}`);
-        const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
-        const sourceSequence = (this.#sourceSequences.get(sourceKey) ?? 0) + 1;
-        this.#sourceSequences.set(sourceKey, sourceSequence);
-        this.#socket.send(
-            encodeSessionEventEnvelope({
-                eventId,
-                kind: SESSION_EVENT_KIND,
-                payload,
-                sessionId,
-                source:
-                    attemptId === undefined
-                        ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
-                        : {
-                              attemptId,
-                              kind: "attempt",
-                              sourceSeq: sourceSequence.toString(),
-                          },
-            }),
-        );
-        const acknowledgement = decodeSessionEventAcknowledgement(await this.receive(SESSION_EVENT_ACK_KIND, signal));
-        if (
-            acknowledgement.eventId !== eventId ||
-            acknowledgement.sessionId !== sessionId ||
-            acknowledgement.duplicate
-        ) {
-            throw new Error("The relay returned an invalid session event acknowledgement");
-        }
-        return acknowledgement.sequence;
-    };
-}
-
 export interface PairDaemonOptions {
     readonly agentSettingsDiscovery?: boolean;
     readonly agents?: readonly AgentOption[];
@@ -356,8 +151,8 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     readonly channelId: string;
     readonly close: () => Promise<void>;
     readonly credential: CreatedPairing;
-    readonly daemon: StatefulDaemon;
-    readonly reconnectDaemon: () => Promise<StatefulDaemon>;
+    readonly daemon: FakeAgentDaemon;
+    readonly reconnectDaemon: () => Promise<FakeAgentDaemon>;
 }> {
     const createdResponse = await fetch(new URL(`${MOBIUS_API_PREFIX}/pairings`, window.location.origin), {
         method: "POST",
@@ -407,7 +202,8 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     const daemonUrl = new URL(`${MOBIUS_API_PREFIX}/channels/${claimed.channelId}/daemon`, window.location.origin);
     daemonUrl.protocol = "ws:";
     daemonUrl.searchParams.set("token", claimed.daemonToken);
-    const reconnectDaemon = async (): Promise<StatefulDaemon> => await StatefulDaemon.connect(daemonUrl);
+    const reconnectDaemon = async (): Promise<FakeAgentDaemon> =>
+        await FakeAgentDaemon.connect(daemonUrl, (url) => new WebSocket(url) as unknown as AgentDaemonSocket);
     const daemon = await reconnectDaemon();
     return {
         channelId: claimed.channelId,
@@ -473,7 +269,7 @@ export function saveBrowserCredential(channelId: string, credential: CreatedPair
 }
 
 export async function sendReadySession(
-    daemon: StatefulDaemon,
+    daemon: FakeAgentDaemon,
     prepare: SessionPrepareCommand,
     configOptions: readonly SessionConfigOption[] = [],
     capabilities: SessionCapabilities = {
@@ -515,7 +311,7 @@ export async function sendReadySession(
 }
 
 export async function completeRenderedPrompt(
-    daemon: StatefulDaemon,
+    daemon: FakeAgentDaemon,
     promptText: string,
     responseText: string,
     renderedText: string = responseText,

@@ -1,14 +1,19 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+    type AgentDaemonSocket,
+    FakeAgentDaemon,
+    type RunningFakeAgentDaemon,
+    serveFakeAgentDaemon,
+} from "../../tests/infra/agent-daemon.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 const cliPath = fileURLToPath(new URL("../../packages/cli/dist/cli.js", import.meta.url));
-const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 
 function stopProcessTree(child: ChildProcess): void {
@@ -128,20 +133,36 @@ class ObservedProcess {
     }
 
     async stop(): Promise<void> {
-        const exited =
-            this.child.exitCode === null ? once(this.child, "exit", { signal: AbortSignal.timeout(5_000) }) : null;
+        if (this.child.exitCode !== null || this.child.signalCode !== null) {
+            return;
+        }
+        const waitForExit = async (timeoutMilliseconds: number): Promise<boolean> =>
+            await new Promise((resolve) => {
+                let timeout: ReturnType<typeof setTimeout>;
+                const exited = (): void => {
+                    clearTimeout(timeout);
+                    resolve(true);
+                };
+                timeout = setTimeout(() => {
+                    this.child.removeListener("exit", exited);
+                    resolve(this.child.exitCode !== null || this.child.signalCode !== null);
+                }, timeoutMilliseconds);
+                this.child.once("exit", exited);
+            });
         try {
             stopProcessTree(this.child);
-            if (exited !== null) {
-                await exited;
-            }
         } catch {
-            if (this.child.exitCode === null) {
-                const forcedExit = once(this.child, "exit");
-                forceStopProcessTree(this.child);
-                await forcedExit;
-            }
+            // The process may have exited between the state check and the signal.
         }
+        if (await waitForExit(5_000)) {
+            return;
+        }
+        try {
+            forceStopProcessTree(this.child);
+        } catch {
+            // The process may have exited between the timeout and the signal.
+        }
+        await waitForExit(5_000);
     }
 }
 
@@ -191,61 +212,69 @@ export async function startStandaloneDeployment(): Promise<StandaloneDeployment>
     }
 }
 
-function executable(source: string): string {
-    return `#!${process.execPath}\n${source}`;
+function claimedDaemonToken(value: unknown): string {
+    if (!isRecord(value) || typeof value["daemonToken"] !== "string") {
+        throw new Error("The Standalone Runtime claim response is invalid");
+    }
+    return value["daemonToken"];
 }
 
-async function createFakeCodex(directory: string): Promise<Readonly<Record<string, string>>> {
-    const bin = join(directory, "bin");
-    const agent = join(bin, "codex");
-    const adapter = join(bin, "codex-acp");
-    const missing = join(directory, "missing-agent");
-    await mkdir(bin, { recursive: true, mode: 0o700 });
-    await Promise.all([
-        writeFile(
-            agent,
-            executable(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex 0.153.0\\n");
-} else {
-  process.argv.push("--agent-name", "Codex", "--exclusive-writer");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
-}
-`),
-            { mode: 0o700 },
-        ),
-        writeFile(
-            adapter,
-            executable(`
-import { spawn } from "node:child_process";
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.8.0\\n");
-} else {
-  const child = spawn(process.env.CODEX_PATH, [], { env: process.env, stdio: "inherit" });
-  child.once("error", () => process.exit(92));
-  child.once("exit", (code) => process.exit(code ?? 93));
-}
-`),
-            { mode: 0o700 },
-        ),
-    ]);
-    await Promise.all([chmod(agent, 0o700), chmod(adapter, 0o700)]);
+export async function startFakeAgentDaemon(
+    deployment: StandaloneDeployment,
+    pairing: StandalonePairing,
+    signal: AbortSignal,
+): Promise<RunningFakeAgentDaemon> {
+    const claim = await fetch(new URL("/mobius/api/pairings/claim", deployment.origin), {
+        body: JSON.stringify({
+            agents: [
+                {
+                    agentPath: "/fake/codex",
+                    agentVersion: "fake-agent-daemon",
+                    capabilities: {
+                        additionalDirectories: true,
+                        audioPrompt: false,
+                        closeSession: true,
+                        deleteSession: true,
+                        embeddedContextPrompt: true,
+                        imagePrompt: true,
+                        listSessions: true,
+                        loadSession: true,
+                        promptQueueing: false,
+                        resumeSession: true,
+                        steering: false,
+                        unstableForkSession: false,
+                    },
+                    id: "codex",
+                    label: "Codex",
+                },
+            ],
+            installableAgents: [],
+            machineName: "Fake Runtime",
+            pairingCode: pairing.pairingCode,
+            workspaceName: "Fake workspace",
+        }),
+        headers: { "content-type": "application/json" },
+        method: "POST",
+        signal,
+    });
+    if (claim.status !== 200) {
+        throw new Error(`Could not claim the Standalone Runtime: ${claim.status.toString()}`);
+    }
+    const daemonUrl = new URL(`/mobius/api/channels/${pairing.channelId}/daemon`, deployment.origin);
+    daemonUrl.protocol = "ws:";
+    daemonUrl.searchParams.set("token", claimedDaemonToken(await claim.json()));
+    const daemon = await FakeAgentDaemon.connect(
+        daemonUrl,
+        (url) => new WebSocket(url) as unknown as AgentDaemonSocket,
+        signal,
+    );
+    const behavior = serveFakeAgentDaemon(daemon, { agentName: "Codex" });
     return {
-        CODEX_PATH: agent,
-        MOBIUS_CODEX_PATH: agent,
-        MOBIUS_CODEX_ACP_PATH: adapter,
-        MOBIUS_CLAUDE_PATH: missing,
-        MOBIUS_CLAUDE_ACP_PATH: missing,
-        MOBIUS_COPILOT_PATH: missing,
-        MOBIUS_CURSOR_PATH: missing,
-        MOBIUS_DEEPSEEK_HARNESS_PATH: missing,
-        MOBIUS_GEMINI_PATH: missing,
-        MOBIUS_GROK_BUILD_PATH: missing,
-        MOBIUS_HERMES_PATH: missing,
-        MOBIUS_OPENCODE_PATH: missing,
-        MOBIUS_PI_PATH: missing,
-        MOBIUS_PI_ACP_PATH: missing,
-        MOBIUS_WORKBUDDY_PATH: missing,
+        failure: behavior.failure,
+        [Symbol.asyncDispose]: async () => {
+            await behavior[Symbol.asyncDispose]();
+            daemon.close();
+        },
     };
 }
 
@@ -293,19 +322,14 @@ function spawnCli(arguments_: readonly string[], environment: NodeJS.ProcessEnv)
 export async function startProductionMobiusCli(
     deployment: StandaloneDeployment,
     pairing: StandalonePairing,
-    options: {
-        readonly agentEnvironment?: Readonly<Record<string, string>>;
-    } = {},
+    options: { readonly agentEnvironment: Readonly<Record<string, string>> },
 ): Promise<ProductionMobiusCli> {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-e2e-cli-"));
     const workspace = join(temporaryDirectory, "workspace");
     await mkdir(workspace, { recursive: true });
     const environment = {
         ...process.env,
-        ...(options.agentEnvironment ?? (await createFakeCodex(temporaryDirectory))),
-        ...(options.agentEnvironment === undefined
-            ? { MOBIUS_FAKE_ACP_STATE_DIRECTORY: join(temporaryDirectory, "agent-state") }
-            : {}),
+        ...options.agentEnvironment,
         MOBIUS_STATE_DIRECTORY: join(temporaryDirectory, "mobius-state"),
         NO_PROXY: "127.0.0.1,localhost",
         no_proxy: "127.0.0.1,localhost",

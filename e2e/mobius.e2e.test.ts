@@ -7,15 +7,15 @@ import {
     MobiusTurnCompletedEvent,
     StaticMobiusCredentialProvider,
 } from "../packages/mobius-sdk/src/server.ts";
-import { startProductionMobiusCli, startStandaloneDeployment } from "./support/standalone.ts";
+import { startFakeAgentDaemon, startStandaloneDeployment } from "./support/standalone.ts";
 
-it("Given a Standalone deployment and local Agent, When a developer pairs the production CLI and submits turns before and after restarting it, Then responses, generated images, and history remain available", {
+it("Given a Standalone deployment and fake Agent-daemon, When a developer pairs a Runtime and submits turns, Then responses, pulled images, and history remain available", {
     timeout: 90_000,
 }, async () => {
     const signal = AbortSignal.timeout(80_000);
     await using deployment = await startStandaloneDeployment();
     const pairing = await deployment.createPairing(signal);
-    await using runtime = await startProductionMobiusCli(deployment, pairing);
+    await using runtime = await startFakeAgentDaemon(deployment, pairing, signal);
 
     const client = new MobiusClient({
         credentialProvider: new StaticMobiusCredentialProvider(pairing.hostToken),
@@ -73,7 +73,7 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
                 },
                 signal,
             );
-            await completed.promise;
+            await Promise.race([completed.promise, runtime.failure]);
 
             const firstPage = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 100 }, signal);
             expect(firstPage.messages).toHaveLength(1);
@@ -119,25 +119,24 @@ it("Given a Standalone deployment and local Agent, When a developer pairs the pr
             expect(file.mediaType).toBe("image/png");
             expect(file.bytes.subarray(0, 4)).toEqual(Uint8Array.of(0x89, 0x50, 0x4e, 0x47));
 
-            await runtime.restartFromSavedChannel();
             completed = Promise.withResolvers<MobiusTurnCompletedEvent>();
             await client.turns.submit(
                 session.sessionId,
                 {
                     additionalDirectoryIds: [],
                     artifactIds: [],
-                    content: "continue after restart",
-                    idempotencyKey: "continue-after-restart",
+                    content: "continue conversation",
+                    idempotencyKey: "continue-conversation",
                     images: [],
                     resources: [],
                 },
                 signal,
             );
-            await completed.promise;
+            await Promise.race([completed.promise, runtime.failure]);
 
             const history = await client.sessions.readMessages(session.sessionId, { cursor: "", limit: 100 }, signal);
             expect(history.messages).toMatchObject([
-                { prompt: "continue after restart", response: "Codex turn 2: continue after restart" },
+                { prompt: "continue conversation", response: "Codex turn 2: continue conversation" },
                 { prompt: "generate local image", response: "Codex turn 1: generate local image" },
             ]);
         } finally {
