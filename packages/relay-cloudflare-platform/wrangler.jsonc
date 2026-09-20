@@ -32,6 +32,14 @@
         {
             "tag": "platform-remove-bot-connections",
             "deleted_classes": ["BotConnectionActor"]
+        },
+        {
+            "tag": "platform-non-cloud-retention-session-relay",
+            "new_sqlite_classes": ["NonCloudRetentionSessionRelayDO"]
+        },
+        {
+            "tag": "platform-remove-non-cloud-retention-session-relay",
+            "deleted_classes": ["NonCloudRetentionSessionRelayDO"]
         }
     ],
     "d1_databases": [
