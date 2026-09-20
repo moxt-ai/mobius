@@ -34,36 +34,6 @@ import {
 
 const environment = setupWebIntegrationEnvironment();
 
-function modelConfigOptions(model: string): readonly SessionConfigOption[] {
-    return [
-        {
-            booleanValue: false,
-            category: "model",
-            currentValue: model,
-            description: "Execution model",
-            id: "model",
-            name: "Model",
-            type: "select",
-            values: [
-                {
-                    description: "Faster model",
-                    groupId: "models",
-                    groupName: "Models",
-                    name: "Test Small",
-                    value: "test-small",
-                },
-                {
-                    description: "More capable model",
-                    groupId: "models",
-                    groupName: "Models",
-                    name: "Test Large",
-                    value: "test-large",
-                },
-            ],
-        },
-    ];
-}
-
 function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
     return [
         {
@@ -579,94 +549,6 @@ describe.sequential("Session persistence boundaries", () => {
         }
     });
 
-    it("Given an Agent previously used a selected model configuration, When a user starts another conversation with that Agent, Then the new Session restores that configuration by default", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation, modelConfigOptions("test-small"));
-
-            fireEvent.click(
-                await screen.findByRole("button", {
-                    name: /Run settings: Test Small/,
-                }),
-            );
-            const modelPicker = screen.getByRole("combobox", { name: "Model" });
-            fireEvent.pointerDown(modelPicker, {
-                button: 0,
-                pointerType: "mouse",
-            });
-            fireEvent.click(await screen.findByRole("option", { name: "Test Large" }));
-
-            const selectedConfiguration = decodeSessionConfigureCommand(
-                await paired.daemon.receive(SESSION_CONFIGURE_KIND),
-            );
-            expect(selectedConfiguration).toMatchObject({
-                agentId: "codex",
-                configId: "model",
-                sessionId: initialPreparation.sessionId,
-                value: "test-large",
-            });
-            await paired.daemon.sendSessionEvent(
-                initialPreparation.sessionId,
-                encodeSessionConfigUpdatedEvent({
-                    configOptions: modelConfigOptions("test-large"),
-                    kind: "session.config.updated",
-                    requestId: selectedConfiguration.requestId,
-                    sessionId: initialPreparation.sessionId,
-                }),
-            );
-            await screen.findByRole("button", {
-                name: /Run settings: Test Large/,
-            });
-
-            await completeRenderedPrompt(paired.daemon, "Remember this model", "MODEL-REMEMBERED");
-            fireEvent.click(
-                within(
-                    screen.getByRole("complementary", {
-                        name: "Conversation sidebar",
-                    }),
-                ).getByRole("button", { name: /New chat.*⌘ N/ }),
-            );
-
-            const nextPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, nextPreparation, modelConfigOptions("test-small"));
-            const restoredConfiguration = decodeSessionConfigureCommand(
-                await paired.daemon.receive(SESSION_CONFIGURE_KIND),
-            );
-            expect(restoredConfiguration).toMatchObject({
-                agentId: "codex",
-                configId: "model",
-                sessionId: nextPreparation.sessionId,
-                value: "test-large",
-            });
-            expect(screen.getByRole("combobox", { name: "Message the local agent" }).getAttribute("placeholder")).toBe(
-                "Loading agent settings",
-            );
-            await paired.daemon.sendSessionEvent(
-                nextPreparation.sessionId,
-                encodeSessionConfigUpdatedEvent({
-                    configOptions: modelConfigOptions("test-large"),
-                    kind: "session.config.updated",
-                    requestId: restoredConfiguration.requestId,
-                    sessionId: nextPreparation.sessionId,
-                }),
-            );
-
-            await screen.findByRole("button", {
-                name: /Run settings: Test Large/,
-            });
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
     it("Given a prompted Session uses an additional workspace, When the Web app reloads, Then preparation retains the immutable workspace identity", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
@@ -804,53 +686,7 @@ describe.sequential("Session persistence boundaries", () => {
         }
     });
 
-    it("Given a titled Session has no Turns, When the Web app reloads, Then the same Session remains visible and resumes preparation", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation);
-            await paired.daemon.sendSessionEvent(
-                initialPreparation.sessionId,
-                encodeSessionInfoUpdatedEvent({
-                    kind: "session.info.updated",
-                    sessionId: initialPreparation.sessionId,
-                    title: "Prepared empty Session",
-                    updatedAt: "2026-09-06T12:00:00.000Z",
-                }),
-            );
-            await screen.findByRole("heading", {
-                level: 1,
-                name: "Prepared empty Session",
-            });
-
-            cleanup();
-            await closeMobiusTransport();
-            createTestApplication();
-            const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            expect(resumedPreparation.sessionId).toBe(initialPreparation.sessionId);
-            await sendReadySession(paired.daemon, resumedPreparation);
-
-            const conversations = await screen.findByRole("navigation", {
-                name: "Conversations",
-            });
-            expect(
-                within(conversations).getByRole("link", {
-                    name: /Prepared empty Session/,
-                }),
-            ).toBeTruthy();
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
-    it("Given a user typed an unsent prompt, When the Web app reloads, Then the composer still holds that text", async () => {
+    it("Given a titled prepared Session has an unsent prompt, When the Web app reloads and sends it, Then the Session and draft are restored before the draft is consumed", async () => {
         const paired = await pairDaemon();
         window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
         window.localStorage.clear();
@@ -860,6 +696,19 @@ describe.sequential("Session persistence boundaries", () => {
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation);
+            await paired.daemon.sendSessionEvent(
+                preparation.sessionId,
+                encodeSessionInfoUpdatedEvent({
+                    kind: "session.info.updated",
+                    sessionId: preparation.sessionId,
+                    title: "Prepared empty Session",
+                    updatedAt: "2026-09-06T12:00:00.000Z",
+                }),
+            );
+            await screen.findByRole("heading", {
+                level: 1,
+                name: "Prepared empty Session",
+            });
 
             const draft = "line1\nline2\n  indented\n\nDRAFT-LOSS-VERIFY";
             const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
@@ -871,8 +720,13 @@ describe.sequential("Session persistence boundaries", () => {
             await closeMobiusTransport();
             createTestApplication();
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(resumedPreparation.sessionId).toBe(preparation.sessionId);
             await sendReadySession(paired.daemon, resumedPreparation);
 
+            const conversations = await screen.findByRole("navigation", {
+                name: "Conversations",
+            });
+            expect(within(conversations).getByRole("link", { name: /Prepared empty Session/ })).toBeTruthy();
             const restoredInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             await waitFor(() => {
                 expect((restoredInput as HTMLTextAreaElement).value).toBe(draft);

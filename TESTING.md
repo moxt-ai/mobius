@@ -20,9 +20,12 @@ cases.
 
 ## Boundary tests
 
-A boundary test uses the production entrypoint for the behavior it owns:
+A boundary test uses one production entrypoint for the behavior it owns. A package
+directory does not define a new test level:
 
-- CLI tests use the executable, daemon, filesystem, SQLite, or ACP boundary.
+- CLI workflows enter through the executable or daemon protocol. Direct Agent,
+  process, filesystem, or SQLite tests are reserved for security, corruption, and
+  recovery behavior that the outer boundary cannot create cheaply.
 - SDK tests use the public client and transport.
 - Web tests mount the complete application against the local Relay.
 - hosting tests use the production Worker with local Cloudflare bindings.
@@ -32,6 +35,10 @@ Do not test a private helper or class in isolation. Do not repeat a successful
 path already owned by a longer test. Add a narrower case only for a distinct risk:
 authorization, corruption, cancellation, recovery, cleanup, concurrency, quota,
 or external compatibility.
+
+Keep one file per behavioral owner. Do not create parallel `direct`, `service`, or
+`manager` suites for the same operation; extend the existing owner and fold shared
+outcomes into its longest representative journey.
 
 Prefer one journey that advances through related states over several cases that
 recreate the same expensive setup. A case should stop when its owning boundary has
