@@ -1151,7 +1151,8 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
                                       },
                                   ]
                                 : undefined,
-                    rawOutput: { name: "mobius-workspace" },
+                    rawOutput:
+                        prompt === "return oversized tool output" ? "x".repeat(500_001) : { name: "mobius-workspace" },
                     sessionUpdate: "tool_call_update",
                     status: "completed",
                     toolCallId,

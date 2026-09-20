@@ -183,6 +183,38 @@ describe("ACP session features", () => {
         }
     });
 
+    it("Given an ACP tool returns more than 500,000 characters, When Mobius records the tool update, Then it truncates the visible output at 500,000 characters", async () => {
+        const observer = new RecordingObserver();
+        const manager = new AcpSessionManager(observer);
+        const activities: AcpActivity[] = [];
+        try {
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: fakeAgent(),
+                commandId: "oversized-tool-output-command",
+                cwd: process.cwd(),
+                images: [],
+                onActivity: (activity) => {
+                    activities.push(activity);
+                    return Promise.resolve();
+                },
+                onText: () => Promise.resolve(),
+                prompt: "return oversized tool output",
+                resources: [],
+                sessionId: "oversized-tool-output-session",
+                signal: new AbortController().signal,
+            });
+
+            const completedTool = activities.findLast(
+                (activity) => activity.activityType === "tool" && activity.status === "completed",
+            );
+            expect(completedTool?.output).toHaveLength(500_000);
+            expect(completedTool?.output).toMatch(/… output truncated by Mobius$/);
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given an ACP agent links a local image in Markdown, When Mobius records the reply, Then it preserves the original path for on-demand reading", async () => {
         const directory = await mkdtemp(join(tmpdir(), "mobius-markdown-image-"));
         const observer = new RecordingObserver();
