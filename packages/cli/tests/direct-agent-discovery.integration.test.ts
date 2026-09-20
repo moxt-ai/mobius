@@ -32,7 +32,7 @@ describe("direct ACP Agent discovery", () => {
                 dshPath,
                 executableSource(`
 if (process.argv.includes("--version")) {
-  process.stdout.write("0.1.2-rc.1\\n");
+  process.stdout.write("0.1.5-rc.2\\n");
 } else {
   process.exit(80);
 }

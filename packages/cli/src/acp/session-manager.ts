@@ -75,7 +75,7 @@ import {
     nativeSessionIdSchema,
     nativeSessionPageSchema,
 } from "./native-session.ts";
-import { normalizeAcpCapabilities } from "./session-capabilities.ts";
+import { normalizeAcpCapabilities, unsupportedSessionCapabilities } from "./session-capabilities.ts";
 import { type SessionConfigProtocol, SessionConfigProtocolError } from "./session-config/session-config-protocol.ts";
 import { sessionConfigProtocolForAgent } from "./session-config/session-config-registry.ts";
 import { AcpHistoryReplay } from "./session-history.ts";
@@ -810,20 +810,7 @@ class AcpProcessSession implements AcpClientHandler {
     #agentName = "";
     #agentVersion = "";
     #bufferedAgentText: readonly { readonly chunks: readonly string[]; readonly messageId: string }[] = [];
-    #capabilities: SessionCapabilities = {
-        additionalDirectories: false,
-        audioPrompt: false,
-        closeSession: false,
-        deleteSession: false,
-        embeddedContextPrompt: false,
-        imagePrompt: false,
-        listSessions: false,
-        loadSession: false,
-        promptQueueing: false,
-        resumeSession: false,
-        steering: false,
-        unstableForkSession: false,
-    };
+    #capabilities: SessionCapabilities = unsupportedSessionCapabilities();
     #commands: readonly SessionCommand[] = [];
     #configRevision = 0;
     #configOptions: readonly SessionConfigOption[] = [];

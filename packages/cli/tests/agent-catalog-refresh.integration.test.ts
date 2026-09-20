@@ -228,11 +228,11 @@ async function writeFakeHarnessAgent(path: string): Promise<void> {
         path,
         executableSource(`
 if (process.argv.includes("--version")) {
-  process.stdout.write("0.1.2-rc.1\\n");
+  process.stdout.write("0.1.5-rc.2\\n");
 } else {
   process.argv.push(
     "--agent-name", "DeepSeek Harness",
-    "--agent-version", "0.1.2-rc.1",
+    "--agent-version", "0.1.5-rc.2",
     "--no-load-session",
     "--http-mcp",
     "--no-additional-directories",

@@ -137,7 +137,7 @@ Cloud-based integration targets:
 Repository development requires Node.js 24.20.0 and pnpm. The published CLI supports Node.js 22.13.0 or newer.
 The CLI supports Linux on x64 and arm64, including glibc and musl distributions;
 individual Agent executables must also support the selected distribution.
-DeepSeek Harness `0.1.2-rc.1` ships glibc-linked `node-pty` Linux binaries, so
+DeepSeek Harness `0.1.5-rc.2` ships glibc-linked `node-pty` Linux binaries, so
 install `bash`, `ca-certificates`, and `gcompat` before using it on Alpine:
 
 ```bash
@@ -346,7 +346,9 @@ authentication. OpenCode uses `opencode auth login`, Cursor uses `cursor-agent l
 Grok Build uses `grok login`, and WorkBuddy opens its local sign-in through `codebuddy`.
 DeepSeek Harness reads credentials from its validated local home or launch
 environment; use the local `dsh web` Models page or `DEEPSEEK_API_KEY` to
-configure the default route. `mobius agents` reports ACP
+configure the default route. A managed DeepSeek Harness pins its ACP route to
+the `deepseek-v4-flash-vision-exp` model, so that route also needs a credential
+before image prompts can complete. `mobius agents` reports ACP
 authentication failures as `authentication_required` without exposing a
 credential.
 
@@ -378,8 +380,11 @@ delegation, or MCP passthrough while `pi-acp@0.0.33` does not implement them.
 Pi prompts have a five-minute outer Mobius deadline. A timeout closes the ACP
 connection and terminates the detached adapter process group, including its Pi
 RPC child. DeepSeek Harness advertises its current list, resume, close, and HTTP
-MCP capabilities; unsupported load, additional-directory, delete, fork, image,
-audio, embedded-resource, and elicitation features remain absent. OpenCode's ACP
+MCP capabilities; unsupported load, additional-directory, delete, fork, audio,
+embedded-resource, and elicitation features remain absent. A managed DeepSeek
+Harness pins its ACP route to an image-capable model, so image prompts are
+offered there and are reported verbatim when the route cannot accept them.
+OpenCode's ACP
 session lifecycle, including persisted load/resume behavior, is negotiated from
 the running binary. GitHub Copilot CLI must provide load and list support,
 Hermes Agent must provide load, list, resume, and fork support, and Gemini CLI

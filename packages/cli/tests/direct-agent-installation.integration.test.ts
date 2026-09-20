@@ -48,7 +48,7 @@ describe("legacy managed Agent artifact boundaries", () => {
             const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-deepseek-npm-policy-"));
             const executableDirectory = join(temporaryDirectory, "bin");
             const npmPath = join(executableDirectory, "npm");
-            const root = join(temporaryDirectory, "managed", "0.1.2-rc.1");
+            const root = join(temporaryDirectory, "managed", DEEPSEEK_HARNESS_PACKAGE.version);
             try {
                 await mkdir(executableDirectory, { mode: 0o700, recursive: true });
                 await writeFile(
@@ -60,7 +60,7 @@ const arguments_ = process.argv.slice(2);
 const prefixIndex = arguments_.indexOf("--prefix");
 const prefix = arguments_[prefixIndex + 1];
 if (prefixIndex < 0 || prefix === undefined) process.exit(81);
-if (!arguments_.includes("--before=2026-09-03T06:31:52.107Z")) process.exit(82);
+if (!arguments_.includes("--before=2026-09-18T00:00:00.000Z")) process.exit(82);
 if (!arguments_.includes("--include=optional")) process.exit(83);
 if (arguments_.includes("--omit=optional")) process.exit(84);
 if (!arguments_.includes("--ignore-scripts")) process.exit(85);
@@ -73,7 +73,7 @@ mkdirSync(join(executable, ".."), { recursive: true });
 writeFileSync(join(packageRoot, "package.json"), JSON.stringify({
   bin: { dsh: "lib/bin.js" },
   name: "@deepseek-ai/dsh",
-  version: "0.1.2-rc.1",
+  version: "0.1.5-rc.2",
 }));
 writeFileSync(executable, ${JSON.stringify(executableSource('process.stdout.write("managed-deepseek\\n");\n'))}, { mode: 0o700 });
 chmodSync(executable, 0o700);
@@ -83,7 +83,7 @@ writeFileSync(join(prefix, "package-lock.json"), JSON.stringify({
     "node_modules/@deepseek-ai/dsh": {
       integrity: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.integrity)},
       resolved: ${JSON.stringify(DEEPSEEK_HARNESS_PACKAGE.tarballUrl)},
-      version: "0.1.2-rc.1",
+      version: "0.1.5-rc.2",
     },
   },
 }));
