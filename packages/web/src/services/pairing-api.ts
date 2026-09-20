@@ -366,7 +366,14 @@ function decodeRecordedActivities(value: unknown): readonly RecordedActivity[] {
     const activities: RecordedActivity[] = [];
     const identifiers = new Set<string>();
     for (const candidate of value) {
-        const activity = decodeRecordedActivity(candidate);
+        let activity: RecordedActivity;
+        try {
+            activity = decodeRecordedActivity(candidate);
+        } catch {
+            // A step the current protocol revision cannot read must cost only that step. Failing here
+            // would turn one unreadable record into an unavailable Session.
+            continue;
+        }
         if (identifiers.has(activity.activityId)) {
             throw new PairingApiError("invalid_relay_response", "The relay returned a duplicate agent activity.");
         }

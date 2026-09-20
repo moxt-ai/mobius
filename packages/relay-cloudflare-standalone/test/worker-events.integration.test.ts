@@ -1354,4 +1354,105 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
             daemon.socket.close(1000, "Empty title test complete");
         }
     });
+
+    it("Given a stored Agent activity no longer decodes, When a browser reads its message page, Then the other Turns still load", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "unreadable-activity-session";
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+
+        try {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+
+            const healthyCommand = prompt(sessionId, "healthy-turn", "Turn that stays readable");
+            await completeTurn(host, daemon, healthyCommand, "Healthy response", [
+                {
+                    activityId: "healthy-activity",
+                    activityType: "tool",
+                    commandId: healthyCommand.commandId,
+                    content: [],
+                    detail: { kind: "unrecorded" },
+                    input: "{}",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "terminal",
+                    output: "healthy output",
+                    sequence: 0,
+                    sessionId,
+                    status: "completed",
+                    title: "Run terminal command",
+                    toolKind: "execute",
+                },
+            ]);
+            const affectedCommand = prompt(sessionId, "affected-turn", "Turn carrying the unreadable step");
+            await completeTurn(host, daemon, affectedCommand, "Affected response", [
+                {
+                    activityId: "affected-activity",
+                    activityType: "tool",
+                    commandId: affectedCommand.commandId,
+                    content: [],
+                    detail: { kind: "unrecorded" },
+                    input: "{}",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "terminal",
+                    output: "still readable",
+                    sequence: 0,
+                    sessionId,
+                    status: "completed",
+                    title: "Run terminal command",
+                    toolKind: "execute",
+                },
+            ]);
+
+            // A stored summary that a later protocol revision can no longer decode must degrade the single
+            // step it belongs to, not the whole transcript. Rewrite one stored summary into that shape.
+            const sessionStub = env.SESSION_RELAY.get(
+                env.SESSION_RELAY.idFromName(
+                    `${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`,
+                ),
+            );
+            await runInDurableObject(sessionStub, async (_instance, state) => {
+                state.storage.sql.exec(
+                    `UPDATE tool_call_views
+                        SET summary_json = ?
+                      WHERE session_id = ? AND activity_id = ?`,
+                    JSON.stringify({ kind: AGENT_ACTIVITY_KIND, unexpected: "field" }),
+                    sessionId,
+                    "affected-activity",
+                );
+            });
+
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            const body = await response.json();
+            if (!isRecord(body) || !Array.isArray(body["messages"])) {
+                throw new Error("Expected the message page to carry a messages array");
+            }
+            const messages = body["messages"].filter(isRecord);
+            expect(messages).toHaveLength(2);
+            const byCommand = new Map(messages.map((message) => [message["commandId"], message]));
+            expect(byCommand.get(healthyCommand.commandId)).toMatchObject({
+                activities: [{ output: "healthy output", toolCallId: "healthy-activity" }],
+                response: "Healthy response",
+            });
+            expect(byCommand.get(affectedCommand.commandId)).toMatchObject({
+                activities: [],
+                response: "Affected response",
+            });
+        } finally {
+            daemon.socket.close(1000, "Unreadable activity test complete");
+            host.socket.close(1000, "Unreadable activity test complete");
+        }
+    });
 });

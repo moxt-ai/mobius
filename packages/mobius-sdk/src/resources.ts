@@ -1713,6 +1713,23 @@ export function decodeMobiusActivitySummary(value: unknown): MobiusActivitySumma
     );
 }
 
+/**
+ * A stored step whose recorded shape a later protocol revision can no longer decode must cost only that
+ * step. Failing the whole page would hide every other Turn in the Session, so an unreadable summary is
+ * dropped from the restored conversation instead.
+ */
+function decodeMobiusActivitySummaries(values: readonly unknown[]): readonly MobiusActivitySummary[] {
+    const activities: MobiusActivitySummary[] = [];
+    for (const value of values) {
+        try {
+            activities.push(decodeMobiusActivitySummary(value));
+        } catch {
+            // Skip the unreadable entry and keep the rest of the conversation.
+        }
+    }
+    return activities;
+}
+
 export class MobiusMessageContent {
     readonly activities: readonly MobiusActivitySummary[];
     readonly additionalDirectoryIds: readonly string[];
@@ -1790,7 +1807,7 @@ export class MobiusMessage extends MobiusMessageContent {
 
 export function decodeMobiusMessageContent(message: Readonly<Record<string, unknown>>): MobiusMessageContent {
     return new MobiusMessageContent(
-        arrayField(message, "activities", 10_000).map(decodeMobiusActivitySummary),
+        decodeMobiusActivitySummaries(arrayField(message, "activities", 10_000)),
         arrayField(message, "additionalDirectoryIds", 100).map((directoryId) => {
             if (typeof directoryId !== "string") {
                 throw invalidResponse("The service returned an invalid additional directory identifier");

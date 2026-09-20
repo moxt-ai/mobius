@@ -452,15 +452,25 @@ export class SessionQueryService {
             const canonical = canonicalByCommand.get(command.commandId);
             const activeResponse =
                 canonical === undefined ? (activeResponseByCommand.get(command.commandId) ?? "") : "";
-            const contents = (contentsByCommand.get(command.commandId) ?? []).map((contentRow) => {
-                const event = decodeAgentContentEvent(rowString(contentRow, "content_json"));
-                if (event.kind !== AGENT_CONTENT_KIND || event.commandId !== command.commandId) {
-                    throw new SessionRuntimeError("session_storage_unavailable", "The stored agent content is invalid");
+            const contents = (contentsByCommand.get(command.commandId) ?? []).flatMap((contentRow) => {
+                let event: ReturnType<typeof decodeAgentContentEvent>;
+                try {
+                    event = decodeAgentContentEvent(rowString(contentRow, "content_json"));
+                } catch (cause) {
+                    console.error("Stored Agent content could not be decoded", cause);
+                    return [];
                 }
-                return event.content;
+                if (event.kind !== AGENT_CONTENT_KIND || event.commandId !== command.commandId) {
+                    console.error("Stored Agent content holds an unexpected event");
+                    return [];
+                }
+                return [event.content];
             });
             return {
-                activities: (activitiesByCommand.get(command.commandId) ?? []).map(activityFromRow),
+                activities: (activitiesByCommand.get(command.commandId) ?? []).flatMap((activityRow) => {
+                    const activity = activityFromRow(activityRow);
+                    return activity === null ? [] : [activity];
+                }),
                 additionalDirectoryIds: command.additionalDirectoryIds,
                 agentId: command.agentId,
                 attempt: attemptSummaryFromRow(row),
@@ -502,10 +512,22 @@ function groupByCommandId<TRow extends { readonly command_id: string }>(rows: re
     return grouped;
 }
 
-function activityFromRow(activityRow: TurnActivityRecord): SessionMessage["activities"][number] {
-    const event = decodeRecordedSessionEvent(activityRow.summary_json);
+/**
+ * A stored step whose recorded summary a later protocol revision can no longer decode must cost only that
+ * step. Failing the read would hide every other Turn in the Session, so an unreadable step is dropped and
+ * reported instead of failing the page.
+ */
+function activityFromRow(activityRow: TurnActivityRecord): SessionMessage["activities"][number] | null {
+    let event: ReturnType<typeof decodeRecordedSessionEvent>;
+    try {
+        event = decodeRecordedSessionEvent(activityRow.summary_json);
+    } catch (cause) {
+        console.error("A stored Agent activity could not be decoded", cause);
+        return null;
+    }
     if (event.kind !== AGENT_ACTIVITY_KIND) {
-        throw new SessionRuntimeError("session_storage_unavailable", "The stored activity summary is invalid");
+        console.error("A stored Agent activity summary holds an unexpected event kind");
+        return null;
     }
     const detailKind = activityRow.detail_kind;
     const detailAvailability: SessionMessage["activities"][number]["detailAvailability"] = detailKind;
