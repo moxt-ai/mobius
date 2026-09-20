@@ -15,6 +15,7 @@ const clerk = new FakeClerk();
 function bindings(): PlatformRelayBindings {
     return {
         APP_CREDENTIAL_CACHE: env.APP_CREDENTIAL_CACHE,
+        NON_CLOUD_RETENTION_SESSION_RELAY: env.NON_CLOUD_RETENTION_SESSION_RELAY,
         PLATFORM_DIRECTORY_DATABASE: env.PLATFORM_DIRECTORY_DATABASE,
         PROJECT_RELAY: env.PROJECT_RELAY,
         R2_BUCKET_APAC: env.R2_BUCKET_APAC,

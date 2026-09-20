@@ -60,6 +60,7 @@ export interface PlatformRelayBindings
     readonly APP_CREDENTIAL_CACHE: KVNamespace;
     readonly PLATFORM_DIRECTORY_DATABASE: D1Database;
     readonly R2_BUCKET_APAC: R2Bucket;
+    readonly NON_CLOUD_RETENTION_SESSION_RELAY: DurableObjectNamespace;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
 }

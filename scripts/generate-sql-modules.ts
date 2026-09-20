@@ -47,6 +47,12 @@ const relayCore = join(root, "packages/relay-core");
 const platform = join(root, "packages/relay-cloudflare-platform");
 
 await writeMigrationModule(
+    join(platform, "src/generated/non-cloud-retention-session-relay-do-migrations.ts"),
+    "nonCloudRetentionSessionRelayDurableObjectMigrations",
+    await sqlFiles(join(platform, "migrations/non-cloud-retention-session-relay-do")),
+);
+
+await writeMigrationModule(
     join(relayCore, "src/generated/session-do-migrations.ts"),
     "sessionDurableObjectMigrations",
     (await sqlFiles(join(relayCore, "migrations/session-do"))).map((source) => {

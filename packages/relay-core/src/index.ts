@@ -113,6 +113,10 @@ export {
     type ImmutableContentStore,
 } from "./infra/content-store.ts";
 export { D1DatabaseAdapter } from "./infra/d1-database.ts";
+export {
+    applyDurableObjectMigrations,
+    type DurableObjectMigration,
+} from "./infra/durable-object-migrations.ts";
 export { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "./infra/durable-object-sql-database.ts";
 export { logger } from "./infra/logger.ts";
 export type { ProjectDatabaseBindings } from "./infra/project-database-bindings.ts";

@@ -11,6 +11,7 @@
     "scripts": {
         "db:shard": "bash scripts/migrate-shard.sh",
         "db:environment": "bash scripts/migrate-environment.sh",
+        "db:generate:non-cloud-retention-session-relay-do": "drizzle-kit generate --config drizzle/drizzle.non-cloud-retention-session-relay-do.config.ts && pnpm db:codegen",
         "db:generate:platform-d1": "drizzle-kit generate --config drizzle/drizzle.platform-d1.config.ts",
         "db:generate:project-do": "drizzle-kit generate --config drizzle/drizzle.project-do.config.ts && pnpm db:codegen",
         "db:generate:relay-d1": "drizzle-kit generate --config drizzle/drizzle.relay-d1.config.ts",
