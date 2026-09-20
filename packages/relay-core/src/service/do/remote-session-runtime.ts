@@ -59,16 +59,8 @@ import {
     type TurnCancellationAcceptance,
     UploadingArtifactDescriptor,
 } from "../../entity/do/session.ts";
-import type {
-    SessionArtifactGateway,
-    SessionCommandGateway,
-    SessionEventStreamGateway,
-    SessionQueryGateway,
-    SessionTransferGateway,
-} from "../../gateway/index.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
 import { COMPRESSED_JSON_ENCODING, decompressJsonBody } from "../../infra/compressed-json.ts";
-import type { DatabaseResolver } from "../../infra/database-resolver.ts";
 import {
     DO_TIMING_HEADER,
     DO_TIMING_NAME_PREFIX,
@@ -77,6 +69,13 @@ import {
     unmeasuredOperationTiming,
 } from "../../infra/operation-timing.ts";
 import type { ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
+import type {
+    SessionArtifactRuntime,
+    SessionCommandRuntime,
+    SessionEventStreamRuntime,
+    SessionQueryRuntime,
+    SessionTransferRuntime,
+} from "../../infra/session-runtime.ts";
 import type { SessionDirectoryStorage } from "../../storage/session-directory-storage.ts";
 import { validateCreateSessionRequest } from "./session-records.ts";
 
@@ -764,11 +763,11 @@ function decodeDirectoryCursor(
 
 export class RemoteSessionRuntime
     implements
-        SessionCommandGateway,
-        SessionQueryGateway,
-        SessionTransferGateway,
-        SessionArtifactGateway,
-        SessionEventStreamGateway
+        SessionCommandRuntime,
+        SessionQueryRuntime,
+        SessionTransferRuntime,
+        SessionArtifactRuntime,
+        SessionEventStreamRuntime
 {
     readonly #directory: SessionDirectoryStorage;
     readonly #projects: ProjectStorageDirectory;
@@ -776,16 +775,15 @@ export class RemoteSessionRuntime
     readonly #quotaPolicy: SessionQuotaPolicyProvider;
 
     constructor(cx: {
-        readonly storages: { readonly directory: SessionDirectoryStorage };
-        readonly gateways: {
-            readonly transport: SessionTransport;
-            readonly databaseResolver: DatabaseResolver;
-            readonly projectStorageDirectory: ProjectStorageDirectory;
+        readonly storages: {
+            readonly directory: SessionDirectoryStorage;
+            readonly projects: ProjectStorageDirectory;
         };
+        readonly gateways: { readonly transport: SessionTransport };
         readonly config: { readonly quotaPolicy: SessionQuotaPolicyProvider };
     }) {
         this.#directory = cx.storages.directory;
-        this.#projects = cx.gateways.projectStorageDirectory;
+        this.#projects = cx.storages.projects;
         this.#transport = cx.gateways.transport;
         this.#quotaPolicy = cx.config.quotaPolicy;
     }

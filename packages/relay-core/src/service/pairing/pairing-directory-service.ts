@@ -42,13 +42,13 @@ import type { PairingOperations } from "./pairing-operations.ts";
 import { deriveRuntimePairingSecrets } from "./runtime-pairing-secrets.ts";
 
 export interface PairingDirectoryInfrastructure {
-    readonly storages: { readonly forProject: (project: ProjectStorageContext) => PairingStorage };
+    readonly storages: {
+        readonly forProject: (project: ProjectStorageContext) => PairingStorage;
+        readonly projectDirectory: ProjectStorageDirectory;
+    };
     readonly services: {
         readonly identities: PairingIdentityService;
         readonly projectAuthentication: ProjectAccessAuthorizer;
-    };
-    readonly gateways: {
-        readonly projectStorageDirectory: ProjectStorageDirectory;
     };
 }
 
@@ -114,7 +114,7 @@ export class PairingDirectoryService implements PairingOperations {
     }
 
     private readonly projectStorage = async (scope: ProjectScope, signal: AbortSignal) => {
-        const project = await this.#cx.gateways.projectStorageDirectory.resolve(scope.projectId, signal);
+        const project = await this.#cx.storages.projectDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
         if (project.projectId !== scope.projectId) {
             throw new PairingDirectoryError("invalid_directory_record", "The Project storage locator is invalid");

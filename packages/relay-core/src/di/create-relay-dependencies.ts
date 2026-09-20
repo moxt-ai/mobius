@@ -47,22 +47,21 @@ function createPairings(cx: PairingInfrastructure) {
     return new PairingDirectoryService({
         storages: {
             forProject: (project) => new PairingStorage(project, cx.databases),
+            projectDirectory: cx.projects,
         },
         services: { identities, projectAuthentication: cx.authentication.projects },
-        gateways: {
-            projectStorageDirectory: cx.projects,
-        },
     });
 }
 
 function createHttpContext(infrastructure: RelayInfrastructure, pairings: PairingDirectoryService) {
     const sessions = new RemoteSessionRuntime({
-        storages: { directory: new SessionDirectoryStorage(infrastructure.databases) },
+        storages: {
+            directory: new SessionDirectoryStorage(infrastructure.databases),
+            projects: infrastructure.projects,
+        },
         config: { quotaPolicy: infrastructure.config.quotaPolicy },
         gateways: {
             transport: infrastructure.gateways.sessionTransport,
-            databaseResolver: infrastructure.databases,
-            projectStorageDirectory: infrastructure.projects,
         },
     });
     const cx = {
@@ -71,6 +70,8 @@ function createHttpContext(infrastructure: RelayInfrastructure, pairings: Pairin
         services: { pairings },
         gateways: {
             ...infrastructure.gateways,
+        },
+        runtimes: {
             sessionCommands: sessions,
             sessionQueries: sessions,
             sessionTransfers: sessions,

@@ -5,12 +5,12 @@ import type {
     SessionSummary,
 } from "../../entity/do/session.ts";
 import type {
-    SessionArtifactGateway,
-    SessionCommandGateway,
-    SessionEventStreamGateway,
-    SessionQueryGateway,
-    SessionTransferGateway,
-} from "../../gateway/index.ts";
+    SessionArtifactRuntime,
+    SessionCommandRuntime,
+    SessionEventStreamRuntime,
+    SessionQueryRuntime,
+    SessionTransferRuntime,
+} from "../../infra/session-runtime.ts";
 import type { SessionRecoveryStorage } from "../../storage/do/session-recovery-storage.ts";
 import type { SessionArchiveService } from "./session-archive-service.ts";
 import type { SessionArtifactService } from "./session-artifact-service.ts";
@@ -25,11 +25,11 @@ import type { SessionTransferService } from "./session-transfer-service.ts";
 
 export class SqliteSessionRuntime
     implements
-        SessionCommandGateway,
-        SessionQueryGateway,
-        SessionArtifactGateway,
-        SessionEventStreamGateway,
-        SessionTransferGateway
+        SessionCommandRuntime,
+        SessionQueryRuntime,
+        SessionArtifactRuntime,
+        SessionEventStreamRuntime,
+        SessionTransferRuntime
 {
     readonly #archive: SessionArchiveService;
     readonly #recovery: SessionRecoveryStorage;
@@ -71,24 +71,24 @@ export class SqliteSessionRuntime
         this.#transfer = cx.services.transfers;
     }
 
-    readonly createSession: SessionCommandGateway["createSession"] = (...parameters) =>
+    readonly createSession: SessionCommandRuntime["createSession"] = (...parameters) =>
         this.#lifecycle.createSession(...parameters);
 
     readonly listRecoverySessions = () => this.#recovery.list();
 
-    readonly acceptTurn: SessionCommandGateway["acceptTurn"] = (...parameters) =>
+    readonly acceptTurn: SessionCommandRuntime["acceptTurn"] = (...parameters) =>
         this.#commands.acceptTurn(...parameters);
 
-    readonly acceptConfiguration: SessionCommandGateway["acceptConfiguration"] = (...parameters) =>
+    readonly acceptConfiguration: SessionCommandRuntime["acceptConfiguration"] = (...parameters) =>
         this.#commands.acceptConfiguration(...parameters);
 
-    readonly acceptTurnCancellation: SessionCommandGateway["acceptTurnCancellation"] = (...parameters) =>
+    readonly acceptTurnCancellation: SessionCommandRuntime["acceptTurnCancellation"] = (...parameters) =>
         this.#commands.acceptTurnCancellation(...parameters);
 
-    readonly promoteQueuedTurnToSteering: SessionCommandGateway["promoteQueuedTurnToSteering"] = (...parameters) =>
+    readonly promoteQueuedTurnToSteering: SessionCommandRuntime["promoteQueuedTurnToSteering"] = (...parameters) =>
         this.#commands.promoteQueuedTurnToSteering(...parameters);
 
-    readonly commitEvent: SessionCommandGateway["commitEvent"] = async (...parameters) => {
+    readonly commitEvent: SessionCommandRuntime["commitEvent"] = async (...parameters) => {
         const result = await this.#commands.commitEvent(...parameters);
         if (!result.duplicate) {
             this.#eventStreams.publish(parameters[0], result.committed);
@@ -96,92 +96,92 @@ export class SqliteSessionRuntime
         return result;
     };
 
-    readonly setDefaultBinding: SessionCommandGateway["setDefaultBinding"] = (...parameters) =>
+    readonly setDefaultBinding: SessionCommandRuntime["setDefaultBinding"] = (...parameters) =>
         this.#commands.setDefaultBinding(...parameters);
 
-    readonly recordNativeHistory: SessionCommandGateway["recordNativeHistory"] = (...parameters) =>
+    readonly recordNativeHistory: SessionCommandRuntime["recordNativeHistory"] = (...parameters) =>
         this.#lifecycle.recordNativeHistory(...parameters);
 
-    readonly acceptInteractionResponse: SessionCommandGateway["acceptInteractionResponse"] = (...parameters) =>
+    readonly acceptInteractionResponse: SessionCommandRuntime["acceptInteractionResponse"] = (...parameters) =>
         this.#interactions.acceptInteractionResponse(...parameters);
 
-    readonly listPendingDaemonDeliveries: SessionCommandGateway["listPendingDaemonDeliveries"] = (...parameters) =>
+    readonly listPendingDaemonDeliveries: SessionCommandRuntime["listPendingDaemonDeliveries"] = (...parameters) =>
         this.#interactions.listPendingDaemonDeliveries(...parameters);
 
-    readonly markPendingWorkCompleted: SessionCommandGateway["markPendingWorkCompleted"] = (...parameters) =>
+    readonly markPendingWorkCompleted: SessionCommandRuntime["markPendingWorkCompleted"] = (...parameters) =>
         this.#interactions.markPendingWorkCompleted(...parameters);
 
-    readonly reconcileAttempt: SessionCommandGateway["reconcileAttempt"] = (...parameters) =>
+    readonly reconcileAttempt: SessionCommandRuntime["reconcileAttempt"] = (...parameters) =>
         this.#interactions.reconcileAttempt(...parameters);
 
-    readonly markRuntimeDisconnected: SessionCommandGateway["markRuntimeDisconnected"] = (...parameters) =>
+    readonly markRuntimeDisconnected: SessionCommandRuntime["markRuntimeDisconnected"] = (...parameters) =>
         this.#commands.markRuntimeDisconnected(...parameters);
 
-    readonly deleteSession: SessionCommandGateway["deleteSession"] = (...parameters) =>
+    readonly deleteSession: SessionCommandRuntime["deleteSession"] = (...parameters) =>
         this.#lifecycle.deleteSession(...parameters);
 
-    readonly readSession: SessionQueryGateway["readSession"] = (...parameters) =>
+    readonly readSession: SessionQueryRuntime["readSession"] = (...parameters) =>
         this.#queries.readSession(...parameters);
 
-    readonly readConfiguration: SessionQueryGateway["readConfiguration"] = (...parameters) =>
+    readonly readConfiguration: SessionQueryRuntime["readConfiguration"] = (...parameters) =>
         this.#queries.readConfiguration(...parameters);
 
-    readonly readNativeHistory: SessionQueryGateway["readNativeHistory"] = (...parameters) =>
+    readonly readNativeHistory: SessionQueryRuntime["readNativeHistory"] = (...parameters) =>
         this.#queries.readNativeHistory(...parameters);
 
-    readonly readTurn: SessionQueryGateway["readTurn"] = (...parameters) => this.#queries.readTurn(...parameters);
+    readonly readTurn: SessionQueryRuntime["readTurn"] = (...parameters) => this.#queries.readTurn(...parameters);
 
-    readonly readTurnRuntime: SessionQueryGateway["readTurnRuntime"] = (...parameters) =>
+    readonly readTurnRuntime: SessionQueryRuntime["readTurnRuntime"] = (...parameters) =>
         this.#queries.readTurnRuntime(...parameters);
 
-    readonly readCommandRuntime: SessionQueryGateway["readCommandRuntime"] = (...parameters) =>
+    readonly readCommandRuntime: SessionQueryRuntime["readCommandRuntime"] = (...parameters) =>
         this.#queries.readCommandRuntime(...parameters);
 
-    readonly readAttempt: SessionQueryGateway["readAttempt"] = (...parameters) =>
+    readonly readAttempt: SessionQueryRuntime["readAttempt"] = (...parameters) =>
         this.#queries.readAttempt(...parameters);
 
-    readonly readInteraction: SessionQueryGateway["readInteraction"] = (...parameters) =>
+    readonly readInteraction: SessionQueryRuntime["readInteraction"] = (...parameters) =>
         this.#queries.readInteraction(...parameters);
 
-    readonly readInteractionRuntime: SessionQueryGateway["readInteractionRuntime"] = (...parameters) =>
+    readonly readInteractionRuntime: SessionQueryRuntime["readInteractionRuntime"] = (...parameters) =>
         this.#queries.readInteractionRuntime(...parameters);
 
-    readonly readPendingInteractions: SessionQueryGateway["readPendingInteractions"] = (...parameters) =>
+    readonly readPendingInteractions: SessionQueryRuntime["readPendingInteractions"] = (...parameters) =>
         this.#queries.readPendingInteractions(...parameters);
 
-    readonly listSessions: SessionQueryGateway["listSessions"] = (...parameters) =>
+    readonly listSessions: SessionQueryRuntime["listSessions"] = (...parameters) =>
         this.#queries.listSessions(...parameters);
 
-    readonly readEvents: SessionQueryGateway["readEvents"] = (...parameters) => this.#queries.readEvents(...parameters);
+    readonly readEvents: SessionQueryRuntime["readEvents"] = (...parameters) => this.#queries.readEvents(...parameters);
 
-    readonly readMessages: SessionQueryGateway["readMessages"] = (scope, sessionId, cursor, limit, signal) =>
+    readonly readMessages: SessionQueryRuntime["readMessages"] = (scope, sessionId, cursor, limit, signal) =>
         this.#queries.readMessages(scope, sessionId, cursor, limit, signal);
 
-    readonly readToolCallDetail: SessionQueryGateway["readToolCallDetail"] = (...parameters) =>
+    readonly readToolCallDetail: SessionQueryRuntime["readToolCallDetail"] = (...parameters) =>
         this.#queries.readToolCallDetail(...parameters);
 
-    readonly createArtifactUpload: SessionArtifactGateway["createArtifactUpload"] = (...parameters) =>
+    readonly createArtifactUpload: SessionArtifactRuntime["createArtifactUpload"] = (...parameters) =>
         this.#artifacts.createUpload(...parameters);
 
-    readonly authorizeArtifactUpload: SessionArtifactGateway["authorizeArtifactUpload"] = (...parameters) =>
+    readonly authorizeArtifactUpload: SessionArtifactRuntime["authorizeArtifactUpload"] = (...parameters) =>
         this.#artifacts.authorizeUpload(...parameters);
 
-    readonly completeArtifactUpload: SessionArtifactGateway["completeArtifactUpload"] = (...parameters) =>
+    readonly completeArtifactUpload: SessionArtifactRuntime["completeArtifactUpload"] = (...parameters) =>
         this.#artifacts.completeUpload(...parameters);
 
-    readonly readArtifact: SessionArtifactGateway["readArtifact"] = (...parameters) =>
+    readonly readArtifact: SessionArtifactRuntime["readArtifact"] = (...parameters) =>
         this.#artifacts.read(...parameters);
 
-    readonly readArtifactContent: SessionArtifactGateway["readArtifactContent"] = (...parameters) =>
+    readonly readArtifactContent: SessionArtifactRuntime["readArtifactContent"] = (...parameters) =>
         this.#artifacts.readContent(...parameters);
 
-    readonly resolveArtifactResources: SessionArtifactGateway["resolveArtifactResources"] = (...parameters) =>
+    readonly resolveArtifactResources: SessionArtifactRuntime["resolveArtifactResources"] = (...parameters) =>
         this.#artifacts.resolveResources(...parameters);
 
-    readonly openEventStream: SessionEventStreamGateway["openEventStream"] = (...parameters) =>
+    readonly openEventStream: SessionEventStreamRuntime["openEventStream"] = (...parameters) =>
         this.#eventStreams.open(...parameters);
 
-    readonly waitForEvents: SessionEventStreamGateway["waitForEvents"] = (...parameters) =>
+    readonly waitForEvents: SessionEventStreamRuntime["waitForEvents"] = (...parameters) =>
         this.#eventStreams.wait(...parameters);
 
     readonly closeEventStreams = (): void => {

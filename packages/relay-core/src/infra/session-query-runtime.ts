@@ -8,8 +8,8 @@ import type {
     SessionMessagePage,
     SessionSummary,
 } from "../entity/do/session.ts";
-import type { OperationTiming } from "../infra/operation-timing.ts";
-export interface SessionQueryGateway {
+import type { OperationTiming } from "./operation-timing.ts";
+export interface SessionQueryRuntime {
     readonly readConfiguration: (
         scope: ProjectScope,
         sessionId: string,

@@ -36,10 +36,9 @@ export class SessionArchiveService {
     readonly #storage: SessionArchiveStorage;
 
     constructor(cx: {
-        readonly gateways: { readonly content: ImmutableContentStore };
-        readonly storages: { readonly archive: SessionArchiveStorage };
+        readonly storages: { readonly archive: SessionArchiveStorage; readonly content: ImmutableContentStore };
     }) {
-        const { content } = cx.gateways;
+        const { content } = cx.storages;
         this.#content = content;
         this.#storage = cx.storages.archive;
     }

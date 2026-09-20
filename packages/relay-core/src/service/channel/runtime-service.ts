@@ -54,9 +54,11 @@ interface RuntimeContext {
     };
     readonly gateways: {
         readonly peers: RuntimePeers;
-        readonly sessions: Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
-        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
     };
+    readonly runtimes: {
+        readonly sessions: Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
+    };
+    readonly utilities: { readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void> };
 }
 
 type RuntimeAcceptance =
@@ -153,7 +155,7 @@ export class RuntimeService {
                 disconnectedAt: Date.now(),
                 progress: { kind: "listing" },
             });
-            await this.#cx.gateways.schedule(Date.now() + 30_000, signal);
+            await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
             await this.resumeDisconnect(signal, false);
         }
         signal.throwIfAborted();
@@ -256,7 +258,7 @@ export class RuntimeService {
                 });
             }
             this.#cx.services.connections.disconnected(current, Date.now());
-            await this.#cx.gateways.schedule(Date.now() + 30_000, signal);
+            await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
         }
         // The durable fence is effective immediately. Session recovery belongs to
         // the armed alarm; revocation must not wait behind in-flight attachment cleanup.
@@ -409,7 +411,7 @@ export class RuntimeService {
             });
         }
         // Arm recovery before waiting for prior frames or any remote session work.
-        await this.#cx.gateways.schedule(Date.now() + 30_000, signal);
+        await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
         await this.resumeDisconnect(signal);
     };
 
@@ -420,7 +422,7 @@ export class RuntimeService {
             if (job === null) {
                 return;
             }
-            await this.#cx.gateways.schedule(Date.now() + 30_000, signal);
+            await this.#cx.utilities.schedule(Date.now() + 30_000, signal);
             await this.#daemonMessages.idle(signal);
             signal.throwIfAborted();
             this.#cx.services.connections.disconnected(job, job.disconnectedAt);
@@ -428,7 +430,7 @@ export class RuntimeService {
             let remaining: readonly string[];
             switch (job.progress.kind) {
                 case "listing":
-                    remaining = await this.#cx.gateways.sessions.listRuntimeSessionIds(scope, job.runtimeId, signal);
+                    remaining = await this.#cx.runtimes.sessions.listRuntimeSessionIds(scope, job.runtimeId, signal);
                     job = { ...job, progress: { kind: "disconnecting", remaining } };
                     this.#cx.services.connections.saveDisconnect(job);
                     break;
@@ -438,7 +440,7 @@ export class RuntimeService {
             }
             for (const [index, sessionId] of remaining.entries()) {
                 signal.throwIfAborted();
-                await this.#cx.gateways.sessions.disconnectSession(
+                await this.#cx.runtimes.sessions.disconnectSession(
                     scope,
                     job.runtimeId,
                     sessionId,

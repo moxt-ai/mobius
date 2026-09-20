@@ -8,7 +8,7 @@ import type {
     CreateArtifactUploadRequest,
     ProjectScope,
 } from "../entity/do/session.ts";
-export interface SessionArtifactGateway {
+export interface SessionArtifactRuntime {
     readonly authorizeArtifactUpload: (
         scope: ProjectScope,
         sessionId: string,

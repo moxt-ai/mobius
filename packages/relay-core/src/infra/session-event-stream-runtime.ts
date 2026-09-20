@@ -1,5 +1,5 @@
 import type { ProjectScope, SessionEventPage } from "../entity/do/session.ts";
-export interface SessionEventStreamGateway {
+export interface SessionEventStreamRuntime {
     readonly openEventStream: (
         scope: ProjectScope,
         sessionId: string,

@@ -6,7 +6,7 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
 } from "@moxt-ai/mobius-protocol";
 import { type ProjectScope, type SessionEventPage, SessionRuntimeError } from "../../entity/do/session.ts";
-import type { SessionQueryGateway } from "../../gateway/index.ts";
+import type { SessionQueryRuntime } from "../../infra/session-runtime.ts";
 
 const CATCH_UP_PAGE_SIZE = 100;
 const EVENT_BUFFER_CAPACITY = 256;
@@ -233,12 +233,12 @@ class SessionEventWaiter {
 }
 
 export class SessionEventStreams {
-    readonly #queries: SessionQueryGateway;
+    readonly #queries: SessionQueryRuntime;
     readonly #subscribers = new Map<string, Set<SessionEventSubscriber>>();
     readonly #waiters = new Map<string, Set<SessionEventWaiter>>();
 
-    constructor(cx: { readonly gateways: { readonly queries: SessionQueryGateway } }) {
-        const { queries } = cx.gateways;
+    constructor(cx: { readonly runtimes: { readonly queries: SessionQueryRuntime } }) {
+        const { queries } = cx.runtimes;
         this.#queries = queries;
     }
 

@@ -16,7 +16,7 @@ import {
     type SessionSummary,
 } from "../../entity/do/session.ts";
 import type { ImportedInteraction, SessionImportPlan } from "../../entity/do/session-import.ts";
-import type { SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import type { SessionCommandRuntime, SessionQueryRuntime } from "../../infra/session-runtime.ts";
 import type { SessionDeletionStorage } from "../../storage/do/session-deletion-storage.ts";
 import type { SessionTransferStorage } from "../../storage/do/session-transfer-storage.ts";
 import { rowNullableString, rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
@@ -64,7 +64,7 @@ export class SessionTransferService {
         scope: ProjectScope,
         sessionId: string,
         signal: AbortSignal,
-        readNativeHistory: SessionQueryGateway["readNativeHistory"],
+        readNativeHistory: SessionQueryRuntime["readNativeHistory"],
     ): Promise<SessionExport> => {
         signal.throwIfAborted();
         const sessionRow = this.#store.requireActiveSessionRow(scope, sessionId, Date.now());
@@ -230,7 +230,7 @@ export class SessionTransferService {
         targetBinding: CreateSessionBindingRequest,
         now: number,
         signal: AbortSignal,
-        createSession: SessionCommandGateway["createSession"],
+        createSession: SessionCommandRuntime["createSession"],
     ): Promise<SessionSummary> => {
         signal.throwIfAborted();
         validateTimestamp(now);

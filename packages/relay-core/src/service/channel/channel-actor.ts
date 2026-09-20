@@ -83,7 +83,7 @@ import {
     SessionRecordingPolicy,
     SessionRuntimeError,
 } from "../../entity/do/session.ts";
-import type { SessionCommandGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import type { SessionCommandRuntime, SessionQueryRuntime } from "../../infra/session-runtime.ts";
 import { sha256 } from "../do/session-archive-codec.ts";
 
 const DEFAULT_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1_000;
@@ -239,9 +239,9 @@ export class ChannelActor {
     >();
     readonly #backpressuredEventBySource = new Map<string, string>();
     readonly #clock: RelayClock;
-    readonly #commands: SessionCommandGateway;
+    readonly #commands: SessionCommandRuntime;
     readonly #peers: ChannelPeers;
-    readonly #queries: SessionQueryGateway;
+    readonly #queries: SessionQueryRuntime;
     readonly #runtimeId: string;
     readonly #scope: ProjectScope;
     readonly #inFlightDeliveries = new Map<string, number>();
@@ -252,14 +252,14 @@ export class ChannelActor {
     constructor(cx: {
         readonly config: { readonly runtimeId: string; readonly scope: ProjectScope };
         readonly gateways: {
-            readonly commands: SessionCommandGateway;
-            readonly queries: SessionQueryGateway;
             readonly peers: ChannelPeers;
             readonly clock?: RelayClock;
         };
+        readonly runtimes: { readonly commands: SessionCommandRuntime; readonly queries: SessionQueryRuntime };
     }) {
         const { runtimeId, scope } = cx.config;
-        const { commands, queries, peers, clock = new SystemRelayClock() } = cx.gateways;
+        const { peers, clock = new SystemRelayClock() } = cx.gateways;
+        const { commands, queries } = cx.runtimes;
         this.#clock = clock;
         this.#commands = commands;
         this.#peers = peers;
@@ -363,7 +363,7 @@ export class ChannelActor {
                     this.deferSessionEvent(socket, envelope);
                     return;
                 }
-                let result: Awaited<ReturnType<SessionCommandGateway["commitEvent"]>>;
+                let result: Awaited<ReturnType<SessionCommandRuntime["commitEvent"]>>;
                 try {
                     result = await this.#commands.commitEvent(
                         this.#scope,
@@ -604,7 +604,7 @@ export class ChannelActor {
                     );
                     return;
                 }
-                let acceptance: Awaited<ReturnType<SessionCommandGateway["acceptTurn"]>>;
+                let acceptance: Awaited<ReturnType<SessionCommandRuntime["acceptTurn"]>>;
                 try {
                     acceptance = await this.#commands.acceptTurn(
                         this.#scope,
@@ -912,7 +912,7 @@ export class ChannelActor {
         command: NativeSessionTurnForkRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionTurnForkCommand> => {
-        let cursor: Parameters<SessionQueryGateway["readMessages"]>[2] = null;
+        let cursor: Parameters<SessionQueryRuntime["readMessages"]>[2] = null;
         let found = false;
         let messageId = "";
         let response = "";

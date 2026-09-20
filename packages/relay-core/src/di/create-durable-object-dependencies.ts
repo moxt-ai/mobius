@@ -4,7 +4,6 @@ import {
     type SessionQuotaPolicy,
     StaticSessionQuotaPolicyProvider,
 } from "../entity/do/session.ts";
-import type { SessionCommandGateway, SessionQueryGateway } from "../gateway/index.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import { createDoRoutes } from "../http/do/do-routes.ts";
 import { createRuntimeRoutes } from "../http/do/runtime-routes.ts";
@@ -12,6 +11,7 @@ import type { ContentPersistence, ImmutableContentStore } from "../infra/content
 import type { DatabaseResolver } from "../infra/database-resolver.ts";
 import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
+import type { SessionCommandRuntime, SessionQueryRuntime } from "../infra/session-runtime.ts";
 import { ChannelActor } from "../service/channel/channel-actor.ts";
 import { ChannelCredentialService } from "../service/channel/channel-credential-service.ts";
 import { RuntimeConnectionService } from "../service/channel/runtime-connection-service.ts";
@@ -54,7 +54,7 @@ export type SessionContentConfiguration =
 
 interface DoInfrastructure {
     readonly doDatabase: DoSqlDatabase;
-    readonly gateways: { readonly content: ImmutableContentStore };
+    readonly storages: { readonly content: ImmutableContentStore };
     readonly config: { readonly quota?: SessionQuotaPolicy };
 }
 
@@ -63,6 +63,7 @@ function createDoContext(infrastructure: DoInfrastructure) {
     const archiveStorage = new SessionArchiveStorage(infrastructure);
     const eventProjectorStorage = new SessionEventProjectorStorage(infrastructure);
     const storages = Object.freeze({
+        ...infrastructure.storages,
         recovery: new SessionRecoveryStorage(infrastructure.doDatabase),
         archive: archiveStorage,
         artifacts: new SessionArtifactStorage(infrastructure),
@@ -86,7 +87,7 @@ function createDoContext(infrastructure: DoInfrastructure) {
     const artifacts = new SessionArtifactService({ ...cx, services: { state } });
     const lifecycle = new SessionLifecycleService({ ...cx, services: { archive, state } });
     const queries = new SessionQueryService({ ...cx, services: { archive, state } });
-    const eventStreams = new SessionEventStreams({ gateways: { queries } });
+    const eventStreams = new SessionEventStreams({ runtimes: { queries } });
     const interactions = new SessionInteractionService({ ...cx, services: { queries, state } });
     const commands = new SessionCommandService({ ...cx, services: { archive, eventProjector, lifecycle, state } });
     const transfers = new SessionTransferService({ ...cx, services: { archive, artifacts, state } });
@@ -117,7 +118,7 @@ function createSessionRuntime(cx: {
             ? new ContentService(new SqliteContentStore(cx.database), cx.content.archiveByteLimit)
             : new ContentService(cx.content.content, null);
     return new SqliteSessionRuntime(
-        createDoContext({ doDatabase: cx.database, gateways: { content }, config: { quota: cx.quota } }),
+        createDoContext({ doDatabase: cx.database, storages: { content }, config: { quota: cx.quota } }),
     );
 }
 
@@ -135,23 +136,29 @@ function createSessionRelayDependencies(cx: {
 
 function createRuntimeRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
-    readonly gateways: {
+    readonly storages: {
         readonly databaseResolver: DatabaseResolver;
-        readonly projectStorageDirectory: ProjectStorageDirectory;
-        readonly sessions: SessionCommandGateway &
-            SessionQueryGateway &
-            Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
+        readonly projectDirectory: ProjectStorageDirectory;
+    };
+    readonly gateways: {
         readonly peers: RuntimePeers;
+    };
+    readonly runtimes: {
+        readonly sessions: SessionCommandRuntime &
+            SessionQueryRuntime &
+            Pick<RemoteSessionRuntime, "listRuntimeSessionIds" | "disconnectSession">;
+    };
+    readonly utilities: {
         readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
     };
 }) {
     const credentialService = async (scope: ProjectScope, signal: AbortSignal) => {
-        const project = await cx.gateways.projectStorageDirectory.resolve(scope.projectId, signal);
+        const project = await cx.storages.projectDirectory.resolve(scope.projectId, signal);
         signal.throwIfAborted();
         if (project.projectId !== scope.projectId) {
             throw new Error("The Project placement is invalid");
         }
-        const database = cx.gateways.databaseResolver.resolve(project.storagePlacement);
+        const database = cx.storages.databaseResolver.resolve(project.storagePlacement);
         return new ChannelCredentialService(new ChannelCredentialStorage(database));
     };
     const credentials: Pick<ChannelCredentialService, "isActive"> = {
@@ -166,16 +173,25 @@ function createRuntimeRelayDependencies(cx: {
         channel: (runtimeId: string, scope: ProjectScope) =>
             new ChannelActor({
                 config: { runtimeId, scope },
-                gateways: { commands: cx.gateways.sessions, queries: cx.gateways.sessions, peers: cx.gateways.peers },
+                gateways: { peers: cx.gateways.peers },
+                runtimes: { commands: cx.runtimes.sessions, queries: cx.runtimes.sessions },
             }),
     };
     return {
         services: {
             credentials,
             connections: services.connections,
-            runtime: new RuntimeService({ services, gateways: cx.gateways }),
+            runtime: new RuntimeService({
+                services,
+                gateways: cx.gateways,
+                runtimes: cx.runtimes,
+                utilities: cx.utilities,
+            }),
         },
         gateways: cx.gateways,
+        runtimes: cx.runtimes,
+        storages: cx.storages,
+        utilities: cx.utilities,
     };
 }
 
@@ -185,37 +201,46 @@ export function createDurableObjectDependencies(cx: {
     readonly doDatabase: DoSqlDatabase;
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
-    readonly gateways: {
+    readonly storages: {
         readonly databaseResolver: DatabaseResolver;
-        readonly projectStorageDirectory: ProjectStorageDirectory;
+        readonly projectDirectory: ProjectStorageDirectory;
+    };
+    readonly gateways: {
         readonly peers: RuntimePeers;
-        readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
         readonly sessionTransport: SessionTransport;
     };
+    readonly utilities: { readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void> };
 }) {
     const sessions = new RemoteSessionRuntime({
-        storages: { directory: new SessionDirectoryStorage(cx.gateways.databaseResolver) },
+        storages: {
+            directory: new SessionDirectoryStorage(cx.storages.databaseResolver),
+            projects: cx.storages.projectDirectory,
+        },
         config: { quotaPolicy: new StaticSessionQuotaPolicyProvider(cx.quota) },
         gateways: {
             transport: cx.gateways.sessionTransport,
-            databaseResolver: cx.gateways.databaseResolver,
-            projectStorageDirectory: cx.gateways.projectStorageDirectory,
         },
     });
-    const gateways = {
-        ...cx.gateways,
-        sessions,
-    };
-    const runtime = createRuntimeRelayDependencies({ database: cx.doDatabase, gateways });
+    const runtimes = { sessions };
+    const runtime = createRuntimeRelayDependencies({
+        database: cx.doDatabase,
+        gateways: cx.gateways,
+        runtimes,
+        storages: cx.storages,
+        utilities: cx.utilities,
+    });
     const session = createSessionRelayDependencies({
         database: cx.doDatabase,
         content: cx.content,
         quota: cx.quota,
-        schedule: cx.gateways.schedule,
+        schedule: cx.utilities.schedule,
     });
     return {
         doDatabase: cx.doDatabase,
-        gateways,
+        gateways: cx.gateways,
+        runtimes,
+        storages: cx.storages,
+        utilities: cx.utilities,
         services: {
             ...runtime.services,
             sessionRecovery: session.services.recovery,

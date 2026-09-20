@@ -23,7 +23,7 @@ import type {
     TurnAcceptance,
     TurnCancellationAcceptance,
 } from "../entity/do/session.ts";
-export interface SessionCommandGateway {
+export interface SessionCommandRuntime {
     readonly acceptConfiguration: (
         scope: ProjectScope,
         runtimeId: string,

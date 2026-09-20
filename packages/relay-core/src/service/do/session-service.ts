@@ -21,50 +21,44 @@ import {
     ProjectScope,
 } from "../../entity/do/session.ts";
 import { PairingDirectoryError, VerifiedChannelAccess } from "../../entity/pairing/pairing.ts";
-import type {
-    ChannelGateway,
-    SessionArtifactGateway,
-    SessionCommandGateway,
-    SessionEventStreamGateway,
-    SessionQueryGateway,
-    SessionTransferGateway,
-} from "../../gateway/index.ts";
+import type { ChannelGateway } from "../../gateway/channel-gateway.ts";
 import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
+import type {
+    SessionArtifactRuntime,
+    SessionCommandRuntime,
+    SessionEventStreamRuntime,
+    SessionQueryRuntime,
+    SessionTransferRuntime,
+} from "../../infra/session-runtime.ts";
 import { RuntimeDescriptor } from "../channel/channel.ts";
 export class SessionService {
     readonly #pairings: PairingOperations;
-    readonly #sessionCommands: SessionCommandGateway;
-    readonly #sessionQueries: SessionQueryGateway;
-    readonly #sessionTransfers: SessionTransferGateway;
-    readonly #sessionArtifacts: SessionArtifactGateway;
-    readonly #sessionEventStreams: SessionEventStreamGateway;
+    readonly #sessionCommands: SessionCommandRuntime;
+    readonly #sessionQueries: SessionQueryRuntime;
+    readonly #sessionTransfers: SessionTransferRuntime;
+    readonly #sessionArtifacts: SessionArtifactRuntime;
+    readonly #sessionEventStreams: SessionEventStreamRuntime;
     readonly #channelGateway: ChannelGateway;
     constructor(cx: {
         readonly services: { readonly pairings: PairingOperations };
-        readonly gateways: {
-            readonly sessionCommands: SessionCommandGateway;
-            readonly sessionQueries: SessionQueryGateway;
-            readonly sessionTransfers: SessionTransferGateway;
-            readonly sessionArtifacts: SessionArtifactGateway;
-            readonly sessionEventStreams: SessionEventStreamGateway;
-            readonly channelGateway: ChannelGateway;
+        readonly gateways: { readonly channelGateway: ChannelGateway };
+        readonly runtimes: {
+            readonly sessionCommands: SessionCommandRuntime;
+            readonly sessionQueries: SessionQueryRuntime;
+            readonly sessionTransfers: SessionTransferRuntime;
+            readonly sessionArtifacts: SessionArtifactRuntime;
+            readonly sessionEventStreams: SessionEventStreamRuntime;
         };
     }) {
-        const {
-            sessionCommands,
-            sessionQueries,
-            sessionTransfers,
-            sessionArtifacts,
-            sessionEventStreams,
-            channelGateway,
-        } = cx.gateways;
+        const { sessionCommands, sessionQueries, sessionTransfers, sessionArtifacts, sessionEventStreams } =
+            cx.runtimes;
         this.#pairings = cx.services.pairings;
         this.#sessionCommands = sessionCommands;
         this.#sessionQueries = sessionQueries;
         this.#sessionTransfers = sessionTransfers;
         this.#sessionArtifacts = sessionArtifacts;
         this.#sessionEventStreams = sessionEventStreams;
-        this.#channelGateway = channelGateway;
+        this.#channelGateway = cx.gateways.channelGateway;
     }
     readonly createSession = async (
         projectId: string,

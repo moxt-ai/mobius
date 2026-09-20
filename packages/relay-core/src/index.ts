@@ -90,14 +90,7 @@ export {
 } from "./entity/pairing/pairing.ts";
 export { CloudflareChannelRuntime } from "./gateway/cloudflare-channel-runtime.ts";
 export { CloudflareSessionTransport } from "./gateway/cloudflare-session-transport.ts";
-export type {
-    ChannelGateway,
-    SessionArtifactGateway,
-    SessionCommandGateway,
-    SessionEventStreamGateway,
-    SessionQueryGateway,
-    SessionTransferGateway,
-} from "./gateway/index.ts";
+export type { ChannelGateway } from "./gateway/index.ts";
 export type { ProjectAccessAuthorizer } from "./gateway/project-access-authorizer.ts";
 export type { SessionTransport } from "./gateway/session-transport.ts";
 export { errorMiddleware, rethrowHonoError } from "./http/middleware/error-middleware.ts";
@@ -134,6 +127,13 @@ export {
     type SessionConfigurationEnvironment,
     sessionQuotaFromEnvironment,
 } from "./infra/session-configuration.ts";
+export type {
+    SessionArtifactRuntime,
+    SessionCommandRuntime,
+    SessionEventStreamRuntime,
+    SessionQueryRuntime,
+    SessionTransferRuntime,
+} from "./infra/session-runtime.ts";
 export * from "./service/authentication/oidc-authentication.ts";
 export { RuntimeDescriptor, RuntimeStatus } from "./service/channel/channel.ts";
 export {

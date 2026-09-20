@@ -11,22 +11,26 @@ import {
     type InstallableAgentDescriptor,
     PairingDirectoryError,
 } from "../../entity/pairing/pairing.ts";
-import type { ChannelGateway, SessionArtifactGateway, SessionQueryGateway } from "../../gateway/index.ts";
+import type { ChannelGateway } from "../../gateway/index.ts";
+import type { SessionArtifactRuntime, SessionQueryRuntime } from "../../infra/session-runtime.ts";
 import type { PairingOperations } from "../pairing/pairing-operations.ts";
 export class ChannelService {
     readonly #pairings: PairingOperations;
     readonly #channelGateway: ChannelGateway;
-    readonly #sessionQueries: SessionQueryGateway;
-    readonly #sessionArtifacts: SessionArtifactGateway;
+    readonly #sessionQueries: SessionQueryRuntime;
+    readonly #sessionArtifacts: SessionArtifactRuntime;
     constructor(cx: {
         readonly services: { readonly pairings: PairingOperations };
         readonly gateways: {
             readonly channelGateway: ChannelGateway;
-            readonly sessionQueries: SessionQueryGateway;
-            readonly sessionArtifacts: SessionArtifactGateway;
+        };
+        readonly runtimes: {
+            readonly sessionQueries: SessionQueryRuntime;
+            readonly sessionArtifacts: SessionArtifactRuntime;
         };
     }) {
-        const { channelGateway, sessionQueries, sessionArtifacts } = cx.gateways;
+        const { channelGateway } = cx.gateways;
+        const { sessionQueries, sessionArtifacts } = cx.runtimes;
         this.#pairings = cx.services.pairings;
         this.#channelGateway = channelGateway;
         this.#sessionQueries = sessionQueries;

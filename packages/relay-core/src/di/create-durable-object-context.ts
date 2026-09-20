@@ -32,12 +32,16 @@ export function createDurableObjectContext(
             options.content.kind === "sqlite"
                 ? { kind: "sqlite", archiveByteLimit: sessionArchiveByteLimitFromEnvironment(options.environment) }
                 : { kind: "external", content: new R2ContentStore(options.content.buckets, options.projects) },
-        gateways: {
+        storages: {
             databaseResolver: options.databases,
-            projectStorageDirectory: options.projects,
+            projectDirectory: options.projects,
+        },
+        gateways: {
             sessionTransport:
                 options.sessionTransport ?? new CloudflareSessionTransport(options.sessions, options.namespacePrefix),
             peers: new CloudflareChannelPeers(state),
+        },
+        utilities: {
             schedule: async (timestamp, signal) => {
                 signal.throwIfAborted();
                 await state.storage.setAlarm(timestamp);

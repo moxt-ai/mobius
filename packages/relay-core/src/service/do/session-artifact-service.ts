@@ -129,11 +129,10 @@ export class SessionArtifactService {
     readonly #store: SessionStateService;
 
     constructor(cx: {
-        readonly gateways: { readonly content: ImmutableContentStore };
-        readonly storages: { readonly artifacts: SessionArtifactStorage };
+        readonly storages: { readonly artifacts: SessionArtifactStorage; readonly content: ImmutableContentStore };
         readonly services: { readonly state: SessionStateService };
     }) {
-        const { content } = cx.gateways;
+        const { content } = cx.storages;
         const { state: store } = cx.services;
         this.#content = content;
         this.#storage = cx.storages.artifacts;

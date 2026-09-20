@@ -31,11 +31,15 @@ export function createTestGateways(options: {
             doDatabase: database,
             quota: DEFAULT_SESSION_QUOTA_POLICY,
             content: { kind: "sqlite", archiveByteLimit: 100_000_000 },
-            gateways: {
+            storages: {
                 databaseResolver: options.databases,
-                projectStorageDirectory: options.projects,
+                projectDirectory: options.projects,
+            },
+            gateways: {
                 peers,
                 sessionTransport: gateways.sessions,
+            },
+            utilities: {
                 schedule: async (timestamp, signal) => {
                     signal.throwIfAborted();
                     alarms.set(key, timestamp);
