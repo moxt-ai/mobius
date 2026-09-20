@@ -154,8 +154,8 @@ export class SqliteSessionRuntime
 
     readonly readEvents: SessionQueryGateway["readEvents"] = (...parameters) => this.#queries.readEvents(...parameters);
 
-    readonly readMessages: SessionQueryGateway["readMessages"] = (...parameters) =>
-        this.#queries.readMessages(...parameters);
+    readonly readMessages: SessionQueryGateway["readMessages"] = (scope, sessionId, cursor, limit, signal) =>
+        this.#queries.readMessages(scope, sessionId, cursor, limit, signal);
 
     readonly readToolCallDetail: SessionQueryGateway["readToolCallDetail"] = (...parameters) =>
         this.#queries.readToolCallDetail(...parameters);

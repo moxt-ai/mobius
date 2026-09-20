@@ -29,6 +29,7 @@ import type {
     SessionQueryGateway,
     SessionTransferGateway,
 } from "../../gateway/index.ts";
+import { type OperationTiming, unmeasuredOperationTiming } from "../../infra/operation-timing.ts";
 import { RuntimeDescriptor } from "../channel/channel.ts";
 export class SessionService {
     readonly #pairings: PairingOperations;
@@ -565,14 +566,19 @@ export class SessionService {
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
-    ) =>
-        this.#sessionQueries.readMessages(
-            await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
-            sessionId,
-            cursor,
-            limit,
-            signal,
+        timing: OperationTiming = unmeasuredOperationTiming,
+    ) => {
+        const scope = await timing.measure(
+            "messages-authorize",
+            "Authorize Session message read",
+            async () => await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
         );
+        return await timing.measure(
+            "messages-read",
+            "Read Session messages",
+            async () => await this.#sessionQueries.readMessages(scope, sessionId, cursor, limit, signal, timing),
+        );
+    };
 
     readonly readEvents = async (
         projectId: string,

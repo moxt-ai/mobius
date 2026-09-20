@@ -8,6 +8,7 @@ import type {
     SessionMessagePage,
     SessionSummary,
 } from "../entity/do/session.ts";
+import type { OperationTiming } from "../infra/operation-timing.ts";
 export interface SessionQueryGateway {
     readonly readConfiguration: (
         scope: ProjectScope,
@@ -77,6 +78,7 @@ export interface SessionQueryGateway {
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
+        timing?: OperationTiming,
     ) => Promise<SessionMessagePage>;
     readonly readNativeHistory: (
         scope: ProjectScope,

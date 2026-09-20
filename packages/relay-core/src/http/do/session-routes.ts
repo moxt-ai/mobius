@@ -156,7 +156,7 @@ export function createSessionRoutes() {
         .onError(rethrowHonoError)
         .use("*", errorMiddleware)
         .use(
-            "/projects/:projectId/sessions/:sessionId/:operation{prepare|configuration}",
+            "/projects/:projectId/sessions/:sessionId/:operation{prepare|configuration|messages}",
             operationTimingMiddleware<RelayHttpEnvironment>(),
         )
         .post(
@@ -833,6 +833,7 @@ export function createSessionRoutes() {
                     optionalCursor(context.req.query("cursor")),
                     pageLimit(context.req.query("limit")),
                     context.req.raw.signal,
+                    context.var.operationTiming,
                 ),
             );
         })

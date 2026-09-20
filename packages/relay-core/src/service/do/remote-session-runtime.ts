@@ -68,6 +68,12 @@ import type {
 } from "../../gateway/index.ts";
 import type { SessionTransport } from "../../gateway/session-transport.ts";
 import type { DatabaseResolver } from "../../infra/database-resolver.ts";
+import {
+    decodeStorageDuration,
+    type OperationTiming,
+    STORAGE_TIMING_HEADER,
+    unmeasuredOperationTiming,
+} from "../../infra/operation-timing.ts";
 import type { ProjectStorageDirectory } from "../../infra/project-storage-directory.ts";
 import type { SessionDirectoryStorage } from "../../storage/session-directory-storage.ts";
 import { validateCreateSessionRequest } from "./session-records.ts";
@@ -1350,8 +1356,14 @@ export class RemoteSessionRuntime
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
+        timing: OperationTiming = unmeasuredOperationTiming,
     ): Promise<SessionMessagePage> =>
-        decodeMessages(await this.request(scope, sessionId, "messages", { cursor, limit, sessionId }, signal));
+        decodeMessages(
+            await this.request(scope, sessionId, "messages", { cursor, limit, sessionId }, signal, timing, {
+                description: "Session Durable Object message query",
+                name: "messages-storage",
+            }),
+        );
 
     readonly readEvents = async (
         scope: ProjectScope,
@@ -1499,21 +1511,28 @@ export class RemoteSessionRuntime
         operation: string,
         body: Readonly<Record<string, unknown>>,
         signal: AbortSignal,
+        timing: OperationTiming = unmeasuredOperationTiming,
+        storageMetric?: Readonly<{ description: string; name: string }>,
     ): Promise<unknown> => {
         signal.throwIfAborted();
         const timeout = AbortSignal.timeout(SESSION_OPERATION_TIMEOUT_MILLISECONDS);
         const operationSignal = AbortSignal.any([signal, timeout]);
         let response: Response;
         try {
-            response = await this.#transport.fetch(
-                scope,
-                sessionId,
-                new Request(`https://session.internal/internal/sessions/${operation}`, {
-                    body: JSON.stringify({ ...body, scope: infrastructureScope(scope) }),
-                    headers: { "content-type": "application/json" },
-                    method: "POST",
-                    signal: operationSignal,
-                }),
+            response = await timing.measure(
+                `${operation}-transport`,
+                `Session Durable Object ${operation} round trip`,
+                async () =>
+                    await this.#transport.fetch(
+                        scope,
+                        sessionId,
+                        new Request(`https://session.internal/internal/sessions/${operation}`, {
+                            body: JSON.stringify({ ...body, scope: infrastructureScope(scope) }),
+                            headers: { "content-type": "application/json" },
+                            method: "POST",
+                            signal: operationSignal,
+                        }),
+                    ),
             );
         } catch (cause) {
             if (signal.aborted) {
@@ -1528,7 +1547,19 @@ export class RemoteSessionRuntime
             );
         }
         operationSignal.throwIfAborted();
-        return await responseJson(response);
+        if (storageMetric !== undefined) {
+            const reported = decodeStorageDuration(response.headers.get(STORAGE_TIMING_HEADER));
+            if (reported !== undefined) {
+                timing.record(storageMetric.name, storageMetric.description, reported);
+            }
+        }
+        // `fetch` resolves once the Durable Object returns its headers, so reading and parsing the body is a
+        // separate cost that only shows up here.
+        return await timing.measure(
+            `${operation}-body`,
+            `Session Durable Object ${operation} response body`,
+            async () => await responseJson(response),
+        );
     };
 
     private readonly reserveSession = async (

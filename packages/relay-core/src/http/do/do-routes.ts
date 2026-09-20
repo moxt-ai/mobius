@@ -19,6 +19,7 @@ import {
 } from "../../entity/do/session.ts";
 import { type HttpError, isHttpError } from "../../entity/http-error.ts";
 import { RequestBodyError, readBoundedUtf8Body } from "../../infra/bounded-request-body.ts";
+import { encodeStorageDuration, STORAGE_TIMING_HEADER } from "../../infra/operation-timing.ts";
 import type { DoService } from "../../service/do/do-service.ts";
 import type { SqliteSessionRuntime } from "../../service/do/sqlite-session-runtime.ts";
 
@@ -648,15 +649,17 @@ class DoRoutes {
             }
             if (operation === "messages") {
                 assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
-                return Response.json(
-                    await this.#runtime.readMessages(
-                        scope,
-                        readString(body, "sessionId"),
-                        readNullableString(body, "cursor"),
-                        readInteger(body, "limit"),
-                        request.signal,
-                    ),
+                const startedAt = performance.now();
+                const page = await this.#runtime.readMessages(
+                    scope,
+                    readString(body, "sessionId"),
+                    readNullableString(body, "cursor"),
+                    readInteger(body, "limit"),
+                    request.signal,
                 );
+                return Response.json(page, {
+                    headers: { [STORAGE_TIMING_HEADER]: encodeStorageDuration(performance.now() - startedAt) },
+                });
             }
             if (operation === "events") {
                 assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);

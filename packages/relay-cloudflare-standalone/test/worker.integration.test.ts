@@ -3231,6 +3231,60 @@ describe.sequential("Cloudflare session deployment", () => {
         }
     });
 
+    it("Given a browser reads a Session message page, Then the response reports how long authorization, the Durable Object round trip, and the storage query each took", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "timed-message-session";
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+
+        try {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+            await completeTurn(host, daemon, prompt(sessionId, "timed-turn", "Measure this read"), "Timed response");
+
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            const serverTiming = response.headers.get("server-timing") ?? "";
+            const durations = new Map(
+                serverTiming
+                    .split(",")
+                    .map((metric) => /^\s*([a-z0-9-]+);dur=([0-9.]+)/u.exec(metric))
+                    .filter((match): match is RegExpExecArray => match !== null)
+                    .map((match) => [match[1] as string, Number.parseFloat(match[2] as string)]),
+            );
+            for (const name of [
+                "total",
+                "messages-authorize",
+                "messages-read",
+                "messages-transport",
+                "messages-storage",
+                "messages-body",
+            ]) {
+                const duration = durations.get(name);
+                expect(duration, `Expected a ${name} timing in "${serverTiming}"`).toBeTypeOf("number");
+                expect(duration).toBeGreaterThanOrEqual(0);
+            }
+            const total = durations.get("total") ?? 0;
+            expect(durations.get("messages-authorize") ?? 0).toBeLessThanOrEqual(total);
+            expect(durations.get("messages-read") ?? 0).toBeLessThanOrEqual(total);
+            expect(durations.get("messages-storage") ?? 0).toBeLessThanOrEqual(
+                (durations.get("messages-transport") ?? 0) + 1,
+            );
+        } finally {
+            daemon.socket.close(1000, "Message timing test complete");
+            host.socket.close(1000, "Message timing test complete");
+        }
+    });
+
     it("Given an Agent titled a prepared session, When the browser reconnects and prepares it again, Then the same session resumes without closing the channel", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket } = createSessionRequests(app);
