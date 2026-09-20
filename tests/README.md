@@ -25,8 +25,10 @@ Use `await using` for bindings, gateways, Agent, and Runtime, in that order, so
 the Runtime and its SDK streams stop before storage is released. Pass an
 `AbortSignal` to Runtime creation and every SDK operation.
 
-See `runtime-server.integration.test.ts` for Platform pairing and a complete
-Session prompt/event-stream exchange. Run this scenario from the Mobius repository:
+See `runtime-server.integration.test.ts` for Platform provisioning, Runtime
+pairing, and Session creation through the public SDK. Prompt and event-stream
+behavior is owned by the product E2E and Agent-daemon journeys. Run the Platform
+embedding scenario from the Mobius repository:
 
 ```sh
 pnpm exec vitest run tests/runtime-server.integration.test.ts

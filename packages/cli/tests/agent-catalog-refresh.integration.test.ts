@@ -116,6 +116,10 @@ interface PublishedCatalog {
 
 class RecordingCatalogRelay {
     readonly published: PublishedCatalog[] = [];
+    readonly #catalogWaiters: Array<{
+        readonly minimum: number;
+        readonly resolve: (catalog: PublishedCatalog) => void;
+    }> = [];
     readonly #server: Server;
     readonly #sockets = new Set<Duplex>();
     readonly #ready = Promise.withResolvers<Duplex>();
@@ -130,7 +134,15 @@ class RecordingCatalogRelay {
                 const chunks: Buffer[] = [];
                 request.on("data", (chunk: Buffer) => chunks.push(chunk));
                 request.on("end", () => {
-                    this.published.push(JSON.parse(Buffer.concat(chunks).toString("utf8")) as PublishedCatalog);
+                    const catalog = JSON.parse(Buffer.concat(chunks).toString("utf8")) as PublishedCatalog;
+                    this.published.push(catalog);
+                    for (let index = this.#catalogWaiters.length - 1; index >= 0; index -= 1) {
+                        const waiter = this.#catalogWaiters[index];
+                        if (waiter !== undefined && this.published.length >= waiter.minimum) {
+                            this.#catalogWaiters.splice(index, 1);
+                            waiter.resolve(this.published[waiter.minimum - 1] ?? catalog);
+                        }
+                    }
                     if (this.#catalogRejection !== null) {
                         response.writeHead(400, { "content-type": "application/json" });
                         response.end(JSON.stringify({ error: this.#catalogRejection }));
@@ -177,6 +189,14 @@ class RecordingCatalogRelay {
 
     readonly socket = (): Promise<Duplex> => this.#ready.promise;
 
+    readonly catalog = (minimum: number): Promise<PublishedCatalog> => {
+        const published = this.published[minimum - 1];
+        if (published !== undefined) {
+            return Promise.resolve(published);
+        }
+        return new Promise((resolve) => this.#catalogWaiters.push({ minimum, resolve }));
+    };
+
     readonly daemonUrl = (channelId: string): URL => {
         const url = new URL(`ws://127.0.0.1:${this.#port}${MOBIUS_API_PREFIX}/channels/${channelId}/daemon`);
         url.searchParams.set("token", "d".repeat(43));
@@ -189,19 +209,6 @@ class RecordingCatalogRelay {
         }
         await new Promise<void>((resolve) => this.#server.close(() => resolve()));
     };
-}
-
-// The daemon publishes its catalog on every connect as well as on every refresh.
-async function readPublishedCatalog(relay: RecordingCatalogRelay, minimum: number): Promise<PublishedCatalog> {
-    for (;;) {
-        if (relay.published.length >= minimum) {
-            const catalog = relay.published[minimum - 1];
-            if (catalog !== undefined) {
-                return catalog;
-            }
-        }
-        await new Promise((resolve) => setTimeout(resolve, 10));
-    }
 }
 
 async function readRefreshed(frames: ClientFrames, requestId: string): Promise<void> {
@@ -327,7 +334,7 @@ describe("daemon Agent catalog refresh boundary", () => {
 
         try {
             const frames = new ClientFrames(await relay.socket());
-            const initial = await readPublishedCatalog(relay, 1);
+            const initial = await relay.catalog(1);
             expect(initial.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
 
             refreshEnvironment = { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: join(stateDirectory, "empty") };
@@ -338,7 +345,7 @@ describe("daemon Agent catalog refresh boundary", () => {
             );
             await readRefreshed(frames, requestId);
 
-            const refreshed = await readPublishedCatalog(relay, 2);
+            const refreshed = await relay.catalog(2);
             expect(refreshed.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
             expect(refreshed.installableAgents.map((agent) => agent.id)).not.toContain("deepseek-harness");
         } finally {
@@ -390,7 +397,7 @@ describe("daemon Agent catalog refresh boundary", () => {
 
         try {
             const frames = new ClientFrames(await relay.socket());
-            const initial = await readPublishedCatalog(relay, 1);
+            const initial = await relay.catalog(1);
             expect(initial.agents.map((agent) => agent.id)).toEqual(["deepseek-harness"]);
 
             await rm(executablePath, { force: true });
@@ -401,7 +408,7 @@ describe("daemon Agent catalog refresh boundary", () => {
             );
             await readRefreshed(frames, requestId);
 
-            const refreshed = await readPublishedCatalog(relay, 2);
+            const refreshed = await relay.catalog(2);
             expect(refreshed.agents.map((agent) => agent.id)).not.toContain("deepseek-harness");
             expect(refreshed.installableAgents.map((agent) => agent.id)).toContain("deepseek-harness");
         } finally {

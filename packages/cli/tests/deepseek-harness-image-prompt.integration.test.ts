@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -100,7 +100,7 @@ describe("DeepSeek Harness image prompt capability", () => {
             });
 
             expect(inventory.unavailable).toEqual([]);
-            expect(inventory.readyAgents()[0]?.environment["DSH_HOME"]).toBe(home);
+            expect(inventory.readyAgents()[0]?.environment["DSH_HOME"]).toBe(await realpath(home));
             await expect(readFile(join(home, "cordis.patch.yml"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
         } finally {
             await rm(temporaryDirectory, { force: true, recursive: true });
