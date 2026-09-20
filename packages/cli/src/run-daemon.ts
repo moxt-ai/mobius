@@ -426,10 +426,43 @@ class ActiveDaemonTurn {
 
 class ActiveTurnReconciliationError extends Error {
     readonly code = "active_turn_reconciliation_failed";
+    readonly diagnosticDetails: Readonly<Record<string, string>>;
+    readonly relayErrorCode: string | null;
+    readonly terminal: boolean;
 
-    constructor(message: string, options: ErrorOptions = {}) {
+    constructor(
+        message: string,
+        options: ErrorOptions & { readonly relayErrorCode?: string | null; readonly terminal?: boolean } = {},
+    ) {
         super(message, options);
         this.name = "ActiveTurnReconciliationError";
+        this.relayErrorCode = options.relayErrorCode ?? null;
+        this.terminal = options.terminal ?? false;
+        this.diagnosticDetails = this.relayErrorCode === null ? {} : { relayErrorCode: this.relayErrorCode };
+    }
+}
+
+/**
+ * The Relay reports a reconciliation conflict when the Attempt is no longer owned by this Runtime or has
+ * already reached a terminal state. Retrying cannot change that outcome, so the daemon must abandon the
+ * stale turn instead of replacing its connection forever.
+ */
+const TERMINAL_RECONCILIATION_RELAY_CODES = new Set(["session_conflict"]);
+
+async function relayErrorCode(response: Awaited<ReturnType<typeof fetch>>): Promise<string | null> {
+    try {
+        const body: unknown = JSON.parse(await response.text());
+        if (typeof body !== "object" || body === null) {
+            return null;
+        }
+        const error = Reflect.get(body, "error");
+        if (typeof error !== "object" || error === null) {
+            return null;
+        }
+        const code = Reflect.get(error, "code");
+        return typeof code === "string" && code.length > 0 ? code : null;
+    } catch {
+        return null;
     }
 }
 
@@ -473,12 +506,17 @@ async function reconcileActiveTurn(config: DaemonConfig, turn: ActiveDaemonTurn,
             { cause: error },
         );
     }
-    await response.body?.cancel();
     if (!response.ok) {
+        const errorCode = await relayErrorCode(response);
+        const terminal = errorCode !== null && TERMINAL_RECONCILIATION_RELAY_CODES.has(errorCode);
         throw new ActiveTurnReconciliationError(
-            `The Relay rejected the active Agent turn reconciliation with status ${response.status.toString()}`,
+            terminal
+                ? `The Relay reported that the active Agent turn can no longer be reconciled (${errorCode})`
+                : `The Relay rejected the active Agent turn reconciliation with status ${response.status.toString()}`,
+            { relayErrorCode: errorCode, terminal },
         );
     }
+    await response.body?.cancel();
 }
 
 async function reconcileActiveTurns(
@@ -2898,6 +2936,26 @@ async function runRelayConnection(
                         return;
                     }
                     console.error("Mobius daemon could not reconcile active Agent turns", error);
+                    if (error instanceof ActiveTurnReconciliationError && error.terminal) {
+                        // The Relay has already settled these Attempts, so this Runtime can never reconcile them.
+                        // Abandoning the stale turns lets the connection recover instead of looping on code 4009.
+                        diagnostics.reconciliationAbandoned(
+                            connectionEpoch,
+                            error.relayErrorCode,
+                            reconnectingTurns.length,
+                        );
+                        console.error(
+                            "Mobius daemon abandoned Agent turns the Relay already settled",
+                            error.relayErrorCode,
+                        );
+                        for (const turn of reconnectingTurns) {
+                            activeTurns.delete(turn.command.commandId);
+                            turn.abortDaemon();
+                        }
+                        publisher.connect(socket);
+                        resumeRuntimeDeliveries();
+                        return;
+                    }
                     failAndClose(
                         new Error("Active Agent turn reconciliation failed", { cause: error }),
                         ACTIVE_TURN_RECONCILIATION_CLOSE_CODE,

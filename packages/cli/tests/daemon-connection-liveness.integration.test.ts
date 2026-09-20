@@ -1994,4 +1994,195 @@ describe("daemon relay connection liveness", () => {
             await rm(stateDirectory, { force: true, recursive: true });
         }
     });
+
+    it("Given the Relay already settled an active Agent turn, When the connection recovers, Then the daemon abandons the turn instead of replacing the connection forever", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-reconciliation-conflict-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        let reconciliationRequestCount = 0;
+        let observeAbandonment = (): void => undefined;
+        const abandonmentSettled = new Promise<void>((resolve) => {
+            observeAbandonment = resolve;
+        });
+        const relay = createServer((request, response) => {
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            if (
+                request.method === "PUT" &&
+                url.pathname === `${MOBIUS_API_PREFIX}/channels/reconciliation-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            if (request.method === "POST" && url.pathname.endsWith("/reconciliation")) {
+                reconciliationRequestCount += 1;
+                request.resume();
+                response.writeHead(409, { "content-type": "application/json" });
+                response.end(
+                    JSON.stringify({
+                        error: {
+                            code: "session_conflict",
+                            message: "The Attempt cannot be reconciled from its current state",
+                        },
+                    }),
+                );
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const upgradeWaiters: Array<() => void> = [];
+        const daemonSockets: Duplex[] = [];
+        const clientFrames: Array<Promise<ClientWebSocketFrame>> = [];
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            respondToClientClose(socket);
+            observeClientFrames(socket, (frame) => {
+                // The abandoned turn is published only after the Relay rejected its reconciliation.
+                if (
+                    frame.opcode === 1 &&
+                    reconciliationRequestCount > 0 &&
+                    decodeMessageKind(frame.text) === SESSION_EVENT_KIND
+                ) {
+                    observeAbandonment();
+                }
+            });
+            if (daemonSockets.length === 1) {
+                clientFrames.push(readClientFrame(socket));
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionPromptCommand({
+                        additionalDirectoryIds: [],
+                        agentId: "codex",
+                        bindingId: "workspace",
+                        commandId: "conflict-command",
+                        directoryId: "default",
+                        disposition: "reject",
+                        images: [],
+                        kind: SESSION_PROMPT_KIND,
+                        prompt: "wait until cancelled",
+                        resources: [],
+                        sessionId: "conflict-session",
+                        targetCommandId: "",
+                    }),
+                );
+            }
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        const config = createDaemonConfig(
+            {
+                defaultWorkspace,
+                auditDatabasePath,
+                channelId: "reconciliation-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/reconciliation-channel/daemon?token=reconciliation-secret`,
+                ),
+            },
+            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
+        );
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-08T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await firstConnection;
+            const firstFrame = clientFrames[0];
+            if (firstFrame === undefined) {
+                throw new Error("Test relay did not observe the active Agent turn");
+            }
+            const started = decodeSessionEventEnvelope((await firstFrame).text);
+            expect(decodeMessageKind(started.payload)).toBe(SESSION_STARTED_KIND);
+            const firstSocket = daemonSockets[0];
+            if (firstSocket === undefined) {
+                throw new Error("Test relay did not retain the first connection");
+            }
+
+            const secondConnection = waitForUpgrade();
+            const firstRetry = timer.waitForTask(500);
+            firstSocket.destroy();
+            (await firstRetry).run();
+            await secondConnection;
+
+            // The Relay settled the Attempt, so the recovered connection stays usable instead of being
+            // replaced by another 4009 reconnect cycle.
+            await abandonmentSettled;
+            expect(reconciliationRequestCount).toBe(1);
+            expect(daemonSockets).toHaveLength(2);
+
+            const diagnostics = new DatabaseSync(auditDatabasePath, { readOnly: true });
+            try {
+                const abandoned = diagnostics
+                    .prepare("SELECT details_json FROM audit_events WHERE event = 'relay_reconciliation_abandoned'")
+                    .all()
+                    .map((row) => String(row["details_json"]))
+                    .join("\n");
+                expect(abandoned).toContain("session_conflict");
+                const closed = diagnostics
+                    .prepare("SELECT details_json FROM audit_events WHERE event = 'relay_connection_closed'")
+                    .all()
+                    .map((row) => String(row["details_json"]))
+                    .join("\n");
+                expect(closed).not.toContain("4009");
+            } finally {
+                diagnostics.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
 });
