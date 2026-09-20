@@ -271,15 +271,13 @@ export function acceptWebSocketHttpTransport(request: Request, dispatch: Dispatc
                 }
                 logger.error({ err: cause, requestId }, "Mobius WebSocket transport request failed");
                 const httpError = toHttpError(cause);
-                const reportedError =
-                    httpError.status >= 500 && httpError.status < 600 ? toHttpError(undefined) : httpError;
                 server.send(
                     JSON.stringify({
-                        code: reportedError.body.error.code,
+                        code: httpError.body.error.code,
                         kind: ERROR_KIND,
-                        message: reportedError.body.error.message,
+                        message: httpError.body.error.message,
                         requestId,
-                        status: reportedError.status,
+                        status: httpError.status,
                     }),
                 );
             }
