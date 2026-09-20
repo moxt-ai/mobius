@@ -69,10 +69,18 @@ export class DoService {
         scope: ProjectScope,
         exported: unknown,
         binding: CreateSessionBindingRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ) => {
-        const summary = await this.#services.runtime.importSession(scope, exported, binding, now, signal);
+        const summary = await this.#services.runtime.importSession(
+            scope,
+            exported,
+            binding,
+            cloudRetention,
+            now,
+            signal,
+        );
         await this.#services.recovery.schedule(signal);
         return summary;
     };

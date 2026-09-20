@@ -56,10 +56,11 @@ interface DoInfrastructure {
     readonly doDatabase: DoSqlDatabase;
     readonly storages: { readonly content: ImmutableContentStore };
     readonly config: { readonly quota?: SessionQuotaPolicy };
+    readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
 }
 
 function createDoContext(infrastructure: DoInfrastructure) {
-    initializeSessionSchema(infrastructure.doDatabase);
+    infrastructure.initializeSessionSchema(infrastructure.doDatabase);
     const archiveStorage = new SessionArchiveStorage(infrastructure);
     const eventProjectorStorage = new SessionEventProjectorStorage(infrastructure);
     const storages = Object.freeze({
@@ -112,13 +113,19 @@ function createSessionRuntime(cx: {
     readonly database: DoSqlDatabase;
     readonly quota: SessionQuotaPolicy;
     readonly content: SessionContentConfiguration;
+    readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
 }) {
     const content =
         cx.content.kind === "sqlite"
             ? new ContentService(new SqliteContentStore(cx.database), cx.content.archiveByteLimit)
             : new ContentService(cx.content.content, null);
     return new SqliteSessionRuntime(
-        createDoContext({ doDatabase: cx.database, storages: { content }, config: { quota: cx.quota } }),
+        createDoContext({
+            doDatabase: cx.database,
+            storages: { content },
+            config: { quota: cx.quota },
+            initializeSessionSchema: cx.initializeSessionSchema,
+        }),
     );
 }
 
@@ -126,6 +133,7 @@ function createSessionRelayDependencies(cx: {
     readonly database: DoSqlDatabase;
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
+    readonly initializeSessionSchema: (database: DoSqlDatabase) => void;
     readonly schedule: (timestamp: number, signal: AbortSignal) => Promise<void>;
 }) {
     const runtime = createSessionRuntime(cx);
@@ -201,6 +209,7 @@ export function createDurableObjectDependencies(cx: {
     readonly doDatabase: DoSqlDatabase;
     readonly content: SessionContentConfiguration;
     readonly quota: SessionQuotaPolicy;
+    readonly initializeSessionSchema?: (database: DoSqlDatabase) => void;
     readonly storages: {
         readonly databaseResolver: DatabaseResolver;
         readonly projectDirectory: ProjectStorageDirectory;
@@ -232,6 +241,7 @@ export function createDurableObjectDependencies(cx: {
     const session = createSessionRelayDependencies({
         database: cx.doDatabase,
         content: cx.content,
+        initializeSessionSchema: cx.initializeSessionSchema ?? initializeSessionSchema,
         quota: cx.quota,
         schedule: cx.utilities.schedule,
     });

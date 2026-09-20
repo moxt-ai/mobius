@@ -32,6 +32,7 @@ import {
     decodeServiceToDaemonMessage,
     type decodeSessionEventDeferred,
     decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryLoad,
     encodeDaemonToServiceMessage,
     encodeRecordedSessionEvent,
     FILE_FAILED_KIND,
@@ -54,6 +55,7 @@ import {
     SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_REJECTED_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_PERMISSION_RESPOND_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
@@ -1224,6 +1226,61 @@ async function executeSessionPrepare(
     }
 }
 
+async function executeSessionLiveHistoryLoad(
+    socket: WebSocket,
+    command: ReturnType<typeof decodeSessionLiveHistoryLoad>,
+    config: DaemonConfig,
+    directories: WorkspaceDirectoryService,
+    audit: AuditStore,
+    sessions: AcpSessionManager,
+    signal: AbortSignal,
+): Promise<void> {
+    try {
+        const resolved = await resolveSessionDirectories(
+            directories,
+            config.bindingId,
+            command.directoryId,
+            command.additionalDirectoryIds,
+            signal,
+        );
+        const history = await sessions.loadSessionHistory({
+            additionalDirectories: resolved.additionalDirectories,
+            agent: config.catalog.find(command.agentId),
+            cwd: resolved.cwd,
+            sessionId: command.sessionId,
+            signal,
+        });
+        signal.throwIfAborted();
+        audit.record({
+            commandId: command.requestId,
+            event: "session_history_loaded",
+            sessionId: command.sessionId,
+        });
+        send(socket, {
+            history,
+            kind: "session.live-history.loaded",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    } catch (error) {
+        if (signal.aborted) {
+            return;
+        }
+        audit.record({
+            commandId: command.requestId,
+            details: { code: operationErrorCode(error) },
+            event: "session_history_unavailable",
+            sessionId: command.sessionId,
+        });
+        send(socket, {
+            history: { status: "unavailable" },
+            kind: "session.live-history.loaded",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        });
+    }
+}
+
 async function executeSessionConfigure(
     publisher: DaemonSessionEventPublisher,
     socket: WebSocket,
@@ -2270,6 +2327,19 @@ async function runRelayConnection(
                         } else {
                             console.warn("Mobius daemon ignored a rejection for an unknown session event");
                         }
+                        return;
+                    }
+                    if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
+                        const command = decodeSessionLiveHistoryLoad(encoded);
+                        void executeSessionLiveHistoryLoad(
+                            socket,
+                            command,
+                            config,
+                            directories,
+                            audit,
+                            sessions,
+                            connectionController.signal,
+                        );
                         return;
                     }
                     if (kind === NATIVE_SESSION_CANCEL_KIND) {

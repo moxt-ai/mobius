@@ -67,6 +67,14 @@ function integer(value: Readonly<Record<string, unknown>>, field: string): numbe
     return candidate;
 }
 
+function boolean(value: Readonly<Record<string, unknown>>, field: string): boolean {
+    const candidate = value[field];
+    if (typeof candidate !== "boolean") {
+        throw new MobiusProtocolError(`The Platform returned an invalid ${field}`);
+    }
+    return candidate;
+}
+
 function strings(value: Readonly<Record<string, unknown>>, field: string): readonly string[] {
     const candidate = value[field];
     if (!Array.isArray(candidate) || candidate.length > 100 || candidate.some((entry) => typeof entry !== "string")) {
@@ -142,10 +150,7 @@ export class MobiusPlatformConfiguration {
 
     constructor(value: Readonly<Record<string, unknown>>) {
         this.allowedOrigins = strings(value, "allowedOrigins");
-        if (typeof value["anonymousPublicBootstrap"] !== "boolean") {
-            throw new MobiusProtocolError("The Platform returned an invalid bootstrap configuration");
-        }
-        this.anonymousPublicBootstrap = value["anonymousPublicBootstrap"];
+        this.anonymousPublicBootstrap = boolean(value, "anonymousPublicBootstrap");
         this.hostingProfile = string(value, "hostingProfile", 32);
     }
 }
@@ -270,6 +275,7 @@ export class MobiusPlatformApp {
     readonly deletedAt: string;
     readonly displayName: string;
     readonly lifecycle: string;
+    readonly cloudRetention: boolean;
     readonly suspendedAt: string;
     readonly tenantId: string;
     readonly updatedAt: string;
@@ -281,6 +287,7 @@ export class MobiusPlatformApp {
         this.deletedAt = timestamp(value, "deletedAt");
         this.displayName = string(value, "displayName", 120);
         this.lifecycle = string(value, "lifecycle", 32);
+        this.cloudRetention = boolean(value, "cloudRetention");
         this.suspendedAt = timestamp(value, "suspendedAt");
         this.tenantId = identifier(value, "tenantId");
         this.updatedAt = timestamp(value, "updatedAt");
@@ -503,6 +510,7 @@ export class MobiusPlatformDeveloperClient {
         tenantId: string,
         displayName: string,
         signal: AbortSignal,
+        cloudRetention: boolean,
     ): Promise<MobiusCreatedPlatformApp> =>
         new MobiusCreatedPlatformApp(
             record(
@@ -510,6 +518,7 @@ export class MobiusPlatformDeveloperClient {
                     "dashboard/v1/apps",
                     {
                         displayName: requestedDisplayName(displayName),
+                        cloudRetention,
                         tenantId: requestedIdentifier(tenantId, "Tenant identifier"),
                     },
                     signal,
@@ -518,12 +527,20 @@ export class MobiusPlatformDeveloperClient {
             ),
         );
 
-    readonly updateApp = async (appId: string, displayName: string, signal: AbortSignal): Promise<MobiusPlatformApp> =>
+    readonly updateApp = async (
+        appId: string,
+        displayName: string,
+        signal: AbortSignal,
+        cloudRetention: boolean,
+    ): Promise<MobiusPlatformApp> =>
         new MobiusPlatformApp(
             record(
                 await this.#executor.put(
                     `dashboard/v1/apps/${encodeURIComponent(requestedIdentifier(appId, "App identifier"))}`,
-                    { displayName: requestedDisplayName(displayName) },
+                    {
+                        displayName: requestedDisplayName(displayName),
+                        cloudRetention,
+                    },
                     signal,
                 ),
                 "App",

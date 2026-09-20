@@ -44,6 +44,7 @@ export class SessionLifecycleStorage {
         readonly projectId: string;
         readonly sessionId: string;
         readonly createdBy: string;
+        readonly cloudRetention: boolean;
         readonly runtimeId: string;
         readonly agentId: string;
         readonly bindingId: string;
@@ -61,17 +62,18 @@ export class SessionLifecycleStorage {
     }): { readonly changes: number } =>
         this.#database.run(
             `INSERT INTO sessions (
-         scope_key, project_id, session_id, created_by, runtime_id,
+         scope_key, project_id, session_id, created_by, cloud_retention, runtime_id,
          agent_id, binding_id, directory_id, config_revision,
          binding_created_at, title, native_history_json, recording_level, retention_milliseconds,
          idempotency_retention_milliseconds, hot_event_limit,
          content_limit_bytes, lifecycle, created_at, updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, 'ready', ?, ?)`,
             [
                 input.scopeKey,
                 input.projectId,
                 input.sessionId,
                 input.createdBy,
+                input.cloudRetention ? 1 : 0,
                 input.runtimeId,
                 input.agentId,
                 input.bindingId,

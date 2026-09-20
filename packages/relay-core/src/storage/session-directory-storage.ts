@@ -6,6 +6,7 @@ import type { ProjectStorageContext } from "../infra/project-storage-directory.t
 import { sessionDirectory, sessionQuotaReservation } from "../schema/d1/index.ts";
 
 interface DirectoryRow {
+    readonly cloud_retention: boolean;
     readonly session_id: string;
     readonly summary_json: string;
     readonly updated_at: number;
@@ -70,6 +71,7 @@ export class SessionDirectoryStorage {
                   );
         return database
             .select({
+                cloud_retention: sessionDirectory.cloudRetention,
                 session_id: sessionDirectory.sessionId,
                 summary_json: sessionDirectory.summaryJson,
                 updated_at: sessionDirectory.updatedAt,
@@ -133,7 +135,10 @@ export class SessionDirectoryStorage {
         signal: AbortSignal,
     ) => {
         const [row] = await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
-            .select({ summary_json: sessionDirectory.summaryJson })
+            .select({
+                cloud_retention: sessionDirectory.cloudRetention,
+                summary_json: sessionDirectory.summaryJson,
+            })
             .from(sessionDirectory)
             .where(and(eq(sessionDirectory.projectId, scope.projectId), eq(sessionDirectory.sessionId, sessionId)))
             .limit(1);
@@ -145,23 +150,32 @@ export class SessionDirectoryStorage {
         summary: SessionSummary,
         signal: AbortSignal,
     ): Promise<void> => {
+        const directorySummary = summary.cloudRetention
+            ? summary
+            : {
+                  ...summary,
+                  hasNativeHistory: false,
+                  lastCommittedSeq: "0",
+                  title: "",
+              };
         await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
             .insert(sessionDirectory)
             .values({
-                projectId: summary.projectId,
-                sessionId: summary.sessionId,
-                runtimeId: summary.runtimeId,
-                lifecycle: summary.lifecycle.kind,
-                updatedAt: Date.parse(summary.updatedAt),
-                summaryJson: JSON.stringify(summary),
+                projectId: directorySummary.projectId,
+                sessionId: directorySummary.sessionId,
+                runtimeId: directorySummary.runtimeId,
+                cloudRetention: directorySummary.cloudRetention,
+                lifecycle: directorySummary.lifecycle.kind,
+                updatedAt: Date.parse(directorySummary.updatedAt),
+                summaryJson: JSON.stringify(directorySummary),
             })
             .onConflictDoUpdate({
                 target: [sessionDirectory.projectId, sessionDirectory.sessionId],
                 set: {
-                    runtimeId: summary.runtimeId,
-                    lifecycle: summary.lifecycle.kind,
-                    updatedAt: Date.parse(summary.updatedAt),
-                    summaryJson: JSON.stringify(summary),
+                    runtimeId: directorySummary.runtimeId,
+                    lifecycle: directorySummary.lifecycle.kind,
+                    updatedAt: Date.parse(directorySummary.updatedAt),
+                    summaryJson: JSON.stringify(directorySummary),
                 },
             });
     };

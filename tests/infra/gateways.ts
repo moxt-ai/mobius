@@ -51,7 +51,7 @@ export function createTestGateways(options: {
     }
     const gateways: WorkerRuntimeGateways = {
         sessions: {
-            fetch: async (scope, sessionId, request) =>
+            fetch: async ({ scope, sessionId }, request) =>
                 await actor(`session:${scope.projectId}:${sessionId}`).applications.session.request(request),
         },
         channel: {

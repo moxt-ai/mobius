@@ -185,6 +185,7 @@ export function summaryFromRow(row: SessionRecord): SessionSummary {
         agentId: rowString(row, "agent_id"),
         createdAt,
         createdBy: rowString(row, "created_by"),
+        cloudRetention: rowNumber(row, "cloud_retention") === 1,
         defaultBinding: {
             agentRef: rowString(row, "agent_id"),
             bindingId: rowString(row, "binding_id"),

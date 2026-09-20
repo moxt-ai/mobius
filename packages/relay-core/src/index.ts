@@ -113,6 +113,7 @@ export {
     type ImmutableContentStore,
 } from "./infra/content-store.ts";
 export { D1DatabaseAdapter } from "./infra/d1-database.ts";
+export type { DoSqlDatabase } from "./infra/do-sql-database.ts";
 export {
     applyDurableObjectMigrations,
     type DurableObjectMigration,

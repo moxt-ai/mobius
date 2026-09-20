@@ -15,15 +15,18 @@ import {
     decodeAgentSettingsDiscoveredEvent,
     decodeMessageKind,
     decodeSessionEventEnvelope,
+    decodeSessionLiveHistoryLoaded,
     encodeAgentCatalogRefreshCommand,
     encodeAgentSettingsDiscoverCommand,
     encodeSessionEventAcknowledgement,
+    encodeSessionLiveHistoryLoad,
     encodeSessionPromptCommand,
     MOBIUS_API_PREFIX,
     SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_EVENT_KIND,
     SESSION_FAILED_KIND,
+    SESSION_LIVE_HISTORY_LOADED_KIND,
     type SessionConfigurationSelection,
     type SessionPromptCommand,
     SessionPromptDisposition,
@@ -210,7 +213,142 @@ async function readAgentCatalogRefresh(frames: ClientFrames, requestId: string) 
     }
 }
 
+async function readSessionLiveHistory(frames: ClientFrames, requestId: string) {
+    for (;;) {
+        const message = await frames.next();
+        if (decodeMessageKind(message) !== SESSION_LIVE_HISTORY_LOADED_KIND) {
+            continue;
+        }
+        const loaded = decodeSessionLiveHistoryLoaded(message);
+        if (loaded.requestId === requestId) {
+            return loaded;
+        }
+    }
+}
+
 describe("daemon session configuration boundary", () => {
+    it("Given a cloud-disabled Session uses an application binding, When Mobius reloads its native history, Then the daemon returns the saved conversation", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${websocketGuid}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [fakeAgentPath], {
+            MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
+        });
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            const socket = await socketReady.promise;
+            const frames = new ClientFrames(socket);
+            const sessionId = "cloud_disabled_conversation";
+            const applicationBindingId = "binding_application_alpha";
+            const prompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: agent.id,
+                bindingId: applicationBindingId,
+                commandId: "save_native_history",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "private conversation",
+                resources: [],
+                sessionConfigurations: [],
+                sessionId,
+                targetCommandId: "",
+            };
+            writeServerTextFrame(socket, encodeSessionPromptCommand(prompt));
+            await expect(readTerminalSessionResult(frames, sessionId)).resolves.toMatchObject({
+                kind: SESSION_COMPLETED_KIND,
+                text: "Echo from ACP: private conversation",
+            });
+
+            const requestId = "reload_native_history";
+            writeServerTextFrame(
+                socket,
+                encodeSessionLiveHistoryLoad({
+                    additionalDirectoryIds: [],
+                    agentId: agent.id,
+                    bindingId: applicationBindingId,
+                    directoryId: "default",
+                    kind: "session.live-history.load",
+                    requestId,
+                    sessionId,
+                }),
+            );
+            await expect(readSessionLiveHistory(frames, requestId)).resolves.toMatchObject({
+                history: {
+                    messages: expect.arrayContaining([
+                        expect.objectContaining({ role: "user", text: "private conversation" }),
+                        expect.objectContaining({ role: "assistant", text: "Echo from ACP: private conversation" }),
+                    ]),
+                    status: "available",
+                },
+                sessionId,
+            });
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve) => relay.close(() => resolve()));
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    }, 30_000);
+
     it("Given a runtime refreshes its shell environment, When its private Agent cache is needed, Then catalog discovery retains the runtime state directory", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-catalog-state-"));
         const discardedStateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-discarded-state-"));

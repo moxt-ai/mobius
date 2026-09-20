@@ -10,6 +10,7 @@ export interface RevealedSecret {
 }
 
 interface PlatformStore {
+    readonly appTab: "api-keys" | "options";
     readonly apps: readonly MobiusPlatformApp[];
     readonly busy: string;
     readonly credentials:
@@ -23,6 +24,7 @@ interface PlatformStore {
     readonly secretVisible: boolean;
     readonly selectedAppId: string;
     readonly setApps: (value: readonly MobiusPlatformApp[]) => void;
+    readonly setAppTab: (value: "api-keys" | "options") => void;
     readonly setBusy: (value: string) => void;
     readonly setCredentials: (appId: string, value: readonly MobiusPlatformAppCredentialMetadata[]) => void;
     readonly failCredentials: (appId: string) => void;
@@ -38,6 +40,7 @@ export function usePlatformStore() {
     const [store] = useState(() =>
         createStore<PlatformStore>()((set) => ({
             apps: [],
+            appTab: "api-keys",
             busy: "",
             credentials: { kind: "loading" },
             error: "",
@@ -47,6 +50,7 @@ export function usePlatformStore() {
             secretVisible: false,
             selectedAppId: "",
             setApps: (apps) => set({ apps }),
+            setAppTab: (appTab) => set({ appTab }),
             setBusy: (busy) => set({ busy }),
             setCredentials: (appId, items) =>
                 set((state) => (state.selectedAppId === appId ? { credentials: { kind: "ready", items } } : state)),
@@ -64,6 +68,7 @@ export function usePlatformStore() {
                         ? state
                         : {
                               selectedAppId,
+                              appTab: "api-keys",
                               credentials: { kind: "loading" },
                               rename: { kind: "idle" },
                               error: "",

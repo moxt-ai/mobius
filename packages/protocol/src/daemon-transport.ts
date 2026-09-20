@@ -136,6 +136,14 @@ import {
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
 } from "./session-events.ts";
+import {
+    decodeSessionLiveHistoryLoad,
+    decodeSessionLiveHistoryLoaded,
+    encodeSessionLiveHistoryLoad,
+    encodeSessionLiveHistoryLoaded,
+    SESSION_LIVE_HISTORY_LOAD_KIND,
+    SESSION_LIVE_HISTORY_LOADED_KIND,
+} from "./session-live-history.ts";
 
 interface MessageSignature<TMessage extends { readonly kind: string }> {
     readonly decoder: (encoded: string) => TMessage;
@@ -244,6 +252,11 @@ const serviceToDaemonSignatures = {
         SESSION_EVENT_REJECTED_KIND,
         encodeSessionEventRejection,
         decodeSessionEventRejection,
+    ),
+    [SESSION_LIVE_HISTORY_LOAD_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_LOAD_KIND,
+        encodeSessionLiveHistoryLoad,
+        decodeSessionLiveHistoryLoad,
     ),
     [SESSION_PERMISSION_RESPOND_KIND]: defineMessageSignature(
         SESSION_PERMISSION_RESPOND_KIND,
@@ -361,6 +374,11 @@ const daemonToServiceSignatures = {
         SESSION_OPERATION_FAILED_KIND,
         encodeSessionOperationFailedEvent,
         decodeSessionOperationFailedEvent,
+    ),
+    [SESSION_LIVE_HISTORY_LOADED_KIND]: defineMessageSignature(
+        SESSION_LIVE_HISTORY_LOADED_KIND,
+        encodeSessionLiveHistoryLoaded,
+        decodeSessionLiveHistoryLoaded,
     ),
     [SESSION_READY_KIND]: defineMessageSignature(SESSION_READY_KIND, encodeSessionReadyEvent, decodeSessionReadyEvent),
     [WORKSPACE_ENTRIES_KIND]: defineMessageSignature(

@@ -82,6 +82,7 @@ export interface SessionCommandRuntime {
     readonly createSession: (
         scope: ProjectScope,
         request: CreateSessionRequest,
+        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ) => Promise<SessionSummary>;

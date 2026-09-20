@@ -295,6 +295,7 @@ export interface SessionSummary {
     readonly agentId: string;
     readonly createdAt: string;
     readonly createdBy: string;
+    readonly cloudRetention: boolean;
     readonly defaultBinding: SessionBinding;
     readonly hasNativeHistory: boolean;
     readonly lastCommittedSeq: string;

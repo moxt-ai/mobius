@@ -71,6 +71,7 @@ class TestSocket implements RuntimeSocket {
     };
     readonly isOpen = () => this.#socket.readyState === 1;
     readonly isSame = (socket: ChannelSocket): boolean => socket === this;
+    readonly permitsLiveSessionHistory = (): boolean => this.#identity.role === "relay";
     readonly send = (message: string) => this.#socket.send(message);
     readonly trackAgentCatalogRefresh = (requestId: string, expiresAt: number): void => {
         this.#agentCatalogRefreshes.set(requestId, expiresAt);
@@ -79,8 +80,8 @@ class TestSocket implements RuntimeSocket {
         this.#agentSettingsDiscoveries.set(requestId, { agentId, expiresAt });
     };
     readonly replaceDaemon = () => {
-        if (this.#identity.role === "host") {
-            throw new Error("A Host cannot replace a Runtime");
+        if (this.#identity.role !== "daemon" && this.#identity.role !== "replaced-daemon") {
+            throw new Error("Only a daemon can replace a Runtime");
         }
         this.#identity = { ...this.#identity, role: "replaced-daemon" };
     };

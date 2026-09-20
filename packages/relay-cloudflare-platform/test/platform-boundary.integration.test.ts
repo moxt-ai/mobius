@@ -125,6 +125,53 @@ describe.sequential("Platform Session-only boundary", () => {
         expect(retired).toMatchObject({ error: { code: "project_permission_invalid" } });
     });
 
+    it("Given an App disables cloud retention, When its owner creates and updates the App, Then Platform exposes the policy for future Sessions", async () => {
+        const worker = createTestMobiusPlatformApp(
+            new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
+            createPlatformGateways,
+        );
+        const environment = bindings();
+        const tenants = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/platform/tenants`, {
+                    headers: developerHeaders(),
+                }),
+                environment,
+            ),
+            200,
+        );
+        const values = tenants["tenants"];
+        if (!Array.isArray(values) || values.length === 0) {
+            throw new Error("Expected a Platform tenant");
+        }
+        const tenantId = text(record(values[0]), "tenantId");
+        const created = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps`, {
+                    body: JSON.stringify({ displayName: "Private sessions", cloudRetention: false, tenantId }),
+                    headers: developerHeaders(),
+                    method: "POST",
+                }),
+                environment,
+            ),
+            201,
+        );
+        expect(created["cloudRetention"]).toBe(false);
+
+        const updated = await responseJson(
+            await worker.fetch(
+                new Request(`${relayOrigin}${MOBIUS_API_PREFIX}/dashboard/v1/apps/${text(created, "appId")}`, {
+                    body: JSON.stringify({ displayName: "Durable sessions", cloudRetention: true }),
+                    headers: developerHeaders(),
+                    method: "PUT",
+                }),
+                environment,
+            ),
+            200,
+        );
+        expect(updated["cloudRetention"]).toBe(true);
+    });
+
     it("Given an existing Platform Project has a Session, When an operator runs the cloud-retention migration, Then the Project and Session stores are migrated", async () => {
         const worker = createTestMobiusPlatformApp(
             new PlatformAuthenticationConfiguration(clerk.authenticator, new Set(["developer-1"])),
