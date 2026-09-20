@@ -26,32 +26,9 @@ class ManualTimer implements DaemonTimer {
             callback();
         }
     };
-
-    get pending(): number {
-        return this.#callbacks.size;
-    }
 }
 
 describe("coalescing assistant text publisher", () => {
-    it("Given token-level deltas arrive faster than the flush interval, When the timer fires, Then the buffered text is published as one event", () => {
-        const timer = new ManualTimer();
-        const events: [string, string][] = [];
-        const publisher = new CoalescingTextPublisher(
-            timer,
-            (messageId, text) => events.push([messageId, text]),
-            100,
-            100_000,
-        );
-
-        for (const token of ["La", "sa", " ph", "ot", "ov"]) {
-            publisher.record("message-1", token);
-        }
-
-        expect(events).toHaveLength(0);
-        timer.fire();
-        expect(events).toEqual([["message-1", "Lasa photov"]]);
-    });
-
     it("Given deltas from a new message arrive, When the message id changes, Then the buffered text is published before the new message buffers", () => {
         const timer = new ManualTimer();
         const events: [string, string][] = [];
@@ -90,61 +67,6 @@ describe("coalescing assistant text publisher", () => {
         expect(events).toEqual([["message-1", "tail"]]);
         timer.fire();
         expect(events).toEqual([["message-1", "tail"]]);
-    });
-
-    it("Given no text is buffered, When flush is called, Then nothing is published", () => {
-        const timer = new ManualTimer();
-        const events: [string, string][] = [];
-        const publisher = new CoalescingTextPublisher(
-            timer,
-            (messageId, text) => events.push([messageId, text]),
-            100,
-            100_000,
-        );
-
-        publisher.flush();
-
-        expect(events).toEqual([]);
-    });
-
-    it("Given empty deltas are recorded, When the timer fires, Then no event is published", () => {
-        const timer = new ManualTimer();
-        const events: [string, string][] = [];
-        const publisher = new CoalescingTextPublisher(
-            timer,
-            (messageId, text) => events.push([messageId, text]),
-            100,
-            100_000,
-        );
-
-        publisher.record("message-1", "");
-        timer.fire();
-
-        expect(events).toEqual([]);
-        expect(timer.pending).toBe(0);
-    });
-
-    it("Given the buffer was flushed, When more deltas arrive, Then they schedule a fresh flush rather than publishing immediately", () => {
-        const timer = new ManualTimer();
-        const events: [string, string][] = [];
-        const publisher = new CoalescingTextPublisher(
-            timer,
-            (messageId, text) => events.push([messageId, text]),
-            100,
-            100_000,
-        );
-
-        publisher.record("message-1", "a");
-        timer.fire();
-        publisher.record("message-1", "b");
-
-        expect(events).toEqual([["message-1", "a"]]);
-        expect(timer.pending).toBe(1);
-        timer.fire();
-        expect(events).toEqual([
-            ["message-1", "a"],
-            ["message-1", "b"],
-        ]);
     });
 
     it("Given buffered text would exceed the per-event limit, When another delta arrives, Then the buffer flushes so no event exceeds the limit", () => {

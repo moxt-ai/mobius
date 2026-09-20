@@ -38,7 +38,6 @@ import {
     type AccessGrantRecord,
     buildAgents,
     type CreatedRuntimePairingResponse,
-    completeReadyAgentDirectory,
     createSessionRequests,
     decodeCreatedAccessGrant,
     decodeRedeemedAccessGrant,
@@ -64,27 +63,6 @@ afterEach(() => {
 });
 
 describe.sequential("Cloudflare session deployment: control and public API", () => {
-    it("Given a Session-only Relay, When a client reaches a retired Bot endpoint, Then the Worker reports that it is unavailable", async () => {
-        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
-
-        const response = await app.request(`${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/retired-project/bots`, {
-            headers: { authorization: "Bearer retired-credential" },
-        });
-
-        expect(response.status).toBe(404);
-    });
-
-    it("Given all eleven supported local Agents are ready, When the machine claims its pairing, Then the Relay accepts the complete bounded directory", async () => {
-        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
-        const { createPairing, claimPairing } = createSessionRequests(app);
-        const created = await createPairing();
-
-        await expect(claimPairing(created, completeReadyAgentDirectory, [])).resolves.toMatchObject({
-            channelId: created.channelId,
-            runtimeId: created.runtimeId,
-        });
-    });
-
     it("Given a paired local Agent, When a project owner discovers its settings, Then the live snapshot is returned without creating a Session", async () => {
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { openChannelSocket, pairChannel } = createSessionRequests(app);

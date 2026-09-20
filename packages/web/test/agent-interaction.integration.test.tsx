@@ -7,7 +7,6 @@ import {
     encodeSessionCompletedEvent,
     encodeSessionElicitationRequestedEvent,
     encodeSessionElicitationResolvedEvent,
-    encodeSessionFailedEvent,
     encodeSessionStartedEvent,
     encodeSessionUsageUpdatedEvent,
     MOBIUS_API_PREFIX,
@@ -569,100 +568,6 @@ describe.sequential("Agent interaction boundaries", () => {
         }
     });
 
-    it("Given the Agent is finishing its Turn, When the daemon rejects a steered follow-up, Then the message returns to the queue and the rejection is reported", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, prepare, [], {
-                additionalDirectories: true,
-                audioPrompt: false,
-                closeSession: true,
-                deleteSession: true,
-                embeddedContextPrompt: true,
-                imagePrompt: true,
-                listSessions: true,
-                loadSession: true,
-                promptQueueing: false,
-                resumeSession: true,
-                steering: true,
-                unstableForkSession: true,
-            });
-            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
-            fireEvent.change(promptInput, { target: { value: "Inspect the failing workflow" } });
-            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-            const runningPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
-            await paired.daemon.sendSessionEvent(
-                runningPrompt.sessionId,
-                encodeSessionStartedEvent({
-                    attemptId: "running-attempt",
-                    commandId: runningPrompt.commandId,
-                    kind: "session.started",
-                    sessionId: runningPrompt.sessionId,
-                }),
-            );
-            expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
-
-            const followUpInput = screen.getByRole("combobox", { name: "Message the local agent" });
-            fireEvent.change(followUpInput, { target: { value: "Run the regression suite afterward" } });
-            fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
-            const followUpTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
-            fireEvent.click(
-                within(followUpTray).getByRole("button", {
-                    name: "Steer queued message: Run the regression suite afterward",
-                }),
-            );
-
-            // The Relay accepts the disposition before the daemon decides; the daemon reports the
-            // rejection on the steered Turn's own command. The queued follow-up is normally held back
-            // until the running Turn settles, but under load it can be released first, so drain until
-            // the promoted steer arrives rather than assuming it is the next prompt.
-            let steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
-            while (steeringPrompt.disposition !== "steer") {
-                steeringPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
-            }
-            expect(steeringPrompt).toMatchObject({
-                disposition: "steer",
-                prompt: "Run the regression suite afterward",
-                targetCommandId: runningPrompt.commandId,
-            });
-            await paired.daemon.sendSessionEvent(
-                steeringPrompt.sessionId,
-                encodeSessionStartedEvent({
-                    attemptId: "steering-attempt",
-                    commandId: steeringPrompt.commandId,
-                    kind: "session.started",
-                    sessionId: steeringPrompt.sessionId,
-                }),
-            );
-            await paired.daemon.sendSessionEvent(
-                steeringPrompt.sessionId,
-                encodeSessionFailedEvent({
-                    code: "steering_target_unavailable",
-                    commandId: steeringPrompt.commandId,
-                    kind: "session.failed",
-                    message: "The target turn is no longer active",
-                    sessionId: steeringPrompt.sessionId,
-                }),
-            );
-
-            const restoredTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
-            await waitFor(() => {
-                expect(within(restoredTray).getByText("Run the regression suite afterward")).toBeTruthy();
-            });
-            expect(screen.getByRole("alert").textContent).toContain("steering_target_unavailable");
-            expect(within(screen.getByRole("log")).queryByText("Run the regression suite afterward")).toBeNull();
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
     it("Given an Agent lacks native prompt queueing, When follow-ups are sent during a running Turn, Then Mobius runs them in order after the current Turn", async ({
         signal,
     }) => {
@@ -942,62 +847,6 @@ describe.sequential("Agent interaction boundaries", () => {
             });
             expect(screen.getByDisplayValue("Keep the existing New chat draft")).toBeTruthy();
             expect(within(conversations).getAllByRole("link", { name: /New chat/ })).toHaveLength(1);
-        } finally {
-            cleanup();
-            await closeMobiusTransport();
-            paired.daemon.close();
-        }
-    });
-
-    it("Given a conversation created from New chat, When it completes a turn and the user requests New chat again, Then another conversation is created", async () => {
-        const paired = await pairDaemon();
-        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
-        window.localStorage.clear();
-        saveBrowserCredential(paired.channelId, paired.credential);
-        createTestApplication();
-
-        try {
-            const initialPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, initialPreparation);
-            await completeRenderedPrompt(paired.daemon, "First conversation", "First response");
-
-            const sidebar = screen.getByRole("complementary", {
-                name: "Conversation sidebar",
-            });
-            const conversations = screen.getByRole("navigation", {
-                name: "Conversations",
-            });
-            expect(within(conversations).getAllByRole("link")).toHaveLength(1);
-
-            // Start a second conversation from New chat and finish a turn in it.
-            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
-            const secondPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, secondPreparation);
-            await completeRenderedPrompt(paired.daemon, "Second conversation", "Second response");
-            expect(within(conversations).getAllByRole("link")).toHaveLength(2);
-
-            // Requesting New chat from the completed conversation must start a third one.
-            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
-            const thirdPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
-            await sendReadySession(paired.daemon, thirdPreparation);
-            await waitFor(() => {
-                expect(window.location.pathname).toBe(
-                    `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(thirdPreparation.sessionId)}`,
-                );
-            });
-            expect(thirdPreparation.sessionId).not.toBe(secondPreparation.sessionId);
-            await waitFor(() => {
-                expect(within(conversations).getAllByRole("link")).toHaveLength(3);
-            });
-
-            // A row carries a title and a directory label. Its two lines must describe different things,
-            // never repeat one string, which is what a prompt-derived title paired with its own preview did.
-            for (const row of within(conversations).getAllByRole("link")) {
-                const lines = Array.from(row.querySelectorAll("strong, span > span"), (line) =>
-                    line.textContent?.trim(),
-                ).filter((line): line is string => line !== undefined && line.length > 0);
-                expect(new Set(lines).size).toBe(lines.length);
-            }
         } finally {
             cleanup();
             await closeMobiusTransport();

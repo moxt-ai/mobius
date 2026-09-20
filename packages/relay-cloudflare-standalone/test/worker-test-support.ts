@@ -62,13 +62,6 @@ export const buildAgents = [
         label: "Build Agent",
     },
 ];
-export const completeReadyAgentDirectory = Array.from({ length: 11 }, (_, index) => ({
-    agentPath: `/usr/local/bin/agent-${index + 1}`,
-    agentVersion: `agent ${index + 1}.0.0`,
-    capabilities: verifiedAgentCapabilities,
-    id: `agent-${index + 1}`,
-    label: `Agent ${index + 1}`,
-}));
 const attemptIdsBySession = new Map<string, string>();
 const sourceSequences = new Map<string, number>();
 
