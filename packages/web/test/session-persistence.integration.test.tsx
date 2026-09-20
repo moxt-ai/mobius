@@ -184,7 +184,7 @@ describe.sequential("Session persistence boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await reconnectedDaemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(reconnectedDaemon, prepare);
 
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -231,7 +231,7 @@ describe.sequential("Session persistence boundaries", () => {
             expect((await screen.findByTestId(dataTestId.promptAttachment)).textContent).toContain(
                 "public-api-context.txt",
             );
-            const promptInput = screen.getByRole("textbox", {
+            const promptInput = screen.getByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -311,7 +311,7 @@ describe.sequential("Session persistence boundaries", () => {
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation);
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -380,7 +380,7 @@ describe.sequential("Session persistence boundaries", () => {
         try {
             const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, preparation);
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -415,7 +415,7 @@ describe.sequential("Session persistence boundaries", () => {
                 await paired.daemon.receive(SESSION_PREPARE_KIND, signal),
             );
             await sendReadySession(paired.daemon, initialPreparation);
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -712,7 +712,7 @@ describe.sequential("Session persistence boundaries", () => {
                 sessionId: nextPreparation.sessionId,
                 value: "test-large",
             });
-            expect(screen.getByRole("textbox", { name: "Message the local agent" }).getAttribute("placeholder")).toBe(
+            expect(screen.getByRole("combobox", { name: "Message the local agent" }).getAttribute("placeholder")).toBe(
                 "Loading agent settings",
             );
             await paired.daemon.sendSessionEvent(
@@ -930,7 +930,7 @@ describe.sequential("Session persistence boundaries", () => {
             await sendReadySession(paired.daemon, preparation);
 
             const draft = "line1\nline2\n  indented\n\nDRAFT-LOSS-VERIFY";
-            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(promptInput, { target: { value: draft } });
             expect((promptInput as HTMLTextAreaElement).value).toBe(draft);
 
@@ -941,7 +941,7 @@ describe.sequential("Session persistence boundaries", () => {
             const resumedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, resumedPreparation);
 
-            const restoredInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const restoredInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             await waitFor(() => {
                 expect((restoredInput as HTMLTextAreaElement).value).toBe(draft);
             });
@@ -955,7 +955,7 @@ describe.sequential("Session persistence boundaries", () => {
             createTestApplication();
             const finalPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, finalPreparation);
-            const consumedInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const consumedInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             await waitFor(() => {
                 expect((consumedInput as HTMLTextAreaElement).value).toBe("");
             });
@@ -1008,7 +1008,7 @@ describe.sequential("Session persistence boundaries", () => {
                 name: /Run settings: Configured/,
             });
 
-            const promptInput = screen.getByRole("textbox", {
+            const promptInput = screen.getByRole("combobox", {
                 name: "Message the local agent",
             });
             fireEvent.change(promptInput, {
@@ -1067,7 +1067,7 @@ describe.sequential("Session persistence boundaries", () => {
             );
             await sendReadySession(paired.daemon, initialPreparation);
 
-            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             await waitFor(() => {
                 expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
             });

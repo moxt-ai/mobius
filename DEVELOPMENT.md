@@ -20,6 +20,26 @@ Warnings also fail lint and staged pre-commit checks.
 a protected base constructor publicly. `useLiteralKeys` is
 disabled because it conflicts with TypeScript's `noPropertyAccessFromIndexSignature`.
 
+Two `a11y` rules are relaxed for a small set of files through `overrides` in
+`biome.json`, because each is unsatisfiable in combination with another enabled
+rule for the patterns those files must use:
+
+- `useSemanticElements` is off for the sidebar resize handle. A focusable,
+  value-carrying separator must declare `role="separator"` for `aria-valuenow`,
+  `aria-valuemin`, and `aria-valuemax` to be valid, but `useSemanticElements`
+  requires that role to live on `<hr>` while `noRedundantRoles` forbids it there.
+  The handle is a `div` with the widget separator role.
+- `noNoninteractiveTabindex` and `useSemanticElements` are off for the Markdown,
+  activity, and rich-content components. A scroll container that clips content
+  must be keyboard-focusable, and an accessible name requires a role:
+  `noNoninteractiveTabindex` rejects `tabIndex` on any non-interactive element,
+  and `useSemanticElements` rejects the labelled `role="group"` wrapper it would
+  otherwise need.
+
+Keep these overrides scoped to the listed files. A new file that needs them
+should be added deliberately, with its own justification, rather than by
+disabling the rules repository-wide.
+
 Builds run in dependency order with at most three workspace tasks at once.
 The Standalone and Platform build scripts each own their frontend build, so the
 root build excludes those frontend packages to avoid duplicate builds and races

@@ -53,7 +53,12 @@ function MermaidError({ chart, error, retry }: MermaidErrorComponentProps) {
                     <summary className="flex min-h-11 cursor-pointer items-center rounded-lg px-2 font-medium focus-visible:ring-2 focus-visible:ring-ring/70 focus-visible:outline-none">
                         Show Mermaid source
                     </summary>
-                    <pre className="m-0 max-h-64 overflow-auto rounded-lg bg-surface-subtle p-3 font-mono text-xs leading-5 whitespace-pre">
+                    <pre
+                        aria-label="Mermaid source"
+                        className="m-0 max-h-64 overflow-auto rounded-lg bg-surface-subtle p-3 font-mono text-xs leading-5 whitespace-pre"
+                        role="group"
+                        tabIndex={0}
+                    >
                         <code>{chart}</code>
                     </pre>
                 </details>

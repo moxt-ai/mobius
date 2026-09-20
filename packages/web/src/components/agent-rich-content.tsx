@@ -153,7 +153,12 @@ function AgentRichContentItem({
                 <div className="border-b-[0.5px] border-black/7 px-3 pt-2">
                     <ContentHeader content={content} />
                 </div>
-                <div className="grid max-h-96 overflow-auto font-mono text-[11px] leading-[18px] md:grid-cols-2">
+                <div
+                    aria-label="Diff"
+                    className="grid max-h-96 overflow-auto font-mono text-[11px] leading-[18px] md:grid-cols-2"
+                    role="group"
+                    tabIndex={0}
+                >
                     <pre className="m-0 whitespace-pre-wrap bg-[#fff4f2] p-3 text-[#8f2f35] [overflow-wrap:anywhere]">
                         {content.oldText}
                     </pre>
@@ -191,7 +196,12 @@ function AgentRichContentItem({
                 <div className="px-3 pt-2 text-[#aeb5bc]">
                     <ContentHeader content={content} />
                 </div>
-                <pre className="m-0 max-h-80 overflow-auto px-3 pb-3 font-mono text-[11px] leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere]">
+                <pre
+                    aria-label="Terminal output"
+                    className="m-0 max-h-80 overflow-auto px-3 pb-3 font-mono text-[11px] leading-[18px] whitespace-pre-wrap [overflow-wrap:anywhere]"
+                    role="group"
+                    tabIndex={0}
+                >
                     {content.text}
                 </pre>
             </section>
@@ -208,7 +218,12 @@ function AgentRichContentItem({
         <section className="rounded-xl border-[0.5px] border-black/9 bg-white p-3">
             <ContentHeader content={content} />
             {content.text.length > 0 && (
-                <pre className="m-0 max-h-80 overflow-auto font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-[#555c68] [overflow-wrap:anywhere]">
+                <pre
+                    aria-label="Content output"
+                    className="m-0 max-h-80 overflow-auto font-mono text-[11px] leading-[18px] whitespace-pre-wrap text-[#555c68] [overflow-wrap:anywhere]"
+                    role="group"
+                    tabIndex={0}
+                >
                     {content.text}
                 </pre>
             )}

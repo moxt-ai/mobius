@@ -121,7 +121,12 @@ function ActivityText({
     readonly unwrapToolOutput?: boolean;
 }) {
     return (
-        <pre className="max-h-80 min-w-0 max-w-full overflow-auto rounded-lg border border-black/[0.07] bg-black/[0.025] px-3 py-2.5 font-mono text-xs leading-5 whitespace-pre-wrap text-copy-secondary [overflow-wrap:anywhere]">
+        <pre
+            aria-label="Step output"
+            className="max-h-80 min-w-0 max-w-full overflow-auto rounded-lg border border-black/[0.07] bg-black/[0.025] px-3 py-2.5 font-mono text-xs leading-5 whitespace-pre-wrap text-copy-secondary [overflow-wrap:anywhere]"
+            role="group"
+            tabIndex={0}
+        >
             {unwrapToolOutput ? presentActivityText(children) : children}
         </pre>
     );

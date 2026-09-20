@@ -481,7 +481,7 @@ export async function completeRenderedPrompt(
     responseText: string,
     renderedText: string = responseText,
 ): Promise<SessionPromptCommand> {
-    const promptInput = await screen.findByRole("textbox", {
+    const promptInput = await screen.findByRole("combobox", {
         name: "Message the local agent",
     });
     await waitFor(() => {

@@ -97,7 +97,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
             expect(
-                await screen.findByRole("textbox", {
+                await screen.findByRole("combobox", {
                     name: "Message the local agent",
                 }),
             ).toBeTruthy();
@@ -119,7 +119,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
 
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             const sessionPath = `/channels/${encodeURIComponent(paired.channelId)}/sessions/${encodeURIComponent(prepare.sessionId)}`;
@@ -137,7 +137,7 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(screen.getByText("/usr/local/bin/codex")).toBeTruthy();
 
             fireEvent.click(screen.getByRole("link", { name: "Back to chat" }));
-            const restoredPromptInput = await screen.findByRole("textbox", {
+            const restoredPromptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             expect(screen.getByDisplayValue("Keep this draft while viewing settings")).toBe(restoredPromptInput);
@@ -186,7 +186,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 expect(document.getElementById("main-content")?.hasAttribute("inert")).toBe(false);
             });
             expect(
-                await screen.findByRole("textbox", {
+                await screen.findByRole("combobox", {
                     name: "Message the local agent",
                 }),
             ).toBeTruthy();
@@ -207,7 +207,7 @@ describe.sequential("Agent interaction boundaries", () => {
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
 
             // The visible attach button opens the native picker, so the input itself must stay hidden from
             // assistive technology rather than appearing as a second, unlabeled control.
@@ -220,6 +220,39 @@ describe.sequential("Agent interaction boundaries", () => {
             fireEvent.click(await screen.findByTestId(dataTestId.runSettingsTrigger));
             await screen.findByRole("dialog", { name: "Run settings" });
             expect(screen.getAllByRole("button", { name: "Close run settings" })).toHaveLength(1);
+        } finally {
+            cleanup();
+            await closeMobiusTransport();
+            paired.daemon.close();
+        }
+    });
+
+    it("Given the sidebar and composer are interactive, When a screen reader lists them, Then the resize handle and command popup expose valid semantics", async () => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+
+        try {
+            const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, prepare);
+            await screen.findByRole("combobox", { name: "Message the local agent" });
+
+            // A focusable, value-carrying separator must declare its role explicitly: an `hr` implies a
+            // non-focusable separator, which makes aria-valuenow/min/max invalid.
+            const handle = screen.getByRole("separator", { name: "Resize conversation sidebar" });
+            expect(handle.getAttribute("aria-valuenow")).toBe("264");
+            expect(handle.getAttribute("aria-valuemin")).toBe("220");
+            expect(handle.getAttribute("aria-valuemax")).toBe("380");
+            expect(handle.getAttribute("aria-orientation")).toBe("vertical");
+            expect(handle.getAttribute("tabindex")).toBe("0");
+
+            // The composer drives the command listbox, so it must expose the popup relationship.
+            const composer = screen.getByRole("combobox", { name: "Message the local agent" });
+            expect(composer.getAttribute("aria-expanded")).toBe("false");
+            expect(composer.getAttribute("aria-autocomplete")).toBe("list");
+            expect(composer.getAttribute("aria-controls")).toBeNull();
         } finally {
             cleanup();
             await closeMobiusTransport();
@@ -300,7 +333,7 @@ describe.sequential("Agent interaction boundaries", () => {
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -407,7 +440,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 steering: true,
                 unstableForkSession: true,
             });
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -440,7 +473,7 @@ describe.sequential("Agent interaction boundaries", () => {
             expect(screen.queryByText("Follow-up delivery")).toBeNull();
             expect(screen.queryByRole("button", { name: "Queue next" })).toBeNull();
             expect(screen.queryByRole("button", { name: "Steer now" })).toBeNull();
-            const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+            const followUpInput = screen.getByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(followUpInput, { target: { value: "Run the regression suite afterward" } });
             fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
             const followUpTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
@@ -559,7 +592,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 steering: true,
                 unstableForkSession: true,
             });
-            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(promptInput, { target: { value: "Inspect the failing workflow" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const runningPrompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
@@ -574,7 +607,7 @@ describe.sequential("Agent interaction boundaries", () => {
             );
             expect(await screen.findByRole("button", { name: "Stop agent" })).toBeTruthy();
 
-            const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+            const followUpInput = screen.getByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(followUpInput, { target: { value: "Run the regression suite afterward" } });
             fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
             const followUpTray = await screen.findByRole("status", { name: "Pending follow-up messages" });
@@ -655,7 +688,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 steering: true,
                 unstableForkSession: true,
             });
-            const promptInput = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
             await waitFor(() => {
                 expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
             });
@@ -694,7 +727,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 "second-task-context.txt",
             );
             for (const followUp of followUps) {
-                const followUpInput = screen.getByRole("textbox", { name: "Message the local agent" });
+                const followUpInput = screen.getByRole("combobox", { name: "Message the local agent" });
                 fireEvent.change(followUpInput, { target: { value: followUp } });
                 fireEvent.click(screen.getByRole("button", { name: "Queue message" }));
                 const tray = await screen.findByRole("status", { name: "Pending follow-up messages" });
@@ -883,7 +916,7 @@ describe.sequential("Agent interaction boundaries", () => {
                 expect(window.location.pathname).toBe(draftPath);
             });
             fireEvent.change(
-                await screen.findByRole("textbox", {
+                await screen.findByRole("combobox", {
                     name: "Message the local agent",
                 }),
                 { target: { value: "Keep the existing New chat draft" } },
@@ -1044,7 +1077,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
 
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -1574,7 +1607,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
 
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {
@@ -1721,7 +1754,7 @@ describe.sequential("Agent interaction boundaries", () => {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
 
-            const promptInput = await screen.findByRole("textbox", {
+            const promptInput = await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             await waitFor(() => {

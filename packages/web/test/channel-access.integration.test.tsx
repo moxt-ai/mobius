@@ -84,7 +84,7 @@ describe.sequential("Channel access boundaries", () => {
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, linkedPreparation);
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
             expect(window.location.hash).toBe("");
             const linkedCredential = window.localStorage.getItem(`mobius:channel-credential:${paired.channelId}`);
             expect(linkedCredential).not.toBeNull();
@@ -151,7 +151,7 @@ describe.sequential("Channel access boundaries", () => {
             window.history.replaceState(null, "", renewedAccessLink);
             createTestApplication();
 
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
             expect(window.location.hash).toBe("");
             expect(window.localStorage.getItem(`mobius:channel-credential:${paired.channelId}`)).not.toBe(
                 linkedCredential,

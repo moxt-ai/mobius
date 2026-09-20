@@ -123,7 +123,7 @@ describe.sequential("Session configuration", () => {
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare, groupedModelConfig());
-            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use the selected configuration" } });
             const send = screen.getByRole("button", { name: "Send message" });
             await waitFor(() => expect(send).toHaveProperty("disabled", false));

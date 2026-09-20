@@ -336,7 +336,7 @@ describe.sequential("Agent-native run settings", () => {
             fireEvent.pointerDown(mode, { button: 0, pointerType: "mouse" });
             fireEvent.click(await screen.findByRole("option", { name: "Plan" }));
 
-            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use plan mode" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
@@ -422,7 +422,7 @@ describe.sequential("Agent-native run settings", () => {
             });
             expect(paired.daemon.available(SESSION_CONFIGURE_KIND)).toBe(0);
 
-            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use the selected model" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
@@ -514,7 +514,7 @@ describe.sequential("Agent-native run settings", () => {
             });
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
 
-            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use the selected model" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
@@ -566,7 +566,7 @@ describe.sequential("Agent-native run settings", () => {
             });
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
 
-            const input = await screen.findByRole("textbox", { name: "Message the local agent" });
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.change(input, { target: { value: "Use the selected model" } });
             fireEvent.click(screen.getByRole("button", { name: "Send message" }));
             const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));

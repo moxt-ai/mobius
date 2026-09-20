@@ -216,7 +216,7 @@ describe.sequential("Project Runtime management", () => {
             window.history.replaceState(null, "", runtimePath);
             createTestApplication();
 
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.click(screen.getByRole("link", { name: "Access from other devices" }));
 
             await screen.findByRole("heading", { level: 1, name: "Access from other devices" });
@@ -383,7 +383,7 @@ describe.sequential("Project Runtime management", () => {
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, linkedPreparation);
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
 
             await screen.findByRole("heading", { level: 1, name: "Local machines" });
@@ -448,7 +448,7 @@ describe.sequential("Project Runtime management", () => {
 
             const linkedPreparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, linkedPreparation);
-            await screen.findByRole("textbox", { name: "Message the local agent" });
+            await screen.findByRole("combobox", { name: "Message the local agent" });
             fireEvent.click(screen.getByRole("link", { name: "Local machines" }));
 
             const directory = await screen.findByRole("list", { name: "Project runtimes" });

@@ -31,11 +31,20 @@ import { hasSelectedComposerContext } from "@/services/composer-selected-context
 import { prepareActiveSession, sendPrompt, steerQueuedPrompt, stopActiveTurn } from "@/services/mobius-transport";
 import { selectActiveConversation, useChatStore } from "@/store/chat-store";
 
+const COMMAND_LISTBOX_ID = "agent-command-listbox";
 const COMPOSER_MAX_HEIGHT = 180;
 const CONTEXT_CIRCLE_SIZE = 18;
 const CONTEXT_CIRCLE_STROKE = 2.5;
 const CONTEXT_CIRCLE_RADIUS = (CONTEXT_CIRCLE_SIZE - CONTEXT_CIRCLE_STROKE) / 2;
 const CONTEXT_CIRCLE_CIRCUMFERENCE = 2 * Math.PI * CONTEXT_CIRCLE_RADIUS;
+
+/**
+ * The composer exposes the highlighted command through `aria-activedescendant`, which needs a stable id per
+ * option so a screen reader can announce which command Enter would run.
+ */
+function commandOptionId(index: number): string {
+    return `${COMMAND_LISTBOX_ID}-option-${index.toString()}`;
+}
 
 function ContextUsageIndicator() {
     const conversation = useChatStore(selectActiveConversation);
@@ -484,7 +493,11 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     Message the local agent
                 </label>
                 <Textarea
+                    aria-activedescendant={commandSuggestions.length > 0 ? commandOptionId(commandIndex) : undefined}
+                    aria-autocomplete="list"
+                    aria-controls={commandSuggestions.length > 0 ? COMMAND_LISTBOX_ID : undefined}
                     aria-describedby="composer-hint connection-hint"
+                    aria-expanded={commandSuggestions.length > 0}
                     className={cn(placement === "active" ? "min-h-12 lg:min-h-16" : "min-h-12 md:min-h-16")}
                     data-testid={dataTestId.promptInput}
                     id="agent-prompt"
@@ -497,6 +510,8 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     onPaste={handlePaste}
                     placeholder={conversation.session.isReady ? "Ask the local agent…" : conversation.session.label}
                     ref={textareaRef}
+                    // The composer drives the command listbox, so it is the combobox that owns the popup.
+                    role="combobox"
                     rows={1}
                     value={conversation.draft}
                 />
@@ -504,6 +519,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                     <div
                         aria-label="Agent commands"
                         className="absolute right-3 bottom-[58px] left-3 z-30 overflow-hidden rounded-xl border-[0.5px] border-black/10 bg-white p-1.5 shadow-[0_12px_36px_rgba(0,0,0,0.14)]"
+                        id={COMMAND_LISTBOX_ID}
                         role="listbox"
                     >
                         {commandSuggestions.map((command, index) => (
@@ -513,6 +529,7 @@ export function ChatComposer({ placement }: ChatComposerProps) {
                                     "flex min-h-11 w-full items-center gap-3 rounded-lg px-3 text-left outline-none hover:bg-black/[0.035] focus-visible:ring-2 focus-visible:ring-ring/70",
                                     commandIndex === index && "bg-black/[0.045]",
                                 )}
+                                id={commandOptionId(index)}
                                 key={command.name}
                                 onMouseEnter={() => setCommandIndex(index)}
                                 onClick={() => setDraft(`/${command.name} `)}

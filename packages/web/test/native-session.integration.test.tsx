@@ -293,7 +293,7 @@ describe.sequential("Native Session boundaries", () => {
         try {
             const prepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             await sendReadySession(paired.daemon, prepare);
-            await screen.findByRole("textbox", {
+            await screen.findByRole("combobox", {
                 name: "Message the local agent",
             });
             const sessionsButton = await screen.findByRole("button", {

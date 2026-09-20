@@ -37,7 +37,7 @@ export function SidebarResizeHandle({ onResize, onResizeEnd, onReset, width }: S
         [],
     );
 
-    const beginResize = (event: ReactPointerEvent<HTMLHRElement>): void => {
+    const beginResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
         if (event.button !== 0) {
             return;
         }
@@ -55,7 +55,7 @@ export function SidebarResizeHandle({ onResize, onResizeEnd, onReset, width }: S
         event.currentTarget.setPointerCapture(event.pointerId);
     };
 
-    const continueResize = (event: ReactPointerEvent<HTMLHRElement>): void => {
+    const continueResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
         const drag = dragRef.current;
         if (drag === null || drag.pointerId !== event.pointerId) {
             return;
@@ -65,7 +65,7 @@ export function SidebarResizeHandle({ onResize, onResizeEnd, onReset, width }: S
         onResize(requestedWidth);
     };
 
-    const finishResize = (event: ReactPointerEvent<HTMLHRElement>): void => {
+    const finishResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
         const drag = dragRef.current;
         if (drag === null || drag.pointerId !== event.pointerId) {
             return;
@@ -79,7 +79,10 @@ export function SidebarResizeHandle({ onResize, onResizeEnd, onReset, width }: S
     };
 
     return (
-        <hr
+        // A focusable, value-carrying separator is a widget: it must declare `role="separator"` explicitly
+        // for `aria-valuenow`/`min`/`max` to be valid. `hr` implies a *non*-focusable separator, so this is
+        // a div whose separator role is the widget one.
+        <div
             aria-label="Resize conversation sidebar"
             aria-orientation="vertical"
             aria-valuemax={MAX_SIDEBAR_WIDTH}
@@ -110,6 +113,7 @@ export function SidebarResizeHandle({ onResize, onResizeEnd, onReset, width }: S
             onPointerDown={beginResize}
             onPointerMove={continueResize}
             onPointerUp={finishResize}
+            role="separator"
             tabIndex={0}
             title="Drag to resize. Double-click or press Enter to reset."
         />
