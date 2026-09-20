@@ -1173,7 +1173,6 @@ export class MobiusSession {
     readonly agentId: string;
     readonly createdAt: string;
     readonly createdBy: string;
-    readonly cloudRetention: boolean;
     readonly defaultBinding: MobiusSessionBinding;
     readonly hasNativeHistory: boolean;
     readonly lastCommittedSequence: string;
@@ -1189,7 +1188,6 @@ export class MobiusSession {
         agentId: string,
         createdAt: string,
         createdBy: string,
-        cloudRetention: boolean,
         defaultBinding: MobiusSessionBinding,
         hasNativeHistory: boolean,
         lastCommittedSequence: string,
@@ -1204,7 +1202,6 @@ export class MobiusSession {
         this.agentId = agentId;
         this.createdAt = createdAt;
         this.createdBy = createdBy;
-        this.cloudRetention = cloudRetention;
         this.defaultBinding = defaultBinding;
         this.hasNativeHistory = hasNativeHistory;
         this.lastCommittedSequence = lastCommittedSequence;
@@ -1267,7 +1264,6 @@ export function decodeMobiusSession(value: unknown): MobiusSession {
         identifierField(session, "agentId"),
         validateTimestamp(stringField(session, "createdAt", 128), "createdAt"),
         identifierField(session, "createdBy"),
-        booleanField(session, "cloudRetention"),
         decodeBinding(session["defaultBinding"]),
         booleanField(session, "hasNativeHistory"),
         sequence,

@@ -16,9 +16,7 @@ import {
     type PlatformAuthenticationEnvironment,
     platformAuthenticationFromEnvironment,
 } from "./composition/platform-authentication-environment.ts";
-import { NonCloudRetentionSessionRelayDO } from "./durable-objects/non-cloud-retention-session-relay.ts";
-import { PlatformSessionRelay } from "./durable-objects/platform-session-relay.ts";
-import { RuntimeRelay } from "./durable-objects/runtime-relay.ts";
+import { PlatformSessionRelay, RuntimeRelay } from "./durable-objects.ts";
 import type { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
 import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
 import {
@@ -62,7 +60,6 @@ export interface PlatformRelayBindings
     readonly R2_BUCKET_APAC: R2Bucket;
     readonly RUNTIME_RELAY: DurableObjectNamespace;
     readonly SESSION_RELAY: DurableObjectNamespace;
-    readonly NON_CLOUD_RETENTION_SESSION_RELAY: DurableObjectNamespace;
 }
 
 export interface ProjectPlatformRelayBindings extends PlatformRelayBindings, ProjectDurableObjectExecutionBindings {}
@@ -282,7 +279,6 @@ export function createPlatformGateways(environment: PlatformRelayBindings): Work
             environment.SESSION_RELAY,
             "platform",
             (projectId) => decodePlatformProjectPlacement(projectId)?.locationHint,
-            environment.NON_CLOUD_RETENTION_SESSION_RELAY,
         ),
     };
 }
@@ -304,5 +300,5 @@ const worker = {
 
 export { platformAuthenticationFromEnvironment } from "./composition/platform-authentication-environment.ts";
 export { PlatformAuthenticationConfiguration } from "./entity/platform-control-plane.ts";
-export { NonCloudRetentionSessionRelayDO, PlatformSessionRelay, RuntimeRelay };
+export { PlatformSessionRelay, RuntimeRelay };
 export default worker;

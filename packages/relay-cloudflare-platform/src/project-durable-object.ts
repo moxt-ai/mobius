@@ -1,12 +1,12 @@
 import { DurableObjectDatabaseAdapter, DurableObjectSqlDatabase } from "@moxt-ai/mobius-relay-core";
-import { decodePlatformProjectPlacement } from "../entity/platform-project-id.ts";
-import { decodeProjectDurableObjectPath } from "../entity/project-durable-object-path.ts";
+import { decodePlatformProjectPlacement } from "./entity/platform-project-id.ts";
+import { decodeProjectDurableObjectPath } from "./entity/project-durable-object-path.ts";
 import platformWorker, {
     type ConfiguredPlatformRelayBindings,
     type ProjectPlatformRelayBindings,
-} from "../platform-worker.ts";
-import { executeProjectDatabaseRequest } from "../storage/project-durable-object-database.ts";
-import { initializeProjectDurableObjectSchema } from "../storage/project-durable-object-schema.ts";
+} from "./platform-worker.ts";
+import { executeProjectDatabaseRequest } from "./storage/project-durable-object-database.ts";
+import { initializeProjectDurableObjectSchema } from "./storage/project-durable-object-schema.ts";
 
 export class ProjectRelay {
     readonly #database: DurableObjectDatabaseAdapter;

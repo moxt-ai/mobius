@@ -6,7 +6,6 @@ import type { ChannelGateway } from "./channel-gateway.ts";
 const INTERNAL_CHANNEL_ID_HEADER = "x-mobius-channel-id";
 const INTERNAL_HOST_CREDENTIAL_ID_HEADER = "x-mobius-host-credential-id";
 const INTERNAL_RUNTIME_ID_HEADER = "x-mobius-runtime-id";
-const INTERNAL_CLOUD_RETENTION_HEADER = "x-mobius-cloud-retention";
 
 export class CloudflareChannelRuntime implements ChannelGateway {
     readonly #namespace: DurableObjectNamespace;
@@ -36,7 +35,6 @@ export class CloudflareChannelRuntime implements ChannelGateway {
     ): Promise<Response> => {
         const headers = new Headers(request.headers);
         headers.set(INTERNAL_HOST_CREDENTIAL_ID_HEADER, access.credentialId);
-        headers.set(INTERNAL_CLOUD_RETENTION_HEADER, String(access.cloudRetention));
         return await this.forward(access, new Request(request, { headers, signal }), signal);
     };
 

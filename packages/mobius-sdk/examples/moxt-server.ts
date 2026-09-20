@@ -60,7 +60,7 @@ export async function provisionMoxtPlatformProject(
         credentialProvider: new MobiusOidcCredentialProvider(options.oidcToken),
         endpoint: options.endpoint,
     });
-    const app = await platform.createApp(options.tenantId, options.appDisplayName, signal, true);
+    const app = await platform.createApp(options.tenantId, options.appDisplayName, signal);
     await vault.put(app.defaultCredential.credential, signal);
     const project = await platform.createProject(
         app.appId,

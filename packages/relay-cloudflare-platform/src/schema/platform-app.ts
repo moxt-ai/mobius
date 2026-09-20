@@ -9,7 +9,6 @@ export const platformApp = sqliteTable(
         displayName: text("display_name").notNull(),
         lifecycle: text("lifecycle", { enum: ["active", "suspended", "deleted"] }).notNull(),
         defaultCredentialId: text("default_credential_id"),
-        cloudRetention: integer("cloud_retention", { mode: "boolean" }).notNull().default(true),
         createdAt: integer("created_at").notNull(),
         updatedAt: integer("updated_at").notNull(),
         suspendedAt: integer("suspended_at"),

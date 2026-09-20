@@ -89,7 +89,6 @@ export class PlatformControlPlaneStorage {
     readonly updateApp = async (
         appId: string,
         displayName: string,
-        cloudRetention: boolean,
         updatedAt: number,
         audit: PlatformAuditRecord,
         signal: AbortSignal,
@@ -99,9 +98,9 @@ export class PlatformControlPlaneStorage {
                 this.#database.batch([
                     this.#database
                         .prepare(
-                            "UPDATE platform_apps SET display_name = ?, cloud_retention = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
+                            "UPDATE platform_apps SET display_name = ?, updated_at = ? WHERE app_id = ? AND lifecycle = 'active'",
                         )
-                        .bind(displayName, cloudRetention ? 1 : 0, updatedAt, appId),
+                        .bind(displayName, updatedAt, appId),
                     this.dashboardAuditStatement(audit),
                 ]),
             signal,
@@ -172,9 +171,8 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `INSERT INTO platform_apps (
-                               app_id, tenant_id, display_name, lifecycle, default_credential_id,
-                               cloud_retention, created_at, updated_at
-                             ) SELECT ?, ?, ?, 'active', ?, ?, ?, ?
+                               app_id, tenant_id, display_name, lifecycle, default_credential_id, created_at, updated_at
+                             ) SELECT ?, ?, ?, 'active', ?, ?, ?
                                WHERE (SELECT COUNT(*) FROM platform_apps
                                        WHERE tenant_id = ? AND lifecycle = 'active') < ?`,
                         )
@@ -183,7 +181,6 @@ export class PlatformControlPlaneStorage {
                             app.tenant_id,
                             app.display_name,
                             app.default_credential_id,
-                            app.cloud_retention,
                             app.created_at,
                             app.updated_at,
                             app.tenant_id,
@@ -479,9 +476,7 @@ export class PlatformControlPlaneStorage {
                 this.#database
                     .prepare(
                         `SELECT credentials.*, apps.tenant_id,
-                                     apps.lifecycle AS app_lifecycle,
-                                     apps.cloud_retention AS app_cloud_retention,
-                                     tenants.lifecycle AS tenant_lifecycle
+                                apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
                            FROM platform_app_credentials AS credentials
                            JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
                            JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
@@ -630,9 +625,7 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `SELECT credentials.*, apps.tenant_id,
-                                     apps.lifecycle AS app_lifecycle,
-                                     apps.cloud_retention AS app_cloud_retention,
-                                     tenants.lifecycle AS tenant_lifecycle
+                                    apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
                                FROM platform_app_credentials AS credentials
                                JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
                                JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id
@@ -652,9 +645,7 @@ export class PlatformControlPlaneStorage {
                     this.#database
                         .prepare(
                             `SELECT credentials.*, apps.tenant_id,
-                                    apps.lifecycle AS app_lifecycle,
-                                    apps.cloud_retention AS app_cloud_retention,
-                                    tenants.lifecycle AS tenant_lifecycle
+                                    apps.lifecycle AS app_lifecycle, tenants.lifecycle AS tenant_lifecycle
                                FROM platform_app_credentials AS credentials
                                JOIN platform_apps AS apps ON apps.app_id = credentials.app_id
                                JOIN platform_tenants AS tenants ON tenants.tenant_id = apps.tenant_id

@@ -18,15 +18,8 @@ const OPERATION_TIMEOUT_MILLISECONDS = 15_000;
 
 const requiredString = v.pipe(v.string(), v.minLength(1));
 const safeInteger = v.pipe(v.number(), v.safeInteger());
-const createAppBody = v.strictObject({
-    displayName: requiredString,
-    cloudRetention: v.optional(v.boolean(), true),
-    tenantId: requiredString,
-});
-const updateAppBody = v.strictObject({
-    displayName: requiredString,
-    cloudRetention: v.optional(v.boolean()),
-});
+const createAppBody = v.strictObject({ displayName: requiredString, tenantId: requiredString });
+const updateDisplayNameBody = v.strictObject({ displayName: requiredString });
 const createProjectBody = v.strictObject({
     displayName: requiredString,
     idempotencyKey: requiredString,
@@ -220,12 +213,7 @@ export function createPlatformControlApplication() {
                 context.var.signal,
             );
             return context.json(
-                await context.env.control.createApp(
-                    access,
-                    value.displayName,
-                    value.cloudRetention,
-                    context.var.signal,
-                ),
+                await context.env.control.createApp(access, value.displayName, context.var.signal),
                 201,
             );
         })
@@ -239,7 +227,7 @@ export function createPlatformControlApplication() {
                 ),
             );
         })
-        .put("/v1/apps/:appId", bodyParser(updateAppBody), async (context) => {
+        .put("/v1/apps/:appId", bodyParser(updateDisplayNameBody), async (context) => {
             const value = context.req.valid("json");
             const identity = await authenticateDeveloper(context);
             const result = await context.env.control.requireAppDeveloper(
@@ -248,13 +236,7 @@ export function createPlatformControlApplication() {
                 context.var.signal,
             );
             return context.json(
-                await context.env.control.updateApp(
-                    result.access,
-                    result.app,
-                    value.displayName,
-                    value.cloudRetention,
-                    context.var.signal,
-                ),
+                await context.env.control.updateApp(result.access, result.app, value.displayName, context.var.signal),
             );
         })
         .delete("/v1/apps/:appId", async (context) => {

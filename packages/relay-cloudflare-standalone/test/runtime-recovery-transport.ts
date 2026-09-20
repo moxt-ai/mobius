@@ -9,7 +9,7 @@ import { STANDALONE_NAMESPACE_PREFIX } from "../src/standalone-namespace.ts";
 // transport forwards real traffic, then suspends disconnect delivery until cancellation or release.
 export class SuspendedDisconnectTransport implements SessionTransport {
     readonly #transport: SessionTransport = {
-        fetch: ({ scope, sessionId }, request) =>
+        fetch: (scope, sessionId, request) =>
             env.SESSION_RELAY.get(
                 env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
             ).fetch(request),
@@ -29,8 +29,7 @@ export class SuspendedDisconnectTransport implements SessionTransport {
         this.#released.resolve();
     };
 
-    readonly fetch: SessionTransport["fetch"] = async (target, request) => {
-        const { sessionId } = target;
+    readonly fetch: SessionTransport["fetch"] = async (scope, sessionId, request) => {
         if (new URL(request.url).pathname.endsWith("/disconnect")) {
             if (this.#state.kind === "suspending") {
                 request.signal.throwIfAborted();
@@ -40,18 +39,18 @@ export class SuspendedDisconnectTransport implements SessionTransport {
                 this.#suspended.resolve(this.#state.completedSessionId);
                 try {
                     await Promise.race([aborted.promise, this.#released.promise]);
-                    return await this.#transport.fetch(target, request);
+                    return await this.#transport.fetch(scope, sessionId, request);
                 } finally {
                     request.signal.removeEventListener("abort", cancel);
                 }
             }
-            const response = await this.#transport.fetch(target, request);
+            const response = await this.#transport.fetch(scope, sessionId, request);
             if (response.ok && this.#state.kind === "ready") {
                 this.#state = { kind: "suspending", completedSessionId: sessionId };
             }
             return response;
         }
-        return await this.#transport.fetch(target, request);
+        return await this.#transport.fetch(scope, sessionId, request);
     };
 }
 
@@ -92,7 +91,7 @@ export class SuspendedEventCommitTransport implements SessionTransport {
         this.#released.resolve();
     };
 
-    readonly fetch: SessionTransport["fetch"] = async ({ sessionId }, request) => {
+    readonly fetch: SessionTransport["fetch"] = async (_scope, sessionId, request) => {
         if (!new URL(request.url).pathname.endsWith("/commit")) {
             throw new Error("Expected a Session commit request");
         }
@@ -158,7 +157,7 @@ export class SuspendedEventCommitTransport implements SessionTransport {
 export class UnavailableEventCommitTransport implements SessionTransport {
     readonly #sessionId: string;
     readonly #transport: SessionTransport = {
-        fetch: ({ scope, sessionId }, request) =>
+        fetch: (scope, sessionId, request) =>
             env.SESSION_RELAY.get(
                 env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${scope.projectId}:${sessionId}`),
             ).fetch(request),
@@ -168,12 +167,11 @@ export class UnavailableEventCommitTransport implements SessionTransport {
         this.#sessionId = sessionId;
     }
 
-    readonly fetch: SessionTransport["fetch"] = async (target, request) => {
-        const { sessionId } = target;
+    readonly fetch: SessionTransport["fetch"] = async (scope, sessionId, request) => {
         if (sessionId === this.#sessionId && new URL(request.url).pathname.endsWith("/commit")) {
             throw new Error("The Session Durable Object is unavailable");
         }
-        return await this.#transport.fetch(target, request);
+        return await this.#transport.fetch(scope, sessionId, request);
     };
 }
 

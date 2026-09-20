@@ -2,7 +2,6 @@ import { CloudflareChannelPeers } from "../gateway/cloudflare-channel-peers.ts";
 import { CloudflareSessionTransport } from "../gateway/cloudflare-session-transport.ts";
 import type { SessionTransport } from "../gateway/session-transport.ts";
 import type { BucketResolver } from "../infra/bucket-resolver.ts";
-import type { DoSqlDatabase } from "../infra/do-sql-database.ts";
 import { DurableObjectSqlDatabase } from "../infra/durable-object-sql-database.ts";
 import type { ProjectDatabaseBindings } from "../infra/project-database-bindings.ts";
 import type { ProjectStorageDirectory } from "../infra/project-storage-directory.ts";
@@ -24,11 +23,10 @@ export function createDurableObjectContext(
         readonly projects: ProjectStorageDirectory;
         readonly content: { readonly kind: "sqlite" } | { readonly kind: "r2"; readonly buckets: BucketResolver };
         readonly sessionTransport?: SessionTransport;
-        readonly doDatabase?: DoSqlDatabase;
     },
 ) {
     return createDurableObjectDependencies({
-        doDatabase: options.doDatabase ?? new DurableObjectSqlDatabase(state.storage),
+        doDatabase: new DurableObjectSqlDatabase(state.storage),
         quota: sessionQuotaFromEnvironment(options.environment),
         content:
             options.content.kind === "sqlite"

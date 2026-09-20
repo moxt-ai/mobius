@@ -82,7 +82,6 @@ export interface SessionCommandGateway {
     readonly createSession: (
         scope: ProjectScope,
         request: CreateSessionRequest,
-        cloudRetention: boolean,
         now: number,
         signal: AbortSignal,
     ) => Promise<SessionSummary>;

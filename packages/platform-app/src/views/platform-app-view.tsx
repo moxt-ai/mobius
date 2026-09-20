@@ -3,8 +3,6 @@ import { type ReactNode, useCallback, useEffect } from "react";
 import { ConfirmAction } from "../components/confirm-action.tsx";
 import { CreateNameDialog } from "../components/create-name-dialog.tsx";
 import { SecretDialog } from "../components/secret-dialog.tsx";
-import { Checkbox } from "../components/ui/checkbox.tsx";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
 import { platformDataTestId } from "../data-testid.ts";
 import { createPlatformClient } from "../services/platform-client.ts";
 import { usePlatformStore } from "../view-models/platform-app-view-model.ts";
@@ -59,8 +57,6 @@ function EmptyState({ children }: { readonly children: ReactNode }) {
 export function PlatformApp({ endpoint, getToken, userControl, organization, organizationControl }: PlatformAppProps) {
     const {
         apps,
-        appTab,
-        setAppTab,
         setApps,
         credentials,
         setCredentials,
@@ -151,7 +147,7 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
 
     const createApp = async (name: string): Promise<boolean> => {
         return perform("create-app", async () => {
-            const created = await client().createApp(selectedTenant.tenantId, name, AbortSignal.timeout(20_000), true);
+            const created = await client().createApp(selectedTenant.tenantId, name, AbortSignal.timeout(20_000));
             const listed = await client().listApps(selectedTenant.tenantId, AbortSignal.timeout(20_000));
             setApps(listed);
             setSelectedAppId(created.appId);
@@ -366,7 +362,6 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                                     selectedApp.appId,
                                                     rename.name,
                                                     AbortSignal.timeout(20_000),
-                                                    selectedApp.cloudRetention,
                                                 );
                                                 setApps(
                                                     apps.map((app) => (app.appId === updated.appId ? updated : app)),
@@ -396,124 +391,73 @@ export function PlatformApp({ endpoint, getToken, userControl, organization, org
                                         </button>
                                     </form>
                                 ) : null}
-                                <Tabs
-                                    value={appTab}
-                                    onValueChange={(value) => setAppTab(value === "options" ? "options" : "api-keys")}
-                                >
-                                    <TabsList className="mt-6" aria-label="Application settings">
-                                        <TabsTrigger value="api-keys">API keys</TabsTrigger>
-                                        <TabsTrigger value="options">Options</TabsTrigger>
-                                    </TabsList>
-                                    <TabsContent value="options">
-                                        <div className="mt-6 rounded-lg border border-[#dde3df] p-4">
-                                            <div className="flex items-start gap-3">
-                                                <Checkbox
-                                                    aria-label="Retain chat session data in Mobius Cloud"
-                                                    checked={selectedApp.cloudRetention}
-                                                    disabled={busy.length > 0}
-                                                    onCheckedChange={(checked) => {
-                                                        const cloudRetention = checked === true;
-                                                        void perform("update-app-options", async () => {
-                                                            const updated = await client().updateApp(
-                                                                selectedApp.appId,
-                                                                selectedApp.displayName,
-                                                                AbortSignal.timeout(20_000),
-                                                                cloudRetention,
-                                                            );
-                                                            setApps(
-                                                                apps.map((app) =>
-                                                                    app.appId === updated.appId ? updated : app,
-                                                                ),
-                                                            );
-                                                            setNotice("Application options saved.");
-                                                        });
-                                                    }}
-                                                />
-                                                <span>
-                                                    <strong className="block text-sm">
-                                                        Retain chat session data in Mobius Cloud
-                                                    </strong>
-                                                    <span className="mt-1 block text-sm text-[#69766f]">
-                                                        Store data for newly created chat Sessions in Mobius. Existing
-                                                        Sessions are unchanged.
-                                                    </span>
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </TabsContent>
-                                    <TabsContent value="api-keys">
-                                        <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
-                                            <div>
-                                                <h3 id="app-keys-title">App keys</h3>
-                                                <p>
-                                                    Secrets cannot be viewed again. Choose Create key to get a new app
-                                                    secret. Keys do not expire. Use app secrets only on trusted servers.
-                                                </p>
-                                            </div>
+                                <div className="mt-6 flex flex-col items-start justify-between gap-4 md:flex-row md:items-center [&_h3]:m-0 [&_h3]:text-xl [&_h3]:font-bold [&_p]:mt-1.5 [&_p]:text-sm [&_p]:text-[#69766f]">
+                                    <div>
+                                        <h3 id="app-keys-title">App keys</h3>
+                                        <p>
+                                            Secrets cannot be viewed again. Choose Create key to get a new app secret.
+                                            Keys do not expire. Use app secrets only on trusted servers.
+                                        </p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
+                                        onClick={issueCredential}
+                                        disabled={busy.length > 0}
+                                    >
+                                        <Plus size={16} /> Create key
+                                    </button>
+                                </div>
+                                <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
+                                    <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
+                                        <span>App secret</span>
+                                        <span>Created</span>
+                                        <span>Status</span>
+                                        <span />
+                                    </div>
+                                    {credentials.items.map((credential, index) => (
+                                        <div
+                                            className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
+                                            key={credential.credentialId}
+                                        >
+                                            <span>Only shown when created</span>
+                                            <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
+                                            <span
+                                                className={
+                                                    credential.revokedAt.length > 0
+                                                        ? "w-fit rounded-full bg-[#f5e9e9] px-2 py-1 text-[10px] font-bold uppercase text-[#8b5555]"
+                                                        : "w-fit rounded-full bg-[#e5f3e9] px-2 py-1 text-[10px] font-bold uppercase text-[#168247]"
+                                                }
+                                            >
+                                                {credential.revokedAt.length > 0 ? "Revoked" : "Active"}
+                                            </span>
                                             <button
                                                 type="button"
-                                                className="inline-flex min-h-[39px] items-center justify-center gap-2 rounded-lg border border-[#168247] bg-[#168247] px-3.5 font-bold text-white hover:bg-[#11683a] disabled:cursor-not-allowed disabled:opacity-50"
-                                                onClick={issueCredential}
-                                                disabled={busy.length > 0}
+                                                className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
+                                                aria-label={`Revoke key ${index + 1}`}
+                                                data-testid={platformDataTestId.revokeCredential}
+                                                disabled={credential.revokedAt.length > 0 || busy.length > 0}
+                                                onClick={() =>
+                                                    void perform(`revoke-${credential.credentialId}`, async () => {
+                                                        await client().revokeAppCredential(
+                                                            credential.credentialId,
+                                                            AbortSignal.timeout(20_000),
+                                                        );
+                                                        setCredentials(
+                                                            selectedApp.appId,
+                                                            await client().listAppCredentials(
+                                                                selectedApp.appId,
+                                                                AbortSignal.timeout(20_000),
+                                                            ),
+                                                        );
+                                                    })
+                                                }
                                             >
-                                                <Plus size={16} /> Create key
+                                                <Trash2 size={15} />
                                             </button>
                                         </div>
-                                        <div className="mt-4 overflow-x-auto rounded-lg border border-[#dde3df]">
-                                            <div className="grid min-h-[38px] min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 bg-[#f8faf8] px-3.5 py-2 text-[10px] font-bold uppercase tracking-[.06em] text-[#849087]">
-                                                <span>App secret</span>
-                                                <span>Created</span>
-                                                <span>Status</span>
-                                                <span />
-                                            </div>
-                                            {credentials.items.map((credential, index) => (
-                                                <div
-                                                    className="grid min-h-14 min-w-[660px] grid-cols-[minmax(150px,1.4fr)_1fr_.7fr_40px] items-center gap-3 border-t border-[#e8ece9] px-3.5 py-2 text-xs text-[#5f6c65] first:border-t-0"
-                                                    key={credential.credentialId}
-                                                >
-                                                    <span>Only shown when created</span>
-                                                    <span>{new Date(credential.issuedAt).toLocaleDateString()}</span>
-                                                    <span
-                                                        className={
-                                                            credential.revokedAt.length > 0
-                                                                ? "w-fit rounded-full bg-[#f5e9e9] px-2 py-1 text-[10px] font-bold uppercase text-[#8b5555]"
-                                                                : "w-fit rounded-full bg-[#e5f3e9] px-2 py-1 text-[10px] font-bold uppercase text-[#168247]"
-                                                        }
-                                                    >
-                                                        {credential.revokedAt.length > 0 ? "Revoked" : "Active"}
-                                                    </span>
-                                                    <button
-                                                        type="button"
-                                                        className="grid size-[30px] place-items-center rounded-lg border-0 bg-transparent text-[#718078] hover:bg-[#eaf3ed] hover:text-[#168247] disabled:opacity-50"
-                                                        aria-label={`Revoke key ${index + 1}`}
-                                                        data-testid={platformDataTestId.revokeCredential}
-                                                        disabled={credential.revokedAt.length > 0 || busy.length > 0}
-                                                        onClick={() =>
-                                                            void perform(
-                                                                `revoke-${credential.credentialId}`,
-                                                                async () => {
-                                                                    await client().revokeAppCredential(
-                                                                        credential.credentialId,
-                                                                        AbortSignal.timeout(20_000),
-                                                                    );
-                                                                    setCredentials(
-                                                                        selectedApp.appId,
-                                                                        await client().listAppCredentials(
-                                                                            selectedApp.appId,
-                                                                            AbortSignal.timeout(20_000),
-                                                                        ),
-                                                                    );
-                                                                },
-                                                            )
-                                                        }
-                                                    >
-                                                        <Trash2 size={15} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </TabsContent>
-                                </Tabs>
+                                    ))}
+                                </div>
                             </section>
                         )}
                     </div>

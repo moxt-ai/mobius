@@ -156,7 +156,6 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         "agentId",
         "createdAt",
         "createdBy",
-        "cloudRetention",
         "defaultBinding",
         "hasNativeHistory",
         "lastCommittedSeq",
@@ -169,9 +168,6 @@ export async function decodeSessionImport(exported: unknown, signal: AbortSignal
         "updatedAt",
     ];
     if (!hasExactKeys(sourceSession, portableSessionFields)) {
-        throw new SessionRuntimeError("invalid_export", "The exported session descriptor is invalid");
-    }
-    if (typeof sourceSession["cloudRetention"] !== "boolean") {
         throw new SessionRuntimeError("invalid_export", "The exported session descriptor is invalid");
     }
     const lifecycle = sourceSession["lifecycle"];

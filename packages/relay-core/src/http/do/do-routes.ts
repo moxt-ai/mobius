@@ -130,14 +130,6 @@ function readInteger(value: Readonly<Record<string, unknown>>, key: string): num
     return field;
 }
 
-function readBoolean(value: Readonly<Record<string, unknown>>, key: string): boolean {
-    const field = value[key];
-    if (typeof field !== "boolean") {
-        throw new InternalRequestError("invalid_session_operation", `The ${key} field is invalid`);
-    }
-    return field;
-}
-
 function readNullableString(value: Readonly<Record<string, unknown>>, key: string): string | null {
     const field = value[key];
     if (field === null) {
@@ -329,12 +321,11 @@ class DoRoutes {
                 );
             }
             if (operation === "create") {
-                assertExactKeys(body, ["cloudRetention", "now", "request", "scope"]);
+                assertExactKeys(body, ["now", "request", "scope"]);
                 return Response.json(
                     await this.#runtime.createSession(
                         scope,
                         readCreateRequest(body),
-                        readBoolean(body, "cloudRetention"),
                         readInteger(body, "now"),
                         request.signal,
                     ),
@@ -714,12 +705,11 @@ class DoRoutes {
                 );
             }
             if (operation === "import") {
-                assertExactKeys(body, ["binding", "cloudRetention", "exported", "now", "scope"]);
+                assertExactKeys(body, ["binding", "exported", "now", "scope"]);
                 const summary = await this.#operations.importSession(
                     scope,
                     body["exported"],
                     readBinding(body),
-                    readBoolean(body, "cloudRetention"),
                     readInteger(body, "now"),
                     request.signal,
                 );

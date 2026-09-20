@@ -16,17 +16,10 @@ const attachmentSchema = v.union([
         role: v.literal("host"),
         channelId: v.string(),
         credentialId: v.string(),
-        cloudRetention: v.boolean(),
         runtimeId: v.string(),
         projectId: v.string(),
         pendingAgentCatalogRefreshes: v.optional(v.array(pendingAgentCatalogRefreshSchema), []),
         pendingAgentSettingsDiscoveries: v.optional(v.array(pendingAgentSettingsDiscoverySchema), []),
-    }),
-    v.object({
-        role: v.literal("relay"),
-        channelId: v.string(),
-        runtimeId: v.string(),
-        projectId: v.string(),
     }),
     v.object({
         role: v.picklist(["daemon", "replaced-daemon"]),
@@ -51,7 +44,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
             return {
                 channelId: attachment.channelId,
                 credentialId: attachment.credentialId,
-                cloudRetention: attachment.cloudRetention,
                 projectId: attachment.projectId,
                 role: attachment.role,
                 runtimeId: attachment.runtimeId,
@@ -117,10 +109,6 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     readonly isOpen = (): boolean => this.#socket.readyState === WebSocket.OPEN;
     readonly isSame = (socket: ChannelSocket): boolean =>
         socket instanceof CloudflareChannelSocket && socket.#socket === this.#socket;
-    readonly permitsLiveSessionHistory = (): boolean => {
-        const identity = this.identity();
-        return identity.role === "relay";
-    };
     readonly send = (message: string): void => this.#socket.send(message);
     readonly trackAgentCatalogRefresh = (requestId: string, expiresAt: number): void => {
         const attachment = this.hostAttachment();
@@ -144,8 +132,8 @@ export class CloudflareChannelSocket implements RuntimeSocket {
     };
     readonly replaceDaemon = (): void => {
         const identity = this.identity();
-        if (identity.role !== "daemon" && identity.role !== "replaced-daemon") {
-            throw new Error("Only a daemon socket can replace a daemon");
+        if (identity.role === "host") {
+            throw new Error("A host socket cannot replace a daemon");
         }
         this.#socket.serializeAttachment({ ...identity, role: "replaced-daemon" });
         this.#socket.close(1012, "Daemon connection replaced");

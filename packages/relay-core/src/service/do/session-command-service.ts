@@ -113,7 +113,6 @@ export class SessionCommandService {
                         retentionMilliseconds: DEFAULT_RETENTION_MILLISECONDS,
                     },
                 ),
-                true,
                 now,
                 signal,
             );

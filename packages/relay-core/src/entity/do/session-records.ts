@@ -36,7 +36,6 @@ export const SessionRecordSchema = v.object({
     project_id: v.string(),
     session_id: v.string(),
     created_by: v.string(),
-    cloud_retention: v.picklist([0, 1]),
     runtime_id: v.string(),
     agent_id: v.string(),
     binding_id: v.string(),

@@ -195,7 +195,6 @@ export class D1ProjectAuthentication implements ProjectAccessAuthorizer {
                 : new ExpiringProjectAccessLifetime(row.expires_at);
         const access = new ProjectAccessContext(
             new ProjectScope(row.project_id),
-            true,
             new Set(row.source === "owner" ? PROJECT_PERMISSIONS : INTERACTIVE_PROJECT_PERMISSIONS),
             new AuditActor(kind, row.credential_id),
             row.credential_id,

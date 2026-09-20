@@ -78,20 +78,7 @@ export function createRuntimeRoutes(runtime: RuntimeService) {
             if (credentialId === null) {
                 return unauthorized("Verified host credential access is required");
             }
-            return runtime.acceptHost(
-                {
-                    role: "host",
-                    channelId,
-                    credentialId,
-                    runtimeId,
-                    projectId,
-                    cloudRetention: request.headers.get("x-mobius-cloud-retention") !== "false",
-                },
-                request.signal,
-            );
-        }
-        if (url.pathname.endsWith("/live-history")) {
-            return runtime.acceptRelay({ role: "relay", channelId, runtimeId, projectId }, request.signal);
+            return runtime.acceptHost({ role: "host", channelId, credentialId, runtimeId, projectId }, request.signal);
         }
         return new Response(null, { status: 404 });
     });

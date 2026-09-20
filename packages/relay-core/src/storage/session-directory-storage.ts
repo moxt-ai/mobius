@@ -145,31 +145,23 @@ export class SessionDirectoryStorage {
         summary: SessionSummary,
         signal: AbortSignal,
     ): Promise<void> => {
-        const directorySummary = summary.cloudRetention
-            ? summary
-            : {
-                  ...summary,
-                  hasNativeHistory: false,
-                  lastCommittedSeq: "0",
-                  title: "",
-              };
         await relayDrizzle(this.#databases.resolve(project.storagePlacement), signal)
             .insert(sessionDirectory)
             .values({
-                projectId: directorySummary.projectId,
-                sessionId: directorySummary.sessionId,
-                runtimeId: directorySummary.runtimeId,
-                lifecycle: directorySummary.lifecycle.kind,
-                updatedAt: Date.parse(directorySummary.updatedAt),
-                summaryJson: JSON.stringify(directorySummary),
+                projectId: summary.projectId,
+                sessionId: summary.sessionId,
+                runtimeId: summary.runtimeId,
+                lifecycle: summary.lifecycle.kind,
+                updatedAt: Date.parse(summary.updatedAt),
+                summaryJson: JSON.stringify(summary),
             })
             .onConflictDoUpdate({
                 target: [sessionDirectory.projectId, sessionDirectory.sessionId],
                 set: {
-                    runtimeId: directorySummary.runtimeId,
-                    lifecycle: directorySummary.lifecycle.kind,
-                    updatedAt: Date.parse(directorySummary.updatedAt),
-                    summaryJson: JSON.stringify(directorySummary),
+                    runtimeId: summary.runtimeId,
+                    lifecycle: summary.lifecycle.kind,
+                    updatedAt: Date.parse(summary.updatedAt),
+                    summaryJson: JSON.stringify(summary),
                 },
             });
     };

@@ -19,16 +19,9 @@ import { RuntimeMessageScheduler, RuntimeMessageSchedulerCapacityError } from ".
 
 export type RuntimeSocketIdentity =
     | {
-          readonly role: "relay";
-          readonly channelId: string;
-          readonly runtimeId: string;
-          readonly projectId: string;
-      }
-    | {
           readonly role: "host";
           readonly channelId: string;
           readonly credentialId: string;
-          readonly cloudRetention: boolean;
           readonly runtimeId: string;
           readonly projectId: string;
       }
@@ -203,16 +196,6 @@ export class RuntimeService {
         return accepted.response;
     };
 
-    readonly acceptRelay = async (
-        identity: Extract<RuntimeSocketIdentity, { readonly role: "relay" }>,
-        signal: AbortSignal,
-    ): Promise<Response> => {
-        signal.throwIfAborted();
-        const accepted = this.#cx.gateways.peers.accept(identity);
-        await this.attachHost(identity.runtimeId, new ProjectScope(identity.projectId), accepted.socket, signal);
-        return accepted.response;
-    };
-
     readonly revokeHost = (channelId: string, credentialId: string, runtimeId: string, scope: ProjectScope): void => {
         for (const { identity, socket } of this.#cx.gateways.peers.sockets()) {
             if (
@@ -322,20 +305,14 @@ export class RuntimeService {
     ): Promise<void> => {
         signal.throwIfAborted();
         const scope = new ProjectScope(identity.projectId);
-        if (identity.role === "host" || identity.role === "relay") {
-            if (identity.role === "relay") {
-                const channel = this.channel(identity.runtimeId, scope);
-                channel.configureDaemonDelivery(this.#currentDaemonDeliveryReceipts());
-                await channel.receiveHostMessage(scope, true, socket, message, signal);
-                return;
-            }
+        if (identity.role === "host") {
             if (!(await this.#cx.services.credentials.isActive(identity, signal))) {
                 socket.close(1008, "Channel access revoked");
                 return;
             }
             const channel = this.channel(identity.runtimeId, scope);
             channel.configureDaemonDelivery(this.#currentDaemonDeliveryReceipts());
-            await channel.receiveHostMessage(scope, identity.cloudRetention, socket, message, signal);
+            await channel.receiveHostMessage(socket, message, signal);
             return;
         }
         if (typeof message !== "string" || message.length > 8 * 1024 * 1024) {
