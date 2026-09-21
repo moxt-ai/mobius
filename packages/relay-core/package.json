@@ -17,12 +17,12 @@
         "typecheck": "tsc --project tsconfig.json"
     },
     "devDependencies": {
-        "@cloudflare/workers-types": "^5.20260911.1"
+        "@cloudflare/workers-types": "^5.20260918.1"
     },
     "dependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "drizzle-orm": "^0.45.2",
-        "hono": "^4.13.7",
+        "hono": "^4.13.8",
         "pino": "^10.3.1",
         "valibot": "1.5.0"
     }

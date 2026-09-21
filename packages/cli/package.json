@@ -42,12 +42,12 @@
         "mdast-util-from-markdown": "2.0.3",
         "undici": "8.10.2",
         "unist-util-visit": "5.1.0",
-        "zod": "^4.6.2"
+        "zod": "^4.6.5"
     },
     "devDependencies": {
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/mdast": "4.0.4",
-        "@types/node": "^24.13.4",
+        "@types/node": "^24.13.5",
         "esbuild": "0.28.2"
     },
     "main": "dist/index.js",

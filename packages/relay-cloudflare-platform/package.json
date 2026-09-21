@@ -21,12 +21,12 @@
         "@moxt-ai/mobius-relay-core": "workspace:*",
         "base64-js": "^1.5.1",
         "drizzle-orm": "^0.45.2",
-        "hono": "^4.13.7",
+        "hono": "^4.13.8",
         "valibot": "1.5.0"
     },
     "devDependencies": {
-        "@cloudflare/vitest-plugin": "^1.1.7",
-        "@cloudflare/workers-types": "^5.20260911.1",
-        "wrangler": "^4.131.0"
+        "@cloudflare/vitest-plugin": "^1.1.12",
+        "@cloudflare/workers-types": "^5.20260918.1",
+        "wrangler": "^4.134.0"
     }
 }

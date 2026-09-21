@@ -14,8 +14,8 @@
         "./gateways": "./infra/gateways.ts"
     },
     "dependencies": {
-        "@cloudflare/vitest-plugin": "^1.1.7",
-        "@cloudflare/workers-types": "^5.20260911.1",
+        "@cloudflare/vitest-plugin": "^1.1.12",
+        "@cloudflare/workers-types": "^5.20260918.1",
         "@moxt-ai/mobius-sdk": "workspace:*",
         "@moxt-ai/mobius-protocol": "workspace:*",
         "@types/ws": "^8.18.1",
@@ -23,11 +23,11 @@
         "@moxt-ai/mobius-relay-cloudflare-platform": "workspace:*",
         "@moxt-ai/mobius-relay-cloudflare-standalone": "workspace:*",
         "esbuild": "0.28.2",
-        "hono": "^4.13.7",
+        "hono": "^4.13.8",
         "miniflare": "5.20260903.0-alpha",
         "undici": "8.10.2",
         "valibot": "1.5.0",
-        "wrangler": "^4.131.0",
+        "wrangler": "^4.134.0",
         "ws": "^8.21.3"
     }
 }
