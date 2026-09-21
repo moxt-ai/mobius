@@ -91,19 +91,30 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
     });
 }
 
+/**
+ * Per-Runtime event-source state that outlives a single connection. The real daemon keeps its Attempt
+ * identities and per-source sequences in a durable outbox, so a reconnecting Runtime continues its
+ * source sequences instead of restarting them. Sharing this record across reconnections keeps the fake
+ * daemon contiguous the same way, which is what the Relay requires of the source it already recorded.
+ */
+export class FakeAgentDaemonState {
+    readonly attemptIdsByCommand = new Map<string, string>();
+    readonly sourceSequences = new Map<string, number>();
+}
+
 /** A stateful peer at the public daemon/server protocol boundary. */
 export class FakeAgentDaemon implements AsyncDisposable {
-    readonly #attemptIdsByCommand = new Map<string, string>();
     readonly #closed: Promise<void>;
     #closeCode = 1006;
     #closeReason = "Connection closed unexpectedly";
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
     readonly #socket: AgentDaemonSocket;
-    readonly #sourceSequences = new Map<string, number>();
+    readonly #state: FakeAgentDaemonState;
 
-    private constructor(socket: AgentDaemonSocket) {
+    private constructor(socket: AgentDaemonSocket, state: FakeAgentDaemonState) {
         this.#socket = socket;
+        this.#state = state;
         this.#closed = new Promise((resolve) => {
             if (socket.readyState === 3) {
                 resolve();
@@ -157,6 +168,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
         url: URL,
         createSocket: (url: URL) => AgentDaemonSocket,
         signal = AbortSignal.timeout(8_000),
+        state: FakeAgentDaemonState = new FakeAgentDaemonState(),
     ): Promise<FakeAgentDaemon> {
         const socket = createSocket(url);
         await new Promise<void>((resolve, reject) => {
@@ -188,7 +200,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
             socket.addEventListener("open", open, { once: true });
             signal.addEventListener("abort", abort, { once: true });
         });
-        return new FakeAgentDaemon(socket);
+        return new FakeAgentDaemon(socket, state);
     }
 
     readonly available = (kind: string): number =>
@@ -297,7 +309,7 @@ export class FakeAgentDaemon implements AsyncDisposable {
         const eventId = crypto.randomUUID();
         if (decodeMessageKind(payload) === SESSION_STARTED_KIND) {
             const started = decodeSessionStartedEvent(payload);
-            this.#attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
+            this.#state.attemptIdsByCommand.set(`${sessionId}:${started.commandId}`, started.attemptId);
         }
         const decoded: unknown = JSON.parse(payload);
         const commandId =
@@ -308,10 +320,10 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 ? String(Reflect.get(decoded, "commandId"))
                 : undefined;
         const attemptId =
-            commandId === undefined ? undefined : this.#attemptIdsByCommand.get(`${sessionId}:${commandId}`);
+            commandId === undefined ? undefined : this.#state.attemptIdsByCommand.get(`${sessionId}:${commandId}`);
         const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
-        const sourceSequence = (this.#sourceSequences.get(sourceKey) ?? 0) + 1;
-        this.#sourceSequences.set(sourceKey, sourceSequence);
+        const sourceSequence = (this.#state.sourceSequences.get(sourceKey) ?? 0) + 1;
+        this.#state.sourceSequences.set(sourceKey, sourceSequence);
         const envelope = encodeSessionEventEnvelope({
             eventId,
             kind: SESSION_EVENT_KIND,

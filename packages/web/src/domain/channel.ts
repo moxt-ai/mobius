@@ -576,6 +576,55 @@ export class CompletedRecordedTurn extends RecordedTurn {
     }
 }
 
+/**
+ * A Turn whose Runtime disconnected before reporting an outcome. The Relay still counts it as the
+ * Session's active Turn, so it is not settled: the user has to be able to stop it to release the
+ * Session, which is why it stays distinct from a failed Turn.
+ */
+export class IndeterminateRecordedTurn extends RecordedTurn {
+    readonly attemptId: string;
+    readonly detectedAt: Date;
+    readonly status = "indeterminate";
+
+    constructor(
+        agentId: string,
+        commandId: string,
+        createdAt: Date,
+        prompt: string,
+        response: string,
+        sessionId: string,
+        attemptId: string,
+        detectedAt: Date,
+        activities: readonly RecordedActivity[] = [],
+        images: readonly PromptImage[] = [],
+        resources: readonly PromptResource[] = [],
+        contents: readonly RecordedContent[] = [],
+        disposition = "reject",
+        targetCommandId = "",
+        turnId = "",
+        timing: TurnTiming = UNTIMED_TURN,
+    ) {
+        super(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+            turnId,
+            timing,
+        );
+        this.attemptId = attemptId;
+        this.detectedAt = detectedAt;
+    }
+}
+
 export class FailedRecordedTurn extends RecordedTurn {
     readonly code: string;
     readonly message: string;

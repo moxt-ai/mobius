@@ -36,6 +36,7 @@ import {
     CreatedPairing,
     ExpiredBrowserPairingStatus,
     FailedRecordedTurn,
+    IndeterminateRecordedTurn,
     type InstallableAgentOption,
     isIdentifier,
     isPairingCode,
@@ -1100,6 +1101,26 @@ function decodeRecordedTurn(value: unknown): RecordedTurn {
             timing,
         );
     }
+    if (status === "indeterminate") {
+        return new IndeterminateRecordedTurn(
+            agentId,
+            commandId,
+            createdAt,
+            prompt,
+            response,
+            sessionId,
+            readIdentifier(value["attemptId"], "history attempt"),
+            readDate(value["detectedAt"], "history reconciliation time"),
+            activities,
+            images,
+            resources,
+            contents,
+            disposition,
+            targetCommandId,
+            turnId,
+            timing,
+        );
+    }
     throw new PairingApiError("invalid_relay_response", "The relay returned an invalid conversation history state.");
 }
 
@@ -1358,8 +1379,11 @@ function pendingSessionInteractions(
     sessionId: string,
     turns: readonly RecordedTurn[],
 ): PendingSessionInteractions {
+    // An unreconciled Attempt keeps its pending Interactions, so it indexes alongside a running one.
     const commandIdsByAttempt = new Map(
-        turns.filter((turn) => turn instanceof RunningRecordedTurn).map((turn) => [turn.attemptId, turn.commandId]),
+        turns
+            .filter((turn) => turn instanceof RunningRecordedTurn || turn instanceof IndeterminateRecordedTurn)
+            .map((turn) => [turn.attemptId, turn.commandId]),
     );
     const elicitations: SessionElicitationRequestedEvent[] = [];
     const permissions: SessionPermissionRequestedEvent[] = [];
@@ -1839,13 +1863,15 @@ function decodeSessionMessage(value: unknown): RecordedTurn {
         });
     }
     if (attempt["kind"] === "indeterminate") {
+        // The Relay keeps an unreconciled Attempt as the Session's active Turn, so this is not a settled
+        // outcome. Reporting it as failed would hide the stop control the user needs to release the
+        // Session, leaving the conversation unable to accept another prompt.
         return decodeRecordedTurn({
             ...base,
-            code: "indeterminate",
-            message: "The runtime disconnected before the execution outcome was reconciled.",
-            settledAt: attempt["detectedAt"],
+            attemptId: attempt["attemptId"],
+            detectedAt: attempt["detectedAt"],
             startedAt,
-            status: "failed",
+            status: "indeterminate",
         });
     }
     throw new PairingApiError("invalid_relay_response", "The relay returned an unknown execution attempt state.");

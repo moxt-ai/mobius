@@ -15,7 +15,7 @@ import {
     type SessionPromptCommand,
     type SessionReadyEvent,
 } from "@moxt-ai/mobius-protocol";
-import { type AgentDaemonSocket, FakeAgentDaemon } from "@moxt-ai/mobius-test/agent-daemon";
+import { type AgentDaemonSocket, FakeAgentDaemon, FakeAgentDaemonState } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterAll, beforeAll, expect } from "vitest";
@@ -204,8 +204,16 @@ export async function pairDaemon(options: PairDaemonOptions = {}): Promise<{
     const daemonUrl = new URL(`${MOBIUS_API_PREFIX}/channels/${claimed.channelId}/daemon`, window.location.origin);
     daemonUrl.protocol = "ws:";
     daemonUrl.searchParams.set("token", claimed.daemonToken);
+    // A reconnecting Runtime keeps the event-source state it already reported, because the Relay only
+    // accepts contiguous source sequences for a source it has recorded.
+    const daemonState = new FakeAgentDaemonState();
     const reconnectDaemon = async (): Promise<FakeAgentDaemon> =>
-        await FakeAgentDaemon.connect(daemonUrl, (url) => new WebSocket(url) as unknown as AgentDaemonSocket);
+        await FakeAgentDaemon.connect(
+            daemonUrl,
+            (url) => new WebSocket(url) as unknown as AgentDaemonSocket,
+            undefined,
+            daemonState,
+        );
     const daemon = await reconnectDaemon();
     return {
         channelId: claimed.channelId,

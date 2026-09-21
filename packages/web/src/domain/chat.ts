@@ -20,6 +20,7 @@ import {
     type AgentOption,
     CompletedRecordedTurn,
     FailedRecordedTurn,
+    IndeterminateRecordedTurn,
     PendingRecordedTurn,
     type RecordedActivity,
     type RecordedActivityNarration,
@@ -712,6 +713,33 @@ export class FailedTurnState extends AgentTurnState {
     readonly stop = (): AgentTurnState => this;
 }
 
+/**
+ * A Turn whose Runtime disconnected before reporting an outcome. The Relay still treats it as the
+ * Session's active Turn and rejects the next prompt as busy, so the Turn is unsettled and stoppable:
+ * stopping it is the only way a user can release the Session from the browser.
+ */
+class IndeterminateTurnState extends AgentTurnState {
+    readonly appearance = "working";
+    readonly canStop = true;
+    readonly isStreaming = true;
+    readonly label = "Interrupted";
+    readonly progress = 1;
+    readonly settled = false;
+    readonly #attemptId: string;
+
+    constructor(attemptId: string) {
+        super();
+        this.#attemptId = attemptId;
+    }
+
+    readonly details = (sessionId: string): readonly RunDetail[] => [
+        { label: "Session", value: sessionId },
+        { label: "Attempt", value: this.#attemptId },
+        { label: "State", value: "The local runtime disconnected before reporting an outcome" },
+    ];
+    readonly stop = (): AgentTurnState => new StoppingTurnState(this.#attemptId);
+}
+
 export abstract class ChatMessage {
     readonly createdAt: Date;
     readonly id: string;
@@ -1401,6 +1429,8 @@ export class Conversation {
             } else if (turn instanceof FailedRecordedTurn) {
                 state = new FailedTurnState(`${turn.code}: ${turn.message}`);
                 fallbackText = "The agent could not complete this request.";
+            } else if (turn instanceof IndeterminateRecordedTurn) {
+                state = new IndeterminateTurnState(turn.attemptId);
             } else {
                 throw new Error("Unsupported recorded turn state");
             }

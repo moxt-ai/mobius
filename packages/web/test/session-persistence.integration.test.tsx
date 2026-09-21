@@ -1091,4 +1091,85 @@ describe.sequential("Session persistence boundaries", () => {
             await paired.close();
         }
     });
+
+    it("Given the Runtime connection drops while a Turn is working, When the user reopens the Session, Then the unreconciled Turn can still be stopped so the next prompt is accepted", async ({
+        signal,
+    }) => {
+        const paired = await pairDaemon();
+        window.history.replaceState(null, "", `/channels/${encodeURIComponent(paired.channelId)}`);
+        window.localStorage.clear();
+        saveBrowserCredential(paired.channelId, paired.credential);
+        createTestApplication();
+        let reconnectedDaemon = paired.daemon;
+
+        try {
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND, signal));
+            await sendReadySession(paired.daemon, preparation);
+
+            const promptInput = await screen.findByRole("combobox", { name: "Message the local agent" });
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, { target: { value: "Run a long tool call" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND, signal));
+            await paired.daemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionStartedEvent({
+                    attemptId: "dropped-connection-attempt",
+                    commandId: prompt.commandId,
+                    kind: "session.started",
+                    sessionId: prompt.sessionId,
+                }),
+                signal,
+            );
+
+            // The Runtime connection drops while the Agent is still working. The Relay marks the Attempt
+            // and its Turn indeterminate, which keeps the Turn active for admission control even though no
+            // Runtime is left to finish it.
+            paired.daemon.close();
+            await paired.daemon.waitForClose(signal);
+            reconnectedDaemon = await paired.reconnectDaemon();
+
+            // Reopen the conversation. The restored Turn is unreconciled, not settled, so the user must
+            // still be able to stop it instead of being locked out of the Session.
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const resumed = decodeSessionPrepareCommand(await reconnectedDaemon.receive(SESSION_PREPARE_KIND, signal));
+            await sendReadySession(reconnectedDaemon, resumed);
+
+            const stopButton = await screen.findByRole("button", { name: "Stop agent" });
+            fireEvent.click(stopButton);
+
+            const cancelled = decodeSessionCancelCommand(await reconnectedDaemon.receive(SESSION_CANCEL_KIND, signal));
+            expect(cancelled.commandId).toBe(prompt.commandId);
+
+            // The Runtime that owns the abandoned Attempt settles it, which releases the Session so the
+            // next prompt is admitted instead of rejected as busy.
+            await reconnectedDaemon.sendSessionEvent(
+                prompt.sessionId,
+                encodeSessionCompletedEvent({
+                    commandId: prompt.commandId,
+                    kind: "session.completed",
+                    sessionId: prompt.sessionId,
+                    stopReason: "cancelled",
+                }),
+                signal,
+            );
+
+            const followUpInput = await screen.findByRole("combobox", { name: "Message the local agent" });
+            const sendFollowUp = await screen.findByRole("button", { name: "Send message" }, { timeout: 20_000 });
+            fireEvent.change(followUpInput, { target: { value: "Continue where we left off" } });
+            fireEvent.click(sendFollowUp);
+            const followUp = decodeSessionPromptCommand(await reconnectedDaemon.receive(SESSION_PROMPT_KIND, signal));
+            expect(followUp.prompt).toContain("Continue where we left off");
+            expect(screen.queryByText(/session_busy/u)).toBeNull();
+        } finally {
+            cleanup();
+            paired.daemon.close();
+            reconnectedDaemon.close();
+            await closeMobiusTransport();
+        }
+    }, 45_000);
 });
