@@ -55,9 +55,9 @@ export class NonCloudRetentionSessionRelayDO {
         if (this.#lifecycle.kind === "hibernating") {
             await waitForCompletion(this.#lifecycle.completion.promise, request.signal);
         }
-        if (route.operation === "native-history-page") {
+        if (route.operation === "query-native-messages") {
             try {
-                const page = await readNativeHistoryPageRequest(request, identity.projectId, identity.sessionId);
+                const page = await queryNativeMessagesRequest(request, identity.projectId, identity.sessionId);
                 const restored = await this.#liveHistory.restore(
                     identity.projectId,
                     identity.runtimeId,
@@ -258,7 +258,7 @@ export class NonCloudRetentionSessionRelayDO {
     };
 }
 
-async function readNativeHistoryPageRequest(
+async function queryNativeMessagesRequest(
     request: Request,
     expectedProjectId: string,
     expectedSessionId: string,

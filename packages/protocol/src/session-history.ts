@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ProtocolMessageError } from "./codecs/messages.ts";
+import { displayContentSchema } from "./control-messages.ts";
 
 export const SESSION_HISTORY_CHARACTER_LIMIT = 256_000;
 export const SESSION_HISTORY_MESSAGE_LIMIT = 1_000;
@@ -52,13 +53,39 @@ export function parseNativeHistoryText(text: string): {
     return { text: plainText, images };
 }
 
-const historyMessage = z
+const nativeMessageActivitySchema = z
     .strictObject({
-        role: z.enum(["user", "assistant"]),
+        activityId: z.string().min(1).max(128),
+        activityType: z.string().min(1).max(128),
+        content: z.array(displayContentSchema).max(100).readonly(),
+        input: z.string().max(100_000),
+        locations: z.array(z.string().min(1).max(2_048)).max(100).readonly(),
+        name: z.string().max(128),
+        output: z.string().max(100_000),
+        sequence: z.number().int().nonnegative(),
+        status: z.string().min(1).max(64),
+        title: z.string().max(500),
+        toolKind: z.string().max(64),
+    })
+    .readonly();
+
+const userHistoryMessage = z
+    .strictObject({
+        role: z.literal("user"),
         text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
         images: z.array(historyImage).max(8).readonly().optional(),
     })
     .readonly();
+const assistantHistoryMessage = z
+    .strictObject({
+        activities: z.array(nativeMessageActivitySchema).max(100).readonly().default([]),
+        content: z.array(displayContentSchema).max(100).readonly().default([]),
+        role: z.literal("assistant"),
+        text: z.string().max(SESSION_HISTORY_CHARACTER_LIMIT),
+        images: z.array(historyImage).max(8).readonly().optional(),
+    })
+    .readonly();
+const historyMessage = z.discriminatedUnion("role", [userHistoryMessage, assistantHistoryMessage]);
 
 const availableSessionHistoryObjectSchema = z.strictObject({
     status: z.literal("available"),
@@ -75,7 +102,15 @@ const availableSessionHistoryObjectSchema = z.strictObject({
         .default([]),
 });
 const availableSessionHistorySchema = availableSessionHistoryObjectSchema.readonly();
-const unavailableSessionHistoryObjectSchema = z.strictObject({ status: z.literal("unavailable") });
+const unavailableSessionHistoryObjectSchema = z.strictObject({
+    status: z.literal("unavailable"),
+    cause: z
+        .strictObject({
+            code: z.string().regex(/^[a-z][a-z0-9_]{0,127}$/),
+            message: z.string().min(1).max(1_000),
+        })
+        .readonly(),
+});
 const unavailableSessionHistorySchema = unavailableSessionHistoryObjectSchema.readonly();
 function withinHistoryContentLimits(history: {
     readonly status: "available" | "unavailable";
@@ -85,8 +120,15 @@ function withinHistoryContentLimits(history: {
         return true;
     }
     return (
-        history.messages.reduce((total, message) => total + message.text.length, 0) <=
-            SESSION_HISTORY_CHARACTER_LIMIT &&
+        history.messages.reduce(
+            (total, message) =>
+                total +
+                message.text.length +
+                (message.role === "assistant"
+                    ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+                    : 0),
+            0,
+        ) <= SESSION_HISTORY_CHARACTER_LIMIT &&
         history.messages.reduce(
             (total, message) => total + (message.images ?? []).reduce((size, image) => size + image.data.length, 0),
             0,
@@ -99,13 +141,14 @@ const sessionHistorySchema = z
 
 export type NativeSessionHistory = z.infer<typeof sessionHistorySchema>;
 export type NativeHistoryMessage = z.infer<typeof historyMessage>;
-const sessionHistoryPageSchema = z
+export type NativeMessageActivity = z.infer<typeof nativeMessageActivitySchema>;
+const nativeMessagePageSchema = z
     .discriminatedUnion("status", [
         availableSessionHistoryObjectSchema.extend({ nextCursor: z.string().max(512).nullable() }).readonly(),
         unavailableSessionHistoryObjectSchema.extend({ nextCursor: z.null() }).readonly(),
     ])
     .refine(withinHistoryContentLimits);
-export type NativeSessionHistoryPage = z.infer<typeof sessionHistoryPageSchema>;
+export type NativeMessagePage = z.infer<typeof nativeMessagePageSchema>;
 
 export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory => {
     try {
@@ -114,11 +157,11 @@ export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory
         throw new ProtocolMessageError("Invalid native session history", { cause });
     }
 };
-export const decodeNativeSessionHistoryPage = (value: unknown): NativeSessionHistoryPage => {
+export const decodeNativeMessagePage = (value: unknown): NativeMessagePage => {
     try {
-        return sessionHistoryPageSchema.parse(value);
+        return nativeMessagePageSchema.parse(value);
     } catch (cause) {
-        throw new ProtocolMessageError("Invalid native Session history page", { cause });
+        throw new ProtocolMessageError("Invalid native message page", { cause });
     }
 };
-export { sessionHistoryPageSchema, sessionHistorySchema };
+export { nativeMessagePageSchema, sessionHistorySchema };

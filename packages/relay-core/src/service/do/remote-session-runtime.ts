@@ -7,8 +7,8 @@ import {
     decodeCommittedSessionEvent,
     decodeInteraction,
     decodeInteractionResponse,
+    decodeNativeMessagePage,
     decodeNativeSessionHistory,
-    decodeNativeSessionHistoryPage,
     decodePendingWork,
     decodePromptImagesValue,
     decodePromptResourcesValue,
@@ -21,8 +21,8 @@ import {
     encodeSessionPromptCommand,
     type Interaction,
     type InteractionResponse,
+    type NativeMessagePage,
     type NativeSessionHistory,
-    type NativeSessionHistoryPage,
     type PendingWork,
     type SessionConfigureCommand,
     type SessionEventEnvelope,
@@ -1185,15 +1185,15 @@ export class RemoteSessionRuntime
         return value === null ? null : decodeNativeSessionHistory(value);
     };
 
-    readonly readNativeHistoryPage = async (
+    readonly queryNativeMessages = async (
         scope: ProjectScope,
         sessionId: string,
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
-    ): Promise<NativeSessionHistoryPage> =>
-        decodeNativeSessionHistoryPage(
-            await this.request(scope, sessionId, "native-history-page", { cursor, limit, sessionId }, signal),
+    ): Promise<NativeMessagePage> =>
+        decodeNativeMessagePage(
+            await this.request(scope, sessionId, "query-native-messages", { cursor, limit, sessionId }, signal),
         );
 
     readonly recordNativeHistory = async (

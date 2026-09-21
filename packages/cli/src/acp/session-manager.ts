@@ -103,6 +103,10 @@ export interface AcpPrepareOptions {
     readonly origin?: NativeSessionOrigin;
 }
 
+export interface AcpNativeHistoryReader {
+    readonly read: (options: AcpPrepareOptions, nativeSessionId: string) => Promise<NativeSessionHistory | null>;
+}
+
 export interface AcpAgentSettingsInspectionOptions {
     readonly additionalDirectories: readonly string[];
     readonly agent: LocalAgentDefinition;
@@ -1017,7 +1021,13 @@ class AcpProcessSession implements AcpClientHandler {
 
     readonly loadHistory = async (signal: AbortSignal): Promise<NativeSessionHistory> => {
         if (!this.#capabilities.loadSession) {
-            return { status: "unavailable" };
+            return {
+                status: "unavailable",
+                cause: {
+                    code: "native_history_unsupported",
+                    message: "This Agent restores context but does not provide message history.",
+                },
+            };
         }
         const history = new AcpHistoryReplay();
         this.#replay = { kind: "capture", history };
@@ -1038,7 +1048,7 @@ class AcpProcessSession implements AcpClientHandler {
             );
             await this.#updateTail;
             signal.throwIfAborted();
-            return await embedLocalHistoryImages(history.snapshot(), signal);
+            return await embedLocalHistoryImages(await history.snapshot(), signal);
         } finally {
             this.#replay = { kind: "idle" };
         }
@@ -1960,7 +1970,7 @@ class AcpProcessSession implements AcpClientHandler {
         this.assertNativeSession(notification.sessionId);
         const update = notification.update;
         if (this.#replay.kind === "capture") {
-            this.#replay.history.record(update);
+            await this.#replay.history.record(update);
         }
         if (
             this.#replay.kind !== "idle" &&
@@ -2279,14 +2289,17 @@ export class AcpSessionManager {
     #startingProcessCount = 0;
     #transientProcessCount = 0;
     readonly #store: AcpSessionStore;
+    readonly #nativeHistoryReader: AcpNativeHistoryReader | null;
     #observer: AcpSessionObserver;
 
     constructor(
         observer: AcpSessionObserver = new NullAcpSessionObserver(),
         store: AcpSessionStore = new MemoryAcpSessionStore(),
+        nativeHistoryReader: AcpNativeHistoryReader | null = null,
     ) {
         this.#observer = observer;
         this.#store = store;
+        this.#nativeHistoryReader = nativeHistoryReader;
     }
 
     readonly setObserver = (observer: AcpSessionObserver): void => {
@@ -3191,7 +3204,15 @@ export class AcpSessionManager {
     readonly loadSessionHistory = async (options: AcpPrepareOptions): Promise<NativeSessionHistory> => {
         this.#beginSessionUse(options.sessionId);
         try {
-            return await (await this.ensureSession(options)).loadHistory(options.signal);
+            const runtime = await this.ensureSession(options);
+            const stored = this.#store.read(options.sessionId);
+            if (stored instanceof FoundAcpStoredSession && this.#nativeHistoryReader !== null) {
+                const history = await this.#nativeHistoryReader.read(options, stored.session.nativeSessionId);
+                if (history !== null) {
+                    return history;
+                }
+            }
+            return await runtime.loadHistory(options.signal);
         } finally {
             this.#endSessionUse(options.sessionId);
         }

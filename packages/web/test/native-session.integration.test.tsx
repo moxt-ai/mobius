@@ -74,7 +74,12 @@ describe.sequential("Native Session boundaries", () => {
                         coveredMessageIds: [],
                         messages: [
                             { role: "user", text: "Establish the implementation plan" },
-                            { role: "assistant", text: "The implementation plan is established." },
+                            {
+                                activities: [],
+                                content: [],
+                                role: "assistant",
+                                text: "The implementation plan is established.",
+                            },
                         ],
                         status: "available",
                         truncated: false,
@@ -202,10 +207,12 @@ describe.sequential("Native Session boundaries", () => {
                         coveredMessageIds: [],
                         messages: [
                             {
+                                activities: [],
+                                content: [],
                                 role: "assistant",
                                 text: "Inspecting the workspace. ",
                             },
-                            { role: "assistant", text: "CLAUDE_FRAGMENTED_OK" },
+                            { activities: [], content: [], role: "assistant", text: "CLAUDE_FRAGMENTED_OK" },
                         ],
                         status: "available",
                         truncated: true,
@@ -346,6 +353,8 @@ describe.sequential("Native Session boundaries", () => {
                         messages: [
                             { role: "user", text: "Older message outside the preview" },
                             ...Array.from({ length: 9 }, (_, index) => ({
+                                activities: [],
+                                content: [],
                                 role: "assistant" as const,
                                 text: `Recent answer ${index.toString()}`,
                             })),
@@ -354,6 +363,8 @@ describe.sequential("Native Session boundaries", () => {
                                 text: `Selected image [@image](data:image/png;base64,${imageData}) [@image](https://example.com/private.png)`,
                             },
                             {
+                                activities: [],
+                                content: [],
                                 role: "assistant",
                                 text: "The screenshot is attached.",
                                 images: [{ data: imageData, mimeType: "image/png", name: "Agent screenshot" }],
@@ -456,7 +467,12 @@ describe.sequential("Native Session boundaries", () => {
                 coveredMessageIds: [],
                 messages: [
                     { role: "user" as const, text: "Persisted native question" },
-                    { role: "assistant" as const, text: "Persisted native answer" },
+                    {
+                        activities: [],
+                        content: [],
+                        role: "assistant" as const,
+                        text: "Persisted native answer",
+                    },
                 ],
                 status: "available" as const,
                 truncated: false,

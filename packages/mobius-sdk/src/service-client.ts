@@ -2,7 +2,7 @@ import {
     type AgentSettingsDiscoveredEvent,
     type Attempt,
     decodeAgentSettingsDiscoveredEvent,
-    decodeNativeSessionHistoryPage,
+    decodeNativeMessagePage,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionReadyEvent,
@@ -12,8 +12,8 @@ import {
     MOBIUS_EVENT_FORMAT_VERSION,
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
+    type NativeMessagePage,
     type NativeSessionCommand,
-    type NativeSessionHistoryPage,
     type SessionConfigureCommand,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -1147,11 +1147,11 @@ export class MobiusSessionResources {
         return decodeMobiusMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
-    readonly readNativeHistory = async (
+    readonly queryNativeMessages = async (
         ...request:
             | readonly [sessionId: string, page: MobiusPageRequest, signal: AbortSignal]
             | readonly [sessionId: string, signal: AbortSignal]
-    ): Promise<NativeSessionHistoryPage> => {
+    ): Promise<NativeMessagePage> => {
         const [sessionId, page, signal] =
             request.length === 2
                 ? [request[0], new MobiusPageRequest(50, ""), request[1]]
@@ -1159,20 +1159,18 @@ export class MobiusSessionResources {
         try {
             const path = requestUrl(
                 new URL("https://mobius.invalid/"),
-                sessionPath(this.#projectId, sessionId, "native-history"),
+                sessionPath(this.#projectId, sessionId, "native-messages"),
             );
             path.searchParams.set("limit", page.limit.toString());
             if (page.cursor.length > 0) {
                 path.searchParams.set("cursor", page.cursor);
             }
-            return decodeNativeSessionHistoryPage(
-                await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
-            );
+            return decodeNativeMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
         } catch (cause) {
             if (cause instanceof MobiusError) {
                 throw cause;
             }
-            throw new MobiusProtocolError("The service returned invalid native Session history", { cause });
+            throw new MobiusProtocolError("The service returned invalid native messages", { cause });
         }
     };
 }

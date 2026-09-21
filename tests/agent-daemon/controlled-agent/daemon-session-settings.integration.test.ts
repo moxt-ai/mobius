@@ -44,6 +44,7 @@ import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeCodexAppServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -456,12 +457,18 @@ describe("daemon session configuration boundary", () => {
         }
     });
 
-    it("Given a cloud-disabled Session uses an application binding, When Mobius reloads its native history, Then the daemon returns the saved conversation", async () => {
+    it("Given a cloud-disabled Codex Session uses an application binding, When Mobius reloads its native history, Then the daemon reads rich history without acquiring another writer", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-live-history-"));
         const workspace = join(stateDirectory, "workspace");
         const nativeStateDirectory = join(stateDirectory, "native");
         const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+        const executable = join(stateDirectory, "codex.mjs");
+        await writeFile(
+            executable,
+            `#!${process.execPath}\nawait import(process.argv.includes("app-server") ? ${JSON.stringify(fakeCodexAppServerUrl)} : ${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});\n`,
+            { mode: 0o700 },
+        );
 
         const socketReady = Promise.withResolvers<Duplex>();
         const relaySockets = new Set<Duplex>();
@@ -499,7 +506,7 @@ describe("daemon session configuration boundary", () => {
 
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
         relayUrl.searchParams.set("token", "d".repeat(43));
-        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [fakeAgentPath], {
+        const agent = new LocalAgentDefinition("codex", "Codex", executable, ["--exclusive-writer"], {
             MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory,
         });
         const config = createDaemonConfig(
@@ -560,7 +567,23 @@ describe("daemon session configuration boundary", () => {
                 history: {
                     messages: expect.arrayContaining([
                         expect.objectContaining({ role: "user", text: "private conversation" }),
-                        expect.objectContaining({ role: "assistant", text: "Echo from ACP: private conversation" }),
+                        expect.objectContaining({
+                            activities: expect.arrayContaining([
+                                expect.objectContaining({
+                                    activityType: "reasoning",
+                                    output: "Inspecting the workspace",
+                                }),
+                                expect.objectContaining({ activityType: "tool", title: "cat package.json" }),
+                                expect.objectContaining({
+                                    activityType: "tool",
+                                    output: "Agent could not inspect the optional workspace file",
+                                    status: "failed",
+                                    title: "Agent error",
+                                }),
+                            ]),
+                            role: "assistant",
+                            text: "Echo from ACP: private conversation",
+                        }),
                     ]),
                     status: "available",
                 },

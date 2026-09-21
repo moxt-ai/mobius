@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import {
     type NativeHistoryMessage,
+    type NativeMessageActivity,
     type NativeSessionHistory,
     SESSION_HISTORY_CHARACTER_LIMIT,
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
@@ -31,7 +32,14 @@ const threadSchema = z.object({
     }),
 });
 const turnsSchema = z.object({
-    data: z.array(z.object({ items: z.array(z.unknown()).max(100_000) })).max(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT),
+    data: z
+        .array(
+            z.object({
+                error: z.unknown().nullish(),
+                items: z.array(z.unknown()).max(100_000),
+            }),
+        )
+        .max(SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT),
     nextCursor: z.string().nullish(),
 });
 const itemTypeSchema = z.object({ type: z.string().min(1).max(80) });
@@ -41,6 +49,24 @@ const userMessageSchema = z.object({
 const textSchema = z.object({ text: z.string() });
 const imageSchema = z.object({ url: z.string() });
 const agentMessageSchema = textSchema.extend({ phase: z.string().nullish() });
+const reasoningSchema = z.object({
+    id: z.string(),
+    summary: z.array(z.string()).max(10_000),
+    content: z.array(z.string()).max(10_000),
+});
+const commandExecutionSchema = z.object({
+    id: z.string(),
+    command: z.string(),
+    cwd: z.string(),
+    status: z.string(),
+    commandActions: z.array(z.object({ type: z.string() }).passthrough()).max(100),
+    aggregatedOutput: z.string().nullish(),
+    exitCode: z.number().int().nullish(),
+});
+
+interface ReadCodexHistoryOptions {
+    readonly detail: "messages" | "rich";
+}
 
 interface CodexHistorySnapshot {
     readonly nativeSessionId: string;
@@ -48,12 +74,69 @@ interface CodexHistorySnapshot {
     readonly history: NativeSessionHistory;
 }
 
-function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: unknown): CodexHistorySnapshot {
+function bounded(value: string, maximum: number): string {
+    return value.slice(0, maximum);
+}
+
+function activity(
+    activityId: string,
+    activityType: string,
+    sequence: number,
+    fields: Pick<NativeMessageActivity, "input" | "locations" | "name" | "output" | "status" | "title" | "toolKind">,
+): NativeMessageActivity {
+    return {
+        activityId: bounded(activityId, 128) || `history-${sequence.toString()}`,
+        activityType,
+        content: [],
+        input: bounded(fields.input, 100_000),
+        locations: fields.locations
+            .filter((location) => location.length > 0)
+            .map((location) => bounded(location, 2_048))
+            .slice(0, 100),
+        name: bounded(fields.name, 128),
+        output: bounded(fields.output, 100_000),
+        sequence,
+        status: bounded(fields.status, 64),
+        title: bounded(fields.title, 500),
+        toolKind: bounded(fields.toolKind, 64),
+    };
+}
+
+function errorMessage(value: unknown): string {
+    if (typeof value === "string") {
+        return value;
+    }
+    if (typeof value === "object" && value !== null) {
+        const message = Reflect.get(value, "message");
+        if (typeof message === "string") {
+            return message;
+        }
+    }
+    return JSON.stringify(value) ?? "Codex stopped before completing this turn.";
+}
+
+function messageSize(message: NativeHistoryMessage): number {
+    return (
+        message.text.length +
+        (message.role === "assistant"
+            ? JSON.stringify(message.activities).length + JSON.stringify(message.content).length
+            : 0)
+    );
+}
+
+function decodeHistory(
+    thread: z.infer<typeof threadSchema>["thread"],
+    value: unknown,
+    options: ReadCodexHistoryOptions,
+): CodexHistorySnapshot {
     const page = turnsSchema.parse(value);
     const messages: NativeHistoryMessage[] = [];
     let characters = 0;
     let truncated = page.nextCursor != null;
     for (const turn of page.data.toReversed()) {
+        const activities: NativeMessageActivity[] = [];
+        let sequence = 0;
+        let assistantMessageIndex: number | null = null;
         for (const item of turn.items) {
             const { type } = itemTypeSchema.parse(item);
             let message: NativeHistoryMessage;
@@ -78,9 +161,60 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
             } else if (type === "agentMessage") {
                 const agent = agentMessageSchema.parse(item);
                 if (agent.phase === "commentary") {
+                    if (options.detail === "rich" && agent.text.length > 0) {
+                        activities.push(
+                            activity(`progress-${sequence.toString()}`, "progress", sequence, {
+                                input: "",
+                                locations: [],
+                                name: "",
+                                output: agent.text,
+                                status: "completed",
+                                title: "Progress",
+                                toolKind: "",
+                            }),
+                        );
+                        sequence += 1;
+                    }
                     continue;
                 }
-                message = { role: "assistant", text: agent.text };
+                message = { activities: activities.slice(-100), content: [], role: "assistant", text: agent.text };
+            } else if (type === "reasoning" && options.detail === "rich") {
+                const reasoning = reasoningSchema.parse(item);
+                const output = (reasoning.summary.length > 0 ? reasoning.summary : reasoning.content).join("\n\n");
+                if (output.length > 0) {
+                    activities.push(
+                        activity(reasoning.id, "reasoning", sequence, {
+                            input: "",
+                            locations: [],
+                            name: "",
+                            output,
+                            status: "completed",
+                            title: "Reasoning",
+                            toolKind: "",
+                        }),
+                    );
+                    sequence += 1;
+                }
+                continue;
+            } else if (type === "commandExecution" && options.detail === "rich") {
+                const command = commandExecutionSchema.parse(item);
+                const action = command.commandActions[0]?.type ?? "execute";
+                activities.push(
+                    activity(command.id, "tool", sequence, {
+                        input: JSON.stringify({ command: command.command, cwd: command.cwd }),
+                        locations: [command.cwd],
+                        name: "",
+                        output: JSON.stringify({
+                            formatted_output: command.aggregatedOutput ?? "",
+                            ...(command.exitCode == null ? {} : { exit_code: command.exitCode }),
+                        }),
+                        status: command.status === "completed" ? "completed" : "failed",
+                        title: command.command,
+                        toolKind: action,
+                    }),
+                );
+                sequence += 1;
+                continue;
             } else {
                 continue;
             }
@@ -90,17 +224,51 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
             }
             truncated ||= text.length < message.text.length;
             messages.push({ ...message, text });
-            characters += text.length;
-            while (
-                messages.length > SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT ||
-                characters > SESSION_HISTORY_CHARACTER_LIMIT
-            ) {
-                const removed = messages.shift();
-                if (removed !== undefined) {
-                    characters -= removed.text.length;
-                }
-                truncated = true;
+            if (message.role === "assistant") {
+                assistantMessageIndex = messages.length - 1;
             }
+            characters += messageSize({ ...message, text });
+        }
+        if (options.detail === "rich" && turn.error != null) {
+            activities.push(
+                activity(`agent-error-${sequence.toString()}`, "tool", sequence, {
+                    input: "",
+                    locations: [],
+                    name: "",
+                    output: errorMessage(turn.error),
+                    status: "failed",
+                    title: "Agent error",
+                    toolKind: "other",
+                }),
+            );
+        }
+        if (assistantMessageIndex !== null) {
+            const assistant = messages[assistantMessageIndex];
+            if (assistant?.role === "assistant") {
+                characters -= messageSize(assistant);
+                const updated = { ...assistant, activities: activities.slice(-100) };
+                messages[assistantMessageIndex] = updated;
+                characters += messageSize(updated);
+            }
+        } else if (activities.length > 0) {
+            const message: NativeHistoryMessage = {
+                activities: activities.slice(-100),
+                content: [],
+                role: "assistant",
+                text: "",
+            };
+            messages.push(message);
+            characters += messageSize(message);
+        }
+        while (
+            messages.length > SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT ||
+            characters > SESSION_HISTORY_CHARACTER_LIMIT
+        ) {
+            const removed = messages.shift();
+            if (removed !== undefined) {
+                characters -= messageSize(removed);
+            }
+            truncated = true;
         }
     }
     return {
@@ -117,11 +285,12 @@ function decodeHistory(thread: z.infer<typeof threadSchema>["thread"], value: un
 }
 
 /** Metadata and paginated display history do not acquire the source writer. */
-export async function readCodexHistory(
+async function readCodexHistoryWithOptions(
     agent: LocalAgentDefinition,
     cwd: string,
     nativeSessionId: string,
     signal: AbortSignal,
+    options: ReadCodexHistoryOptions,
 ): Promise<CodexHistorySnapshot> {
     signal.throwIfAborted();
     nativeSessionIdSchema.parse(nativeSessionId);
@@ -226,13 +395,13 @@ export async function readCodexHistory(
                                 threadId: nativeSessionId,
                                 limit: SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
                                 sortDirection: "desc",
-                                itemsView: "summary",
+                                itemsView: options.detail === "rich" ? "full" : "summary",
                             },
                         });
                         break;
                     }
                     case "turns":
-                        response.resolve(decodeHistory(state.thread, message.result));
+                        response.resolve(decodeHistory(state.thread, message.result, options));
                         return;
                     default: {
                         const unhandled: never = state;
@@ -290,3 +459,21 @@ export async function readCodexHistory(
         child.removeListener("exit", onExit);
     }
 }
+
+/** Reads the compact message transcript used by native-session previews. */
+export const readCodexHistory = async (
+    agent: LocalAgentDefinition,
+    cwd: string,
+    nativeSessionId: string,
+    signal: AbortSignal,
+): Promise<CodexHistorySnapshot> =>
+    await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, { detail: "messages" });
+
+/** Reads the complete Codex turn items used to restore non-retained Chats. */
+export const readCodexFullHistory = async (
+    agent: LocalAgentDefinition,
+    cwd: string,
+    nativeSessionId: string,
+    signal: AbortSignal,
+): Promise<CodexHistorySnapshot> =>
+    await readCodexHistoryWithOptions(agent, cwd, nativeSessionId, signal, { detail: "rich" });

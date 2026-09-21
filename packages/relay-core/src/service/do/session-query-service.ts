@@ -9,8 +9,8 @@ import {
     decodeSessionConfigUpdatedEvent,
     decodeSessionPromptCommand,
     type Interaction,
+    type NativeMessagePage,
     type NativeSessionHistory,
-    type NativeSessionHistoryPage,
     type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
@@ -130,15 +130,27 @@ export class SessionQueryService {
         }
     };
 
-    readonly readNativeHistoryPage = async (
+    readonly queryNativeMessages = async (
         scope: ProjectScope,
         sessionId: string,
         cursor: string | null,
         limit: number,
         signal: AbortSignal,
-    ): Promise<NativeSessionHistoryPage> => {
+    ): Promise<NativeMessagePage> => {
         const history = await this.readNativeHistory(scope, sessionId, signal);
-        return paginateNativeSessionHistory(history ?? { status: "unavailable" }, scope, sessionId, cursor, limit);
+        return paginateNativeSessionHistory(
+            history ?? {
+                status: "unavailable",
+                cause: {
+                    code: "native_history_unavailable",
+                    message: "Native message history is unavailable for this Session.",
+                },
+            },
+            scope,
+            sessionId,
+            cursor,
+            limit,
+        );
     };
 
     readonly readTurn = async (

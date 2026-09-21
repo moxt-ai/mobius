@@ -421,7 +421,7 @@ export const elicitationFieldSchema = z
 
 export type SessionElicitationField = z.infer<typeof elicitationFieldSchema>;
 
-const displayContentSchema = z
+export const displayContentSchema = z
     .strictObject({
         artifactId: z.string().max(128).default(""),
         data: z.string().max(4_000_000),

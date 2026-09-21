@@ -423,7 +423,7 @@ const detail = await client.toolCalls.readDetail(
 Message pages contain bounded tool summaries. Full details are fetched only on
 demand and have explicit `available`, `truncated`, `unrecorded`, or `deleted`
 states. Session directories and committed Event history are also paginated with
-`MobiusPageRequest`. `sessions.readNativeHistory` exists for migrated native
+`MobiusPageRequest`. `sessions.queryNativeMessages` exists for migrated native
 Agent history already owned by a Session; it does not expose or restore a native
 Agent session identifier.
 

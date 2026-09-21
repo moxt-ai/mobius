@@ -54,7 +54,8 @@ input.on("line", (line) => {
         if (!Array.isArray(history)) {
             return;
         }
-        const turns: { readonly items: unknown[] }[] = [];
+        const rich = Reflect.get(params, "itemsView") === "full";
+        const turns: { error?: unknown; readonly items: unknown[] }[] = [];
         for (const message of history) {
             if (typeof message !== "object" || message === null) {
                 throw new Error("Invalid saved message");
@@ -88,6 +89,36 @@ input.on("line", (line) => {
                     ],
                 });
             } else {
+                if (rich) {
+                    turns.at(-1)?.items.push(
+                        {
+                            type: "reasoning",
+                            id: `reasoning-${turns.length.toString()}`,
+                            summary: ["Inspecting the workspace"],
+                            content: [],
+                        },
+                        {
+                            type: "agentMessage",
+                            id: `commentary-${turns.length.toString()}`,
+                            text: "I’ll inspect the saved workspace context.",
+                            phase: "commentary",
+                        },
+                        {
+                            type: "commandExecution",
+                            id: `command-${turns.length.toString()}`,
+                            command: "cat package.json",
+                            cwd: Reflect.get(saved, "cwd"),
+                            status: "completed",
+                            commandActions: [],
+                            aggregatedOutput: '{"name":"fixture"}',
+                            exitCode: 0,
+                        },
+                    );
+                    const turn = turns.at(-1);
+                    if (turn !== undefined) {
+                        turn.error = { message: "Agent could not inspect the optional workspace file" };
+                    }
+                }
                 turns.at(-1)?.items.push({ type: "agentMessage", text, phase: "final_answer" });
             }
         }

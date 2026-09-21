@@ -119,6 +119,7 @@ import { LocalAuthorizationError } from "./authorization/local-authorization-err
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
+import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { revalidateExecutable } from "./process/executable.ts";
@@ -1431,7 +1432,10 @@ async function executeSessionLiveHistoryLoad(
             sessionId: command.sessionId,
         });
         send(socket, {
-            history: { status: "unavailable" },
+            history: {
+                status: "unavailable",
+                cause: { code: operationErrorCode(error), message: operationErrorMessage(error) },
+            },
             kind: "session.live-history.loaded",
             requestId: command.requestId,
             sessionId: command.sessionId,
@@ -3117,7 +3121,12 @@ export async function runDaemon(
         }
         publisher.recordAttempt(sessionId, event, attemptId);
     };
-    const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore);
+    const sessions = new AcpSessionManager(new DaemonAcpObserver(recordSessionEvent), sessionStore, {
+        read: async (options, nativeSessionId) =>
+            options.agent.id === "codex"
+                ? (await readCodexFullHistory(options.agent, options.cwd, nativeSessionId, options.signal)).history
+                : null,
+    });
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
     const diagnostics = new RelayConnectionDiagnostics(audit, config.channelId, config.relayUrl);

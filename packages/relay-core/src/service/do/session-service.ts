@@ -637,7 +637,7 @@ export class SessionService {
             signal,
         );
 
-    readonly readNativeHistory = async (
+    readonly queryNativeMessages = async (
         projectId: string,
         token: string,
         sessionId: string,
@@ -645,7 +645,7 @@ export class SessionService {
         limit: number,
         signal: AbortSignal,
     ) =>
-        this.#sessionQueries.readNativeHistoryPage(
+        this.#sessionQueries.queryNativeMessages(
             await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
             cursor,

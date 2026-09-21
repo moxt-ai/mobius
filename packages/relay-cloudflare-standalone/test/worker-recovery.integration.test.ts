@@ -202,7 +202,7 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
                     coveredMessageIds: [],
                     messages: [
                         { role: "user", text: "Persist this native question" },
-                        { role: "assistant", text: "Persist this native answer" },
+                        { activities: [], content: [], role: "assistant", text: "Persist this native answer" },
                     ],
                     status: "available",
                     truncated: false,
@@ -254,7 +254,7 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
                 title: "Existing native session",
             });
             const nativeHistory = await app.request(
-                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/native-history`,
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/native-messages`,
                 { headers: authorization(pairing.created) },
             );
             expect(nativeHistory.status).toBe(200);

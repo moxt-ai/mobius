@@ -815,6 +815,60 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
         const state = readPersistedState(context.params.sessionId);
         sessions.set(context.params.sessionId, state);
         for (const message of nativeHistory.get(context.params.sessionId) ?? []) {
+            if (message.role === "assistant") {
+                const replayId = message.messageId;
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        content: { text: "Inspecting the workspace", type: "text" },
+                        messageId: `reasoning-${replayId}`,
+                        sessionUpdate: "agent_thought_chunk",
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        kind: "read",
+                        locations: [{ path: `${process.cwd()}/package.json` }],
+                        name: "read_file",
+                        rawInput: { path: "package.json" },
+                        sessionUpdate: "tool_call",
+                        status: "in_progress",
+                        title: "Read package metadata",
+                        toolCallId: `tool-${replayId}`,
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        rawOutput: { name: "mobius-workspace" },
+                        sessionUpdate: "tool_call_update",
+                        status: "completed",
+                        toolCallId: `tool-${replayId}`,
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        kind: "other",
+                        name: "agent_error",
+                        rawInput: {},
+                        sessionUpdate: "tool_call",
+                        status: "in_progress",
+                        title: "Agent error",
+                        toolCallId: `error-${replayId}`,
+                    },
+                });
+                await context.client.notify(acp.methods.client.session.update, {
+                    sessionId: context.params.sessionId,
+                    update: {
+                        rawOutput: "Agent could not inspect the optional workspace file",
+                        sessionUpdate: "tool_call_update",
+                        status: "failed",
+                        toolCallId: `error-${replayId}`,
+                    },
+                });
+            }
             await context.client.notify(acp.methods.client.session.update, {
                 sessionId: context.params.sessionId,
                 update: {

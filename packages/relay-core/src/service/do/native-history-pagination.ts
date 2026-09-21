@@ -1,4 +1,4 @@
-import type { NativeSessionHistory, NativeSessionHistoryPage } from "@moxt-ai/mobius-protocol";
+import type { NativeMessagePage, NativeSessionHistory } from "@moxt-ai/mobius-protocol";
 import { type ProjectScope, SessionRuntimeError } from "../../entity/do/session.ts";
 
 const MAXIMUM_PAGE_SIZE = 100;
@@ -86,7 +86,7 @@ export function paginateNativeSessionHistory(
     sessionId: string,
     cursor: string | null,
     limit: number,
-): NativeSessionHistoryPage {
+): NativeMessagePage {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAXIMUM_PAGE_SIZE) {
         throw new SessionRuntimeError(
             "invalid_page_size",
@@ -97,7 +97,7 @@ export function paginateNativeSessionHistory(
         if (cursor !== null) {
             throw new SessionRuntimeError("invalid_cursor", "Unavailable native Session history has no cursor");
         }
-        return { nextCursor: null, status: "unavailable" };
+        return { cause: history.cause, nextCursor: null, status: "unavailable" };
     }
     const endIndex = cursor === null ? history.messages.length : decodeCursor(cursor, scope, sessionId).endIndex;
     if (endIndex > history.messages.length) {

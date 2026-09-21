@@ -891,10 +891,10 @@ export function createSessionRoutes() {
                 ),
             );
         })
-        .get("/projects/:projectId/sessions/:sessionId/native-history", async (context) => {
+        .get("/projects/:projectId/sessions/:sessionId/native-messages", async (context) => {
             const useCases = context.env.services.sessions;
             return context.json(
-                await useCases.readNativeHistory(
+                await useCases.queryNativeMessages(
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     bearerToken(context.req.raw),
                     validateIdentifier(context.req.param("sessionId"), "session_id"),

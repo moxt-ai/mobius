@@ -533,10 +533,10 @@ class DoRoutes {
                     await this.#runtime.readNativeHistory(scope, readString(body, "sessionId"), request.signal),
                 );
             }
-            if (operation === "native-history-page") {
+            if (operation === "query-native-messages") {
                 assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
                 return Response.json(
-                    await this.#runtime.readNativeHistoryPage(
+                    await this.#runtime.queryNativeMessages(
                         scope,
                         readString(body, "sessionId"),
                         readNullableString(body, "cursor"),

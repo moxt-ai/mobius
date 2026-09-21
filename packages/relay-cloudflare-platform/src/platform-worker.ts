@@ -154,7 +154,7 @@ export function createPlatformApplication(
         .get("/:sessionId", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/messages", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/files/content", sessionAccessTargetMiddleware, projectHandler)
-        .get("/:sessionId/native-history", sessionAccessTargetMiddleware, projectHandler)
+        .get("/:sessionId/native-messages", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/events", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/interactions", sessionAccessTargetMiddleware, projectHandler)
         .get("/:sessionId/interactions/:interactionId", sessionAccessTargetMiddleware, projectHandler)

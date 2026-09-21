@@ -598,7 +598,7 @@ describe.sequential("Platform Session-only boundary", () => {
 
             const nativeHistoryResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history?limit=2`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages?limit=2`,
                     { headers: credentialHeaders(appCredential) },
                 ),
                 environment,
@@ -615,6 +615,8 @@ describe.sequential("Platform Session-only boundary", () => {
                         coveredMessageIds: ["daemon-message:agent"],
                         messages: [
                             {
+                                activities: [],
+                                content: [],
                                 role: "assistant",
                                 text: "Oldest daemon history",
                             },
@@ -623,6 +625,48 @@ describe.sequential("Platform Session-only boundary", () => {
                                 text: "Recent daemon prompt",
                             },
                             {
+                                activities: [
+                                    {
+                                        activityId: "reasoning-1",
+                                        activityType: "reasoning",
+                                        content: [],
+                                        input: "",
+                                        locations: [],
+                                        name: "",
+                                        output: "Inspecting the workspace",
+                                        sequence: 0,
+                                        status: "completed",
+                                        title: "Reasoning",
+                                        toolKind: "think",
+                                    },
+                                    {
+                                        activityId: "tool-1",
+                                        activityType: "tool",
+                                        content: [],
+                                        input: '{"path":"package.json"}',
+                                        locations: ["/workspace/package.json"],
+                                        name: "read_file",
+                                        output: '{"name":"workspace"}',
+                                        sequence: 1,
+                                        status: "completed",
+                                        title: "Read package metadata",
+                                        toolKind: "read",
+                                    },
+                                    {
+                                        activityId: "error-1",
+                                        activityType: "tool",
+                                        content: [],
+                                        input: "{}",
+                                        locations: [],
+                                        name: "agent_error",
+                                        output: "Agent could not inspect the optional workspace file",
+                                        sequence: 2,
+                                        status: "failed",
+                                        title: "Agent error",
+                                        toolKind: "other",
+                                    },
+                                ],
+                                content: [],
                                 role: "assistant",
                                 text: "History owned by the daemon",
                             },
@@ -639,7 +683,20 @@ describe.sequential("Platform Session-only boundary", () => {
             expect(firstPage).toMatchObject({
                 messages: [
                     { role: "user", text: "Recent daemon prompt" },
-                    { role: "assistant", text: "History owned by the daemon" },
+                    {
+                        activities: expect.arrayContaining([
+                            expect.objectContaining({ activityType: "reasoning", output: "Inspecting the workspace" }),
+                            expect.objectContaining({ activityType: "tool", title: "Read package metadata" }),
+                            expect.objectContaining({
+                                activityType: "tool",
+                                output: "Agent could not inspect the optional workspace file",
+                                status: "failed",
+                                title: "Agent error",
+                            }),
+                        ]),
+                        role: "assistant",
+                        text: "History owned by the daemon",
+                    },
                 ],
                 status: "available",
             });
@@ -647,7 +704,7 @@ describe.sequential("Platform Session-only boundary", () => {
 
             const olderHistoryResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history?limit=2&cursor=${encodeURIComponent(String(firstPage["nextCursor"]))}`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-messages?limit=2&cursor=${encodeURIComponent(String(firstPage["nextCursor"]))}`,
                     { headers: credentialHeaders(appCredential) },
                 ),
                 environment,
@@ -663,9 +720,9 @@ describe.sequential("Platform Session-only boundary", () => {
                         coveredCommandIds: [],
                         coveredMessageIds: ["daemon-message:agent"],
                         messages: [
-                            { role: "assistant", text: "Oldest daemon history" },
+                            { activities: [], content: [], role: "assistant", text: "Oldest daemon history" },
                             { role: "user", text: "Recent daemon prompt" },
-                            { role: "assistant", text: "History owned by the daemon" },
+                            { activities: [], content: [], role: "assistant", text: "History owned by the daemon" },
                         ],
                         status: "available",
                         truncated: false,
