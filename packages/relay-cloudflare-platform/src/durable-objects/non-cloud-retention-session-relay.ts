@@ -10,6 +10,8 @@ import {
 import { Hono } from "hono";
 import { PlatformSessionLiveHistoryClient } from "../gateway/platform-session-live-history-client.ts";
 import { nonCloudRetentionSessionRelayDurableObjectMigrations } from "../generated/non-cloud-retention-session-relay-do-migrations.ts";
+import { NonCloudRetentionSessionScrubService } from "../service/non-cloud-retention-session-scrub-service.ts";
+import { NonCloudRetentionSessionStorage } from "../storage/non-cloud-retention-session-storage.ts";
 import {
     createPlatformDurableObjectContext,
     type PlatformDurableObjectEnvironment,
@@ -154,7 +156,9 @@ export class NonCloudRetentionSessionRelayDO {
                 this.#sessions.clear();
                 this.#operations.clear();
                 try {
-                    scrubRetainedSessionContent(new DurableObjectSqlDatabase(this.#state.storage));
+                    new NonCloudRetentionSessionScrubService(
+                        new NonCloudRetentionSessionStorage(this.#state.storage),
+                    ).scrubRetainedContent();
                     await this.#state.storage.delete(HIBERNATION_DEADLINE_KEY);
                     await this.#state.storage.deleteAlarm();
                 } catch (cause) {
@@ -292,80 +296,6 @@ async function queryNativeMessagesRequest(
         throw new SessionRuntimeError("invalid_request", "The native Session history request is invalid");
     }
     return { cursor, limit };
-}
-
-function scrubRetainedSessionContent(database: DoSqlDatabase): void {
-    database.transaction(() => {
-        database.run(
-            `INSERT INTO session_event_receipts (
-                 scope_key, session_id, source_kind, source_id, event_id,
-                 payload_hash, source_seq, sequence_number, recorded_at
-             )
-             SELECT scope_key, session_id, source_kind, source_id, event_id,
-                    payload_hash, source_seq, sequence_number, recorded_at
-               FROM (
-                   SELECT event.*,
-                          ROW_NUMBER() OVER (
-                              PARTITION BY event.scope_key, event.session_id, event.source_kind, event.source_id
-                              ORDER BY length(event.source_seq) DESC, event.source_seq DESC
-                          ) AS source_rank
-                     FROM session_events event
-               )
-              WHERE source_rank = 1
-             ON CONFLICT(scope_key, session_id, source_kind, source_id) DO UPDATE SET
-                 event_id = excluded.event_id,
-                 payload_hash = excluded.payload_hash,
-                 source_seq = excluded.source_seq,
-                 sequence_number = excluded.sequence_number,
-                 recorded_at = excluded.recorded_at
-             WHERE length(excluded.source_seq) > length(session_event_receipts.source_seq)
-                OR (
-                    length(excluded.source_seq) = length(session_event_receipts.source_seq)
-                    AND excluded.source_seq > session_event_receipts.source_seq
-                )`,
-        );
-        for (const table of [
-            "archive_segments",
-            "archive_work",
-            "artifacts",
-            "immutable_content",
-            "session_content_chunks",
-            "session_events",
-            "session_message_chunks",
-            "session_messages",
-            "session_stream_blocks",
-            "session_stream_event_refs",
-            "session_streams",
-            "tool_call_views",
-            "turn_content_views",
-            "turn_message_anchors",
-            "uploaded_artifacts",
-        ]) {
-            database.run(`DELETE FROM ${table}`);
-        }
-        database.run(
-            `DELETE FROM interactions
-              WHERE state IN ('resolved', 'expired', 'cancelled')`,
-        );
-        database.run(
-            `UPDATE turns
-                SET command_json = json_set(
-                        command_json,
-                        '$.prompt', '',
-                        '$.images', json('[]'),
-                        '$.resources', json('[]')
-                    ),
-                    response = '',
-                    error_message = NULL
-              WHERE state IN ('succeeded', 'failed', 'cancelled')`,
-        );
-        database.run(
-            `UPDATE pending_work
-                SET delivery_payload = NULL
-              WHERE state IN ('completed', 'failed')`,
-        );
-        database.run("UPDATE sessions SET title = '', native_history_json = NULL");
-    });
 }
 
 function initializeNonCloudRetentionSessionRelaySchema(database: DoSqlDatabase): void {

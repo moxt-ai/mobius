@@ -1,12 +1,19 @@
 import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
+    AGENT_MESSAGE_DELTA_KIND,
     decodeServiceToDaemonMessage,
+    decodeSessionPromptCommand,
     encodeDaemonToServiceMessage,
     encodeSessionEventEnvelope,
     MOBIUS_API_PREFIX,
+    RUNTIME_DELIVERY_COMMITTED_KIND,
+    RUNTIME_DELIVERY_KIND,
+    RUNTIME_DELIVERY_RECEIVED_KIND,
+    SESSION_COMPLETED_KIND,
     SESSION_EVENT_ACK_KIND,
     SESSION_INFO_UPDATED_KIND,
+    SESSION_STARTED_KIND,
 } from "@moxt-ai/mobius-protocol";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestMobiusPlatformApp } from "../../../tests/infra/app.ts";
@@ -39,6 +46,7 @@ const readyAgents = [
         },
         id: "codex",
         label: "Codex",
+        sessionTurnConfiguration: true,
     },
 ];
 
@@ -519,6 +527,105 @@ describe.sequential("Platform Session-only boundary", () => {
                 kind: "runtime.liveness.ready",
             });
 
+            const acceptedTurn = await responseJson(
+                await worker.fetch(
+                    new Request(
+                        `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns`,
+                        {
+                            body: JSON.stringify({
+                                additionalDirectoryIds: [],
+                                artifactIds: [],
+                                content: "private prompt must be scrubbed",
+                                idempotencyKey: "private-reconnect-turn",
+                                images: [
+                                    {
+                                        data: "cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk",
+                                        mimeType: "image/png",
+                                        name: "private.png",
+                                    },
+                                ],
+                                resources: [
+                                    {
+                                        mimeType: "text/plain",
+                                        name: "private.txt",
+                                        text: "private resource must be scrubbed",
+                                        type: "embedded",
+                                        uri: "file:///private.txt",
+                                    },
+                                ],
+                                sessionConfigurations: [
+                                    {
+                                        booleanValue: false,
+                                        configId: "model",
+                                        value: "gpt-5.6-terra",
+                                        valueType: "select",
+                                    },
+                                ],
+                            }),
+                            headers: credentialHeaders(appCredential),
+                            method: "POST",
+                        },
+                    ),
+                    environment,
+                ),
+                202,
+            );
+            const turnId = text(acceptedTurn, "turnId");
+            const delivery = decodeServiceToDaemonMessage(await messages.next());
+            if (delivery.kind !== RUNTIME_DELIVERY_KIND) {
+                throw new Error("Expected the private Session prompt delivery");
+            }
+            socket.send(
+                encodeDaemonToServiceMessage({
+                    deliveryId: delivery.deliveryId,
+                    kind: RUNTIME_DELIVERY_RECEIVED_KIND,
+                    sessionId,
+                }),
+            );
+            expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
+                deliveryId: delivery.deliveryId,
+                kind: RUNTIME_DELIVERY_COMMITTED_KIND,
+                sessionId,
+            });
+            const command = decodeSessionPromptCommand(delivery.payload);
+            const attemptId = "private-reconnect-attempt";
+            for (const [eventIndex, event] of [
+                {
+                    attemptId,
+                    commandId: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                },
+                {
+                    commandId: command.commandId,
+                    kind: AGENT_MESSAGE_DELTA_KIND,
+                    messageId: "private-reconnect-message",
+                    sessionId,
+                    text: "private response must be scrubbed",
+                },
+                {
+                    commandId: command.commandId,
+                    kind: SESSION_COMPLETED_KIND,
+                    sessionId,
+                    stopReason: "end_turn",
+                },
+            ].entries()) {
+                socket.send(
+                    encodeSessionEventEnvelope({
+                        eventId: `private-reconnect-${event.kind}`,
+                        kind: "session.event",
+                        payload: JSON.stringify(event),
+                        sessionId,
+                        source: { attemptId, kind: "attempt", sourceSeq: (eventIndex + 1).toString() },
+                    }),
+                );
+                expect(decodeServiceToDaemonMessage(await messages.next())).toMatchObject({
+                    eventId: `private-reconnect-${event.kind}`,
+                    kind: SESSION_EVENT_ACK_KIND,
+                    sessionId,
+                });
+            }
+
             socket.send(
                 encodeSessionEventEnvelope({
                     eventId: "private-reconnect-before-eviction",
@@ -544,6 +651,10 @@ describe.sequential("Platform Session-only boundary", () => {
                 if (instance.alarm === undefined) {
                     throw new Error("Expected the non-retained Session alarm handler");
                 }
+                state.storage.sql.exec(
+                    "UPDATE turns SET error_message = 'private error must be scrubbed' WHERE turn_id = ?",
+                    turnId,
+                );
                 await state.storage.deleteAlarm();
                 await instance.alarm();
                 expect(state.storage.sql.exec("SELECT title FROM sessions").toArray()).toEqual([
@@ -556,11 +667,59 @@ describe.sequential("Platform Session-only boundary", () => {
                 expect(state.storage.sql.exec("SELECT title, native_history_json FROM sessions").toArray()).toEqual([
                     { native_history_json: null, title: "" },
                 ]);
+                const scrubbedRows = state.storage.sql
+                    .exec("SELECT command_json, error_message, response FROM turns")
+                    .toArray();
+                expect(scrubbedRows).toHaveLength(1);
+                expect(scrubbedRows[0]).toMatchObject({ error_message: null, response: "" });
+                const scrubbedCommandJson = JSON.stringify(scrubbedRows[0]?.["command_json"]);
+                expect(scrubbedCommandJson).toContain("[Content unavailable]");
+                expect(scrubbedCommandJson).toContain("gpt-5.6-terra");
+                expect(scrubbedCommandJson).not.toContain("private prompt");
+                expect(scrubbedCommandJson).not.toContain("private resource");
+                expect(scrubbedCommandJson).not.toContain("cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk");
+                expect(JSON.stringify(scrubbedRows)).not.toContain("private error");
                 expect(
-                    state.storage.sql.exec("SELECT event_id, source_seq FROM session_event_receipts").toArray(),
-                ).toEqual([{ event_id: "private-reconnect-before-eviction", source_seq: "1" }]);
+                    state.storage.sql
+                        .exec("SELECT event_id, source_seq FROM session_event_receipts")
+                        .toArray()
+                        .toSorted((left, right) => String(left["event_id"]).localeCompare(String(right["event_id"]))),
+                ).toEqual([
+                    { event_id: "private-reconnect-before-eviction", source_seq: "1" },
+                    { event_id: "private-reconnect-session.completed", source_seq: "3" },
+                ]);
             });
             await evictDurableObject(sessionStub);
+
+            const scrubbedTurnResponse = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/turns/${turnId}`,
+                    { headers: credentialHeaders(appCredential) },
+                ),
+                environment,
+            );
+            const scrubbedTurn = await responseJson(scrubbedTurnResponse, 200);
+            expect(scrubbedTurn).toMatchObject({
+                request: {
+                    content: "[Content unavailable]",
+                    kind: "prompt",
+                    sessionConfigurations: [
+                        {
+                            booleanValue: false,
+                            configId: "model",
+                            value: "gpt-5.6-terra",
+                            valueType: "select",
+                        },
+                    ],
+                },
+                state: { kind: "succeeded" },
+                turnId,
+            });
+            expect(JSON.stringify(scrubbedTurn)).not.toContain("private prompt");
+            expect(JSON.stringify(scrubbedTurn)).not.toContain("private resource");
+            expect(JSON.stringify(scrubbedTurn)).not.toContain("private response");
+            expect(JSON.stringify(scrubbedTurn)).not.toContain("cHJpdmF0ZSBpbWFnZSBtdXN0IGJlIHNjcnViYmVk");
+
             socket.send(
                 encodeSessionEventEnvelope({
                     eventId: "private-reconnect-after-eviction",
