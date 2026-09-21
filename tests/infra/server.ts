@@ -1,4 +1,6 @@
 import { createServer, type IncomingMessage } from "node:http";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { coupleWebSocket, WebSocket as WorkerWebSocket } from "miniflare";
 import { WebSocketServer } from "ws";
 import { SocketResponse } from "./peers.ts";
@@ -49,16 +51,7 @@ export async function serveTestApp(options: {
                 response.end();
                 return;
             }
-            const reader = result.body.getReader();
-            response.once("close", () => void reader.cancel().catch(() => undefined));
-            while (!response.closed) {
-                const chunk = await reader.read();
-                if (chunk.done) {
-                    response.end();
-                    break;
-                }
-                response.write(Buffer.from(chunk.value));
-            }
+            await pipeline(Readable.fromWeb(result.body as Parameters<typeof Readable.fromWeb>[0]), response);
         } catch (cause) {
             if (options.signal.aborted) {
                 response.end();

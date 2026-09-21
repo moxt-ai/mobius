@@ -46,8 +46,10 @@ import {
 } from "@moxt-ai/mobius-protocol";
 
 interface SocketEvent {
+    readonly code?: number;
     readonly data?: unknown;
     readonly error?: unknown;
+    readonly reason?: string;
 }
 
 export interface AgentDaemonSocket {
@@ -56,6 +58,7 @@ export interface AgentDaemonSocket {
     close(code?: number, reason?: string): void;
     removeEventListener(type: string, listener: (event: SocketEvent) => void): void;
     send(data: string): void;
+    readonly sendFlushed?: (data: string) => Promise<void>;
 }
 
 interface PendingMessage {
@@ -92,6 +95,8 @@ async function waitFor<T>(operation: Promise<T>, signal: AbortSignal): Promise<T
 export class FakeAgentDaemon implements AsyncDisposable {
     readonly #attemptIdsByCommand = new Map<string, string>();
     readonly #closed: Promise<void>;
+    #closeCode = 1006;
+    #closeReason = "Connection closed unexpectedly";
     readonly #messages: string[] = [];
     readonly #pending: PendingMessage[] = [];
     readonly #socket: AgentDaemonSocket;
@@ -104,7 +109,15 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 resolve();
                 return;
             }
-            socket.addEventListener("close", () => resolve(), { once: true });
+            socket.addEventListener(
+                "close",
+                (event) => {
+                    this.#closeCode = event.code ?? 1006;
+                    this.#closeReason = event.reason ?? "Connection closed unexpectedly";
+                    resolve();
+                },
+                { once: true },
+            );
         });
         socket.addEventListener("message", (event) => {
             const message = event.data;
@@ -185,6 +198,13 @@ export class FakeAgentDaemon implements AsyncDisposable {
 
     readonly waitForClose = async (signal: AbortSignal): Promise<void> => await waitFor(this.#closed, signal);
 
+    readonly unexpectedClose = async (signal: AbortSignal): Promise<never> => {
+        await this.waitForClose(signal);
+        throw new Error(
+            `The fake Agent-daemon connection closed (${this.#closeCode.toString()}): ${this.#closeReason}`,
+        );
+    };
+
     readonly receive = (
         kind: string,
         cancellation?: AbortSignal,
@@ -261,6 +281,14 @@ export class FakeAgentDaemon implements AsyncDisposable {
     };
 
     readonly send = (message: string): void => this.#socket.send(message);
+
+    readonly sendFlushed = async (message: string): Promise<void> => {
+        if (this.#socket.sendFlushed === undefined) {
+            this.#socket.send(message);
+            return;
+        }
+        await this.#socket.sendFlushed(message);
+    };
 
     readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
         signal?.throwIfAborted();
@@ -352,9 +380,9 @@ export interface RunningFakeAgentDaemon extends AsyncDisposable {
     readonly failure: Promise<never>;
 }
 
-function sendImageFile(daemon: FakeAgentDaemon, encoded: string): void {
+async function sendImageFile(daemon: FakeAgentDaemon, encoded: string): Promise<void> {
     const command = decodeFileReadCommand(encoded);
-    daemon.send(
+    await daemon.sendFlushed(
         encodeFileBeginEvent({
             byteLength: imageBytes.byteLength,
             kind: "file.begin",
@@ -365,7 +393,7 @@ function sendImageFile(daemon: FakeAgentDaemon, encoded: string): void {
             sessionId: command.sessionId,
         }),
     );
-    daemon.send(
+    await daemon.sendFlushed(
         encodeFileChunkEvent({
             data: Buffer.from(imageBytes).toString("base64"),
             kind: "file.chunk",
@@ -374,7 +402,7 @@ function sendImageFile(daemon: FakeAgentDaemon, encoded: string): void {
             sessionId: command.sessionId,
         }),
     );
-    daemon.send(
+    await daemon.sendFlushed(
         encodeFileEndEvent({
             kind: "file.end",
             requestId: command.requestId,
@@ -512,7 +540,7 @@ async function processHappyPathCommand(
         return;
     }
     if (kind === FILE_READ_KIND) {
-        sendImageFile(daemon, encoded);
+        await sendImageFile(daemon, encoded);
         return;
     }
     if (kind !== SESSION_PROMPT_KIND) {
@@ -637,9 +665,16 @@ export function serveFakeAgentDaemon(
             start(await daemon.receiveAny(cancellation.signal));
         }
     })();
+    const disconnected = daemon.unexpectedClose(cancellation.signal);
     void running.catch((error: unknown) => {
         if (!cancellation.signal.aborted) {
             failure.reject(error);
+        }
+    });
+    void disconnected.catch((error: unknown) => {
+        if (!cancellation.signal.aborted) {
+            failure.reject(error);
+            cancellation.abort(error);
         }
     });
     void failure.promise.catch(() => undefined);

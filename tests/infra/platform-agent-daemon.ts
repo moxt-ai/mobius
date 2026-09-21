@@ -55,6 +55,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                             agents: [
                                 {
                                     agentSettingsDiscovery: true,
+                                    sessionTurnConfiguration: true,
                                     agentPath: "/fake/codex",
                                     agentVersion: "fake-agent-daemon",
                                     capabilities: {
@@ -92,10 +93,17 @@ export async function createFakeAgentDaemonRuntime(options: {
         const daemon = resources.use(
             await FakeAgentDaemon.connect(
                 relayUrl,
-                (url) =>
-                    new WebSocket(url, {
+                (url) => {
+                    const socket = new WebSocket(url, {
                         headers: { authorization: `Bearer ${claim.runtimeCredential}` },
-                    }) as unknown as AgentDaemonSocket,
+                    });
+                    return Object.assign(socket, {
+                        sendFlushed: async (data: string): Promise<void> =>
+                            await new Promise<void>((resolve, reject) => {
+                                socket.send(data, (error) => (error === undefined ? resolve() : reject(error)));
+                            }),
+                    }) as unknown as AgentDaemonSocket;
+                },
                 signal,
             ),
         );
