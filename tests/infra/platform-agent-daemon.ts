@@ -54,6 +54,7 @@ export async function createFakeAgentDaemonRuntime(options: {
                         body: JSON.stringify({
                             agents: [
                                 {
+                                    agentSettingsDiscovery: true,
                                     agentPath: "/fake/codex",
                                     agentVersion: "fake-agent-daemon",
                                     capabilities: {

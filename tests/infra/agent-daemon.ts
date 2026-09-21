@@ -1,15 +1,22 @@
 import {
+    AGENT_SETTINGS_DISCOVER_KIND,
+    decodeAgentSettingsDiscoverCommand,
     decodeFileReadCommand,
     decodeMessageKind,
     decodeRuntimeDelivery,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventAcknowledgement,
+    decodeSessionEventDeferred,
+    decodeSessionEventRejection,
+    decodeSessionLiveHistoryLoad,
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     decodeSessionStartedEvent,
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
+    encodeAgentContentEvent,
     encodeAgentMessageDeltaEvent,
+    encodeAgentSettingsDiscoveredEvent,
     encodeDaemonToServiceMessage,
     encodeFileBeginEvent,
     encodeFileChunkEvent,
@@ -18,6 +25,7 @@ import {
     encodeRuntimeHeartbeatAckEvent,
     encodeSessionCompletedEvent,
     encodeSessionEventEnvelope,
+    encodeSessionLiveHistoryLoaded,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
     encodeWorkspaceEntriesEvent,
@@ -25,7 +33,10 @@ import {
     RUNTIME_DELIVERY_KIND,
     RUNTIME_HEARTBEAT_KIND,
     SESSION_EVENT_ACK_KIND,
+    SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
+    SESSION_EVENT_REJECTED_KIND,
+    SESSION_LIVE_HISTORY_LOAD_KIND,
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
@@ -36,6 +47,7 @@ import {
 
 interface SocketEvent {
     readonly data?: unknown;
+    readonly error?: unknown;
 }
 
 export interface AgentDaemonSocket {
@@ -47,7 +59,9 @@ export interface AgentDaemonSocket {
 }
 
 interface PendingMessage {
+    readonly accepts: (message: string) => boolean;
     readonly kind: string;
+    readonly priority: number;
     readonly reject: (reason: Error) => void;
     readonly resolve: (message: string) => void;
 }
@@ -93,19 +107,31 @@ export class FakeAgentDaemon implements AsyncDisposable {
             socket.addEventListener("close", () => resolve(), { once: true });
         });
         socket.addEventListener("message", (event) => {
-            if (typeof event.data !== "string") {
+            const message = event.data;
+            if (typeof message !== "string") {
                 return;
             }
-            const kind = decodeMessageKind(event.data);
-            const pendingIndex = this.#pending.findIndex(
-                (candidate) => candidate.kind === kind || candidate.kind === "*",
+            const kind = decodeMessageKind(message);
+            let pendingIndex = this.#pending.findIndex(
+                (candidate) => candidate.kind === kind && candidate.accepts(message),
             );
+            if (pendingIndex < 0) {
+                pendingIndex = this.#pending.reduce(
+                    (best, candidate, index) =>
+                        candidate.kind === "*" &&
+                        candidate.accepts(message) &&
+                        (best < 0 || candidate.priority > (this.#pending[best]?.priority ?? -1))
+                            ? index
+                            : best,
+                    -1,
+                );
+            }
             const pending = pendingIndex < 0 ? undefined : this.#pending.splice(pendingIndex, 1)[0];
             if (pending === undefined) {
-                this.#messages.push(event.data);
+                this.#messages.push(message);
                 return;
             }
-            pending.resolve(event.data);
+            pending.resolve(message);
         });
         socket.addEventListener("error", () => {
             for (const pending of this.#pending.splice(0)) {
@@ -135,9 +161,10 @@ export class FakeAgentDaemon implements AsyncDisposable {
                 cleanup();
                 reject(new Error("The fake Agent-daemon WebSocket closed while opening"));
             };
-            const error = (): void => {
+            const error = (event: SocketEvent): void => {
                 cleanup();
-                reject(new Error("The fake Agent-daemon WebSocket failed while opening"));
+                const cause = event.error instanceof Error ? event.error : undefined;
+                reject(new Error("The fake Agent-daemon WebSocket failed while opening", { cause }));
             };
             const open = (): void => {
                 cleanup();
@@ -158,9 +185,15 @@ export class FakeAgentDaemon implements AsyncDisposable {
 
     readonly waitForClose = async (signal: AbortSignal): Promise<void> => await waitFor(this.#closed, signal);
 
-    readonly receive = (kind: string, cancellation?: AbortSignal): Promise<string> => {
+    readonly receive = (
+        kind: string,
+        cancellation?: AbortSignal,
+        accepts: (message: string) => boolean = () => true,
+    ): Promise<string> => {
         cancellation?.throwIfAborted();
-        const existingIndex = this.#messages.findIndex((message) => decodeMessageKind(message) === kind);
+        const existingIndex = this.#messages.findIndex(
+            (message) => (kind === "*" || decodeMessageKind(message) === kind) && accepts(message),
+        );
         if (existingIndex >= 0) {
             const message = this.#messages.splice(existingIndex, 1)[0];
             return message === undefined
@@ -171,7 +204,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
             const deadline = AbortSignal.timeout(20_000);
             const signal = cancellation === undefined ? deadline : AbortSignal.any([cancellation, deadline]);
             const pending: PendingMessage = {
+                accepts,
                 kind,
+                priority: 1,
                 reject: (error) => {
                     signal.removeEventListener("abort", abort);
                     reject(error);
@@ -201,7 +236,9 @@ export class FakeAgentDaemon implements AsyncDisposable {
         }
         return new Promise((resolve, reject) => {
             const pending: PendingMessage = {
+                accepts: () => true,
                 kind: "*",
+                priority: 0,
                 reject: (error) => {
                     cancellation.removeEventListener("abort", abort);
                     reject(error);
@@ -245,27 +282,50 @@ export class FakeAgentDaemon implements AsyncDisposable {
         const sourceKey = attemptId === undefined ? `runtime:${sessionId}` : `attempt:${sessionId}:${attemptId}`;
         const sourceSequence = (this.#sourceSequences.get(sourceKey) ?? 0) + 1;
         this.#sourceSequences.set(sourceKey, sourceSequence);
-        this.#socket.send(
-            encodeSessionEventEnvelope({
-                eventId,
-                kind: SESSION_EVENT_KIND,
-                payload,
-                sessionId,
-                source:
-                    attemptId === undefined
-                        ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
-                        : { attemptId, kind: "attempt", sourceSeq: sourceSequence.toString() },
-            }),
-        );
-        const acknowledgement = decodeSessionEventAcknowledgement(await this.receive(SESSION_EVENT_ACK_KIND, signal));
-        if (
-            acknowledgement.eventId !== eventId ||
-            acknowledgement.sessionId !== sessionId ||
-            acknowledgement.duplicate
-        ) {
-            throw new Error("The server returned an invalid Session event acknowledgement");
+        const envelope = encodeSessionEventEnvelope({
+            eventId,
+            kind: SESSION_EVENT_KIND,
+            payload,
+            sessionId,
+            source:
+                attemptId === undefined
+                    ? { kind: "runtime", sourceSeq: sourceSequence.toString() }
+                    : { attemptId, kind: "attempt", sourceSeq: sourceSequence.toString() },
+        });
+        while (true) {
+            const response = this.receive("*", signal, (message) => {
+                const kind = decodeMessageKind(message);
+                if (kind === SESSION_EVENT_ACK_KIND) {
+                    const candidate = decodeSessionEventAcknowledgement(message);
+                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
+                }
+                if (kind === SESSION_EVENT_DEFERRED_KIND) {
+                    const candidate = decodeSessionEventDeferred(message);
+                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
+                }
+                if (kind === SESSION_EVENT_REJECTED_KIND) {
+                    const candidate = decodeSessionEventRejection(message);
+                    return candidate.eventId === eventId && candidate.sessionId === sessionId;
+                }
+                return false;
+            });
+            this.#socket.send(envelope);
+            const encoded = await response;
+            const kind = decodeMessageKind(encoded);
+            if (kind === SESSION_EVENT_DEFERRED_KIND) {
+                const deferred = decodeSessionEventDeferred(encoded);
+                await waitFor(
+                    new Promise<void>((resolve) => setTimeout(resolve, deferred.retryAfterMilliseconds)),
+                    signal ?? AbortSignal.timeout(20_000),
+                );
+                continue;
+            }
+            if (kind === SESSION_EVENT_REJECTED_KIND) {
+                const rejection = decodeSessionEventRejection(encoded);
+                throw new Error(`The server rejected the Session event: ${rejection.code}`);
+            }
+            return decodeSessionEventAcknowledgement(encoded).sequence;
         }
-        return acknowledgement.sequence;
     };
 
     async [Symbol.asyncDispose](): Promise<void> {
@@ -292,13 +352,44 @@ export interface RunningFakeAgentDaemon extends AsyncDisposable {
     readonly failure: Promise<never>;
 }
 
+function sendImageFile(daemon: FakeAgentDaemon, encoded: string): void {
+    const command = decodeFileReadCommand(encoded);
+    daemon.send(
+        encodeFileBeginEvent({
+            byteLength: imageBytes.byteLength,
+            kind: "file.begin",
+            mediaType: "image/png",
+            modifiedAt: "2026-01-01T00:00:00.000Z",
+            name: "generated-image.png",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        }),
+    );
+    daemon.send(
+        encodeFileChunkEvent({
+            data: Buffer.from(imageBytes).toString("base64"),
+            kind: "file.chunk",
+            requestId: command.requestId,
+            sequence: 0,
+            sessionId: command.sessionId,
+        }),
+    );
+    daemon.send(
+        encodeFileEndEvent({
+            kind: "file.end",
+            requestId: command.requestId,
+            sessionId: command.sessionId,
+        }),
+    );
+}
+
 async function processHappyPathCommand(
     daemon: FakeAgentDaemon,
     encoded: string,
     behavior: FakeAgentDaemonBehavior,
-    turn: number,
+    nextTurn: () => number,
     signal: AbortSignal,
-): Promise<number> {
+): Promise<void> {
     const kind = decodeMessageKind(encoded);
     if (kind === RUNTIME_DELIVERY_KIND) {
         const delivery = decodeRuntimeDelivery(encoded);
@@ -309,7 +400,8 @@ async function processHappyPathCommand(
                 sessionId: delivery.sessionId,
             }),
         );
-        return await processHappyPathCommand(daemon, delivery.payload, behavior, turn, signal);
+        await processHappyPathCommand(daemon, delivery.payload, behavior, nextTurn, signal);
+        return;
     }
     if (kind === RUNTIME_HEARTBEAT_KIND) {
         const heartbeat = decodeRuntimeHeartbeatEvent(encoded);
@@ -319,7 +411,7 @@ async function processHappyPathCommand(
                 kind: "runtime.heartbeat.ack",
             }),
         );
-        return turn;
+        return;
     }
     if (kind === WORKSPACE_LIST_KIND) {
         const command = decodeWorkspaceListCommand(encoded);
@@ -334,7 +426,29 @@ async function processHappyPathCommand(
                 requestId: command.requestId,
             }),
         );
-        return turn;
+        return;
+    }
+    if (kind === AGENT_SETTINGS_DISCOVER_KIND) {
+        const command = decodeAgentSettingsDiscoverCommand(encoded);
+        daemon.send(
+            encodeAgentSettingsDiscoveredEvent({
+                agentId: command.agentId,
+                agentName: behavior.agentName ?? "Fake Agent",
+                agentVersion: "fake-agent-daemon",
+                kind: "agent.settings.discovered",
+                modelEffort: {
+                    effortSettingId: "",
+                    modelSettingId: "",
+                    resolution: "unavailable",
+                    unsupportedModelIds: [],
+                    valuesByModel: {},
+                },
+                requestId: command.requestId,
+                settings: [],
+                settingsRevision: "0".repeat(64),
+            }),
+        );
+        return;
     }
     if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(encoded);
@@ -374,79 +488,73 @@ async function processHappyPathCommand(
             // with a direct reply rather than a durable event, which could never commit. Sending it as a
             // Session event here would wait for an acknowledgement that can never arrive.
             daemon.send(encodeDaemonToServiceMessage(ready));
-            return turn;
+            return;
         }
         await daemon.sendSessionEvent(command.sessionId, encodeSessionReadyEvent(ready), signal);
-        return turn;
+        return;
+    }
+    if (kind === SESSION_LIVE_HISTORY_LOAD_KIND) {
+        const command = decodeSessionLiveHistoryLoad(encoded);
+        daemon.send(
+            encodeSessionLiveHistoryLoaded({
+                history: {
+                    status: "unavailable",
+                    cause: {
+                        code: "native_history_unsupported",
+                        message: "The fake Agent daemon does not provide native message history.",
+                    },
+                },
+                kind: "session.live-history.loaded",
+                requestId: command.requestId,
+                sessionId: command.sessionId,
+            }),
+        );
+        return;
     }
     if (kind === FILE_READ_KIND) {
-        const command = decodeFileReadCommand(encoded);
-        daemon.send(
-            encodeFileBeginEvent({
-                byteLength: imageBytes.byteLength,
-                kind: "file.begin",
-                mediaType: "image/png",
-                modifiedAt: "2026-01-01T00:00:00.000Z",
-                name: "generated-image.png",
-                requestId: command.requestId,
-                sessionId: command.sessionId,
-            }),
-        );
-        daemon.send(
-            encodeFileChunkEvent({
-                data: Buffer.from(imageBytes).toString("base64"),
-                kind: "file.chunk",
-                requestId: command.requestId,
-                sequence: 0,
-                sessionId: command.sessionId,
-            }),
-        );
-        daemon.send(
-            encodeFileEndEvent({
-                kind: "file.end",
-                requestId: command.requestId,
-                sessionId: command.sessionId,
-            }),
-        );
-        return turn;
+        sendImageFile(daemon, encoded);
+        return;
     }
     if (kind !== SESSION_PROMPT_KIND) {
-        return turn;
+        return;
     }
     const command = decodeSessionPromptCommand(encoded);
-    const nextTurn = turn + 1;
+    const turn = nextTurn();
+    const createsImage = command.prompt.toLowerCase().includes("image");
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionStartedEvent({
-            attemptId: `fake-attempt-${nextTurn.toString()}`,
+            attemptId: `fake-attempt-${turn.toString()}`,
             commandId: command.commandId,
             kind: SESSION_STARTED_KIND,
             sessionId: command.sessionId,
         }),
         signal,
     );
-    if (command.prompt.toLowerCase().includes("image")) {
-        const content = {
-            artifactId: "",
-            data: "",
-            mimeType: "image/png",
-            name: "Generated image",
-            newText: "",
-            oldText: "",
-            path: imagePath,
-            terminalId: "",
-            text: "",
-            type: "image" as const,
-            uri: imagePath,
-        };
+    const imageContent = createsImage
+        ? {
+              artifactId: "",
+              data: "",
+              mimeType: "image/png",
+              name: "Generated image",
+              newText: "",
+              oldText: "",
+              path: imagePath,
+              terminalId: "",
+              text: "",
+              type: "image" as const,
+              uri: imagePath,
+          }
+        : null;
+    if (imageContent !== null) {
         await daemon.sendSessionEvent(
             command.sessionId,
             encodeAgentActivityEvent({
-                activityId: `fake-image-${nextTurn.toString()}`,
+                activityId: `fake-image-${turn.toString()}`,
                 activityType: "tool",
                 commandId: command.commandId,
-                content: [content],
-                detail: { content: [content], input: command.prompt, kind: "recorded", output: imagePath },
+                content: [imageContent],
+                detail: { content: [imageContent], input: command.prompt, kind: "recorded", output: imagePath },
                 input: command.prompt,
                 kind: "agent.activity",
                 locations: [imagePath],
@@ -466,12 +574,26 @@ async function processHappyPathCommand(
         encodeAgentMessageDeltaEvent({
             commandId: command.commandId,
             kind: "agent.message.delta",
-            messageId: `fake-message-${nextTurn.toString()}`,
+            messageId: `fake-message-${turn.toString()}`,
             sessionId: command.sessionId,
-            text: `${behavior.agentName ?? "Fake Agent"} turn ${nextTurn.toString()}: ${command.prompt}`,
+            text: `${behavior.agentName ?? "Fake Agent"} turn ${turn.toString()}: ${command.prompt}`,
         }),
         signal,
     );
+    if (imageContent !== null) {
+        await daemon.sendSessionEvent(
+            command.sessionId,
+            encodeAgentContentEvent({
+                commandId: command.commandId,
+                content: imageContent,
+                contentId: `fake-image-content-${turn.toString()}`,
+                kind: "agent.content",
+                messageId: `fake-message-${turn.toString()}`,
+                sessionId: command.sessionId,
+            }),
+            signal,
+        );
+    }
     await daemon.sendSessionEvent(
         command.sessionId,
         encodeSessionCompletedEvent({
@@ -482,7 +604,6 @@ async function processHappyPathCommand(
         }),
         signal,
     );
-    return nextTurn;
 }
 
 export function serveFakeAgentDaemon(
@@ -491,11 +612,29 @@ export function serveFakeAgentDaemon(
 ): RunningFakeAgentDaemon {
     const cancellation = new AbortController();
     const failure = Promise.withResolvers<never>();
+    const tasks = new Set<Promise<void>>();
+    let turn = 0;
+    const nextTurn = (): number => {
+        turn += 1;
+        return turn;
+    };
+    const start = (message: string): void => {
+        const task = processHappyPathCommand(daemon, message, behavior, nextTurn, cancellation.signal);
+        tasks.add(task);
+        void task.then(
+            () => tasks.delete(task),
+            (error: unknown) => {
+                tasks.delete(task);
+                if (!cancellation.signal.aborted) {
+                    failure.reject(error);
+                    cancellation.abort(error);
+                }
+            },
+        );
+    };
     const running = (async () => {
-        let turn = 0;
         while (!cancellation.signal.aborted) {
-            const message = await daemon.receiveAny(cancellation.signal);
-            turn = await processHappyPathCommand(daemon, message, behavior, turn, cancellation.signal);
+            start(await daemon.receiveAny(cancellation.signal));
         }
     })();
     void running.catch((error: unknown) => {
@@ -513,6 +652,7 @@ export function serveFakeAgentDaemon(
             } catch {
                 // Cancellation is the normal shutdown path. Real failures are exposed by `failure`.
             }
+            await Promise.allSettled(tasks);
         },
     };
 }

@@ -71,4 +71,6 @@ Make illegal states unrepresentable.
 
 ## Verification
 
-Do not run `pnpm ci:check` on a local machine. For local development, run `pnpm lint` and `pnpm typecheck`, plus only the test cases related to the change when needed.
+For routine local development, run `pnpm lint`, `pnpm typecheck`, and only the
+related test cases. Use `pnpm ci:check` locally only when diagnosing the combined
+CI validation.

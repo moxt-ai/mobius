@@ -2,8 +2,8 @@
 
 ## Repository checks
 
-Do not run `pnpm ci:check` locally. Run lint and type checks, plus only related tests
-when needed:
+Run lint and type checks plus only related tests during normal local development.
+Use `pnpm ci:check` only when diagnosing the combined CI validation:
 
 ```bash
 pnpm lint

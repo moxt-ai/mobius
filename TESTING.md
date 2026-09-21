@@ -124,8 +124,9 @@ Package-specific integration commands exist only for focused iteration. Run
 `pnpm test:coverage` explicitly when coverage is useful for investigation;
 normal test execution does not collect it.
 
-Run `pnpm lint`, `pnpm typecheck`, and the affected test command locally. Reserve
-`pnpm ci:check` for CI.
+Run `pnpm lint`, `pnpm typecheck`, and the affected test command locally.
+`pnpm ci:check` serially reproduces the complete static and deterministic test
+surface when combined CI diagnosis is necessary.
 
 ## CI
 

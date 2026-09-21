@@ -13,13 +13,7 @@ const suites = [
     [
         "agent-daemon",
         ".",
-        [
-            "--config",
-            "vitest.agent-daemon.config.ts",
-            "tests/agent-daemon/controlled-agent/",
-            "--fileParallelism",
-            "--maxWorkers=4",
-        ],
+        ["--config", "vitest.agent-daemon.config.ts", "tests/agent-daemon/controlled-agent/", "--maxWorkers=4"],
     ],
     ["sdk", ".", ["packages/mobius-sdk/tests/", "--coverage.reportsDirectory=coverage/sdk"]],
     [

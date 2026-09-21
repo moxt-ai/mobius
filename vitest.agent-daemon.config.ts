@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
     test: {
-        fileParallelism: false,
+        fileParallelism: true,
         include: [
             "tests/agent-daemon/controlled-agent/**/*.{contract,integration}.test.ts",
             "tests/agent-daemon/real/**/*.integration.test.ts",

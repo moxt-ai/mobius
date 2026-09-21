@@ -35,28 +35,46 @@ export async function serveTestApp(options: {
             for await (const chunk of request) {
                 chunks.push(Buffer.from(chunk));
             }
+            const streaming = request.headers.accept?.startsWith("text/event-stream") === true;
             const result = await options.app.request(
                 new Request(new URL(request.url ?? "/", "http://mobius.test"), {
                     method: request.method ?? "GET",
                     headers: requestHeaders(request),
-                    signal: AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]),
+                    signal: streaming ? options.signal : AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]),
                     ...(chunks.length === 0 ? {} : { body: Buffer.concat(chunks) }),
                 }),
             );
             response.writeHead(result.status, Object.fromEntries(result.headers));
-            response.end(Buffer.from(await result.arrayBuffer()));
+            if (result.body === null) {
+                response.end();
+                return;
+            }
+            const reader = result.body.getReader();
+            response.once("close", () => void reader.cancel().catch(() => undefined));
+            while (!response.closed) {
+                const chunk = await reader.read();
+                if (chunk.done) {
+                    response.end();
+                    break;
+                }
+                response.write(Buffer.from(chunk.value));
+            }
         } catch (cause) {
+            if (options.signal.aborted) {
+                response.end();
+                return;
+            }
             response.destroy(cause instanceof Error ? cause : undefined);
         }
     });
     server.on("upgrade", (request, socket, head) => {
         void (async () => {
-            const result = await options.app.request(
-                new Request(new URL(request.url ?? "/", "http://mobius.test"), {
-                    headers: requestHeaders(request),
-                    signal: AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]),
-                }),
-            );
+            const appRequest = new Request(new URL(request.url ?? "/", "http://mobius.test"), {
+                headers: requestHeaders(request),
+                signal: AbortSignal.any([options.signal, AbortSignal.timeout(15_000)]),
+            });
+            appRequest.headers.set("upgrade", "websocket");
+            const result = await options.app.request(appRequest);
             const peer: unknown = result instanceof SocketResponse ? result.socket : Reflect.get(result, "webSocket");
             if (result.status !== 101 || !(peer instanceof WorkerWebSocket)) {
                 await result.body?.cancel();

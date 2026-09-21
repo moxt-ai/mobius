@@ -2,9 +2,11 @@
 import { fileURLToPath, URL as NodeURL } from "node:url";
 import { readD1Migrations } from "@cloudflare/vitest-plugin";
 import { build } from "esbuild";
-import { convertV4MiniflareOptions, Miniflare } from "miniflare";
+import { convertV4MiniflareOptions, Miniflare, WebSocketPair, Response as WorkerResponse } from "miniflare";
 import type { PlatformRelayBindings, RelayBindings } from "./app.ts";
 import { miniflareDurableObjects } from "./miniflare-durable-objects.ts";
+
+export { convertV4MiniflareOptions, Miniflare, WebSocketPair, WorkerResponse };
 
 /** Owns the real Cloudflare adapters for Runtime/Worker integration scenarios. */
 async function createCloudflareRuntime(profile: "standalone" | "platform") {
