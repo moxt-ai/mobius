@@ -23,6 +23,7 @@ import {
     decodeRuntimeDeliveryReceived,
     decodeRuntimeHeartbeatEvent,
     decodeSessionEventEnvelope,
+    decodeSessionFailedEvent,
     encodeRuntimeDelivery,
     encodeRuntimeDeliveryCommitted,
     encodeRuntimeHeartbeatAckEvent,
@@ -45,6 +46,7 @@ import {
     SESSION_EVENT_DEFERRED_KIND,
     SESSION_EVENT_KIND,
     SESSION_EVENT_REJECTED_KIND,
+    SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
@@ -2131,6 +2133,176 @@ describe("daemon relay connection liveness", () => {
                 expect(closed).not.toContain("4009");
             } finally {
                 diagnostics.close();
+            }
+        } finally {
+            cancellation.abort();
+            await daemon;
+            audit.close();
+            for (const socket of sockets) {
+                socket.destroy();
+            }
+            await new Promise<void>((resolve, reject) => {
+                relay.close((error) => {
+                    if (error === undefined) {
+                        resolve();
+                        return;
+                    }
+                    reject(error);
+                });
+            });
+            restoreEnvironmentVariable("MOBIUS_FAKE_ACP_STATE_DIRECTORY", previousFakeAcpStateDirectory);
+            restoreEnvironmentVariable("MOBIUS_STATE_DIRECTORY", previousStateDirectory);
+            restoreEnvironmentVariable("NO_PROXY", previousNoProxy);
+            restoreEnvironmentVariable("no_proxy", previousLowerNoProxy);
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a Runtime restarted while a Turn was running, When the Relay delivers that Turn's cancellation, Then the daemon settles the abandoned Attempt instead of dropping the cancellation", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-abandoned-cancel-"));
+        const defaultWorkspace = join(stateDirectory, "workspace");
+        await mkdir(defaultWorkspace);
+        const auditDatabasePath = join(stateDirectory, "daemon.sqlite");
+        const commandId = "abandoned-command";
+        const sessionId = "abandoned-session";
+        const promptCommand = encodeSessionPromptCommand({
+            additionalDirectoryIds: [],
+            agentId: "codex",
+            bindingId: "workspace",
+            commandId,
+            directoryId: "default",
+            disposition: "reject",
+            images: [],
+            kind: SESSION_PROMPT_KIND,
+            prompt: "wait until cancelled",
+            resources: [],
+            sessionId,
+            targetCommandId: "",
+        });
+
+        // A Runtime that was executing this Turn before it restarted keeps only its durable receipt. The
+        // restarted process has no in-flight Turn to cancel, while the Relay still counts the Turn as the
+        // Session's active one, so the owning Runtime has to settle the Attempt it abandoned.
+        const priorOutbox = new SessionEventOutbox(auditDatabasePath);
+        const abandoned = priorOutbox.claimExecution(commandId, sessionId, promptCommand);
+        priorOutbox.transitionExecution(commandId, "running");
+        priorOutbox.close();
+
+        const relay = createServer((request, response) => {
+            const url = new URL(request.url ?? "/", "http://127.0.0.1");
+            if (
+                request.method === "PUT" &&
+                url.pathname === `${MOBIUS_API_PREFIX}/channels/abandoned-channel/catalog`
+            ) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(426);
+            response.end();
+        });
+        const sockets = new Set<Duplex>();
+        const upgradeWaiters: Array<() => void> = [];
+        const daemonSockets: Duplex[] = [];
+        const waitForUpgrade = (): Promise<void> => new Promise((resolve) => upgradeWaiters.push(resolve));
+        let observeSettlement = (_encoded: string): void => undefined;
+        const settled = new Promise<string>((resolve) => {
+            observeSettlement = resolve;
+        });
+        relay.on("connection", (socket) => {
+            sockets.add(socket);
+            socket.once("close", () => sockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            if (typeof key !== "string") {
+                socket.destroy();
+                return;
+            }
+            const accept = createHash("sha1").update(`${key}${WEBSOCKET_GUID}`).digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            daemonSockets.push(socket);
+            respondToClientClose(socket);
+            observeClientFrames(socket, (frame) => {
+                if (frame.opcode === 1 && decodeMessageKind(frame.text) === SESSION_EVENT_KIND) {
+                    observeSettlement(frame.text);
+                }
+            });
+            if (daemonSockets.length === 1) {
+                writeServerTextFrame(
+                    socket,
+                    encodeSessionCancelCommand({
+                        commandId,
+                        kind: "session.cancel",
+                        sessionId,
+                    }),
+                );
+            }
+            upgradeWaiters.shift()?.();
+        });
+        await listen(relay);
+
+        const audit = new AuditStore(auditDatabasePath);
+        const cancellation = new AbortController();
+        const timer = new ControllableDaemonTimer();
+        const previousFakeAcpStateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        const previousStateDirectory = process.env["MOBIUS_STATE_DIRECTORY"];
+        const previousNoProxy = process.env["NO_PROXY"];
+        const previousLowerNoProxy = process.env["no_proxy"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = join(stateDirectory, "native");
+        process.env["MOBIUS_STATE_DIRECTORY"] = stateDirectory;
+        process.env["NO_PROXY"] = "127.0.0.1,localhost";
+        process.env["no_proxy"] = "127.0.0.1,localhost";
+        const config = createDaemonConfig(
+            {
+                defaultWorkspace,
+                auditDatabasePath,
+                channelId: "abandoned-channel",
+                relayUrl: new URL(
+                    `ws://127.0.0.1:${readPort(relay)}${MOBIUS_API_PREFIX}/channels/abandoned-channel/daemon?token=abandoned-secret`,
+                ),
+            },
+            [new LocalAgentDefinition("codex", "Codex", process.execPath, [fakeAgentPath])],
+        );
+
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-09-21T00:00:00.000Z"));
+        const firstConnection = waitForUpgrade();
+        const daemon = runDaemon(config, audit, cancellation.signal, timer);
+
+        try {
+            await firstConnection;
+            const settlement = decodeSessionEventEnvelope(await settled);
+            expect(settlement.sessionId).toBe(sessionId);
+            expect(decodeMessageKind(settlement.payload)).toBe(SESSION_FAILED_KIND);
+            // The Relay only accepts a terminal event on the Attempt source it recorded, so the settlement
+            // has to carry the Attempt the restarted Runtime recovered from its durable receipt.
+            expect(settlement.source).toEqual({
+                attemptId: abandoned.attemptId,
+                kind: "attempt",
+                sourceSeq: "1",
+            });
+            const failure = decodeSessionFailedEvent(settlement.payload);
+            expect(failure).toMatchObject({
+                code: "agent_execution_abandoned",
+                commandId,
+                sessionId,
+            });
+
+            // The receipt is terminal afterwards, so a repeated cancellation cannot settle it twice.
+            const settledOutbox = new SessionEventOutbox(auditDatabasePath);
+            try {
+                expect(settledOutbox.isTerminalExecution(commandId, sessionId)).toBe(true);
+                expect(settledOutbox.findUnsettledAttemptId(commandId, sessionId)).toBeNull();
+            } finally {
+                settledOutbox.close();
             }
         } finally {
             cancellation.abort();

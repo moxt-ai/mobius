@@ -875,6 +875,38 @@ function reportFailure(
     );
 }
 
+/**
+ * Settles a Turn this Runtime durably claimed but can no longer execute. A Runtime that restarted
+ * mid-Turn has no in-memory Turn to cancel, while the Relay still counts that Turn as the Session's
+ * active one. Dropping the cancellation would leave the Session permanently unable to accept another
+ * prompt, so the owning Runtime reports the abandoned Attempt as failed instead.
+ */
+function settleAbandonedTurn(
+    publisher: DaemonSessionEventPublisher,
+    outbox: SessionEventOutbox,
+    audit: AuditStore,
+    cancellation: SessionCancelCommand,
+): void {
+    const attemptId = outbox.findUnsettledAttemptId(cancellation.commandId, cancellation.sessionId);
+    if (attemptId === null) {
+        console.warn("Mobius daemon ignored cancellation for an inactive turn");
+        return;
+    }
+    audit.record({
+        commandId: cancellation.commandId,
+        event: "session_abandoned_turn_settled",
+        sessionId: cancellation.sessionId,
+    });
+    reportFailure(
+        publisher,
+        cancellation,
+        "agent_execution_abandoned",
+        "The local Agent execution was abandoned before it completed",
+        attemptId,
+    );
+    outbox.transitionExecution(cancellation.commandId, "failed");
+}
+
 function operationErrorCode(error: unknown): string {
     if (
         error instanceof AcpExecutionError ||
@@ -2306,7 +2338,11 @@ async function runRelayConnection(
                         throw new Error("Runtime delivery Session identity does not match its payload");
                     }
                     const turn = activeTurns.get(cancellation.commandId);
-                    if (turn === undefined || !turn.matches(cancellation) || !turn.requestCancellation()) {
+                    if (turn === undefined || !turn.matches(cancellation)) {
+                        settleAbandonedTurn(publisher, outbox, audit, cancellation);
+                        return;
+                    }
+                    if (!turn.requestCancellation()) {
                         return;
                     }
                     audit.record({
@@ -3018,7 +3054,7 @@ async function runRelayConnection(
                         const cancellation = message;
                         const turn = activeTurns.get(cancellation.commandId);
                         if (turn === undefined || !turn.matches(cancellation)) {
-                            console.warn("Mobius daemon ignored cancellation for an inactive turn");
+                            settleAbandonedTurn(publisher, outbox, audit, cancellation);
                             return;
                         }
                         if (!turn.requestCancellation()) {

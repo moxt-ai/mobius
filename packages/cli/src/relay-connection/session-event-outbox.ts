@@ -295,6 +295,26 @@ export class SessionEventOutbox {
         this.#database.prepare(`UPDATE relay_turn_receipts SET state = ? WHERE command_id = ?`).run(state, commandId);
     };
 
+    /**
+     * The Attempt this Runtime durably claimed for a command, when that Attempt never reached a
+     * terminal state. A restarted Runtime has no in-memory Turn for a command it was executing before
+     * the restart, so this is the only record of the Attempt identity the Relay is still waiting on.
+     */
+    readonly findUnsettledAttemptId = (commandId: string, sessionId: string): string | null => {
+        const row = this.#database
+            .prepare(`SELECT attempt_id, state FROM relay_turn_receipts WHERE command_id = ? AND session_id = ?`)
+            .get(commandId, sessionId);
+        if (typeof row !== "object" || row === null) {
+            return null;
+        }
+        const attemptId = Reflect.get(row, "attempt_id");
+        const state = Reflect.get(row, "state");
+        if (typeof attemptId !== "string" || attemptId.length === 0 || !isDaemonExecutionState(state)) {
+            return null;
+        }
+        return state === "dispatching" || state === "running" ? attemptId : null;
+    };
+
     readonly isTerminalExecution = (commandId: string, sessionId: string): boolean => {
         const row = this.#database
             .prepare(`SELECT state FROM relay_turn_receipts WHERE command_id = ? AND session_id = ?`)
