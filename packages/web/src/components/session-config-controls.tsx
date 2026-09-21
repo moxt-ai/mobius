@@ -628,7 +628,7 @@ export function SessionConfigControls() {
             const requestId = settingsRequestId.current + 1;
             settingsRequestId.current = requestId;
             setSettingsState(new LoadingAgentSettingsLoadState());
-            void loadActiveAgentSettings(agentId, force)
+            void loadActiveAgentSettings(agentId, conversation.sessionId, force)
                 .then((loaded) => {
                     if (loaded.agentId === agentId && settingsRequestId.current === requestId) {
                         setSettingsState(new LoadedAgentSettingsLoadState(loaded));
@@ -645,7 +645,7 @@ export function SessionConfigControls() {
                     setSettingsState(new FailedAgentSettingsLoadState("Agent settings could not be loaded."));
                 });
         },
-        [conversation.agentId, settingsSupported],
+        [conversation.agentId, conversation.sessionId, settingsSupported],
     );
 
     useEffect(() => {
@@ -686,7 +686,13 @@ export function SessionConfigControls() {
                     try {
                         setSettingsState(
                             new LoadedAgentSettingsLoadState(
-                                await selectActiveAgentSetting(conversation.agentId, option.id, value, booleanValue),
+                                await selectActiveAgentSetting(
+                                    conversation.agentId,
+                                    conversation.sessionId,
+                                    option.id,
+                                    value,
+                                    booleanValue,
+                                ),
                             ),
                         );
                         return "";

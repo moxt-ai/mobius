@@ -15,9 +15,14 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-
+import { dataTestId } from "@/data-testid";
 import { AgentOption } from "@/domain/channel";
-import { openPairedApplication, sendReadySession, setupWebIntegrationEnvironment } from "./app-integration-harness.ts";
+import {
+    completeRenderedPrompt,
+    openPairedApplication,
+    sendReadySession,
+    setupWebIntegrationEnvironment,
+} from "./app-integration-harness.ts";
 
 setupWebIntegrationEnvironment();
 
@@ -825,6 +830,146 @@ describe.sequential("Agent-native run settings", () => {
                 expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
             });
             expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given a user selected a model in one conversation, When they select another model in a second conversation on the same Agent and return, Then each conversation keeps its own model", async () => {
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const firstPrepare = decodeSessionPrepareCommand(encodedPrepare);
+            paired.daemon.send(sendDiscoveredModelSettings(discovery.agentId, discovery.requestId, ""));
+            await sendReadySession(paired.daemon, firstPrepare, []);
+            await completeRenderedPrompt(paired.daemon, "First conversation", "First response");
+
+            // Session 1 runs on Model B.
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+            const firstSelection = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            paired.daemon.send(
+                sendDiscoveredModelSettings(firstSelection.agentId, firstSelection.requestId, "model-b"),
+            );
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
+            });
+
+            const sidebar = screen.getByRole("complementary", {
+                name: "Conversation sidebar",
+            });
+            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*⌘ N/ }));
+            const secondPrepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPrepare, []);
+
+            // A New chat is a second conversation of the same Agent. It has no Session yet, so it starts
+            // from what the user last chose rather than from the Agent's own default.
+            const draftTrigger = await screen.findByTestId(dataTestId.runSettingsTrigger);
+            await waitFor(() => {
+                expect(draftTrigger.getAttribute("aria-label")).toBe("Run settings: Model B, Balanced");
+            });
+            fireEvent.click(draftTrigger);
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model A" }));
+
+            fireEvent.click(
+                within(
+                    screen.getByRole("navigation", {
+                        name: "Conversations",
+                    }),
+                ).getByRole("link", { name: /First conversation/ }),
+            );
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
+            });
+
+            const input = await screen.findByRole("combobox", { name: "Message the local agent" });
+            fireEvent.change(input, { target: { value: "Keep the first model" } });
+            fireEvent.click(screen.getByRole("button", { name: "Send message" }));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+            expect(prompt.sessionId).toBe(firstPrepare.sessionId);
+            expect(prompt.sessionConfigurations).toEqual([
+                {
+                    booleanValue: false,
+                    configId: "model",
+                    value: "model-b",
+                    valueType: "select",
+                },
+                {
+                    booleanValue: false,
+                    configId: "reasoning_effort",
+                    value: "balanced",
+                    valueType: "select",
+                },
+            ]);
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given a user never changed the run settings of a conversation, When they change the model in a second conversation of the same Agent, Then the first keeps the settings it opened with", async () => {
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            const firstPrepare = decodeSessionPrepareCommand(encodedPrepare);
+            paired.daemon.send(sendDiscoveredModelSettings(discovery.agentId, discovery.requestId, ""));
+            await sendReadySession(paired.daemon, firstPrepare, []);
+            await completeRenderedPrompt(paired.daemon, "First conversation", "First response");
+            // Session 1 is left exactly as it opened: nothing in it records a model of its own.
+            await screen.findByRole("button", { name: /Run settings: Model A, Low/ });
+
+            const sidebar = screen.getByRole("complementary", { name: "Conversation sidebar" });
+            fireEvent.click(within(sidebar).getByRole("button", { name: /New chat.*\u2318 N/ }));
+            const secondPrepare = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, secondPrepare, []);
+            const draftTrigger = await screen.findByTestId(dataTestId.runSettingsTrigger);
+            await waitFor(() => {
+                expect(draftTrigger.getAttribute("aria-label")).toBe("Run settings: Model A, Low");
+            });
+            fireEvent.click(draftTrigger);
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+            const sel = decodeAgentSettingsDiscoverCommand(await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND));
+            paired.daemon.send(sendDiscoveredModelSettings(sel.agentId, sel.requestId, "model-b"));
+            await waitFor(() => {
+                expect(screen.getByTestId(dataTestId.runSettingsTrigger).getAttribute("aria-label")).toBe(
+                    "Run settings: Model B, Balanced",
+                );
+            });
+
+            fireEvent.click(
+                within(screen.getByRole("navigation", { name: "Conversations" })).getByRole("link", {
+                    name: /First conversation/,
+                }),
+            );
+            // Session 1 opened on the Agent's settings, so those are the settings it owns. Following the
+            // Agent's newest selection instead would restyle a conversation the user is not looking at.
+            const firstTrigger = await screen.findByTestId(dataTestId.runSettingsTrigger);
+            await waitFor(() => {
+                expect(firstTrigger.getAttribute("aria-label")).toBe("Run settings: Model A, Low");
+            });
         } finally {
             await paired.close();
         }

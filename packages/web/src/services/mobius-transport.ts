@@ -268,6 +268,7 @@ async function connectBrowserServiceClients(connection: ChannelConnection): Prom
 abstract class TransportConnection {
     abstract readonly agentSettings: (
         agentId: string,
+        sessionId: string,
         force: boolean,
         signal: AbortSignal,
     ) => Promise<CachedAgentSettings>;
@@ -299,6 +300,7 @@ abstract class TransportConnection {
     abstract readonly installAgent: (request: AgentInstallRequest) => Promise<void>;
     abstract readonly selectAgentSetting: (
         agentId: string,
+        sessionId: string,
         configId: string,
         value: string,
         booleanValue: boolean,
@@ -306,6 +308,7 @@ abstract class TransportConnection {
     ) => Promise<CachedAgentSettings>;
     abstract readonly settingsSelections: (
         agentId: string,
+        sessionId: string,
         signal: AbortSignal,
     ) => Promise<readonly SessionConfigurationSelection[]>;
 }
@@ -489,9 +492,10 @@ class ConnectedTransport extends TransportConnection {
 
     readonly agentSettings = async (
         agentId: string,
+        sessionId: string,
         force: boolean,
         signal: AbortSignal,
-    ): Promise<CachedAgentSettings> => await this.#agentSettings.load(agentId, force, signal);
+    ): Promise<CachedAgentSettings> => await this.#agentSettings.load(agentId, sessionId, force, signal);
 
     readonly readFile = async (sessionId: string, path: string, signal: AbortSignal): Promise<FileReadResult> => {
         const client = await this.#client;
@@ -534,17 +538,20 @@ class ConnectedTransport extends TransportConnection {
 
     readonly selectAgentSetting = async (
         agentId: string,
+        sessionId: string,
         configId: string,
         value: string,
         booleanValue: boolean,
         signal: AbortSignal,
-    ): Promise<CachedAgentSettings> => await this.#agentSettings.select(agentId, configId, value, booleanValue, signal);
+    ): Promise<CachedAgentSettings> =>
+        await this.#agentSettings.select(agentId, sessionId, configId, value, booleanValue, signal);
 
     readonly settingsSelections = async (
         agentId: string,
+        sessionId: string,
         signal: AbortSignal,
     ): Promise<readonly SessionConfigurationSelection[]> =>
-        (await this.#agentSettings.load(agentId, false, signal)).selections();
+        (await this.#agentSettings.load(agentId, sessionId, false, signal)).selections();
 
     readonly steerQueuedTurn = async (request: CancelRequest): Promise<void> => {
         const clients = await this.#serviceClients;
@@ -1037,17 +1044,29 @@ export function initializeMobiusTransport(connection: ChannelConnection, onHisto
     transport = new ConnectedTransport(connection, onHistoryChanged);
 }
 
-export async function loadActiveAgentSettings(agentId: string, force: boolean = false): Promise<CachedAgentSettings> {
-    return await transport.agentSettings(agentId, force, AbortSignal.timeout(120_000));
+export async function loadActiveAgentSettings(
+    agentId: string,
+    sessionId: string,
+    force: boolean = false,
+): Promise<CachedAgentSettings> {
+    return await transport.agentSettings(agentId, sessionId, force, AbortSignal.timeout(120_000));
 }
 
 export async function selectActiveAgentSetting(
     agentId: string,
+    sessionId: string,
     configId: string,
     value: string,
     booleanValue: boolean,
 ): Promise<CachedAgentSettings> {
-    return await transport.selectAgentSetting(agentId, configId, value, booleanValue, AbortSignal.timeout(120_000));
+    return await transport.selectAgentSetting(
+        agentId,
+        sessionId,
+        configId,
+        value,
+        booleanValue,
+        AbortSignal.timeout(120_000),
+    );
 }
 
 export async function prepareActiveSession(expectedSessionId = ""): Promise<void> {
@@ -1338,7 +1357,11 @@ async function sendObservedPrompt(
 
     try {
         const sessionConfigurations = cachedAgentSettings
-            ? await transport.settingsSelections(conversation.agentId, AbortSignal.timeout(120_000))
+            ? await transport.settingsSelections(
+                  conversation.agentId,
+                  conversation.sessionId,
+                  AbortSignal.timeout(120_000),
+              )
             : snapshotSessionConfiguration(conversation.session.configOptions);
         const result = await transport.prompt({
             additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),
@@ -1407,7 +1430,11 @@ async function sendSteeringPrompt(conversation: Conversation, prompt: string, ta
     const cachedAgentSettings = configurationSupported && agent?.agentSettingsDiscovery === true;
     try {
         const sessionConfigurations = cachedAgentSettings
-            ? await transport.settingsSelections(conversation.agentId, AbortSignal.timeout(120_000))
+            ? await transport.settingsSelections(
+                  conversation.agentId,
+                  conversation.sessionId,
+                  AbortSignal.timeout(120_000),
+              )
             : snapshotSessionConfiguration(conversation.session.configOptions);
         await transport.prompt({
             additionalDirectoryIds: conversation.additionalDirectories.map((directory) => directory.directoryId),

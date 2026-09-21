@@ -6,7 +6,12 @@ import type {
     SessionConfigurationSelection,
 } from "@moxt-ai/mobius-sdk";
 import { readStoredAgentSettings, saveStoredAgentSettings } from "@/services/agent-settings-storage";
-import { readSessionConfigPreferences, saveSessionConfigPreferences } from "@/services/session-config-preferences";
+import type { SessionConfigPreference } from "@/services/session-config-preferences";
+import {
+    ensureSessionConfigSelections,
+    readSessionConfigSelections,
+    saveSessionConfigSelections,
+} from "@/services/session-config-preferences";
 
 const MODEL_EFFORT_COMPLETE = "complete";
 const MODEL_EFFORT_ON_MODEL_SELECTION = "on_model_selection";
@@ -58,7 +63,7 @@ function selectedStringValue(setting: AgentSetting): string {
 
 function optionFromSetting(
     setting: AgentSetting,
-    preferences: ReturnType<typeof readSessionConfigPreferences>,
+    preferences: readonly SessionConfigPreference[],
 ): SessionConfigOption {
     const preference = preferences.find((candidate) => candidate.configId === setting.id);
     if (
@@ -231,7 +236,7 @@ function withResolvedEffortOptions(
 function optionsWithCachedEffortSetting(
     event: AgentSettingsDiscoveredEvent,
     options: readonly SessionConfigOption[],
-    preferences: ReturnType<typeof readSessionConfigPreferences>,
+    preferences: readonly SessionConfigPreference[],
 ): readonly SessionConfigOption[] {
     const effortSettingId = event.modelEffort.effortSettingId;
     if (effortSettingId.length === 0 || options.some((option) => option.id === effortSettingId)) {
@@ -309,21 +314,35 @@ export class AgentSettingsCache {
         this.#entries.clear();
     };
 
-    readonly load = async (agentId: string, force: boolean, signal: AbortSignal): Promise<CachedAgentSettings> => {
+    readonly load = async (
+        agentId: string,
+        sessionId: string,
+        force: boolean,
+        signal: AbortSignal,
+    ): Promise<CachedAgentSettings> => {
         const existing = this.#entries.get(agentId) ?? this.#restored(agentId);
         const initial = force || existing === undefined ? await this.#discover(agentId, "", signal) : existing;
-        return await this.#resolveSelectedModel(initial, signal);
+        // The Session's selections decide which model to ask the Agent about, and resolving that may answer
+        // with a freshly discovered entry that carries no Session selection at all, so they are laid over
+        // the result rather than only over the entry the resolution started from.
+        const resolved = await this.#resolveSelectedModel(this.#withSessionSelections(initial, sessionId), signal);
+        const settings = this.#withSessionSelections(resolved, sessionId);
+        // A Session with nothing recorded opens on the Agent's settings and keeps them from then on, so a
+        // selection made in another conversation of this Agent cannot restyle this one behind the user.
+        ensureSessionConfigSelections(this.#channelId, agentId, sessionId, settings.options);
+        return settings;
     };
 
     readonly select = async (
         agentId: string,
+        sessionId: string,
         configId: string,
         value: string,
         booleanValue: boolean,
         signal: AbortSignal,
     ): Promise<CachedAgentSettings> => {
-        const existing = await this.load(agentId, false, signal);
-        const preferences = readSessionConfigPreferences(this.#channelId, agentId);
+        const existing = await this.load(agentId, sessionId, false, signal);
+        const preferences = readSessionConfigSelections(this.#channelId, agentId, sessionId);
         const selected = optionWithSelection(
             optionsWithCachedEffortSetting(existing.event, existing.options, preferences),
             configId,
@@ -358,10 +377,43 @@ export class AgentSettingsCache {
                 optionsWithCachedEffortSetting(selectedEntry.event, selectedEntry.options, preferences),
             ),
         );
-        this.#entries.set(agentId, adjusted);
-        saveSessionConfigPreferences(this.#channelId, agentId, adjusted.options);
+        // Only this Session is adjusted. What the cache holds stays the Agent's own capability -- the entry
+        // `#discover` and `#restored` record -- so the next conversation of this Agent still starts from the
+        // Agent's settings and lays its own selection over them.
+        //
+        // The change itself is what records the Session's run settings. Everything afterwards -- another
+        // conversation of the same Agent, a later prompt -- reads that back instead of assuming the Agent is
+        // still holding the setting the user is looking at here.
+        saveSessionConfigSelections(this.#channelId, agentId, sessionId, adjusted.options);
         return adjusted;
     };
+
+    /**
+     * The Session's run settings, laid over the Agent capability the cache holds.
+     *
+     * Discovered settings describe the Agent, not one Session, so what the cache stores is the Agent's own
+     * answer. The option ids and their available values come from that capability, while the selected
+     * values come from the Session: its recorded selection, or the Agent's when the Session has none.
+     */
+    readonly #withSessionSelections = (entry: CachedAgentSettings, sessionId: string): CachedAgentSettings =>
+        new CachedAgentSettings(
+            entry.agentId,
+            entry.event,
+            this.#resolvedOptions(entry.event, readSessionConfigSelections(this.#channelId, entry.agentId, sessionId)),
+        );
+
+    readonly #resolvedOptions = (
+        event: AgentSettingsDiscoveredEvent,
+        preferences: readonly SessionConfigPreference[],
+    ): readonly SessionConfigOption[] =>
+        withResolvedEffortOptions(
+            event,
+            optionsWithCachedEffortSetting(
+                event,
+                event.settings.map((setting) => optionFromSetting(setting, preferences)),
+                preferences,
+            ),
+        );
 
     readonly #discover = async (agentId: string, model: string, signal: AbortSignal): Promise<CachedAgentSettings> => {
         const key = `${agentId}\u0000${model}`;
@@ -391,13 +443,10 @@ export class AgentSettingsCache {
             event,
             this.#entries.get(agentId) ?? this.#restored(agentId),
         );
-        const preferences = readSessionConfigPreferences(this.#channelId, agentId);
-        const options = withResolvedEffortOptions(
-            cachedEvent,
-            cachedEvent.settings.map((setting) => optionFromSetting(setting, preferences)),
-        );
+        // What the Agent reports is its capability, and that is Agent-scoped, so no Session selection is
+        // laid over it here. Each Session's own is applied when that Session loads.
         saveStoredAgentSettings(this.#channelId, agentId, this.#versions.version(agentId), cachedEvent);
-        return new CachedAgentSettings(agentId, cachedEvent, options);
+        return new CachedAgentSettings(agentId, cachedEvent, this.#resolvedOptions(cachedEvent, []));
     };
 
     readonly #restored = (agentId: string): CachedAgentSettings | undefined => {
@@ -405,15 +454,7 @@ export class AgentSettingsCache {
         if (event === undefined) {
             return undefined;
         }
-        const preferences = readSessionConfigPreferences(this.#channelId, agentId);
-        const entry = new CachedAgentSettings(
-            agentId,
-            event,
-            withResolvedEffortOptions(
-                event,
-                event.settings.map((setting) => optionFromSetting(setting, preferences)),
-            ),
-        );
+        const entry = new CachedAgentSettings(agentId, event, this.#resolvedOptions(event, []));
         this.#entries.set(agentId, entry);
         return entry;
     };
