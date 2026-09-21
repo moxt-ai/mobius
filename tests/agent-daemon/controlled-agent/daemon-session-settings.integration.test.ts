@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -45,6 +45,7 @@ import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 const fakeCodexAppServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
+const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -609,23 +610,10 @@ describe("daemon session configuration boundary", () => {
         const executableDirectory = join(stateDirectory, "external");
         const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
         const codexPath = join(executableDirectory, "codex");
-        const managedAdapterPath = join(
-            stateDirectory,
-            "adapters",
-            "codex",
-            "1.8.0",
-            "node_modules",
-            "@agentclientprotocol",
-            "codex-acp",
-            "dist",
-            "index.js",
-        );
-        const managedAdapterPackageRoot = dirname(dirname(managedAdapterPath));
         await Promise.all([
             mkdir(workspace, { recursive: true }),
             mkdir(nativeStateDirectory, { recursive: true }),
             mkdir(executableDirectory, { recursive: true }),
-            mkdir(dirname(managedAdapterPath), { recursive: true }),
         ]);
 
         const catalogBodies: string[] = [];
@@ -666,46 +654,20 @@ describe("daemon session configuration boundary", () => {
             );
             socketReady.resolve(socket);
         });
-        await Promise.all([
-            writeFile(
-                codexPath,
-                executableSource(`
+        await writeFile(
+            codexPath,
+            executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
 } else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+  process.exit(80);
 }
 `),
-                { mode: 0o700 },
-            ),
-            writeFile(
-                managedAdapterPath,
-                executableSource(`
-import { spawn } from "node:child_process";
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.8.0\\n");
-} else {
-  const executable = process.env.CODEX_PATH;
-  if (executable === undefined) process.exit(91);
-  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
-  child.once("error", () => process.exit(92));
-  child.once("exit", (code) => process.exit(code ?? 93));
-}
-`),
-                { mode: 0o700 },
-            ),
-            writeFile(
-                join(managedAdapterPackageRoot, "package.json"),
-                JSON.stringify({
-                    bin: { "codex-acp": "dist/index.js" },
-                    name: "@agentclientprotocol/codex-acp",
-                    version: "1.8.0",
-                }),
-                { mode: 0o600 },
-            ),
-        ]);
-        await Promise.all([chmod(codexPath, 0o700), chmod(managedAdapterPath, 0o700)]);
+            { mode: 0o700 },
+        );
+        await chmod(codexPath, 0o700);
         await listen(relay);
 
         const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);

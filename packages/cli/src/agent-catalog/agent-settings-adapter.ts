@@ -6,7 +6,7 @@ import {
     type SessionConfigValue,
 } from "@moxt-ai/mobius-protocol";
 
-import type { LocalAgentDefinition } from "./local-agent.ts";
+import type { AcpAgentDefinition } from "./local-agent.ts";
 
 const AGENT_DEFAULT_VALUE = "agent_default";
 const READ_ONLY_VALUE = "read-only";
@@ -26,20 +26,20 @@ class AgentSettingsConfigurationError extends Error {
 }
 
 export class AgentSettingsLaunchSelectionResult {
-    readonly agent: LocalAgentDefinition;
+    readonly agent: AcpAgentDefinition;
     readonly handled: boolean;
 
-    constructor(agent: LocalAgentDefinition, handled: boolean) {
+    constructor(agent: AcpAgentDefinition, handled: boolean) {
         this.agent = agent;
         this.handled = handled;
     }
 }
 
 export class AppliedAgentLaunchSettings {
-    readonly agent: LocalAgentDefinition;
+    readonly agent: AcpAgentDefinition;
     readonly sessionConfigurations: readonly SessionConfigurationSelection[];
 
-    constructor(agent: LocalAgentDefinition, sessionConfigurations: readonly SessionConfigurationSelection[]) {
+    constructor(agent: AcpAgentDefinition, sessionConfigurations: readonly SessionConfigurationSelection[]) {
         this.agent = agent;
         this.sessionConfigurations = Object.freeze([...sessionConfigurations]);
     }
@@ -49,11 +49,11 @@ export class AgentSettingsAdapter {
     readonly modelEffortResolution: string = AGENT_MODEL_EFFORT_RESOLUTION_ON_MODEL_SELECTION;
 
     readonly applyLaunchSelection = (
-        agent: LocalAgentDefinition,
+        agent: AcpAgentDefinition,
         _selection: SessionConfigurationSelection,
     ): AgentSettingsLaunchSelectionResult => new AgentSettingsLaunchSelectionResult(agent, false);
 
-    readonly settings = (_agent: LocalAgentDefinition): readonly SessionConfigOption[] => [];
+    readonly settings = (_agent: AcpAgentDefinition): readonly SessionConfigOption[] => [];
 }
 
 function selectValue(name: string, value: string, description: string): SessionConfigValue {
@@ -111,7 +111,7 @@ const dshAccessModes: readonly SessionConfigValue[] = Object.freeze([
 ]);
 
 class DeepSeekHarnessSettingsAdapter extends AgentSettingsAdapter {
-    override readonly settings = (agent: LocalAgentDefinition): readonly SessionConfigOption[] => {
+    override readonly settings = (agent: AcpAgentDefinition): readonly SessionConfigOption[] => {
         const configured = agent.environment["DSH_PERMISSION_MODE"] ?? WORKSPACE_WRITE_VALUE;
         return [
             selectSetting(
@@ -125,7 +125,7 @@ class DeepSeekHarnessSettingsAdapter extends AgentSettingsAdapter {
     };
 
     override readonly applyLaunchSelection = (
-        agent: LocalAgentDefinition,
+        agent: AcpAgentDefinition,
         selection: SessionConfigurationSelection,
     ): AgentSettingsLaunchSelectionResult => {
         if (selection.configId !== DEEPSEEK_HARNESS_ACCESS_MODE_SETTING_ID) {
@@ -184,7 +184,7 @@ function openCodePermission(value: string): unknown {
 }
 
 class OpenCodeSettingsAdapter extends AgentSettingsAdapter {
-    override readonly settings = (agent: LocalAgentDefinition): readonly SessionConfigOption[] => {
+    override readonly settings = (agent: AcpAgentDefinition): readonly SessionConfigOption[] => {
         const currentValue = agent.environment["MOBIUS_OPENCODE_PERMISSION"] ?? AGENT_DEFAULT_VALUE;
         return [
             selectSetting(
@@ -198,7 +198,7 @@ class OpenCodeSettingsAdapter extends AgentSettingsAdapter {
     };
 
     override readonly applyLaunchSelection = (
-        agent: LocalAgentDefinition,
+        agent: AcpAgentDefinition,
         selection: SessionConfigurationSelection,
     ): AgentSettingsLaunchSelectionResult => {
         if (selection.configId !== OPENCODE_PERMISSION_SETTING_ID) {
@@ -245,7 +245,7 @@ export function agentSettingsAdapterForAgent(agentId: string): AgentSettingsAdap
 }
 
 export function applyAgentLaunchSettings(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     selections: readonly SessionConfigurationSelection[],
 ): AppliedAgentLaunchSettings {
     const adapter = agentSettingsAdapterForAgent(agent.id);

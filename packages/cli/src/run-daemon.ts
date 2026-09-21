@@ -96,9 +96,9 @@ import {
     supportedLocalAgentSpecifications,
 } from "./agent-catalog/discover-local-agents.ts";
 import {
+    type AcpAgentDefinition,
     AgentIntegrationDefinition,
     LocalAgentCatalogError,
-    type LocalAgentDefinition,
 } from "./agent-catalog/local-agent.ts";
 import { publishAgentCatalog } from "./agent-catalog/publish-agent-catalog.ts";
 import {
@@ -1033,7 +1033,7 @@ function settingFromOption(option: SessionConfigOption): AgentSetting {
 }
 
 function settingsFromSnapshot(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     configOptions: readonly SessionConfigOption[],
 ): readonly AgentSetting[] {
     const settings = [
@@ -1098,7 +1098,7 @@ function unavailableModelEffort(): AgentModelEffort {
 
 async function discoverModelEffort(
     command: AgentSettingsDiscoverCommand,
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     resolution: string,
     initialOptions: readonly SessionConfigOption[],
     selectedOptions: readonly SessionConfigOption[],
@@ -1207,7 +1207,7 @@ async function discoverModelEffort(
 }
 
 function settingsRevision(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     reportedAgentVersion: string,
     settings: readonly AgentSetting[],
     modelEffort: AgentModelEffort,
@@ -1228,7 +1228,7 @@ function settingsRevision(
     return createHash("sha256")
         .update(
             JSON.stringify({
-                adapterVersion: agent.adapterVersion,
+                adapterVersion: agent.kind === "acp-adapter-process" ? agent.adapterVersion : agent.agentVersion,
                 agentId: agent.id,
                 agentVersion: agent.agentVersion,
                 modelEffort: revisionModelEffort,
@@ -1681,7 +1681,7 @@ function invalidSessionConfiguration(message: string): AcpExecutionError {
 }
 
 function agentForSessionConfiguration(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     selections: readonly SessionConfigurationSelection[],
 ): ReturnType<typeof applyAgentLaunchSettings> {
     try {
@@ -1783,7 +1783,7 @@ async function applySessionConfigurationSelection(
     audit: AuditStore,
     options: readonly SessionConfigOption[],
     selection: SessionConfigurationSelection,
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     cwd: string,
     additionalDirectories: readonly string[],
     commandId: string,
@@ -1868,7 +1868,7 @@ async function applyCompleteSessionConfiguration(
     audit: AuditStore,
     initialOptions: readonly SessionConfigOption[],
     selections: readonly SessionConfigurationSelection[],
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     cwd: string,
     additionalDirectories: readonly string[],
     commandId: string,
@@ -1998,12 +1998,12 @@ export interface RunDaemonOptions {
 // disk, so a transient probe failure cannot silently drop a working Agent. A genuine removal, or a
 // replaced executable, stops satisfying that check and is still reflected in the catalog.
 async function retainStillInstalledAgents(
-    previous: readonly LocalAgentDefinition[],
-    refreshed: readonly LocalAgentDefinition[],
+    previous: readonly AcpAgentDefinition[],
+    refreshed: readonly AcpAgentDefinition[],
     signal: AbortSignal,
-): Promise<readonly LocalAgentDefinition[]> {
+): Promise<readonly AcpAgentDefinition[]> {
     const refreshedIdentifiers = new Set(refreshed.map((agent) => agent.id));
-    const retained: LocalAgentDefinition[] = [];
+    const retained: AcpAgentDefinition[] = [];
     for (const agent of previous) {
         if (refreshedIdentifiers.has(agent.id)) {
             continue;

@@ -13,6 +13,7 @@ import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import {
     BridgedAcpAgentDefinition,
     DirectAcpAgentDefinition,
+    InProcessAcpAgentDefinition,
     type LocalAgentSpecification,
 } from "./agent-specification.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
@@ -102,7 +103,7 @@ export async function resolveAdapterExecutables(
     specification: LocalAgentSpecification,
     context: LocalAgentDiscoveryContext,
 ): Promise<readonly ResolvedExecutable[]> {
-    if (specification instanceof DirectAcpAgentDefinition) {
+    if (specification instanceof DirectAcpAgentDefinition || specification instanceof InProcessAcpAgentDefinition) {
         return await resolveAgentExecutables(specification, context);
     }
     if (!(specification instanceof BridgedAcpAgentDefinition)) {

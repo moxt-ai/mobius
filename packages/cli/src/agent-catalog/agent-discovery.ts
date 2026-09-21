@@ -1,8 +1,8 @@
 import type { LocalAgentSpecification } from "./agent-specification.ts";
 import {
+    type AcpAgentDefinition,
     type AgentIntegrationDefinition,
     type InstallableAgentDefinition,
-    type LocalAgentDefinition,
     MissingAgentDefinition,
 } from "./local-agent.ts";
 
@@ -16,10 +16,10 @@ export abstract class AgentDiscovery {
 }
 
 export class AvailableAgent extends AgentDiscovery {
-    readonly agent: LocalAgentDefinition;
+    readonly agent: AcpAgentDefinition;
     readonly status = "ready";
 
-    constructor(specification: LocalAgentSpecification, agent: LocalAgentDefinition) {
+    constructor(specification: LocalAgentSpecification, agent: AcpAgentDefinition) {
         super(specification);
         this.agent = agent;
     }
@@ -139,5 +139,5 @@ export class LocalAgentInventory {
         this.unavailable = Object.freeze(unavailable);
     }
 
-    readonly readyAgents = (): readonly LocalAgentDefinition[] => this.available.map((discovery) => discovery.agent);
+    readonly readyAgents = (): readonly AcpAgentDefinition[] => this.available.map((discovery) => discovery.agent);
 }

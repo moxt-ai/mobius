@@ -9,7 +9,7 @@ import {
     DeepSeekHarnessAgentSpecification,
     discoverLocalAgentInventory,
 } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
-import type { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
+import type { AcpAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
@@ -46,7 +46,7 @@ if (process.argv.includes("--version")) {
     await chmod(path, 0o700);
 }
 
-async function discoverHarness(imagePrompt: boolean): Promise<readonly LocalAgentDefinition[]> {
+async function discoverHarness(imagePrompt: boolean): Promise<readonly AcpAgentDefinition[]> {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-dsh-image-prompt-"));
     const workspace = join(temporaryDirectory, "workspace");
     const executableDirectory = join(temporaryDirectory, "external");

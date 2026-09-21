@@ -3,7 +3,7 @@ import { appendFileSync } from "node:fs";
 
 export const agentDaemonConfigurations = [
     { agent: "opencode", packages: "opencode-ai@1.18.29" },
-    { agent: "codex", packages: "@openai/codex@0.154.0 @agentclientprotocol/codex-acp@1.12.0" },
+    { agent: "codex", packages: "@openai/codex@0.154.0" },
     { agent: "copilot", packages: "@github/copilot@1.0.83" },
     { agent: "cursor", packages: "" },
     { agent: "pi", packages: "@earendil-works/pi-coding-agent@0.85.0 pi-acp@0.0.33" },
@@ -37,6 +37,10 @@ const agentFiles = new Map(
         [`packages/cli/src/agent-catalog/agents/${specification}.ts`, agent],
     ]),
 );
+
+// Files under `packages/cli/src/` are shared by every Agent, except the in-process adapter that
+// belongs to exactly one vendor protocol. Keep those owned so a Codex change selects only Codex.
+const agentDirectories = new Map([["packages/cli/src/acp/codex/", "codex"]]);
 
 const sharedFiles = new Set([
     ".github/actions/setup/action.yml",
@@ -87,6 +91,11 @@ export function selectAgentDaemonTests(changedFiles) {
         const ownedAgent = agentFiles.get(file);
         if (ownedAgent !== undefined) {
             addAgents(selected, reasons, [ownedAgent], file);
+            continue;
+        }
+        const ownedDirectory = [...agentDirectories].find(([directory]) => file.startsWith(directory));
+        if (ownedDirectory !== undefined) {
+            addAgents(selected, reasons, [ownedDirectory[1]], file);
             continue;
         }
         if (file === "tests/agent-daemon/providers/openai.ts") {

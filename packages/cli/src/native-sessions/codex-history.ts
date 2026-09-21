@@ -7,9 +7,9 @@ import {
     SESSION_HISTORY_PREVIEW_MESSAGE_LIMIT,
 } from "@moxt-ai/mobius-protocol";
 import { z } from "zod";
+import { AcpExecutionError } from "../acp/acp-error.ts";
 import { nativeSessionIdSchema } from "../acp/native-session.ts";
-import { AcpExecutionError } from "../acp/session-manager.ts";
-import type { LocalAgentDefinition } from "../agent-catalog/local-agent.ts";
+import type { AcpAgentDefinition } from "../agent-catalog/local-agent.ts";
 import { revalidateExecutable, stopProcessTree } from "../process/executable.ts";
 import { embedLocalHistoryImages } from "./history-images.ts";
 
@@ -286,7 +286,7 @@ function decodeHistory(
 
 /** Metadata and paginated display history do not acquire the source writer. */
 async function readCodexHistoryWithOptions(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     cwd: string,
     nativeSessionId: string,
     signal: AbortSignal,
@@ -462,7 +462,7 @@ async function readCodexHistoryWithOptions(
 
 /** Reads the compact message transcript used by native-session previews. */
 export const readCodexHistory = async (
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     cwd: string,
     nativeSessionId: string,
     signal: AbortSignal,
@@ -471,7 +471,7 @@ export const readCodexHistory = async (
 
 /** Reads the complete Codex turn items used to restore non-retained Chats. */
 export const readCodexFullHistory = async (
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     cwd: string,
     nativeSessionId: string,
     signal: AbortSignal,

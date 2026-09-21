@@ -20,7 +20,7 @@ import { normalizeAcpCapabilities } from "../acp/session-capabilities.ts";
 import { captureProcessTree, stopProcessTree } from "../process/executable.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
 import type { LocalAgentSpecification } from "./agent-specification.ts";
-import type { LocalAgentDefinition } from "./local-agent.ts";
+import type { AcpAgentDefinition, InProcessAcpAgentDefinition } from "./local-agent.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 
 const ACP_OUTPUT_LIMIT_BYTES = 1024 * 1024;
@@ -109,9 +109,59 @@ function writableAcpStream(output: NodeJS.WritableStream): WritableStream<Uint8A
     });
 }
 
+/**
+ * Probes an in-process agent by running the real ACP conversation against it: Mobius starts the
+ * vendor's app-server, initializes it, and performs the same `initialize` handshake the daemon will.
+ * There is no adapter executable to spawn, so the probe exercises the code that will serve sessions.
+ */
+async function probeInProcessReadiness(
+    agent: InProcessAcpAgentDefinition,
+    environment: Readonly<NodeJS.ProcessEnv>,
+    defaultWorkspace: string,
+    controller: AbortController,
+): Promise<VerifiedAcpReadiness> {
+    const inProcess = agent.createEndpoint({
+        command: agent.command,
+        cwd: defaultWorkspace,
+        environment: { ...filterEnvironment(environment), ...agent.environment },
+    });
+    try {
+        await inProcess.initialize(controller.signal);
+        const connection = createAcpClient(new DiscoveryAcpHandler()).connect(inProcess.app());
+        const initialized = await connection.agent.request(
+            methods.agent.initialize,
+            {
+                clientCapabilities: {},
+                clientInfo: { name: "mobius", version: "0.0.3" },
+                protocolVersion: PROTOCOL_VERSION,
+            },
+            { cancellationSignal: controller.signal },
+        );
+        if (initialized.protocolVersion !== PROTOCOL_VERSION) {
+            throw new AgentProbeError("acp_incompatible", "ACP agent selected an unsupported protocol version");
+        }
+        return new VerifiedAcpReadiness(
+            normalizeVersionOutput(initialized.agentInfo?.version ?? ""),
+            normalizeAcpCapabilities(initialized),
+        );
+    } finally {
+        await inProcess.close();
+    }
+}
+
+function filterEnvironment(environment: Readonly<NodeJS.ProcessEnv>): Readonly<Record<string, string>> {
+    const filtered: Record<string, string> = {};
+    for (const [name, value] of Object.entries(environment)) {
+        if (typeof value === "string") {
+            filtered[name] = value;
+        }
+    }
+    return filtered;
+}
+
 export async function probeAcpReadiness(
     specification: LocalAgentSpecification,
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     environment: Readonly<NodeJS.ProcessEnv>,
     defaultWorkspace: string,
     signal: AbortSignal,
@@ -127,6 +177,22 @@ export async function probeAcpReadiness(
     signal.addEventListener("abort", abort, { once: true });
     if (signal.aborted) {
         abort();
+    }
+    if (agent.kind === "in-process-acp") {
+        try {
+            return await probeInProcessReadiness(agent, environment, defaultWorkspace, controller);
+        } catch (error) {
+            if (signal.aborted) {
+                signal.throwIfAborted();
+            }
+            if (timedOut) {
+                throw new AgentProbeError("adapter_probe_timeout", "ACP agent probe timed out", { cause: error });
+            }
+            throw error;
+        } finally {
+            clearTimeout(timeout);
+            signal.removeEventListener("abort", abort);
+        }
     }
     const child = spawn(agent.adapterPath, [...agent.arguments], {
         cwd: defaultWorkspace,

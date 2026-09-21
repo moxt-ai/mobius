@@ -2,6 +2,7 @@ import { join } from "node:path";
 
 import type { ClientConnection, InitializeResponse } from "@agentclientprotocol/sdk";
 
+import type { InProcessAcpEndpointFactory } from "../acp/in-process/acp-endpoint.ts";
 import type { ManagedNpmPackageDefinition } from "../agent-installation/managed-npm-package.ts";
 import { type ResolvedExecutable, resolveExecutablePath } from "../process/executable.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
@@ -85,6 +86,34 @@ export abstract class DirectAcpAgentDefinition extends LocalAgentSpecification {
         this.adapterOverrideVariable = executableOverrideVariable;
         this.agentOverrideVariable = executableOverrideVariable;
         this.launchArguments = Object.freeze([...launchArguments]);
+        this.managedAdapterExecutablePath = Object.freeze([...managedExecutablePath]);
+        this.managedAgentExecutablePath = this.managedAdapterExecutablePath;
+    }
+}
+
+/**
+ * A vendor CLI that does not speak ACP, which Mobius drives through the vendor's own protocol from an
+ * ACP Agent hosted inside the daemon. There is no adapter to install or version-probe: the same
+ * executable is both the Agent and the thing Mobius spawns, so it shares the Agent's override
+ * variable and managed path.
+ *
+ * `createEndpoint` is the whole vendor contract. Discovery, the readiness probe, and the session
+ * manager use it without naming an Agent, so adding an in-process Agent stays a registration rather
+ * than an edit to generic code.
+ */
+export abstract class InProcessAcpAgentDefinition extends LocalAgentSpecification {
+    abstract readonly createEndpoint: InProcessAcpEndpointFactory;
+    readonly launchArguments: readonly string[] = Object.freeze([]);
+    readonly adapterOverrideVariable: string;
+    readonly adapterVersion = "in-process";
+    readonly agentOverrideVariable: string;
+    readonly managedAdapterExecutablePath: readonly string[];
+    readonly managedAgentExecutablePath: readonly string[];
+
+    protected constructor(executableOverrideVariable: string, managedExecutablePath: readonly string[]) {
+        super();
+        this.adapterOverrideVariable = executableOverrideVariable;
+        this.agentOverrideVariable = executableOverrideVariable;
         this.managedAdapterExecutablePath = Object.freeze([...managedExecutablePath]);
         this.managedAgentExecutablePath = this.managedAdapterExecutablePath;
     }

@@ -13,7 +13,10 @@ class AvailableAgentDiagnostic {
     readonly status = "ready";
 
     constructor(discovery: AvailableAgent) {
-        this.adapterVersion = discovery.agent.adapterVersion;
+        this.adapterVersion =
+            discovery.agent.kind === "acp-adapter-process"
+                ? discovery.agent.adapterVersion
+                : discovery.agent.agentVersion;
         this.agentVersion = discovery.agent.agentVersion;
         this.id = discovery.specification.id;
         this.label = discovery.specification.label;

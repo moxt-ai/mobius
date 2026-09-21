@@ -42,7 +42,8 @@ import { VerifiedDownload } from "../../../packages/cli/src/agent-installation/v
 import { resolveExecutablePath, runBoundedProcess } from "../../../packages/cli/src/process/executable.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const _fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -140,9 +141,10 @@ async function writeExternalCodexAgent(path: string): Promise<void> {
         executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
 } else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+  process.exit(80);
 }
 `),
         { mode: 0o700 },
@@ -193,7 +195,7 @@ function createManager(
 }
 
 describe("local Agent integration installation", () => {
-    it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and checks again, Then Mobius installs only the adapter and publishes the detected Agent details", async () => {
+    it("Given the daemon did not detect Codex at startup, When the user installs Codex locally and checks again, Then Mobius verifies the in-process Agent and publishes its details", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-after-agent-install-"));
         const executableDirectory = join(stateDirectory, "external");
         const agentPath = join(executableDirectory, "codex");
@@ -220,33 +222,30 @@ describe("local Agent integration installation", () => {
             const installed = await manager.request(request("integration-after-agent"), new AbortController().signal);
 
             expect(installed).toBeInstanceOf(SucceededInstallation);
-            expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
+            // Codex hosts its ACP Agent in-process, so there is no adapter to install.
+            expect(adapterInstaller.installedAgentIds).toEqual([]);
             expect(catalog.read().installableAgents).toEqual([]);
             expect(catalog.read().agents.map((agent) => agent.id)).toEqual(["refreshed-agent", "codex"]);
             expect(catalog.read().agents[1]).toMatchObject({
                 agentVersion: "codex 0.153.0",
                 id: "codex",
+                kind: "in-process-acp",
             });
             expect(catalog.read().agents[1]?.agentIdentity.requestedPath).toBe(agentPath);
-            expect(
-                observer.states
-                    .filter(
-                        (state): state is RunningInstallation =>
-                            state instanceof RunningInstallation && state.requestId === "integration-after-agent",
-                    )
-                    .map((state) => state.stage),
-            ).toEqual(["installing_adapter", "checking_acp"]);
-            expect(audit.events).toContain("agent_installation_acp_verified");
+            // The app-server handshake during discovery is the whole verification: an in-process
+            // Agent is ready the moment its binary is, so no install stage runs at all.
+            expect(observer.states.filter((state) => state instanceof RunningInstallation)).toEqual([]);
+            expect(audit.events).not.toContain("agent_adapter_verified");
+            expect(audit.events).not.toContain("agent_adapter_verified");
         } finally {
             await rm(stateDirectory, { force: true, recursive: true });
         }
     });
 
-    it("Given Codex is installed with an incompatible automatically discovered adapter, When the user installs the integration, Then Mobius preserves Codex and replaces only the adapter", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-adapter-repair-"));
+    it("Given Codex is installed, When the user installs the integration, Then Mobius verifies the in-process Agent without installing any adapter", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-integration-in-process-"));
         const executableDirectory = join(stateDirectory, "external");
         const agentPath = join(executableDirectory, "codex");
-        const adapterPath = join(executableDirectory, "codex-acp");
         const catalog = new LocalAgentCatalog(
             [],
             [new AgentIntegrationDefinition("codex", "Codex", agentPath, "codex 0.153.0")],
@@ -257,18 +256,6 @@ describe("local Agent integration installation", () => {
 
         try {
             await writeExternalCodexAgent(agentPath);
-            await writeFile(
-                adapterPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.7.0\\n");
-} else {
-  process.exit(7);
-}
-`),
-                { mode: 0o700 },
-            );
-            await chmod(adapterPath, 0o700);
             const manager = createManager(
                 stateDirectory,
                 executableDirectory,
@@ -279,15 +266,15 @@ if (process.argv.includes("--version")) {
             );
 
             await expect(
-                manager.request(request("repair-integration"), new AbortController().signal),
+                manager.request(request("install-in-process"), new AbortController().signal),
             ).resolves.toBeInstanceOf(SucceededInstallation);
 
-            expect(adapterInstaller.installedAgentIds).toEqual(["codex"]);
+            // The app-server handshake is proof enough: Mobius publishes the Agent without ever
+            // needing an adapter install stage.
+            expect(adapterInstaller.installedAgentIds).toEqual([]);
             expect(catalog.read().agents[0]?.agentIdentity.requestedPath).toBe(agentPath);
-            expect(catalog.read().agents[0]?.adapterIdentity.requestedPath).not.toBe(await realpath(adapterPath));
-            expect(
-                observer.states.filter((state) => state instanceof RunningInstallation).map((state) => state.stage),
-            ).toEqual(["checking_acp", "installing_adapter", "checking_acp"]);
+            expect(catalog.read().agents[0]).toMatchObject({ kind: "in-process-acp" });
+            expect(observer.states.filter((state) => state instanceof RunningInstallation)).toEqual([]);
         } finally {
             await rm(stateDirectory, { force: true, recursive: true });
         }

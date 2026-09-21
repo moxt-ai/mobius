@@ -18,10 +18,9 @@ export class CodexFixture implements AsyncDisposable {
     }
 
     static async create(provider: FakeOpenAiProvider): Promise<CodexFixture> {
-        const [executable, adapter] = await Promise.all([
-            resolveTestExecutable("codex", "MOBIUS_TEST_CODEX_PATH"),
-            resolveTestExecutable("codex-acp", "MOBIUS_TEST_CODEX_ACP_PATH"),
-        ]);
+        // Codex is an in-process Agent: there is no ACP adapter to resolve, only the real binary
+        // that Mobius drives through `codex app-server`.
+        const executable = await resolveTestExecutable("codex", "MOBIUS_TEST_CODEX_PATH");
         const directory = await mkdtemp(join(tmpdir(), "mobius-agent-daemon-codex-"));
         const codexHome = join(directory, "codex");
         const missing = join(directory, "missing-agent");
@@ -34,6 +33,10 @@ export class CodexFixture implements AsyncDisposable {
                 'model_reasoning_effort = "low"',
                 'model_reasoning_summary = "none"',
                 "model_supports_reasoning_summaries = false",
+                // The CI host cannot create the sandbox namespaces Codex needs, so the fixture runs
+                // its tool calls without one. This is Codex configuration, not Mobius policy.
+                'sandbox_mode = "danger-full-access"',
+                'approval_policy = "never"',
                 "",
             ].join("\n"),
             { mode: 0o600 },
@@ -47,7 +50,6 @@ export class CodexFixture implements AsyncDisposable {
             MOBIUS_CLAUDE_PATH: missing,
             MOBIUS_CLAUDE_ACP_PATH: missing,
             MOBIUS_CODEX_PATH: executable,
-            MOBIUS_CODEX_ACP_PATH: adapter,
             MOBIUS_COPILOT_PATH: missing,
             MOBIUS_CURSOR_PATH: missing,
             MOBIUS_DEEPSEEK_HARNESS_PATH: missing,

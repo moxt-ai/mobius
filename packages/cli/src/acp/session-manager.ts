@@ -51,7 +51,7 @@ import {
 import type { LocalRasterImage } from "../authorization/local-raster.ts";
 import { readInlineRaster, readLocalRaster } from "../authorization/local-raster.ts";
 import { type LocalVideo, readInlineVideo } from "../authorization/local-video.ts";
-import type { LocalAgentDefinition } from "../config.ts";
+import type { AcpAgentDefinition } from "../config.ts";
 import { type OperationMetrics, unmeasuredOperationMetrics } from "../infra/operation-metrics.ts";
 import { embedLocalHistoryImages } from "../native-sessions/history-images.ts";
 import {
@@ -60,6 +60,7 @@ import {
     revalidateExecutable,
     stopProcessTree,
 } from "../process/executable.ts";
+import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import {
     type AcpActivity,
     AcpActivityTracker,
@@ -68,6 +69,7 @@ import {
     normalizeContentBlock,
 } from "./activity.ts";
 import { type AcpClientHandler, createAcpClient } from "./create-client.ts";
+import type { InProcessAcpEndpoint } from "./in-process/acp-endpoint.ts";
 import { emitMarkdownChunksWithLocalImages } from "./markdown-images.ts";
 import {
     type NativeSessionOrigin,
@@ -96,7 +98,7 @@ const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];
-    readonly agent: LocalAgentDefinition;
+    readonly agent: AcpAgentDefinition;
     readonly cwd: string;
     readonly sessionId: string;
     readonly signal: AbortSignal;
@@ -109,7 +111,7 @@ export interface AcpNativeHistoryReader {
 
 export interface AcpAgentSettingsInspectionOptions {
     readonly additionalDirectories: readonly string[];
-    readonly agent: LocalAgentDefinition;
+    readonly agent: AcpAgentDefinition;
     readonly cwd: string;
     readonly model?: string;
     readonly signal: AbortSignal;
@@ -225,31 +227,7 @@ export class AcpAgentSettingsSnapshot {
     }
 }
 
-export class AcpExecutionError extends Error {
-    readonly code: string;
-
-    constructor(message: string, options: ErrorOptions = {}, code = "acp_execution_failed") {
-        super(message, options);
-        this.code = code;
-        this.name = "AcpExecutionError";
-    }
-}
-
-export class AcpConfigurationValueUnavailableError extends AcpExecutionError {
-    readonly configId: string;
-    readonly offeredValueCount: number;
-    readonly offeredValues: readonly string[];
-    readonly requestedValue: string;
-
-    constructor(configId: string, requestedValue: string, offeredValues: readonly string[]) {
-        super("The requested ACP configuration value is unavailable", {}, "invalid_session_configuration");
-        this.name = "AcpConfigurationValueUnavailableError";
-        this.configId = configId.slice(0, 128);
-        this.requestedValue = requestedValue.slice(0, 128);
-        this.offeredValueCount = offeredValues.length;
-        this.offeredValues = Object.freeze(offeredValues.slice(0, 32).map((value) => value.slice(0, 128)));
-    }
-}
+export { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 
 class RetryableAcpInitializationError extends AcpExecutionError {
     constructor(cause: unknown) {
@@ -811,16 +789,18 @@ class AcpProcessSession implements AcpClientHandler {
     readonly #additionalDirectories: readonly string[];
     readonly #acceptedUrlElicitations = new Map<string, string>();
     readonly #agentId: string;
-    readonly #child: ReturnType<typeof spawn>;
     readonly #connection: ClientConnection;
     readonly #cwd: string;
     readonly #environment: Readonly<Record<string, string>>;
     readonly #getObserver: () => AcpSessionObserver;
+    readonly #inProcessAgent: InProcessAcpEndpoint | null;
     readonly #mobiusSessionId: string;
     readonly #pendingElicitations = new Map<string, PendingElicitation>();
     readonly #pendingPermissions = new Map<string, PendingPermission>();
     readonly #preSessionUpdates: SessionNotification[] = [];
+    // The adapter-process topology only. An in-process agent owns the app-server child itself.
     readonly #processExit: Promise<void>;
+    readonly #runtimeChild: ReturnType<typeof spawn> | null;
     readonly #metrics: OperationMetrics;
     readonly #sessionConfigProtocol: SessionConfigProtocol;
     readonly #store: AcpSessionStore;
@@ -847,7 +827,7 @@ class AcpProcessSession implements AcpClientHandler {
     #updateTail: Promise<void> = Promise.resolve();
 
     private constructor(
-        agent: LocalAgentDefinition,
+        agent: AcpAgentDefinition,
         cwd: string,
         additionalDirectories: readonly string[],
         mobiusSessionId: string,
@@ -865,18 +845,34 @@ class AcpProcessSession implements AcpClientHandler {
         this.#sessionConfigProtocol = sessionConfigProtocolForAgent(agent.id);
         this.#store = store;
         this.#verifiedAgentVersion = agent.agentVersion;
-        this.#child = spawn(agent.adapterPath, [...agent.arguments], {
+        if (agent.kind === "in-process-acp") {
+            // Mobius hosts the ACP Agent in-process and drives the vendor's own protocol, so there is
+            // no adapter process to spawn or supervise here. The endpoint owns its own resources.
+            const inProcess = agent.createEndpoint({
+                command: agent.command,
+                cwd,
+                environment: agent.environment,
+            });
+            this.#inProcessAgent = inProcess;
+            this.#runtimeChild = null;
+            this.#processExit = new Promise<void>(() => {});
+            this.#connection = createAcpClient(this).connect(inProcess.app());
+            return;
+        }
+        this.#inProcessAgent = null;
+        const child = spawn(agent.adapterPath, [...agent.arguments], {
             cwd,
             detached: process.platform !== "win32",
             env: { ...process.env, ...agent.environment },
             shell: false,
             stdio: ["pipe", "pipe", "pipe"],
         });
-        const stdin = this.#child.stdin;
-        const stdout = this.#child.stdout;
-        const stderr = this.#child.stderr;
+        this.#runtimeChild = child;
+        const stdin = child.stdin;
+        const stdout = child.stdout;
+        const stderr = child.stderr;
         if (stdin === null || stdout === null || stderr === null) {
-            this.#child.kill("SIGKILL");
+            child.kill("SIGKILL");
             throw new AcpExecutionError("ACP process streams are unavailable");
         }
         stderr.setEncoding("utf8");
@@ -884,8 +880,8 @@ class AcpProcessSession implements AcpClientHandler {
             process.stderr.write(`[${agent.id}-acp] ${chunk}`);
         });
         this.#processExit = new Promise<void>((resolve) => {
-            this.#child.once("error", resolve);
-            this.#child.once("exit", resolve);
+            child.once("error", resolve);
+            child.once("exit", resolve);
         });
         const stream = ndJsonStream(createWritableAcpStream(stdin), readableWebStream(stdout));
         this.#connection = createAcpClient(this).connect(stream);
@@ -900,16 +896,19 @@ class AcpProcessSession implements AcpClientHandler {
     ): Promise<AcpProcessSession> {
         for (let attempt = 1; attempt <= 2; attempt += 1) {
             options.signal.throwIfAborted();
-            const [adapterUnchanged, agentUnchanged] = await metrics.measure(
+            const unchanged = await metrics.measure(
                 "executable-validation",
                 async () =>
                     await Promise.all([
-                        revalidateExecutable(options.agent.adapterIdentity),
+                        // Only the adapter topology has an adapter executable to revalidate.
+                        options.agent.kind === "acp-adapter-process"
+                            ? revalidateExecutable(options.agent.adapterIdentity)
+                            : Promise.resolve(true),
                         revalidateExecutable(options.agent.agentIdentity),
                     ]),
             );
             options.signal.throwIfAborted();
-            if (!adapterUnchanged || !agentUnchanged) {
+            if (unchanged.some((result) => !result)) {
                 throw new AcpExecutionError(
                     "The local Agent runtime changed; restart Mobius before starting a new conversation",
                     {},
@@ -1195,6 +1194,18 @@ class AcpProcessSession implements AcpClientHandler {
     }
 
     async #initializeAgentOperation(signal: AbortSignal): Promise<void> {
+        if (this.#inProcessAgent !== null) {
+            // The ACP agent runs in this process, but it still owns an app-server child that must
+            // start and complete its own handshake before the ACP conversation can begin.
+            await this.race(
+                this.#inProcessAgent.initialize(signal),
+                "The Codex app-server exited during initialization",
+                signal,
+            ).catch((cause: unknown) => {
+                signal.throwIfAborted();
+                throw new RetryableAcpInitializationError(cause);
+            });
+        }
         const initialized = await this.race(
             this.#connection.agent.request(
                 methods.agent.initialize,
@@ -1724,7 +1735,7 @@ class AcpProcessSession implements AcpClientHandler {
     };
 
     readonly cancel = async (): Promise<void> => {
-        const capturedProcesses = await captureProcessTree(this.#child);
+        const capturedProcesses = this.#runtimeChild === null ? [] : await captureProcessTree(this.#runtimeChild);
         try {
             await this.cancelPendingInteractions();
             if (this.#turn.running) {
@@ -2125,7 +2136,12 @@ class AcpProcessSession implements AcpClientHandler {
 
     readonly closeProcess = async (capturedProcesses: readonly ProcessTreeIdentity[] = []): Promise<void> => {
         try {
-            await stopProcessTree(this.#child, capturedProcesses);
+            if (this.#runtimeChild === null) {
+                // The in-process agent owns its app-server child and its process tree.
+                await this.#inProcessAgent?.close();
+                return;
+            }
+            await stopProcessTree(this.#runtimeChild, capturedProcesses);
         } finally {
             this.#connection.close();
         }

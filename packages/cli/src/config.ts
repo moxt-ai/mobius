@@ -2,12 +2,13 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mobiusApiPath } from "@moxt-ai/mobius-protocol";
 import {
+    type AcpAgentDefinition,
     type InstallableAgentDefinition,
     LocalAgentCatalog,
-    type LocalAgentDefinition,
 } from "./agent-catalog/local-agent.ts";
 import { readStateDirectory } from "./storage/state-directory.ts";
 
+export type { AcpAgentDefinition } from "./agent-catalog/local-agent.ts";
 export { LocalAgentDefinition } from "./agent-catalog/local-agent.ts";
 
 export function loadDefaultWorkspace(environment: Readonly<NodeJS.ProcessEnv> = process.env): string {
@@ -26,9 +27,9 @@ export class DaemonLocalContext {
 }
 
 export function withDaemonEnvironment(
-    agent: LocalAgentDefinition,
+    agent: AcpAgentDefinition,
     environment: Readonly<NodeJS.ProcessEnv>,
-): LocalAgentDefinition {
+): AcpAgentDefinition {
     const launchEnvironment: Record<string, string> = {};
     for (const [name, value] of Object.entries(environment)) {
         if (typeof value === "string") {
@@ -65,7 +66,7 @@ export class ChannelDaemonReconnectTarget extends DaemonReconnectTarget {
 }
 
 export interface DaemonConfig {
-    readonly agents: readonly LocalAgentDefinition[];
+    readonly agents: readonly AcpAgentDefinition[];
     readonly defaultWorkspace: string;
     readonly auditDatabasePath: string;
     readonly bindingId: string;
@@ -86,7 +87,7 @@ export interface DaemonConnectionConfig {
 
 export function createDaemonConfig(
     connection: DaemonConnectionConfig,
-    agents: readonly LocalAgentDefinition[] = [],
+    agents: readonly AcpAgentDefinition[] = [],
     installableAgents: readonly InstallableAgentDefinition[] = [],
     localContext: DaemonLocalContext = new DaemonLocalContext(readStateDirectory(), process.env),
     reconnectTarget: DaemonReconnectTarget = new ChannelDaemonReconnectTarget(connection.channelId),

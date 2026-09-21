@@ -7,10 +7,10 @@ import { fetch, type Response } from "undici";
 import { discoverLocalAgentInventory, type LocalAgentInventory } from "../agent-catalog/discover-local-agents.ts";
 import type { InstallableAgentDefinition } from "../agent-catalog/local-agent.ts";
 import {
+    type AcpAgentDefinition,
     createDaemonConfig,
     type DaemonConfig,
     DaemonLocalContext,
-    type LocalAgentDefinition,
     loadDefaultWorkspace,
     OpaqueDaemonReconnectTarget,
 } from "../config.ts";
@@ -294,7 +294,7 @@ function decodePairingResponse(
 async function claimPairing(
     options: PairCommandOptions,
     defaultWorkspace: string,
-    localAgents: readonly LocalAgentDefinition[],
+    localAgents: readonly AcpAgentDefinition[],
     installableAgents: readonly InstallableAgentDefinition[],
     signal: AbortSignal,
 ): Promise<ClaimPairingResponse> {

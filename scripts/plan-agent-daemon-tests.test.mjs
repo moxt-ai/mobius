@@ -21,6 +21,11 @@ describe("agent and daemon test planning", () => {
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/grok-build-agent.ts"]), ["grok"]);
     });
 
+    it("selects one Agent for the in-process protocol it owns", () => {
+        assert.deepEqual(selected(["packages/cli/src/acp/codex/agent.ts"]), ["codex"]);
+        assert.deepEqual(selected(["packages/cli/src/acp/codex/app-server-client.ts"]), ["codex"]);
+    });
+
     it("selects every OpenAI-compatible Agent for their shared fake provider", () => {
         assert.deepEqual(selected(["tests/agent-daemon/providers/openai.ts"]), [
             "opencode",

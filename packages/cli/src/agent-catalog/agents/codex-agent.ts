@@ -1,28 +1,17 @@
-import { ManagedNpmPackageDefinition } from "../../agent-installation/managed-npm-package.ts";
-import { BridgedAcpAgentDefinition } from "../agent-specification.ts";
+import { CodexAcpAgent } from "../../acp/codex/agent.ts";
+import type { InProcessAcpEndpointFactory } from "../../acp/in-process/acp-endpoint.ts";
+import { InProcessAcpAgentDefinition } from "../agent-specification.ts";
 
-export class CodexAgentSpecification extends BridgedAcpAgentDefinition {
+// Codex speaks its own app-server protocol rather than ACP, so Mobius hosts the ACP Agent in-process
+// and drives `codex app-server` directly. There is no adapter package to install or version-probe.
+export class CodexAgentSpecification extends InProcessAcpAgentDefinition {
     override readonly versionProbeTimeoutMilliseconds = 10_000;
-    readonly adapterEnvironmentVariable = "CODEX_PATH";
-    readonly adapterOverrideVariable = "MOBIUS_CODEX_ACP_PATH";
-    readonly adapterPackageDefinition = new ManagedNpmPackageDefinition(
-        "@agentclientprotocol/codex-acp",
-        "1.8.0",
-        "codex-acp",
-    );
     readonly agentExecutable = "codex";
-    readonly agentOverrideVariable = "MOBIUS_CODEX_PATH";
+    readonly createEndpoint: InProcessAcpEndpointFactory = (options) => new CodexAcpAgent(options);
     readonly id = "codex";
     readonly label = "Codex";
-    readonly managedAdapterExecutablePath = [
-        "adapters",
-        "codex",
-        "1.8.0",
-        "node_modules",
-        "@agentclientprotocol",
-        "codex-acp",
-        "dist",
-        "index.js",
-    ];
-    readonly managedAgentExecutablePath = ["agents", "codex", "bin", "codex"];
+
+    constructor() {
+        super("MOBIUS_CODEX_PATH", ["agents", "codex", "bin", "codex"]);
+    }
 }

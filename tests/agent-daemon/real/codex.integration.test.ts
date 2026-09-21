@@ -4,7 +4,7 @@ import { CodexFixture } from "../infra/codex.ts";
 import { expectPersistedToolTurn, runAgentDaemonTurn, startAgentDaemonJourney } from "../infra/journey.ts";
 import { FakeOpenAiProvider } from "../providers/openai.ts";
 
-it("Given real Codex and codex-acp use a local OpenAI upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
+it("Given real Codex and Mobius' in-process ACP Agent use a local OpenAI upstream, When a prompt causes a tool call across the server and daemon protocols, Then the ACP tool and response are persisted", {
     timeout: 120_000,
 }, async () => {
     const signal = AbortSignal.timeout(110_000);

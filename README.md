@@ -114,7 +114,7 @@ authentication and credential operations](docs/project-authentication.md).
 
 Implemented local integrations:
 
-- Codex
+- Codex through an in-process ACP Agent over `codex app-server`
 - Claude Code
 - GitHub Copilot CLI through `copilot --no-auto-update --acp --stdio`
 - Pi coding agent through `pi-acp`

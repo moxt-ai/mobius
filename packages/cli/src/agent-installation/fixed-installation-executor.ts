@@ -209,7 +209,10 @@ export class FixedInstallationExecutor implements InstallationExecutor {
                 const verified = inventory.available.find((candidate) => candidate.specification.id === agentId);
                 if (verified instanceof AvailableAgent) {
                     this.#audit.record("agent_installation_acp_verified", requestId, agentId, {
-                        adapterVersion: verified.agent.adapterVersion,
+                        adapterVersion:
+                            verified.agent.kind === "acp-adapter-process"
+                                ? verified.agent.adapterVersion
+                                : verified.agent.agentVersion,
                         agentVersion: verified.agent.agentVersion,
                     });
 

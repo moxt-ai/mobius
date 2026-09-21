@@ -1,3 +1,5 @@
+import type { SessionCapabilities } from "@moxt-ai/mobius-protocol";
+import { unsupportedSessionCapabilities } from "../acp/session-capabilities.ts";
 import { ProcessExecutionError } from "../process/executable.ts";
 import { probeAcpReadiness } from "./acp-readiness-probe.ts";
 import {
@@ -14,9 +16,19 @@ import {
 } from "./agent-discovery.ts";
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { AgentProbeError } from "./agent-probe-error.ts";
-import { DirectAcpAgentDefinition, type LocalAgentSpecification } from "./agent-specification.ts";
+import {
+    DirectAcpAgentDefinition,
+    InProcessAcpAgentDefinition,
+    type LocalAgentSpecification,
+} from "./agent-specification.ts";
 import { probeVersion, resolveAdapterExecutables, resolveAgentExecutables } from "./executable-discovery.ts";
-import { AgentIntegrationDefinition, LocalAgentDefinition } from "./local-agent.ts";
+
+import {
+    type AcpAgentDefinition,
+    AgentIntegrationDefinition,
+    InProcessAcpAgentDefinition as InProcessAgentDefinition,
+    LocalAgentDefinition,
+} from "./local-agent.ts";
 
 function agentProbeFailure(specification: LocalAgentSpecification, error: unknown): UnavailableAgent {
     if (error instanceof AgentProbeError) {
@@ -118,7 +130,9 @@ export async function discoverAgent(
             agent.identity.requestedPath,
             agentVersion,
         );
-        if (adapters.length === 0) {
+        // An in-process Agent is its own adapter: `resolveAdapterExecutables` already returned the
+        // Agent executable, so an empty adapter list never means "install an adapter" here.
+        if (adapters.length === 0 && !(specification instanceof InProcessAcpAgentDefinition)) {
             return new MissingAdapter(specification, installedAgent);
         }
 
@@ -156,24 +170,40 @@ export async function discoverAgent(
                 continue;
             }
 
-            const definition = new LocalAgentDefinition(
-                specification.id,
-                specification.label,
-                adapter.path,
-                specification.launchArguments,
-                launchEnvironment,
-                adapterVersion,
-                agentVersion,
-                adapter.identity,
-                agent.identity,
-            );
+            const buildDefinition = (
+                verifiedAdapterVersion: string,
+                capabilities: SessionCapabilities,
+            ): AcpAgentDefinition =>
+                specification instanceof InProcessAcpAgentDefinition
+                    ? new InProcessAgentDefinition(
+                          specification.id,
+                          specification.label,
+                          agent.path,
+                          specification.createEndpoint,
+                          launchEnvironment,
+                          agentVersion.length > 0 ? agentVersion : verifiedAdapterVersion,
+                          agent.identity,
+                          capabilities,
+                      )
+                    : new LocalAgentDefinition(
+                          specification.id,
+                          specification.label,
+                          adapter.path,
+                          specification.launchArguments,
+                          launchEnvironment,
+                          verifiedAdapterVersion,
+                          agentVersion,
+                          adapter.identity,
+                          agent.identity,
+                          capabilities,
+                      );
             try {
                 const readiness = await probeWithRetry(
                     context.signal,
                     async () =>
                         await probeAcpReadiness(
                             specification,
-                            definition,
+                            buildDefinition(adapterVersion, unsupportedSessionCapabilities()),
                             context.environment,
                             context.defaultWorkspace,
                             context.signal,
@@ -185,18 +215,7 @@ export async function discoverAgent(
                 }
                 return new AvailableAgent(
                     specification,
-                    new LocalAgentDefinition(
-                        specification.id,
-                        specification.label,
-                        adapter.path,
-                        specification.launchArguments,
-                        launchEnvironment,
-                        verifiedAdapterVersion,
-                        agentVersion,
-                        adapter.identity,
-                        agent.identity,
-                        readiness.capabilities,
-                    ),
+                    buildDefinition(verifiedAdapterVersion, readiness.capabilities),
                 );
             } catch (error) {
                 if (context.signal.aborted) {

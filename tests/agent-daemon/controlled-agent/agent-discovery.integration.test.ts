@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,6 +25,7 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const turnAppServerUrl = new URL("../fixtures/fake-acp-agent/src/turn-app-server.ts", import.meta.url).toString();
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;
@@ -180,6 +181,9 @@ if (process.argv.includes("--version")) {
                 if (!(discovered instanceof AvailableAgent)) {
                     throw new Error("Managed OpenCode was not discovered");
                 }
+                if (discovered.agent.kind !== "acp-adapter-process") {
+                    throw new Error("Managed OpenCode did not use its adapter topology");
+                }
                 const canonicalManagedPath = await realpath(managedPath);
                 expect(discovered.agent.command).toBe(canonicalManagedPath);
                 expect(discovered.agent.adapterIdentity.realPath).toBe(canonicalManagedPath);
@@ -311,73 +315,27 @@ child.once("exit", (code) => process.exit(code ?? 93));
         }
     });
 
-    it("Given PATH contains an incompatible adapter and the pinned private cache is valid, When a saved daemon discovers Agents again, Then it keeps the external Agent and falls back to the verified private adapter", async () => {
-        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-cache-fallback-"));
+    it("Given PATH contains a Codex binary whose app-server answers, When discovery runs, Then Codex is discovered as the in-process Agent that owns the app-server conversation", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-agent-in-process-"));
         const externalDirectory = join(stateDirectory, "external");
         const agentPath = join(externalDirectory, "codex");
-        const externalAdapterPath = join(externalDirectory, "codex-acp");
         const specification = new CodexAgentSpecification();
-        const managedAdapterPath = join(stateDirectory, ...specification.managedAdapterExecutablePath);
-        const managedAdapterPackageRoot = dirname(dirname(managedAdapterPath));
         try {
-            await Promise.all([
-                mkdir(externalDirectory, { mode: 0o700, recursive: true }),
-                mkdir(dirname(managedAdapterPath), {
-                    mode: 0o700,
-                    recursive: true,
-                }),
-            ]);
+            await mkdir(externalDirectory, { mode: 0o700, recursive: true });
             await writeFile(
                 agentPath,
                 executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
 } else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+  process.exit(80);
 }
 `),
                 { mode: 0o700 },
             );
-            await writeFile(
-                externalAdapterPath,
-                executableSource(`
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.7.0\\n");
-} else {
-  process.exit(7);
-}
-`),
-                { mode: 0o700 },
-            );
-            await writeFile(
-                managedAdapterPath,
-                executableSource(`
-import { spawn } from "node:child_process";
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.8.0\\n");
-} else {
-  const executable = process.env.CODEX_PATH;
-  if (executable === undefined) process.exit(91);
-  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
-  child.once("error", () => process.exit(92));
-  child.once("exit", (code) => process.exit(code ?? 93));
-}
-`),
-                { mode: 0o700 },
-            );
-            await writeFile(
-                join(managedAdapterPackageRoot, "package.json"),
-                JSON.stringify({
-                    bin: { "codex-acp": "dist/index.js" },
-                    name: specification.adapterPackage,
-                    version: specification.adapterVersion,
-                }),
-                { mode: 0o600 },
-            );
-            await Promise.all(
-                [agentPath, externalAdapterPath, managedAdapterPath].map(async (path) => await chmod(path, 0o700)),
-            );
+            await chmod(agentPath, 0o700);
 
             const inventory = await discoverLocalAgentInventory({
                 defaultWorkspace: repositoryRoot,
@@ -391,8 +349,13 @@ if (process.argv.includes("--version")) {
 
             expect(inventory.unavailable).toEqual([]);
             expect(inventory.available).toHaveLength(1);
-            expect(inventory.available[0]?.agent.agentIdentity.realPath).toBe(await realpath(agentPath));
-            expect(inventory.available[0]?.agent.adapterIdentity.realPath).toBe(await realpath(managedAdapterPath));
+            const discovered = inventory.available[0];
+            if (!(discovered instanceof AvailableAgent)) {
+                throw new Error("Codex was not discovered");
+            }
+            expect(discovered.agent.kind).toBe("in-process-acp");
+            expect(discovered.agent.command).toBe(await realpath(agentPath));
+            expect(discovered.agent.agentIdentity.realPath).toBe(await realpath(agentPath));
         } finally {
             await rm(stateDirectory, { force: true, recursive: true });
         }
@@ -405,7 +368,6 @@ if (process.argv.includes("--version")) {
             const firstAgentPath = join(temporaryDirectory, "codex-first");
             const secondAgentPath = join(temporaryDirectory, "codex-second");
             const codexLink = join(temporaryDirectory, "codex");
-            const adapterPath = join(temporaryDirectory, "codex-acp");
             const manager = new AcpSessionManager();
             try {
                 for (const path of [firstAgentPath, secondAgentPath]) {
@@ -414,9 +376,10 @@ if (process.argv.includes("--version")) {
                         executableSource(`
 if (process.argv.includes("--version")) {
   process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
 } else {
-  process.argv.push("--agent-name", "Codex");
-  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+  process.exit(80);
 }
 `),
                         { mode: 0o700 },
@@ -424,28 +387,10 @@ if (process.argv.includes("--version")) {
                     await chmod(path, 0o700);
                 }
                 await symlink(firstAgentPath, codexLink);
-                await writeFile(
-                    adapterPath,
-                    executableSource(`
-import { spawn } from "node:child_process";
-if (process.argv.includes("--version")) {
-  process.stdout.write("codex-acp 1.8.0\\n");
-} else {
-  const executable = process.env.CODEX_PATH;
-  if (executable === undefined) process.exit(91);
-  const child = spawn(executable, [], { env: process.env, stdio: "inherit" });
-  child.once("exit", (code) => process.exit(code ?? 92));
-}
-`),
-                    { mode: 0o700 },
-                );
-                await chmod(adapterPath, 0o700);
                 const inventory = await discoverLocalAgentInventory({
                     defaultWorkspace: repositoryRoot,
                     environment: {
-                        MOBIUS_CODEX_ACP_PATH: adapterPath,
                         MOBIUS_CODEX_PATH: codexLink,
-                        MOBIUS_WORKBUDDY_PATH: join(temporaryDirectory, "missing-workbuddy"),
                         PATH: temporaryDirectory,
                     },
                     signal: new AbortController().signal,
@@ -475,11 +420,11 @@ if (process.argv.includes("--version")) {
                     return chunks.join("");
                 };
 
-                await expect(run("existing-session", "before")).resolves.toBe("Codex turn 1: before");
+                await expect(run("existing-session", "before")).resolves.toBe("Scripted Codex answer");
                 await unlink(codexLink);
                 await symlink(secondAgentPath, codexLink);
 
-                await expect(run("existing-session", "after")).resolves.toBe("Codex turn 2: after");
+                await expect(run("existing-session", "after")).resolves.toBe("Scripted Codex answer");
                 await expect(run("new-session", "blocked")).rejects.toMatchObject({
                     code: "agent_runtime_changed",
                 });
