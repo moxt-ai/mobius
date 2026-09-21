@@ -58,7 +58,7 @@ export interface AgentDaemonSocket {
     close(code?: number, reason?: string): void;
     removeEventListener(type: string, listener: (event: SocketEvent) => void): void;
     send(data: string): void;
-    readonly sendFlushed?: (data: string) => Promise<void>;
+    readonly sendBatch?: (data: readonly string[]) => Promise<void>;
 }
 
 interface PendingMessage {
@@ -282,12 +282,14 @@ export class FakeAgentDaemon implements AsyncDisposable {
 
     readonly send = (message: string): void => this.#socket.send(message);
 
-    readonly sendFlushed = async (message: string): Promise<void> => {
-        if (this.#socket.sendFlushed === undefined) {
-            this.#socket.send(message);
+    readonly sendBatch = async (messages: readonly string[]): Promise<void> => {
+        if (this.#socket.sendBatch === undefined) {
+            for (const message of messages) {
+                this.#socket.send(message);
+            }
             return;
         }
-        await this.#socket.sendFlushed(message);
+        await this.#socket.sendBatch(messages);
     };
 
     readonly sendSessionEvent = async (sessionId: string, payload: string, signal?: AbortSignal): Promise<string> => {
@@ -382,7 +384,7 @@ export interface RunningFakeAgentDaemon extends AsyncDisposable {
 
 async function sendImageFile(daemon: FakeAgentDaemon, encoded: string): Promise<void> {
     const command = decodeFileReadCommand(encoded);
-    await daemon.sendFlushed(
+    await daemon.sendBatch([
         encodeFileBeginEvent({
             byteLength: imageBytes.byteLength,
             kind: "file.begin",
@@ -392,8 +394,6 @@ async function sendImageFile(daemon: FakeAgentDaemon, encoded: string): Promise<
             requestId: command.requestId,
             sessionId: command.sessionId,
         }),
-    );
-    await daemon.sendFlushed(
         encodeFileChunkEvent({
             data: Buffer.from(imageBytes).toString("base64"),
             kind: "file.chunk",
@@ -401,14 +401,12 @@ async function sendImageFile(daemon: FakeAgentDaemon, encoded: string): Promise<
             sequence: 0,
             sessionId: command.sessionId,
         }),
-    );
-    await daemon.sendFlushed(
         encodeFileEndEvent({
             kind: "file.end",
             requestId: command.requestId,
             sessionId: command.sessionId,
         }),
-    );
+    ]);
 }
 
 async function processHappyPathCommand(

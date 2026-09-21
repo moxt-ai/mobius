@@ -98,9 +98,21 @@ export async function createFakeAgentDaemonRuntime(options: {
                         headers: { authorization: `Bearer ${claim.runtimeCredential}` },
                     });
                     return Object.assign(socket, {
-                        sendFlushed: async (data: string): Promise<void> =>
+                        sendBatch: async (messages: readonly string[]): Promise<void> =>
                             await new Promise<void>((resolve, reject) => {
-                                socket.send(data, (error) => (error === undefined ? resolve() : reject(error)));
+                                let remaining = messages.length;
+                                for (const message of messages) {
+                                    socket.send(message, (error) => {
+                                        if (error !== undefined && error !== null) {
+                                            reject(error);
+                                            return;
+                                        }
+                                        remaining -= 1;
+                                        if (remaining === 0) {
+                                            resolve();
+                                        }
+                                    });
+                                }
                             }),
                     }) as unknown as AgentDaemonSocket;
                 },
