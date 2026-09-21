@@ -283,7 +283,7 @@ describe("native Agent session boundary", () => {
                 targetSessionId: "imported",
             } satisfies NativeSessionCommand;
             await expect(f.service.execute(command, new AbortController().signal)).rejects.toMatchObject({
-                code: "acp_execution_failed",
+                code: "acp_agent_error",
             });
             await external.close();
             expect(await f.service.execute(command, new AbortController().signal)).toMatchObject({

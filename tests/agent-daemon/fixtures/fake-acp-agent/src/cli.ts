@@ -936,6 +936,9 @@ acp.agent({ name: FAKE_ACP_AGENT_NAME })
 
         context.signal.throwIfAborted();
         const prompt = readPromptText(context.params.prompt);
+        if (prompt === "fail with model unavailable") {
+            throw acp.RequestError.internalError(undefined, "Model unavailable: opencode/jev-1.13-free");
+        }
         const turnNumber = previousState.turnCount + 1;
         const transcript = nativeHistory.get(context.params.sessionId) ?? [];
         transcript.push({

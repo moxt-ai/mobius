@@ -721,6 +721,38 @@ child.once("exit", (code) => process.exit(code ?? 84));
         }
     });
 
+    it("Given an ACP agent rejects a prompt with a non-authentication error, When Mobius runs that turn, Then the local boundary preserves the agent's real failure reason", async () => {
+        const manager = new AcpSessionManager();
+        const agent = new LocalAgentDefinition("opencode", "OpenCode", process.execPath, [
+            fakeAgentPath,
+            "--agent-name",
+            "OpenCode",
+        ]);
+
+        try {
+            await expect(
+                manager.runPrompt({
+                    additionalDirectories: [],
+                    agent,
+                    commandId: "command-model-unavailable",
+                    cwd: process.cwd(),
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "fail with model unavailable",
+                    resources: [],
+                    sessionId: "model-unavailable-session",
+                    signal: new AbortController().signal,
+                }),
+            ).rejects.toMatchObject({
+                code: "acp_agent_error",
+                message: "Internal error: Model unavailable: opencode/jev-1.13-free",
+            });
+        } finally {
+            await manager.close();
+        }
+    });
+
     it("Given a turn is running, When it is cancelled, Then ACP stops that turn and keeps the session usable", async () => {
         const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-acp-cancel-resume-"));
         const manager = new AcpSessionManager();

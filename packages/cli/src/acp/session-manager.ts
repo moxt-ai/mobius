@@ -2151,6 +2151,9 @@ class AcpProcessSession implements AcpClientHandler {
                         "authentication_required",
                     );
                 }
+                if (error instanceof RequestError) {
+                    throw new AcpExecutionError(truncate(error.message, 500), { cause: error }, "acp_agent_error");
+                }
                 throw error;
             }
         } finally {
