@@ -1,4 +1,10 @@
-import type { Attempt, Interaction, NativeSessionHistory, Turn } from "@moxt-ai/mobius-protocol";
+import type {
+    Attempt,
+    Interaction,
+    NativeSessionHistory,
+    NativeSessionHistoryPage,
+    Turn,
+} from "@moxt-ai/mobius-protocol";
 import type {
     ActivityDetail,
     ProjectScope,
@@ -85,4 +91,11 @@ export interface SessionQueryRuntime {
         sessionId: string,
         signal: AbortSignal,
     ) => Promise<NativeSessionHistory | null>;
+    readonly readNativeHistoryPage: (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ) => Promise<NativeSessionHistoryPage>;
 }

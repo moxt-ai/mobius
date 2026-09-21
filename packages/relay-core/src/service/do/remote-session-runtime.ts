@@ -8,6 +8,7 @@ import {
     decodeInteraction,
     decodeInteractionResponse,
     decodeNativeSessionHistory,
+    decodeNativeSessionHistoryPage,
     decodePendingWork,
     decodePromptImagesValue,
     decodePromptResourcesValue,
@@ -21,6 +22,7 @@ import {
     type Interaction,
     type InteractionResponse,
     type NativeSessionHistory,
+    type NativeSessionHistoryPage,
     type PendingWork,
     type SessionConfigureCommand,
     type SessionEventEnvelope,
@@ -664,6 +666,7 @@ function runtimeErrorCode(value: string): SessionRuntimeError["code"] {
         case "session_busy":
         case "session_conflict":
         case "session_deleted":
+        case "session_history_not_retained":
         case "session_not_found":
         case "session_quota_exceeded":
         case "session_storage_timeout":
@@ -1182,6 +1185,17 @@ export class RemoteSessionRuntime
         return value === null ? null : decodeNativeSessionHistory(value);
     };
 
+    readonly readNativeHistoryPage = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<NativeSessionHistoryPage> =>
+        decodeNativeSessionHistoryPage(
+            await this.request(scope, sessionId, "native-history-page", { cursor, limit, sessionId }, signal),
+        );
+
     readonly recordNativeHistory = async (
         scope: ProjectScope,
         runtimeId: string,
@@ -1450,8 +1464,30 @@ export class RemoteSessionRuntime
         limit: number,
         signal: AbortSignal,
         timing: OperationTiming = unmeasuredOperationTiming,
-    ): Promise<SessionMessagePage> =>
-        decodeMessages(await this.request(scope, sessionId, "messages", { cursor, limit, sessionId }, signal, timing));
+    ): Promise<SessionMessagePage> => {
+        const summary = await this.readDirectorySummary(scope, sessionId, signal);
+        if (summary === null) {
+            throw new SessionRuntimeError("session_not_found", "The Session does not exist");
+        }
+        if (!summary.cloudRetention) {
+            throw new SessionRuntimeError(
+                "session_history_not_retained",
+                "This Session does not retain Platform message history",
+            );
+        }
+        return decodeMessages(
+            await this.requestTarget(
+                scope,
+                summary.runtimeId,
+                summary.cloudRetention,
+                sessionId,
+                "messages",
+                { cursor, limit, sessionId },
+                signal,
+                timing,
+            ),
+        );
+    };
 
     readonly readEvents = async (
         scope: ProjectScope,

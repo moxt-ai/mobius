@@ -10,6 +10,7 @@ import {
     decodeSessionPromptCommand,
     type Interaction,
     type NativeSessionHistory,
+    type NativeSessionHistoryPage,
     type SessionPromptCommand,
     type Turn,
 } from "@moxt-ai/mobius-protocol";
@@ -27,6 +28,7 @@ import {
 import type { TurnActivityRecord, TurnRecord } from "../../entity/do/session-records.ts";
 import type { SessionQueriesStorage } from "../../storage/do/session-queries-storage.ts";
 import { rowNullableString, rowNumber, rowString } from "../../storage/do/sqlite-row.ts";
+import { paginateNativeSessionHistory } from "./native-history-pagination.ts";
 import type { SessionArchiveService } from "./session-archive-service.ts";
 import { decodeDirectoryCursor, decodeEventCursor, decodeMessageCursor, encodeCursor } from "./session-cursors.ts";
 import {
@@ -126,6 +128,17 @@ export class SessionQueryService {
                 { cause },
             );
         }
+    };
+
+    readonly readNativeHistoryPage = async (
+        scope: ProjectScope,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ): Promise<NativeSessionHistoryPage> => {
+        const history = await this.readNativeHistory(scope, sessionId, signal);
+        return paginateNativeSessionHistory(history ?? { status: "unavailable" }, scope, sessionId, cursor, limit);
     };
 
     readonly readTurn = async (

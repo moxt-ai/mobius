@@ -60,40 +60,52 @@ const historyMessage = z
     })
     .readonly();
 
-const sessionHistorySchema = z
-    .discriminatedUnion("status", [
-        z
-            .strictObject({
-                status: z.literal("available"),
-                messages: z.array(historyMessage).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
-                truncated: z.boolean(),
-                coveredCommandIds: z
-                    .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/))
-                    .max(10_000)
-                    .readonly(),
-                coveredMessageIds: z
-                    .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}:(?:user|agent)$/))
-                    .max(20_000)
-                    .readonly()
-                    .default([]),
-            })
-            .readonly(),
-        z.strictObject({ status: z.literal("unavailable") }).readonly(),
-    ])
-    .refine(
-        (history) =>
-            history.status === "unavailable" ||
-            (history.messages.reduce((total, message) => total + message.text.length, 0) <=
-                SESSION_HISTORY_CHARACTER_LIMIT &&
-                history.messages.reduce(
-                    (total, message) =>
-                        total + (message.images ?? []).reduce((size, image) => size + image.data.length, 0),
-                    0,
-                ) <= SESSION_HISTORY_IMAGE_CHARACTER_LIMIT),
+const availableSessionHistoryObjectSchema = z.strictObject({
+    status: z.literal("available"),
+    messages: z.array(historyMessage).max(SESSION_HISTORY_MESSAGE_LIMIT).readonly(),
+    truncated: z.boolean(),
+    coveredCommandIds: z
+        .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/))
+        .max(10_000)
+        .readonly(),
+    coveredMessageIds: z
+        .array(z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}:(?:user|agent)$/))
+        .max(20_000)
+        .readonly()
+        .default([]),
+});
+const availableSessionHistorySchema = availableSessionHistoryObjectSchema.readonly();
+const unavailableSessionHistoryObjectSchema = z.strictObject({ status: z.literal("unavailable") });
+const unavailableSessionHistorySchema = unavailableSessionHistoryObjectSchema.readonly();
+function withinHistoryContentLimits(history: {
+    readonly status: "available" | "unavailable";
+    readonly messages?: readonly z.infer<typeof historyMessage>[];
+}): boolean {
+    if (history.status === "unavailable" || history.messages === undefined) {
+        return true;
+    }
+    return (
+        history.messages.reduce((total, message) => total + message.text.length, 0) <=
+            SESSION_HISTORY_CHARACTER_LIMIT &&
+        history.messages.reduce(
+            (total, message) => total + (message.images ?? []).reduce((size, image) => size + image.data.length, 0),
+            0,
+        ) <= SESSION_HISTORY_IMAGE_CHARACTER_LIMIT
     );
+}
+const sessionHistorySchema = z
+    .discriminatedUnion("status", [availableSessionHistorySchema, unavailableSessionHistorySchema])
+    .refine(withinHistoryContentLimits);
 
 export type NativeSessionHistory = z.infer<typeof sessionHistorySchema>;
 export type NativeHistoryMessage = z.infer<typeof historyMessage>;
+const sessionHistoryPageSchema = z
+    .discriminatedUnion("status", [
+        availableSessionHistoryObjectSchema.extend({ nextCursor: z.string().max(512).nullable() }).readonly(),
+        unavailableSessionHistoryObjectSchema.extend({ nextCursor: z.null() }).readonly(),
+    ])
+    .refine(withinHistoryContentLimits);
+export type NativeSessionHistoryPage = z.infer<typeof sessionHistoryPageSchema>;
 
 export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory => {
     try {
@@ -102,4 +114,11 @@ export const decodeNativeSessionHistory = (value: unknown): NativeSessionHistory
         throw new ProtocolMessageError("Invalid native session history", { cause });
     }
 };
-export { sessionHistorySchema };
+export const decodeNativeSessionHistoryPage = (value: unknown): NativeSessionHistoryPage => {
+    try {
+        return sessionHistoryPageSchema.parse(value);
+    } catch (cause) {
+        throw new ProtocolMessageError("Invalid native Session history page", { cause });
+    }
+};
+export { sessionHistoryPageSchema, sessionHistorySchema };

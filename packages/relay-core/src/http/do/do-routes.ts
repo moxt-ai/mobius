@@ -533,6 +533,18 @@ class DoRoutes {
                     await this.#runtime.readNativeHistory(scope, readString(body, "sessionId"), request.signal),
                 );
             }
+            if (operation === "native-history-page") {
+                assertExactKeys(body, ["cursor", "limit", "scope", "sessionId"]);
+                return Response.json(
+                    await this.#runtime.readNativeHistoryPage(
+                        scope,
+                        readString(body, "sessionId"),
+                        readNullableString(body, "cursor"),
+                        readInteger(body, "limit"),
+                        request.signal,
+                    ),
+                );
+            }
             if (operation === "record-native-history") {
                 assertExactKeys(body, ["history", "now", "runtimeId", "scope", "sessionId", "title"]);
                 return Response.json(

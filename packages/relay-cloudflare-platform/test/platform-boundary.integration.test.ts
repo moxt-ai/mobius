@@ -582,9 +582,23 @@ describe.sequential("Platform Session-only boundary", () => {
                 sessionId,
             });
 
+            const retainedMessagesResponse = await worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/messages`,
+                    { headers: credentialHeaders(appCredential) },
+                ),
+                environment,
+            );
+            expect(await responseJson(retainedMessagesResponse, 409)).toEqual({
+                error: {
+                    code: "session_history_not_retained",
+                    message: "This Session does not retain Platform message history",
+                },
+            });
+
             const nativeHistoryResponse = worker.fetch(
                 new Request(
-                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history`,
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history?limit=2`,
                     { headers: credentialHeaders(appCredential) },
                 ),
                 environment,
@@ -602,6 +616,14 @@ describe.sequential("Platform Session-only boundary", () => {
                         messages: [
                             {
                                 role: "assistant",
+                                text: "Oldest daemon history",
+                            },
+                            {
+                                role: "user",
+                                text: "Recent daemon prompt",
+                            },
+                            {
+                                role: "assistant",
                                 text: "History owned by the daemon",
                             },
                         ],
@@ -613,8 +635,49 @@ describe.sequential("Platform Session-only boundary", () => {
                     sessionId,
                 }),
             );
-            expect(await responseJson(await nativeHistoryResponse, 200)).toMatchObject({
-                messages: [{ role: "assistant", text: "History owned by the daemon" }],
+            const firstPage = await responseJson(await nativeHistoryResponse, 200);
+            expect(firstPage).toMatchObject({
+                messages: [
+                    { role: "user", text: "Recent daemon prompt" },
+                    { role: "assistant", text: "History owned by the daemon" },
+                ],
+                status: "available",
+            });
+            expect(firstPage).toHaveProperty("nextCursor", expect.any(String));
+
+            const olderHistoryResponse = worker.fetch(
+                new Request(
+                    `${relayOrigin}${MOBIUS_API_PREFIX}/v1/projects/${projectId}/sessions/${sessionId}/native-history?limit=2&cursor=${encodeURIComponent(String(firstPage["nextCursor"]))}`,
+                    { headers: credentialHeaders(appCredential) },
+                ),
+                environment,
+            );
+            const olderLoad = decodeServiceToDaemonMessage(await messages.next());
+            expect(olderLoad).toMatchObject({ kind: "session.live-history.load", sessionId });
+            if (olderLoad.kind !== "session.live-history.load") {
+                throw new Error("Expected the older live-history request");
+            }
+            socket.send(
+                encodeDaemonToServiceMessage({
+                    history: {
+                        coveredCommandIds: [],
+                        coveredMessageIds: ["daemon-message:agent"],
+                        messages: [
+                            { role: "assistant", text: "Oldest daemon history" },
+                            { role: "user", text: "Recent daemon prompt" },
+                            { role: "assistant", text: "History owned by the daemon" },
+                        ],
+                        status: "available",
+                        truncated: false,
+                    },
+                    kind: "session.live-history.loaded",
+                    requestId: olderLoad.requestId,
+                    sessionId,
+                }),
+            );
+            expect(await responseJson(await olderHistoryResponse, 200)).toMatchObject({
+                messages: [{ role: "assistant", text: "Oldest daemon history" }],
+                nextCursor: null,
                 status: "available",
             });
         } finally {

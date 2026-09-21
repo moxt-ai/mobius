@@ -898,6 +898,8 @@ export function createSessionRoutes() {
                     validateIdentifier(context.req.param("projectId"), "project_id"),
                     bearerToken(context.req.raw),
                     validateIdentifier(context.req.param("sessionId"), "session_id"),
+                    optionalCursor(context.req.query("cursor")),
+                    pageLimit(context.req.query("limit")),
                     context.req.raw.signal,
                 ),
             );

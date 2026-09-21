@@ -258,7 +258,7 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
                 { headers: authorization(pairing.created) },
             );
             expect(nativeHistory.status).toBe(200);
-            await expect(nativeHistory.json()).resolves.toEqual(result.history);
+            await expect(nativeHistory.json()).resolves.toEqual({ ...result.history, nextCursor: null });
             const exported = await app.request(
                 `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/existing-native-session/export`,
                 { headers: authorization(pairing.created) },

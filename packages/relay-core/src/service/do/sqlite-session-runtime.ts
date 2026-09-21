@@ -129,6 +129,9 @@ export class SqliteSessionRuntime
     readonly readNativeHistory: SessionQueryRuntime["readNativeHistory"] = (...parameters) =>
         this.#queries.readNativeHistory(...parameters);
 
+    readonly readNativeHistoryPage: SessionQueryRuntime["readNativeHistoryPage"] = (...parameters) =>
+        this.#queries.readNativeHistoryPage(...parameters);
+
     readonly readTurn: SessionQueryRuntime["readTurn"] = (...parameters) => this.#queries.readTurn(...parameters);
 
     readonly readTurnRuntime: SessionQueryRuntime["readTurnRuntime"] = (...parameters) =>

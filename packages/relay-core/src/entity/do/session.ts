@@ -584,6 +584,7 @@ function sessionRuntimeErrorStatus(code: string): number {
     if (
         code === "session_busy" ||
         code === "session_conflict" ||
+        code === "session_history_not_retained" ||
         code === "idempotency_conflict" ||
         code === "interaction_conflict" ||
         code === "event_source_conflict" ||

@@ -2,7 +2,10 @@ import {
     applyDurableObjectMigrations,
     type DoSqlDatabase,
     DurableObjectSqlDatabase,
+    ProjectScope,
+    paginateNativeSessionHistory,
     SessionRelay as SessionRelayImplementation,
+    SessionRuntimeError,
 } from "@moxt-ai/mobius-relay-core";
 import { Hono } from "hono";
 import { PlatformSessionLiveHistoryClient } from "../gateway/platform-session-live-history-client.ts";
@@ -51,6 +54,32 @@ export class NonCloudRetentionSessionRelayDO {
         const relayRequest = new Request(relayEndpoint, request);
         if (this.#lifecycle.kind === "hibernating") {
             await waitForCompletion(this.#lifecycle.completion.promise, request.signal);
+        }
+        if (route.operation === "native-history-page") {
+            try {
+                const page = await readNativeHistoryPageRequest(request, identity.projectId, identity.sessionId);
+                const restored = await this.#liveHistory.restore(
+                    identity.projectId,
+                    identity.runtimeId,
+                    identity.sessionId,
+                    request.signal,
+                );
+                return Response.json(
+                    paginateNativeSessionHistory(
+                        restored.history,
+                        new ProjectScope(identity.projectId),
+                        identity.sessionId,
+                        page.cursor,
+                        page.limit,
+                    ),
+                );
+            } catch (cause) {
+                if (cause instanceof SessionRuntimeError) {
+                    const error = cause.toHttpJson();
+                    return Response.json(error.body, { status: error.status });
+                }
+                throw cause;
+            }
         }
         if (route.operation === "native-history") {
             const restored = await this.#liveHistory.restore(
@@ -227,6 +256,42 @@ export class NonCloudRetentionSessionRelayDO {
             await this.#state.storage.setAlarm(hibernationAt);
         }
     };
+}
+
+async function readNativeHistoryPageRequest(
+    request: Request,
+    expectedProjectId: string,
+    expectedSessionId: string,
+): Promise<{ readonly cursor: string | null; readonly limit: number }> {
+    let value: unknown;
+    try {
+        value = await request.json();
+    } catch (cause) {
+        throw new SessionRuntimeError("invalid_request", "The native Session history request is invalid", { cause });
+    }
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+        throw new SessionRuntimeError("invalid_request", "The native Session history request is invalid");
+    }
+    const requestValue = Object.fromEntries(Object.entries(value));
+    const cursor = requestValue["cursor"];
+    const limit = requestValue["limit"];
+    const scope = requestValue["scope"];
+    if (
+        Object.keys(requestValue).sort().join(",") !== "cursor,limit,scope,sessionId" ||
+        requestValue["sessionId"] !== expectedSessionId ||
+        typeof scope !== "object" ||
+        scope === null ||
+        Array.isArray(scope) ||
+        Object.keys(scope).length !== 1 ||
+        Object.entries(scope)[0]?.[0] !== "projectId" ||
+        Object.entries(scope)[0]?.[1] !== expectedProjectId ||
+        (cursor !== null && (typeof cursor !== "string" || cursor.length > 512)) ||
+        typeof limit !== "number" ||
+        !Number.isSafeInteger(limit)
+    ) {
+        throw new SessionRuntimeError("invalid_request", "The native Session history request is invalid");
+    }
+    return { cursor, limit };
 }
 
 function scrubRetainedSessionContent(database: DoSqlDatabase): void {

@@ -1705,7 +1705,7 @@ async function readSessionHistoryForSummary(
     const [pageResult, nativeHistoryResult, interactionsResult] = await Promise.allSettled([
         client.sessions.readMessages(summary.session.sessionId, new MobiusPageRequest(100, ""), signal),
         summary.hasNativeHistory
-            ? client.sessions.readNativeHistory(summary.session.sessionId, signal)
+            ? client.sessions.readNativeHistory(summary.session.sessionId, new MobiusPageRequest(100, ""), signal)
             : Promise.resolve(null),
         client.interactions.listPending(summary.session.sessionId, signal),
     ]);

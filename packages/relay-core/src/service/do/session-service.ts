@@ -637,10 +637,19 @@ export class SessionService {
             signal,
         );
 
-    readonly readNativeHistory = async (projectId: string, token: string, sessionId: string, signal: AbortSignal) =>
-        this.#sessionQueries.readNativeHistory(
+    readonly readNativeHistory = async (
+        projectId: string,
+        token: string,
+        sessionId: string,
+        cursor: string | null,
+        limit: number,
+        signal: AbortSignal,
+    ) =>
+        this.#sessionQueries.readNativeHistoryPage(
             await this.projectScope(projectId, token, ProjectPermission.SessionRead, signal),
             sessionId,
+            cursor,
+            limit,
             signal,
         );
 

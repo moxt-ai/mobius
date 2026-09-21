@@ -2,7 +2,7 @@ import {
     type AgentSettingsDiscoveredEvent,
     type Attempt,
     decodeAgentSettingsDiscoveredEvent,
-    decodeNativeSessionHistory,
+    decodeNativeSessionHistoryPage,
     decodeNativeSessionResult,
     decodeSessionConfigUpdatedEvent,
     decodeSessionReadyEvent,
@@ -13,7 +13,7 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
     type NativeSessionCommand,
-    type NativeSessionHistory,
+    type NativeSessionHistoryPage,
     type SessionConfigureCommand,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -62,7 +62,7 @@ import {
     type MobiusEventPage,
     type MobiusInteractionResponseRequest,
     type MobiusMessagePage,
-    type MobiusPageRequest,
+    MobiusPageRequest,
     MobiusPairedRuntimePairingStatus,
     type MobiusRuntimeDescriptor,
     type MobiusRuntimePairing,
@@ -1147,10 +1147,26 @@ export class MobiusSessionResources {
         return decodeMobiusMessagePage(await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal));
     };
 
-    readonly readNativeHistory = async (sessionId: string, signal: AbortSignal): Promise<NativeSessionHistory> => {
+    readonly readNativeHistory = async (
+        ...request:
+            | readonly [sessionId: string, page: MobiusPageRequest, signal: AbortSignal]
+            | readonly [sessionId: string, signal: AbortSignal]
+    ): Promise<NativeSessionHistoryPage> => {
+        const [sessionId, page, signal] =
+            request.length === 2
+                ? [request[0], new MobiusPageRequest(50, ""), request[1]]
+                : [request[0], request[1], request[2]];
         try {
-            return decodeNativeSessionHistory(
-                await this.#executor.get(sessionPath(this.#projectId, sessionId, "native-history"), signal),
+            const path = requestUrl(
+                new URL("https://mobius.invalid/"),
+                sessionPath(this.#projectId, sessionId, "native-history"),
+            );
+            path.searchParams.set("limit", page.limit.toString());
+            if (page.cursor.length > 0) {
+                path.searchParams.set("cursor", page.cursor);
+            }
+            return decodeNativeSessionHistoryPage(
+                await this.#executor.get(`${path.pathname.slice(1)}${path.search}`, signal),
             );
         } catch (cause) {
             if (cause instanceof MobiusError) {

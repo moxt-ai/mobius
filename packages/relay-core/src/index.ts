@@ -148,6 +148,7 @@ export {
     SystemRelayClock,
 } from "./service/channel/channel-actor.ts";
 export type { RuntimePeers, RuntimeSocket, RuntimeSocketIdentity } from "./service/channel/runtime-service.ts";
+export { paginateNativeSessionHistory } from "./service/do/native-history-pagination.ts";
 export { validateCreateSessionRequest } from "./service/do/session-records.ts";
 export {
     type PublicProjectBootstrapEnvironment,
