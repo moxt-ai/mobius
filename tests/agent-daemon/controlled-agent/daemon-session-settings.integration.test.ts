@@ -35,6 +35,8 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/agents/codex-agent.ts";
+import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
@@ -446,6 +448,231 @@ describe("daemon session configuration boundary", () => {
             } finally {
                 database.close();
             }
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            audit.close();
+            await daemon;
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given Codex runs as an in-process Agent, When Agent settings are discovered, Then Mobius offers the model and reasoning effort the app-server reports", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-codex-settings-"));
+        const workspace = join(stateDirectory, "workspace");
+        const executableDirectory = join(stateDirectory, "external");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        const codexPath = join(executableDirectory, "codex");
+        await Promise.all([mkdir(workspace, { recursive: true }), mkdir(executableDirectory, { recursive: true })]);
+        await writeFile(
+            codexPath,
+            executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
+} else {
+  process.exit(80);
+}
+`),
+            { mode: 0o700 },
+        );
+        await chmod(codexPath, 0o700);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        // The in-process Agent owns the app-server conversation, so the settings Mobius can offer
+        // come from the ACP session it serves. Without them the Run settings panel is empty and a
+        // saved model or effort can never be applied.
+        const inventory = await discoverLocalAgentInventory({
+            defaultWorkspace: workspace,
+            environment: { MOBIUS_STATE_DIRECTORY: stateDirectory, PATH: executableDirectory },
+            signal: new AbortController().signal,
+            specifications: [new CodexAgentSpecification()],
+        });
+        expect(inventory.readyAgents().map((agent) => agent.id)).toEqual(["codex"]);
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            inventory.readyAgents(),
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(config, audit, cancellation.signal);
+
+        try {
+            const frames = new ClientFrames(await socketReady.promise);
+            const requestId = "codex-in-process-settings";
+            sendText(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: "codex",
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId,
+                }),
+            );
+            const discovered = await readAgentSettings(frames, requestId);
+
+            const model = discovered.settings.find((setting) => setting.id === "model");
+            expect(model?.values.map((value) => value.value)).toEqual(["scripted-small", "scripted-large"]);
+            expect(model?.defaultValue).toBe("scripted-small");
+            const effort = discovered.settings.find((setting) => setting.id === "reasoning_effort");
+            expect(effort?.values.map((value) => value.value)).toEqual(["low", "medium", "high"]);
+            expect(effort?.defaultValue).toBe("medium");
+            // The default model advertises a speed tier, so fast mode is offered as a toggle.
+            expect(discovered.settings.find((setting) => setting.id === "fast-mode")).toMatchObject({
+                booleanValue: false,
+                type: "boolean",
+            });
+            expect(discovered.settings.find((setting) => setting.id === "mode")).toMatchObject({
+                defaultValue: "agent",
+                type: "select",
+                values: [{ value: "read-only" }, { value: "agent" }, { value: "agent-full-access" }],
+            });
+            expect(discovered.modelEffort).toMatchObject({
+                effortSettingId: "reasoning_effort",
+                modelSettingId: "model",
+                resolution: "complete",
+                valuesByModel: {
+                    "scripted-large": [expect.objectContaining({ value: "high" })],
+                    "scripted-small": [
+                        expect.objectContaining({ value: "low" }),
+                        expect.objectContaining({ value: "medium" }),
+                        expect.objectContaining({ value: "high" }),
+                    ],
+                },
+            });
+
+            // Until a mode is chosen, the host's own approval and sandbox policy must win. Sending
+            // Mobius defaults unconditionally would override `config.toml`, which is how a host that
+            // cannot build the sandbox ends up running every tool call inside a failing one.
+            const inheritedPrompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                commandId: "inherited_codex_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "inherited turn",
+                resources: [],
+                sessionId: "inherited_codex_conversation",
+                targetCommandId: "",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(inheritedPrompt));
+            const inherited = await readTerminalSessionResult(frames, inheritedPrompt.sessionId);
+            expect(inherited.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/undefined)");
+
+            // Discovery alone is not the fix: a selection has to reach Codex. The app-server names
+            // the model and effort each turn ran with, so the answer proves the choice was applied.
+            const prompt: SessionPromptCommand = {
+                additionalDirectoryIds: [],
+                agentId: "codex",
+                bindingId: config.bindingId,
+                commandId: "configured_codex_turn",
+                directoryId: "default",
+                disposition: SessionPromptDisposition.Reject,
+                images: [],
+                kind: "session.prompt",
+                prompt: "configured turn",
+                resources: [],
+                sessionConfigurations: [
+                    {
+                        booleanValue: false,
+                        configId: "model",
+                        value: "scripted-large",
+                        valueType: "select",
+                    },
+                    // Full access carries `never`, which distinguishes the applied preset from the
+                    // default mode's `on-request`.
+                    {
+                        booleanValue: false,
+                        configId: "mode",
+                        value: "agent-full-access",
+                        valueType: "select",
+                    },
+                ],
+                sessionId: "configured_codex_conversation",
+                targetCommandId: "",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(prompt));
+            const result = await readTerminalSessionResult(frames, prompt.sessionId);
+            expect(result).toMatchObject({ kind: SESSION_COMPLETED_KIND });
+            // Switching to a model that only supports "high" re-resolves the effort, which is what
+            // Codex does and what the reply's own settings then advertise. Full access sends `never`
+            // rather than the default mode's `on-request`, so the mode reached Codex too.
+            expect(result.text).toBe("Scripted Codex answer (scripted-large/high/never/undefined)");
+
+            // Fast mode is offered per model. Turning it on for a model with a speed tier sends the
+            // resolved tier, and switching to a model without one drops it rather than sending a
+            // tier that model cannot run.
+            const fastPrompt: SessionPromptCommand = {
+                ...prompt,
+                commandId: "fast_codex_turn",
+                prompt: "fast turn",
+                sessionConfigurations: [
+                    {
+                        booleanValue: true,
+                        configId: "fast-mode",
+                        value: "",
+                        valueType: "boolean",
+                    },
+                    {
+                        booleanValue: false,
+                        configId: "model",
+                        value: "scripted-small",
+                        valueType: "select",
+                    },
+                ],
+                sessionId: "fast_codex_conversation",
+            };
+            sendText(await socketReady.promise, encodeSessionPromptCommand(fastPrompt));
+            const fastResult = await readTerminalSessionResult(frames, fastPrompt.sessionId);
+            // No mode was selected in this session, so it inherits the host's own policy: the turn
+            // omits approval and sandbox rather than overriding what the host configured.
+            expect(fastResult.text).toBe("Scripted Codex answer (scripted-small/medium/undefined/priority)");
         } finally {
             cancellation.abort();
             for (const socket of relaySockets) {

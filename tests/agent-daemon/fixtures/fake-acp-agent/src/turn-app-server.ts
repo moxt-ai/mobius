@@ -8,6 +8,35 @@ let initialized = false;
 let nextThread = 0;
 let nextTurn = 0;
 
+// The catalog Mobius turns into the model and reasoning effort settings. Shaped like a real
+// `model/list` reply, including the fields Mobius reads for labels, effort choices, and the speed
+// tier that gates fast mode. Only `scripted-small` advertises fast, so the fast mode setting appears
+// for one model and not the other.
+const MODELS = [
+    {
+        additionalSpeedTiers: ["fast"],
+        defaultReasoningEffort: "medium",
+        description: "Fast model for scripted turns",
+        displayName: "Scripted Small",
+        id: "scripted-small",
+        isDefault: true,
+        supportedReasoningEfforts: [
+            { description: "Least reasoning", reasoningEffort: "low" },
+            { description: "Balanced reasoning", reasoningEffort: "medium" },
+            { description: "Most reasoning", reasoningEffort: "high" },
+        ],
+    },
+    {
+        additionalSpeedTiers: [],
+        defaultReasoningEffort: "high",
+        description: "Deeper model for scripted turns",
+        displayName: "Scripted Large",
+        id: "scripted-large",
+        isDefault: false,
+        supportedReasoningEfforts: [{ description: "Most reasoning", reasoningEffort: "high" }],
+    },
+];
+
 function reply(id: unknown, result: unknown): void {
     process.stdout.write(`${JSON.stringify({ id, result })}\n`);
 }
@@ -41,9 +70,19 @@ input.on("line", (line) => {
         process.stdout.write(`${JSON.stringify({ id, error: { code: -32002, message: "Not initialized" } })}\n`);
         return;
     }
+    if (method === "model/list") {
+        reply(id, { data: MODELS, nextCursor: null });
+        return;
+    }
     if (method === "thread/start") {
         nextThread += 1;
-        reply(id, { thread: { cwd: readParam("cwd"), id: `thread-${nextThread.toString()}` } });
+        // A real app-server reports the model and effort it resolved from Codex's own configuration;
+        // Mobius reads them back as the current settings values.
+        reply(id, {
+            model: "scripted-small",
+            reasoningEffort: "medium",
+            thread: { cwd: readParam("cwd"), id: `thread-${nextThread.toString()}` },
+        });
         return;
     }
     if (method === "turn/start") {
@@ -82,7 +121,11 @@ input.on("line", (line) => {
             item: {
                 id: `message-${nextTurn.toString()}`,
                 phase: "final_answer",
-                text: "Scripted Codex answer",
+                // The turn reports what it actually ran with, so a caller can prove a selection
+                // reached the app-server rather than only the settings list.
+                text:
+                    `Scripted Codex answer (${String(readParam("model"))}/${String(readParam("effort"))}` +
+                    `/${String(readParam("approvalPolicy"))}/${String(readParam("serviceTier"))})`,
                 type: "agentMessage",
             },
             threadId,

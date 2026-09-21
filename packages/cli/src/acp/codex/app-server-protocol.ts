@@ -196,8 +196,37 @@ export const mcpElicitationParamsSchema = z.object({
 });
 
 export const threadStartResponseSchema = z.object({
+    approvalPolicy: z.unknown().optional(),
+    approvalsReviewer: z.unknown().optional(),
+    model: boundedText(256).nullish(),
+    reasoningEffort: boundedText(256).nullish(),
+    sandbox: z.unknown().optional(),
+    serviceTier: boundedText(256).nullish(),
     thread: z.object({ id: boundedText(256) }),
+});
+
+const reasoningEffortOptionSchema = z.object({
+    description: boundedText(4_096).nullish(),
+    reasoningEffort: boundedText(256),
+});
+
+// A model Mobius can offer as a setting. Only `id` is load-bearing: the display name falls back to
+// it and a missing default effort leaves the effort option without a recommendation.
+const modelSchema = z.object({
+    additionalSpeedTiers: z.array(boundedText(256)).max(100).nullish(),
+    defaultReasoningEffort: boundedText(256).nullish(),
+    description: boundedText(4_096).nullish(),
+    displayName: boundedText(256).nullish(),
+    id: boundedText(256),
+    isDefault: z.boolean().nullish(),
+    supportedReasoningEfforts: z.array(reasoningEffortOptionSchema).max(100).nullish(),
+});
+
+export const modelListResponseSchema = z.object({
+    data: z.array(modelSchema).max(1_000),
+    nextCursor: boundedText(1_024).nullish(),
 });
 
 export type McpElicitationParams = z.infer<typeof mcpElicitationParamsSchema>;
 export type UserInputQuestion = z.infer<typeof userInputQuestionSchema>;
+export type CodexModel = z.infer<typeof modelSchema>;
