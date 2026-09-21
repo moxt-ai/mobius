@@ -1,4 +1,9 @@
-import { encodeAgentActivityEvent, encodeAgentContentEvent } from "@moxt-ai/mobius-protocol";
+import {
+    type AgentActivityEvent,
+    decodeAgentActivityEvent,
+    encodeAgentActivityEvent,
+    encodeAgentContentEvent,
+} from "@moxt-ai/mobius-protocol";
 import type { SessionEventProjection } from "../../entity/do/session-event-projection.ts";
 import {
     type AttemptRecord,
@@ -21,6 +26,7 @@ import {
 import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
+import { rowNullableString, rowString } from "./sqlite-row.ts";
 
 export class SessionEventProjectorStorage {
     readonly applyProjection = (input: {
@@ -71,8 +77,29 @@ export class SessionEventProjectorStorage {
                     originalBytes: detail.kind === "truncated" ? detail.originalBytes : 0,
                     eventSequence: input.sequence,
                 });
+                // A terminal narration snapshot carries the whole narration, so the
+                // increments that built it are redundant from this point on.
+                if (event.status === "completed" || event.status === "failed") {
+                    this.deleteActivityNarrations({
+                        ...scope,
+                        attemptId: plan.attemptId,
+                        activityId: event.activityId,
+                    });
+                }
                 return;
             }
+            case "narration":
+                this.appendActivityNarration({
+                    ...scope,
+                    commandId: plan.commandId,
+                    attemptId: plan.attemptId,
+                    activityId: plan.activityId,
+                    // The event sequence is the DO's own per-chunk order, so redelivery
+                    // lands on the same slot while distinct chunks stay ordered.
+                    sequence: input.sequence,
+                    text: plan.text,
+                });
+                return;
             case "content":
                 this.upsertContent({
                     ...scope,
@@ -248,6 +275,123 @@ export class SessionEventProjectorStorage {
                 [scopeKey, sessionId],
             ),
         )[0];
+
+    /**
+     * Append one streamed narration increment. The key includes the increment's own
+     * sequence, so a redelivered event overwrites its slot instead of duplicating
+     * text, and a reader concatenates slots in the order the Attempt produced them.
+     */
+    private readonly appendActivityNarration = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+        readonly attemptId: string;
+        readonly activityId: string;
+        readonly sequence: number;
+        readonly text: string;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `INSERT INTO tool_call_narrations (
+               scope_key, session_id, command_id, attempt_id, activity_id, sequence, text
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(scope_key, session_id, attempt_id, activity_id, sequence) DO UPDATE SET
+               text = excluded.text`,
+            [
+                input.scopeKey,
+                input.sessionId,
+                input.commandId,
+                input.attemptId,
+                input.activityId,
+                input.sequence,
+                input.text,
+            ],
+        );
+
+    /** Drop an activity's increments once a snapshot supersedes them. */
+    private readonly deleteActivityNarrations = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly attemptId: string;
+        readonly activityId: string;
+    }): { readonly changes: number } =>
+        this.#database.run(
+            `DELETE FROM tool_call_narrations
+              WHERE scope_key = ? AND session_id = ? AND attempt_id = ? AND activity_id = ?`,
+            [input.scopeKey, input.sessionId, input.attemptId, input.activityId],
+        );
+
+    /**
+     * Drop every narration increment of a Turn. A Turn whose Agent stopped mid-narration
+     * leaves increments behind with no completed snapshot to fold them into, so the
+     * terminal commit reclaims them instead of retaining text nobody will read again.
+     */
+    readonly foldTurnNarrations = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly commandId: string;
+    }): void => {
+        // A crashed Agent never sends the completed snapshot that carries the whole
+        // narration, so fold the retained increments into the activity summary first:
+        // the partial text the user already saw stays visible instead of vanishing.
+        const activities = this.#database.query(
+            `SELECT DISTINCT attempt_id, activity_id FROM tool_call_narrations
+              WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
+            [input.scopeKey, input.sessionId, input.commandId],
+        );
+        for (const row of activities) {
+            const attemptId = rowString(row, "attempt_id");
+            const activityId = rowString(row, "activity_id");
+            const narration = this.#concatenateNarrations(input.scopeKey, input.sessionId, attemptId, activityId);
+            if (narration.length === 0) {
+                continue;
+            }
+            const activity = this.#database.query(
+                `SELECT summary_json FROM tool_call_views
+                  WHERE scope_key = ? AND session_id = ? AND attempt_id = ? AND activity_id = ?`,
+                [input.scopeKey, input.sessionId, attemptId, activityId],
+            )[0];
+            if (activity === undefined) {
+                continue;
+            }
+            const event = decodeAgentActivityEvent(rowString(activity, "summary_json"));
+            const folded: AgentActivityEvent = {
+                ...event,
+                detail:
+                    event.detail.kind === "recorded"
+                        ? { ...event.detail, output: `${event.detail.output}${narration}` }
+                        : event.detail,
+                output: `${event.output}${narration}`,
+            };
+            this.#database.run(
+                `UPDATE tool_call_views SET summary_json = ?
+                  WHERE scope_key = ? AND session_id = ? AND attempt_id = ? AND activity_id = ?`,
+                [encodeAgentActivityEvent(folded), input.scopeKey, input.sessionId, attemptId, activityId],
+            );
+        }
+        this.#database.run(
+            `DELETE FROM tool_call_narrations
+              WHERE scope_key = ? AND session_id = ? AND command_id = ?`,
+            [input.scopeKey, input.sessionId, input.commandId],
+        );
+    };
+
+    readonly #concatenateNarrations = (
+        scopeKey: string,
+        sessionId: string,
+        attemptId: string,
+        activityId: string,
+    ): string => {
+        const row = this.#database.query(
+            `SELECT group_concat(text, '') AS narration
+               FROM (
+                   SELECT text FROM tool_call_narrations
+                    WHERE scope_key = ? AND session_id = ? AND attempt_id = ? AND activity_id = ?
+                    ORDER BY sequence
+               )`,
+            [scopeKey, sessionId, attemptId, activityId],
+        )[0];
+        return row === undefined ? "" : (rowNullableString(row, "narration") ?? "");
+    };
 
     private readonly upsertActivity = (input: {
         readonly scopeKey: string;

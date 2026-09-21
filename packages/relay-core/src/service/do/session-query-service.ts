@@ -494,7 +494,20 @@ export class SessionQueryService {
             return {
                 activities: (activitiesByCommand.get(command.commandId) ?? []).flatMap((activityRow) => {
                     const activity = activityFromRow(activityRow);
-                    return activity === null ? [] : [activity];
+                    if (activity === null) {
+                        return [];
+                    }
+                    // A running narration keeps its text in increments; fold them onto
+                    // the snapshot so a reader that arrives mid-Turn sees the full text.
+                    const narration = this.#storage.readActivityNarration({
+                        activityId: activity.activityId,
+                        attemptId: activityRow.attempt_id,
+                        scopeKey: scopeKey(scope),
+                        sessionId,
+                    });
+                    return narration.length === 0
+                        ? [activity]
+                        : [{ ...activity, output: `${activity.output}${narration}` }];
                 }),
                 additionalDirectoryIds: command.additionalDirectoryIds,
                 agentId: command.agentId,

@@ -1,8 +1,10 @@
 import {
     AGENT_ACTIVITY_DETAIL_LIMIT,
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentActivityNarrationEvent,
     type AgentDisplayContent,
     type Attempt,
     decodeAgentDisplayContentValue,
@@ -2084,6 +2086,25 @@ export class MobiusAgentActivityEvent extends MobiusRecordedEvent {
     }
 }
 
+/** One increment of a streamed narration activity, before it is folded into a snapshot. */
+export class MobiusAgentActivityNarrationEvent extends MobiusRecordedEvent {
+    readonly activityId: string;
+    readonly activityType: string;
+    readonly commandId: string;
+    readonly kind = AGENT_ACTIVITY_NARRATION_KIND;
+    readonly sequence: number;
+    readonly text: string;
+
+    constructor(event: AgentActivityNarrationEvent) {
+        super(event.sessionId);
+        this.activityId = event.activityId;
+        this.activityType = event.activityType;
+        this.commandId = event.commandId;
+        this.sequence = event.sequence;
+        this.text = event.text;
+    }
+}
+
 export class MobiusTurnCompletedEvent extends MobiusRecordedEvent {
     readonly commandId: string;
     readonly kind = SESSION_COMPLETED_KIND;
@@ -2130,6 +2151,8 @@ function decodeRecordedEvent(encoded: string): MobiusRecordedEvent {
             return new MobiusAgentMessageEvent(event.sessionId, event.commandId, event.text);
         case AGENT_ACTIVITY_KIND:
             return new MobiusAgentActivityEvent(event);
+        case AGENT_ACTIVITY_NARRATION_KIND:
+            return new MobiusAgentActivityNarrationEvent(event);
         case SESSION_COMPLETED_KIND:
             return new MobiusTurnCompletedEvent(event.sessionId, event.commandId, event.stopReason);
         case SESSION_FAILED_KIND:

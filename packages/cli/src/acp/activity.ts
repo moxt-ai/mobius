@@ -24,6 +24,28 @@ const TRUNCATION_MARKER = "\n… output truncated by Mobius";
 
 type CapturedActivityDetail = Extract<AgentActivityDetailCapture, { readonly kind: "recorded" | "truncated" }>;
 
+/** An incremental append to a streamed narration activity. */
+export class AcpActivityNarration {
+    readonly activityId: string;
+    readonly activityType: string;
+    readonly sequence: number;
+    readonly text: string;
+
+    constructor(activityId: string, activityType: string, sequence: number, text: string) {
+        this.activityId = activityId;
+        this.activityType = activityType;
+        this.sequence = sequence;
+        this.text = text;
+    }
+}
+
+interface AcpNarrationState {
+    readonly activityId: string;
+    readonly activityType: string;
+    readonly output: string;
+    readonly sequence: number;
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -440,17 +462,21 @@ export function isProgressMessage(content: ContentChunk): boolean {
 export class AcpActivityTracker {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #identities = new Map<string, ActivityIdentity>();
+    readonly #narrations = new Map<string, AcpNarrationState>();
     readonly #onActivity: (activity: AcpActivity) => Promise<void>;
+    readonly #onNarration: (narration: AcpActivityNarration) => Promise<void>;
     readonly #prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>;
     #activeNarrativeKey = "";
     #nextSequence = 0;
 
     constructor(
         onActivity: (activity: AcpActivity) => Promise<void>,
+        onNarration: (narration: AcpActivityNarration) => Promise<void>,
         prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent> = (content) =>
             Promise.resolve(content),
     ) {
         this.#onActivity = onActivity;
+        this.#onNarration = onNarration;
         this.#prepareContent = prepareContent;
     }
 
@@ -459,26 +485,45 @@ export class AcpActivityTracker {
         if (this.#activeNarrativeKey !== key) {
             await this.finishNarrative();
         }
-        const previous = this.#activities.get(key);
         const identity = this.#identity(key);
-        const fullOutput = `${recordedDetail(previous)?.output ?? previous?.output ?? ""}${text}`;
-        const activity = new AcpActivity(
+        // A narration streams: the activity is announced once, then each chunk travels
+        // as its own increment and the accumulated text is materialized exactly once,
+        // on completion. Sending the accumulated text per chunk made the durable event
+        // stream quadratic in the length of the narration.
+        const previous = this.#narrations.get(key);
+        this.#narrations.set(key, {
+            activityId: identity.id,
+            activityType,
+            output: `${previous?.output ?? ""}${text}`,
+            sequence: identity.sequence,
+        });
+        if (previous === undefined) {
+            await this.#record(key, this.#narrativeSnapshot(identity, activityType, "", "running"));
+        }
+        this.#activeNarrativeKey = key;
+        if (text.length > 0) {
+            await this.#onNarration(new AcpActivityNarration(identity.id, activityType, identity.sequence, text));
+        }
+    };
+
+    readonly #narrativeSnapshot = (
+        identity: ActivityIdentity,
+        activityType: string,
+        output: string,
+        status: string,
+    ): AcpActivity =>
+        new AcpActivity(
             identity.id,
             activityType,
             "",
             [],
             "",
-            truncate(fullOutput, AGENT_ACTIVITY_DETAIL_LIMIT),
+            truncate(output, AGENT_ACTIVITY_DETAIL_LIMIT),
             identity.sequence,
-            "running",
+            status,
             activityType === "reasoning" ? "Reasoning" : "Progress update",
             activityType === "reasoning" ? "think" : "",
-            [],
-            captureActivityDetail([], "", fullOutput),
         );
-        await this.#record(key, activity);
-        this.#activeNarrativeKey = key;
-    };
 
     readonly recordPlan = async (plan: Plan): Promise<void> => {
         await this.finishNarrative();
@@ -630,18 +675,14 @@ export class AcpActivityTracker {
             return;
         }
         this.#activeNarrativeKey = "";
-        const activity = this.#activities.get(key);
-        if (activity === undefined) {
-            return;
-        }
-        const completed = activity.complete();
-        if (completed !== activity) {
-            await this.#record(key, completed);
-        }
+        await this.#completeNarrative(key);
     };
 
     readonly finish = async (): Promise<void> => {
         await this.finishNarrative();
+        for (const key of this.#narrations.keys()) {
+            await this.#completeNarrative(key);
+        }
         const entries = [...this.#activities.entries()].sort((left, right) => left[1].sequence - right[1].sequence);
         for (const [key, activity] of entries) {
             const completed = activity.complete();
@@ -649,6 +690,35 @@ export class AcpActivityTracker {
                 await this.#record(key, completed);
             }
         }
+    };
+
+    // Materialize a streamed narration as one completed snapshot activity. The
+    // incremental events carried the text; this final event gives consumers the
+    // whole narration with its terminal status, as a single bounded item.
+    readonly #completeNarrative = async (key: string): Promise<void> => {
+        const narration = this.#narrations.get(key);
+        if (narration === undefined) {
+            return;
+        }
+        this.#narrations.delete(key);
+        const previous = this.#activities.get(key);
+        await this.#record(
+            key,
+            new AcpActivity(
+                narration.activityId,
+                narration.activityType,
+                "",
+                [],
+                "",
+                truncate(narration.output, AGENT_ACTIVITY_DETAIL_LIMIT),
+                narration.sequence,
+                "completed",
+                narration.activityType === "reasoning" ? "Reasoning" : "Progress update",
+                narration.activityType === "reasoning" ? "think" : "",
+                previous?.content ?? [],
+                captureActivityDetail([], "", narration.output),
+            ),
+        );
     };
 
     readonly #identity = (key: string): ActivityIdentity => {

@@ -1,5 +1,5 @@
 import { LocalAgentDefinition } from "../config.ts";
-import type { AcpActivity } from "./activity.ts";
+import type { AcpActivity, AcpActivityNarration } from "./activity.ts";
 import { AcpExecutionError, type AcpPromptResult, AcpSessionManager } from "./session-manager.ts";
 
 interface RunAcpPromptOptions {
@@ -7,6 +7,7 @@ interface RunAcpPromptOptions {
     readonly agentCommand: string;
     readonly cwd: string;
     readonly onActivity: (activity: AcpActivity) => Promise<void>;
+    readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
     readonly onText: (text: string) => Promise<void>;
     readonly prompt: string;
     readonly signal: AbortSignal;
@@ -24,6 +25,7 @@ export async function runAcpPrompt(options: RunAcpPromptOptions): Promise<AcpPro
             commandId: crypto.randomUUID(),
             images: [],
             onActivity: options.onActivity,
+            ...(options.onNarration === undefined ? {} : { onNarration: options.onNarration }),
             onText: options.onText,
             prompt: options.prompt,
             resources: [],

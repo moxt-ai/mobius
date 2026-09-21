@@ -17,6 +17,7 @@ export class SessionDeletionStorage {
         this.deleteArchiveSegments(input);
         this.deleteContentChunks(input);
         this.deleteArtifacts(input);
+        this.deleteToolCallNarrations(input);
         this.deleteToolCallViews(input);
         this.deleteTurnContentViews(input);
         this.deletePendingWork(input);
@@ -122,6 +123,13 @@ export class SessionDeletionStorage {
         ]);
     private readonly deleteToolCallViews = (input: DeleteSessionRecords): { readonly changes: number } =>
         this.#database.run("DELETE FROM tool_call_views WHERE scope_key = ? AND session_id = ?", [
+            input.scopeKey,
+            input.sessionId,
+        ]);
+    // Narration increments are keyed by activity and event sequence, so a Session
+    // deletion has to reclaim them alongside the activity snapshots they fold into.
+    private readonly deleteToolCallNarrations = (input: DeleteSessionRecords): { readonly changes: number } =>
+        this.#database.run("DELETE FROM tool_call_narrations WHERE scope_key = ? AND session_id = ?", [
             input.scopeKey,
             input.sessionId,
         ]);

@@ -240,6 +240,34 @@ export class RecordedActivity {
         this.content = content;
         this.detailAvailability = detailAvailability;
     }
+
+    readonly appendingOutput = (text: string): RecordedActivity =>
+        new RecordedActivity(
+            this.activityId,
+            this.attemptId,
+            this.activityType,
+            this.input,
+            this.locations,
+            this.name,
+            `${this.output}${text}`,
+            this.sequence,
+            this.status,
+            this.title,
+            this.toolKind,
+            this.content,
+            this.detailAvailability,
+        );
+}
+
+/** One streamed increment of a narration activity, applied to its placeholder row. */
+export class RecordedActivityNarration {
+    readonly activityId: string;
+    readonly text: string;
+
+    constructor(activityId: string, text: string) {
+        this.activityId = activityId;
+        this.text = text;
+    }
 }
 
 export class RecordedContent {

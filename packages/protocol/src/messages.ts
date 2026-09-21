@@ -12,6 +12,7 @@ export const RUNTIME_DELIVERY_COMMITTED_KIND = "runtime.delivery.committed";
 export const SESSION_STARTED_KIND = "session.started";
 export const AGENT_MESSAGE_DELTA_KIND = "agent.message.delta";
 export const AGENT_ACTIVITY_KIND = "agent.activity";
+export const AGENT_ACTIVITY_NARRATION_KIND = "agent.activity.narration";
 export const AGENT_ACTIVITY_DETAIL_LIMIT = 500_000;
 export const AGENT_ACTIVITY_RECORDED_FIELD_LIMIT = 4_000_000;
 export const AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT = 6_000_000;
@@ -98,6 +99,27 @@ export interface AgentMessageDeltaEvent {
     readonly commandId: string;
     readonly kind: typeof AGENT_MESSAGE_DELTA_KIND;
     readonly messageId: string;
+    readonly sessionId: string;
+    readonly text: string;
+}
+
+/**
+ * An incremental append to a streaming narration activity (reasoning or progress).
+ *
+ * A narration activity is rewritten once per streamed Agent chunk. Sending the
+ * accumulated text each time made the durable event stream quadratic in the
+ * length of the narration, so only the newly produced text travels here. The
+ * receiver appends `text` to what it already holds for `activityId`; the owning
+ * Attempt's contiguous source sequence orders the appends, so no offset has to
+ * be trusted. The fields carried here are what the receiver needs to render the
+ * activity while it is still streaming.
+ */
+export interface AgentActivityNarrationEvent {
+    readonly activityId: string;
+    readonly activityType: string;
+    readonly commandId: string;
+    readonly kind: typeof AGENT_ACTIVITY_NARRATION_KIND;
+    readonly sequence: number;
     readonly sessionId: string;
     readonly text: string;
 }

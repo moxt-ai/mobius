@@ -12,6 +12,7 @@ import {
     AGENT_ACTIVITY_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
+    AGENT_MESSAGE_DELTA_KIND,
     AGENT_SETTINGS_DISCOVER_KIND,
     AGENT_SETTINGS_DISCOVERED_KIND,
     decodeAgentCatalogRefreshedEvent,
@@ -188,7 +189,11 @@ async function readTerminalSessionResult(
         if (commandId.length > 0 && readStringField(payload, "commandId") !== commandId) {
             continue;
         }
-        text += readStringField(payload, "text");
+        // Only the assistant reply contributes to the turn's text. Activities and
+        // narration increments also carry a text-like field for their own decoding.
+        if (kind === AGENT_MESSAGE_DELTA_KIND) {
+            text += readStringField(payload, "text");
+        }
         if (kind === SESSION_COMPLETED_KIND || kind === SESSION_FAILED_KIND) {
             return new TerminalSessionResult(kind, text, readStringField(payload, "code"));
         }

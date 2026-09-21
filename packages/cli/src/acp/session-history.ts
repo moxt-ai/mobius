@@ -25,17 +25,22 @@ export class AcpHistoryReplay {
     readonly #activities = new Map<string, AcpActivity>();
     readonly #messages: ReplayMessage[] = [];
     readonly #turnActivityIds = new Set<string>();
-    readonly #activityTracker = new AcpActivityTracker(async (activity) => {
-        this.#activities.set(activity.activityId, activity);
-        this.#turnActivityIds.add(activity.activityId);
-        const latest = this.#messages.at(-1);
-        if (latest?.role === "assistant") {
-            this.#messages[this.#messages.length - 1] = {
-                ...latest,
-                activityIds: [...this.#turnActivityIds],
-            };
-        }
-    });
+    readonly #activityTracker = new AcpActivityTracker(
+        async (activity) => {
+            this.#activities.set(activity.activityId, activity);
+            this.#turnActivityIds.add(activity.activityId);
+            const latest = this.#messages.at(-1);
+            if (latest?.role === "assistant") {
+                this.#messages[this.#messages.length - 1] = {
+                    ...latest,
+                    activityIds: [...this.#turnActivityIds],
+                };
+            }
+        },
+        // History replay folds each narration into its snapshot activity, so no
+        // separate incremental event is produced here.
+        () => Promise.resolve(),
+    );
     #lastMessageId: string | null = null;
     #characters = 0;
     #truncated = false;

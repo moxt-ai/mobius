@@ -63,6 +63,7 @@ import {
 import { AcpConfigurationValueUnavailableError, AcpExecutionError } from "./acp-error.ts";
 import {
     type AcpActivity,
+    type AcpActivityNarration,
     AcpActivityTracker,
     imageDisplayContent,
     isProgressMessage,
@@ -145,6 +146,11 @@ export interface AcpTurnOptions extends AcpPrepareOptions, AcpPromptContentOptio
     readonly commandId: string;
     readonly disposition?: string;
     readonly onActivity: (activity: AcpActivity) => Promise<void>;
+    /**
+     * Receives streamed narration increments. Optional: without a sink the same text
+     * still arrives once on the completed activity snapshot, just without live updates.
+     */
+    readonly onNarration?: (narration: AcpActivityNarration) => Promise<void>;
     readonly onText: (text: string, messageId: string) => Promise<void>;
     readonly targetCommandId?: string;
 }
@@ -699,7 +705,10 @@ abstract class AcpTurnState {
 class IdleAcpTurn extends AcpTurnState {
     readonly commandId = SESSION_CONTROL_COMMAND_ID;
     readonly running = false;
-    readonly activities = new AcpActivityTracker(() => Promise.resolve());
+    readonly activities = new AcpActivityTracker(
+        () => Promise.resolve(),
+        () => Promise.resolve(),
+    );
     readonly onText = (): Promise<void> => Promise.resolve();
 }
 
@@ -712,12 +721,13 @@ class RunningAcpTurn extends AcpTurnState {
     constructor(
         commandId: string,
         onActivity: (activity: AcpActivity) => Promise<void>,
+        onNarration: ((narration: AcpActivityNarration) => Promise<void>) | undefined,
         onText: (text: string, messageId: string) => Promise<void>,
         prepareContent: (content: AgentDisplayContent) => Promise<AgentDisplayContent>,
     ) {
         super();
         this.commandId = commandId;
-        this.activities = new AcpActivityTracker(onActivity, prepareContent);
+        this.activities = new AcpActivityTracker(onActivity, onNarration ?? (() => Promise.resolve()), prepareContent);
         this.onText = onText;
     }
 }
@@ -1643,6 +1653,7 @@ class AcpProcessSession implements AcpClientHandler {
         const running = new RunningAcpTurn(
             options.commandId,
             options.onActivity,
+            options.onNarration,
             options.onText,
             this.prepareAgentContent,
         );

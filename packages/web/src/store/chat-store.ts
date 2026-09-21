@@ -30,6 +30,7 @@ import {
     IdleAgentInstallationState,
     type InstallableAgentOption,
     type RecordedActivity,
+    type RecordedActivityNarration,
     type RecordedTurn,
     RequestedAgentInstallationState,
     RequestingAgentInstallationState,
@@ -106,6 +107,7 @@ export interface ChatStore {
     readonly reconcileHistory: (history: ChannelHistory) => void;
     readonly refreshChannelConnection: (connection: ChannelConnection) => void;
     readonly recordAgentActivity: (turn: PendingTurn, activity: RecordedActivity) => void;
+    readonly recordAgentActivityNarration: (turn: PendingTurn, narration: RecordedActivityNarration) => void;
     readonly recordAgentContent: (event: AgentContentEvent) => void;
     readonly removeDraftImage: (name: string) => void;
     readonly removeDraftResource: (name: string) => void;
@@ -909,6 +911,20 @@ export const useChatStore = create<ChatStore>()((set, get) => ({
         set((state) => {
             const conversation = readConversation(state.conversations, turn.conversationId);
             const agentMessage = readAgentMessage(conversation, turn.agentMessageId).recordActivity(activity);
+            return {
+                conversations: replaceConversation(
+                    state.conversations,
+                    conversation.replaceAgentMessage(turn.agentMessageId, agentMessage),
+                ),
+            };
+        });
+    },
+    recordAgentActivityNarration: (turn, narration) => {
+        set((state) => {
+            const conversation = readConversation(state.conversations, turn.conversationId);
+            const agentMessage = readAgentMessage(conversation, turn.agentMessageId).appendAgentActivityNarration(
+                narration,
+            );
             return {
                 conversations: replaceConversation(
                     state.conversations,

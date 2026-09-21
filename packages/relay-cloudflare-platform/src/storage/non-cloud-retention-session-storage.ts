@@ -16,6 +16,7 @@ import {
     sessionStreamEventRefs,
     sessionStreams,
     sessions,
+    toolCallNarrations,
     toolCallViews,
     turnContentViews,
     turnMessageAnchors,
@@ -131,6 +132,7 @@ export class NonCloudRetentionSessionStorage {
             transaction.delete(sessionStreamEventRefs).run();
             transaction.delete(sessionStreams).run();
             transaction.delete(toolCallViews).run();
+            transaction.delete(toolCallNarrations).run();
             transaction.delete(turnContentViews).run();
             transaction.delete(turnMessageAnchors).run();
             transaction.delete(uploadedArtifacts).run();

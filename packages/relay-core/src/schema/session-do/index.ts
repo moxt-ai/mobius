@@ -17,6 +17,7 @@ export { sessionStreamBlocks } from "./session-stream-blocks.ts";
 export { sessionStreamEventRefs } from "./session-stream-event-refs.ts";
 export { sessionStreams } from "./session-streams.ts";
 export { sessions } from "./sessions.ts";
+export { toolCallNarrations } from "./tool-call-narrations.ts";
 export { toolCallViews } from "./tool-call-views.ts";
 export { turnContentViews } from "./turn-content-views.ts";
 export { turnMessageAnchors } from "./turn-message-anchors.ts";

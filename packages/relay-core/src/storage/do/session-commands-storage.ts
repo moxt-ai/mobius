@@ -108,6 +108,10 @@ export class SessionCommandsStorage {
                     commandId: plan.projection.commandId,
                     completedAt: plan.recordedAt,
                 });
+                this.#projections.foldTurnNarrations({
+                    ...scope,
+                    commandId: plan.projection.commandId,
+                });
                 this.#archive.stageTurnActivityDetails({ ...scope, commandId: plan.projection.commandId });
             }
             if (!this.hasActiveTurn(plan.scopeKey, plan.sessionId)) {

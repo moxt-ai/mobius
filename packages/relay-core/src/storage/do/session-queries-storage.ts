@@ -30,7 +30,7 @@ import type { DoSqlDatabase } from "../../infra/do-sql-database.ts";
 import { DatabaseError } from "../../infra/sql-database.ts";
 import { decodeStorageRows } from "./decode-storage-rows.ts";
 import { decodeStreamBlock, sessionDeltaText } from "./session-stream-codec.ts";
-import { rowNumber, rowString } from "./sqlite-row.ts";
+import { rowNullableString, rowNumber, rowString } from "./sqlite-row.ts";
 
 function placeholders(count: number): string {
     return Array.from({ length: count }, () => "?").join(", ");
@@ -80,6 +80,32 @@ export class SessionQueriesStorage {
                 [input.scopeKey, input.sessionId, ...input.commandIds],
             ),
         );
+    };
+
+    /**
+     * The narration increments an activity has accumulated, concatenated in the order
+     * the Attempt produced them. A Turn that is still running keeps these rows instead
+     * of re-storing the whole narration on its snapshot row.
+     */
+    readonly readActivityNarration = (input: {
+        readonly scopeKey: string;
+        readonly sessionId: string;
+        readonly attemptId: string;
+        readonly activityId: string;
+    }): string => {
+        const row = this.#database.query(
+            `SELECT group_concat(text, '') AS narration
+               FROM (
+                   SELECT text FROM tool_call_narrations
+                    WHERE scope_key = ? AND session_id = ? AND attempt_id = ? AND activity_id = ?
+                    ORDER BY sequence
+               )`,
+            [input.scopeKey, input.sessionId, input.attemptId, input.activityId],
+        )[0];
+        if (row === undefined) {
+            return "";
+        }
+        return rowNullableString(row, "narration") ?? "";
     };
 
     readonly listTurnContents = (input: {

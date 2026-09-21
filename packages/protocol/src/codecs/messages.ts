@@ -10,11 +10,13 @@ import {
     AGENT_ACTIVITY_KIND,
     AGENT_ACTIVITY_LOCATION_LENGTH_LIMIT,
     AGENT_ACTIVITY_LOCATION_LIMIT,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_ACTIVITY_RECORDED_DETAIL_LIMIT,
     AGENT_ACTIVITY_RECORDED_FIELD_LIMIT,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityDetailCapture,
     type AgentActivityEvent,
+    type AgentActivityNarrationEvent,
     type AgentMessageDeltaEvent,
     RUNTIME_DELIVERY_COMMITTED_KIND,
     RUNTIME_DELIVERY_KIND,
@@ -50,6 +52,8 @@ export const MAX_PROMPT_ATTACHMENT_LENGTH = 6_000_000;
 const MAX_EVENT_TEXT_LENGTH = 100_000;
 const MAX_RUNTIME_DELIVERY_PAYLOAD_LENGTH = 8 * 1024 * 1024;
 const ACTIVITY_TYPES = new Set(["plan", "progress", "reasoning", "tool"]);
+// Only narrative activities stream incrementally; tools and plans are replaced wholesale.
+const NARRATION_ACTIVITY_TYPES = new Set(["progress", "reasoning"]);
 const ACTIVITY_STATUSES = new Set(["pending", "running", "completed", "failed"]);
 const TOOL_KINDS = new Set([
     "",
@@ -586,6 +590,26 @@ export function encodeAgentMessageDeltaEvent(message: AgentMessageDeltaEvent): s
 
 export function encodeAgentActivityEvent(message: AgentActivityEvent): string {
     return JSON.stringify(decodeAgentActivityEvent(JSON.stringify(message)));
+}
+
+export function decodeAgentActivityNarrationEvent(encoded: string): AgentActivityNarrationEvent {
+    const value = parseJson(encoded);
+    assertExactKeys(value, ["activityId", "activityType", "commandId", "kind", "sequence", "sessionId", "text"]);
+    assertKind(value, AGENT_ACTIVITY_NARRATION_KIND);
+
+    return {
+        activityId: readIdentifier(value, "activityId"),
+        activityType: readAllowedString(value, "activityType", NARRATION_ACTIVITY_TYPES),
+        commandId: readIdentifier(value, "commandId"),
+        kind: AGENT_ACTIVITY_NARRATION_KIND,
+        sequence: readSequence(value, "sequence"),
+        sessionId: readIdentifier(value, "sessionId"),
+        text: readText(value, "text", MAX_EVENT_TEXT_LENGTH),
+    };
+}
+
+export function encodeAgentActivityNarrationEvent(message: AgentActivityNarrationEvent): string {
+    return JSON.stringify(decodeAgentActivityNarrationEvent(JSON.stringify(message)));
 }
 
 export function encodeSessionCompletedEvent(message: SessionCompletedEvent): string {

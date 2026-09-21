@@ -4,6 +4,7 @@ import { styleText } from "node:util";
 
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CATALOG_REFRESH_FAILED_KIND,
     AGENT_CATALOG_REFRESH_KIND,
     AGENT_CATALOG_REFRESHED_KIND,
@@ -125,6 +126,7 @@ import { NativeSessionService } from "./native-sessions/service.ts";
 import { environmentProxyDispatcher } from "./network/environment-proxy.ts";
 import { revalidateExecutable } from "./process/executable.ts";
 import { PromptArtifactError, resolvePromptArtifacts } from "./prompt-artifact-resolver.ts";
+import { CoalescingNarrationPublisher } from "./relay-connection/coalescing-narration-publisher.ts";
 import { CoalescingTextPublisher } from "./relay-connection/coalescing-text-publisher.ts";
 import { connectRelay } from "./relay-connection/connect.ts";
 import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
@@ -1509,6 +1511,26 @@ async function executePrompt(
     const activities = new CoalescingDaemonActivityPublisher(timer, (activity) => {
         publisher.recordAttempt(command.sessionId, daemonActivity(command, activity), attemptId);
     });
+    const narration = new CoalescingNarrationPublisher(
+        timer,
+        (increment) => {
+            publisher.recordAttempt(
+                command.sessionId,
+                {
+                    activityId: increment.activityId,
+                    activityType: increment.activityType,
+                    commandId: command.commandId,
+                    kind: AGENT_ACTIVITY_NARRATION_KIND,
+                    sequence: increment.sequence,
+                    sessionId: command.sessionId,
+                    text: increment.text,
+                },
+                attemptId,
+            );
+        },
+        AGENT_ACTIVITY_COALESCING_MILLISECONDS,
+        AGENT_TEXT_MAXIMUM_LENGTH,
+    );
     const text = new CoalescingTextPublisher(
         timer,
         (messageId, delta) => {
@@ -1623,6 +1645,10 @@ async function executePrompt(
                 disposition: command.disposition,
                 images: attachments.images,
                 onActivity: activities.record,
+                onNarration: (increment) => {
+                    narration.record(increment);
+                    return Promise.resolve();
+                },
                 onText: (delta, messageId) => {
                     text.record(messageId, delta);
                     return Promise.resolve();
@@ -1637,6 +1663,7 @@ async function executePrompt(
         }
 
         text.flush();
+        narration.flush();
         activities.flush();
         publisher.recordAttempt(
             command.sessionId,
@@ -1656,6 +1683,7 @@ async function executePrompt(
         });
     } catch (error) {
         text.flush();
+        narration.flush();
         activities.flush();
         audit.record({
             commandId: command.commandId,

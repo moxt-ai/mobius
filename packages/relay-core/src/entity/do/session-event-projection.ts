@@ -39,6 +39,13 @@ export type SessionEventProjection =
           readonly hotDetail: string | null;
       }
     | {
+          readonly kind: "narration";
+          readonly activityId: string;
+          readonly attemptId: string;
+          readonly commandId: string;
+          readonly text: string;
+      }
+    | {
           readonly kind: "request-interaction";
           readonly interactionId: string;
           readonly turnId: string;

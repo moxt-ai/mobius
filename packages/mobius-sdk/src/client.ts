@@ -1,5 +1,6 @@
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
     AGENT_INSTALL_CANCEL_KIND,
     AGENT_INSTALL_CANCELLED_KIND,
@@ -10,6 +11,7 @@ import {
     AGENT_INSTALL_STARTED_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentActivityNarrationEvent,
     type AgentContentEvent,
     type AgentInstallCancelledEvent,
     type AgentInstallCompletedEvent,
@@ -17,6 +19,7 @@ import {
     type AgentInstallProgressEvent,
     type AgentInstallStartedEvent,
     decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
     decodeAgentContentEvent,
     decodeAgentInstallCancelCommand,
     decodeAgentInstallCancelledEvent,
@@ -133,6 +136,7 @@ const INSTALLATION_TIMEOUT_MILLISECONDS = 11 * 60 * 1_000;
 const TERMINAL_RELAY_CLOSE_CODES: ReadonlySet<number> = new Set([1002, 1003, 1007, 1008, 4003, 4008]);
 const HISTORY_CHANGING_MESSAGE_KINDS: ReadonlySet<string> = new Set([
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_CONTENT_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     NATIVE_SESSION_RESULT_KIND,
@@ -176,6 +180,7 @@ export interface PromptObserver {
     readonly onActivity?: (activity: AgentActivityEvent) => void;
     readonly onContent?: (content: AgentContentEvent) => void;
     readonly onDelta?: (text: string, committedSequence: string) => void;
+    readonly onNarration?: (narration: AgentActivityNarrationEvent) => void;
     readonly onStarted?: (attemptId: string) => void;
 }
 
@@ -900,6 +905,14 @@ export class MobiusClient {
                         return;
                     }
 
+                    if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                        const message = decodeAgentActivityNarrationEvent(encoded);
+                        if (message.commandId === commandId) {
+                            request.observer?.onNarration?.(message);
+                        }
+                        return;
+                    }
+
                     if (kind === AGENT_CONTENT_KIND) {
                         const message = decodeAgentContentEvent(encoded);
                         if (message.commandId === commandId) {
@@ -1125,6 +1138,8 @@ export class MobiusClient {
                 decodeAgentMessageDeltaEvent(encoded);
             } else if (kind === AGENT_ACTIVITY_KIND) {
                 decodeAgentActivityEvent(encoded);
+            } else if (kind === AGENT_ACTIVITY_NARRATION_KIND) {
+                decodeAgentActivityNarrationEvent(encoded);
             } else if (kind === AGENT_CONTENT_KIND) {
                 this.#options.onContent?.(decodeAgentContentEvent(encoded));
             } else if (kind === AGENT_INSTALL_REQUEST_KIND) {

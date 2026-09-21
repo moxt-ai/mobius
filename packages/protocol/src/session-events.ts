@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import {
     decodeAgentActivityEvent,
+    decodeAgentActivityNarrationEvent,
     decodeAgentMessageDeltaEvent,
     decodeMessageKind,
     decodeSessionCompletedEvent,
@@ -43,8 +44,10 @@ import {
 } from "./control-messages.ts";
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentActivityEvent,
+    type AgentActivityNarrationEvent,
     type AgentMessageDeltaEvent,
     SESSION_COMPLETED_KIND,
     SESSION_FAILED_KIND,
@@ -148,6 +151,7 @@ export type SessionEventRejection = z.infer<typeof eventRejectionSchema>;
 
 export type RecordedSessionEvent =
     | AgentActivityEvent
+    | AgentActivityNarrationEvent
     | AgentContentEvent
     | AgentMessageDeltaEvent
     | SessionCommandsUpdatedEvent
@@ -224,6 +228,8 @@ export function decodeRecordedSessionEvent(encoded: string): RecordedSessionEven
     switch (kind) {
         case AGENT_ACTIVITY_KIND:
             return decodeAgentActivityEvent(encoded);
+        case AGENT_ACTIVITY_NARRATION_KIND:
+            return decodeAgentActivityNarrationEvent(encoded);
         case AGENT_CONTENT_KIND:
             return decodeAgentContentEvent(encoded);
         case AGENT_MESSAGE_DELTA_KIND:

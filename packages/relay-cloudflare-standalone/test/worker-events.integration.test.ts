@@ -2,6 +2,7 @@ import { evictDurableObject, runInDurableObject } from "cloudflare:test";
 import { env } from "cloudflare:workers";
 import {
     AGENT_ACTIVITY_KIND,
+    AGENT_ACTIVITY_NARRATION_KIND,
     AGENT_INSTALL_REQUEST_KIND,
     AGENT_MESSAGE_DELTA_KIND,
     type AgentDisplayContent,
@@ -1298,6 +1299,136 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
         } finally {
             daemon.socket.close(1000, "Batched message projection test complete");
             host.socket.close(1000, "Batched message projection test complete");
+        }
+    });
+
+    it("Given an Agent streams one reasoning activity chunk by chunk, When a browser reads the Session mid-Turn and after it completes, Then the partial text is visible while streaming and the retained rows stay bounded", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "narration-delta-session";
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        await host.messages.next();
+        const sessionStub = env.SESSION_RELAY.get(
+            env.SESSION_RELAY.idFromName(`${STANDALONE_NAMESPACE_PREFIX}:${pairing.created.projectId}:${sessionId}`),
+        );
+        const readNarrationRows = async (): Promise<readonly Record<string, unknown>[]> =>
+            await runInDurableObject(sessionStub, async (_instance, state) =>
+                state.storage.sql.exec("SELECT text FROM tool_call_narrations").toArray(),
+            );
+        const readMessageActivities = async (): Promise<readonly Record<string, unknown>[]> => {
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}/messages`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            const body = await response.json();
+            if (!isRecord(body) || !Array.isArray(body["messages"]) || !isRecord(body["messages"][0])) {
+                throw new Error("Expected a message page with a streaming Turn");
+            }
+            const activities = body["messages"][0]["activities"];
+            if (!Array.isArray(activities)) {
+                throw new Error("Expected the streaming Turn to carry its activities");
+            }
+            return activities as readonly Record<string, unknown>[];
+        };
+
+        try {
+            expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+
+            const command = prompt(sessionId, "narration-command", "Stream a long reasoning block");
+            await submitPrompt(host, daemon, command);
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "narration-started", {
+                    attemptId: "narration-attempt",
+                    commandId: command.commandId,
+                    kind: SESSION_STARTED_KIND,
+                    sessionId,
+                }),
+            );
+            // The daemon announces the activity once, then appends one increment per chunk.
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "narration-activity", {
+                    activityId: "narration-activity-id",
+                    activityType: "reasoning",
+                    commandId: command.commandId,
+                    content: [],
+                    detail: { kind: "unrecorded" },
+                    input: "",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "",
+                    output: "",
+                    sequence: 0,
+                    sessionId,
+                    status: "running",
+                    title: "Reasoning",
+                    toolKind: "think",
+                }),
+            );
+            const chunks = ["Thinking ", "about ", "the ", "workspace"];
+            for (const [index, text] of chunks.entries()) {
+                await commit(
+                    host,
+                    daemon,
+                    envelope(sessionId, `narration-chunk-${index.toString()}`, {
+                        activityId: "narration-activity-id",
+                        activityType: "reasoning",
+                        commandId: command.commandId,
+                        kind: AGENT_ACTIVITY_NARRATION_KIND,
+                        sequence: index,
+                        sessionId,
+                        text,
+                    }),
+                );
+            }
+
+            // Mid-Turn: the increments are retained as separate bounded rows and the
+            // message page folds them so the partial narration is already readable.
+            expect(await readNarrationRows()).toHaveLength(chunks.length);
+            expect(await readMessageActivities()).toMatchObject([
+                { activityId: "narration-activity-id", output: "Thinking about the workspace" },
+            ]);
+
+            // Completing the activity replaces the increments with one bounded snapshot
+            // and reclaims them, so the retained bytes do not accumulate per chunk.
+            await commit(
+                host,
+                daemon,
+                envelope(sessionId, "narration-completed", {
+                    activityId: "narration-activity-id",
+                    activityType: "reasoning",
+                    commandId: command.commandId,
+                    content: [],
+                    detail: { kind: "unrecorded" },
+                    input: "",
+                    kind: AGENT_ACTIVITY_KIND,
+                    locations: [],
+                    name: "",
+                    output: "Thinking about the workspace",
+                    sequence: 0,
+                    sessionId,
+                    status: "completed",
+                    title: "Reasoning",
+                    toolKind: "think",
+                }),
+            );
+            expect(await readNarrationRows()).toHaveLength(0);
+            expect(await readMessageActivities()).toMatchObject([
+                { activityId: "narration-activity-id", output: "Thinking about the workspace" },
+            ]);
+        } finally {
+            daemon.socket.close(1000, "Narration delta test complete");
+            host.socket.close(1000, "Narration delta test complete");
         }
     });
 
