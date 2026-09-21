@@ -7,6 +7,6 @@
         "skipLibCheck": true,
         "types": ["node"]
     },
-    "include": ["fake/**/*.ts", "infra/**/*.ts", "providers/**/*.ts", "real/**/*.ts"],
+    "include": ["controlled-agent/**/*.ts", "infra/**/*.ts", "providers/**/*.ts", "real/**/*.ts"],
     "exclude": ["fixtures/**"]
 }

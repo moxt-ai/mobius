@@ -1,9 +1,9 @@
 # Agent and daemon integration tests
 
 These tests treat an Agent and the production Mobius daemon as one system.
-`fake/` drives deterministic daemon, ACP, storage, and failure behavior with one
-controllable ACP fixture. `real/` drives compatibility through the production
-protocol between the daemon and a local Mobius server.
+`controlled-agent/` drives deterministic daemon, ACP, storage, and failure
+behavior with one controllable ACP Agent. `real/` drives compatibility through
+the production protocol between the daemon and a local Mobius server.
 
 ```text
 test client
@@ -56,9 +56,16 @@ unrelated model calls while proving the complete tool round trip.
 ```text
 tests/agent-daemon/
   README.md
-  fake/
+  controlled-agent/
+    acp-session-lifecycle.integration.test.ts
+    acp-session-settings.integration.test.ts
     acp-session-features.integration.test.ts
+    agent-discovery.integration.test.ts
     daemon-connection-liveness.integration.test.ts
+    daemon-session-settings.integration.test.ts
+    deepseek-harness.integration.test.ts
+    grok-build.integration.test.ts
+    workbuddy.integration.test.ts
     ...
   fixtures/
     fake-acp-agent/
@@ -95,9 +102,11 @@ tests/agent-daemon/
     openai.ts
 ```
 
-Each file in `fake/` owns a daemon behavior or explicit failure risk. The files
-use the same fake ACP executable from `fixtures/`; there is no command-shell
-suite or second fake Agent.
+Each file in `controlled-agent/` owns either a shared daemon behavior or one
+vendor adapter. Shared behavior is named for that behavior; vendor-specific
+discovery, configuration, and compatibility are named for the concrete Agent.
+The files use the same controllable ACP executable from `fixtures/`; there is
+no command-shell suite or second fake Agent.
 
 Each file in `real/` is the compatibility control surface: it names the real
 Agent, provider, and Agent-specific behavior. `infra/journey.ts` keeps the
@@ -119,7 +128,7 @@ protocol implementation so diagnostics preserve the actual wire format.
 
 ## Run
 
-The public command runs deterministic fake-Agent coverage first and then the
+The public command runs deterministic controlled-Agent coverage first and then the
 real-Agent compatibility cases. Build the production assets and supply the real
 Agent executables before running the whole boundary:
 

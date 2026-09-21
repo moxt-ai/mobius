@@ -4,7 +4,7 @@ export default defineConfig({
     test: {
         fileParallelism: false,
         include: [
-            "tests/agent-daemon/fake/**/*.{contract,integration}.test.ts",
+            "tests/agent-daemon/controlled-agent/**/*.{contract,integration}.test.ts",
             "tests/agent-daemon/real/**/*.integration.test.ts",
         ],
         testTimeout: 120_000,

@@ -79,7 +79,7 @@ export function selectAgentDaemonTests(changedFiles) {
     for (const file of changedFiles) {
         if (
             file.endsWith(".md") ||
-            file.startsWith("tests/agent-daemon/fake/") ||
+            file.startsWith("tests/agent-daemon/controlled-agent/") ||
             file.startsWith("tests/agent-daemon/fixtures/fake-acp-agent/")
         ) {
             continue;

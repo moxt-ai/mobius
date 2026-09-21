@@ -55,7 +55,10 @@ describe("agent and daemon test planning", () => {
     });
 
     it("does not rerun real Agents for fake-only scenarios", () => {
-        assert.deepEqual(selected(["tests/agent-daemon/fake/acp-session-features.integration.test.ts"]), []);
+        assert.deepEqual(
+            selected(["tests/agent-daemon/controlled-agent/acp-session-features.integration.test.ts"]),
+            [],
+        );
         assert.deepEqual(selected(["tests/agent-daemon/fixtures/fake-acp-agent/src/cli.ts"]), []);
     });
 });

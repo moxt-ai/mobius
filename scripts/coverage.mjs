@@ -16,7 +16,7 @@ const suites = [
         [
             "--config",
             "vitest.agent-daemon.config.ts",
-            "tests/agent-daemon/fake/",
+            "tests/agent-daemon/controlled-agent/",
             "--fileParallelism",
             "--maxWorkers=4",
         ],

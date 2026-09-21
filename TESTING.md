@@ -14,8 +14,9 @@ test levels.
 ## Agent and daemon boundary
 
 Treat an Agent and the production Mobius daemon as one integration unit. Only
-`tests/agent-daemon` tests that unit. `fake/` uses one controllable ACP fixture
-for deterministic failure, recovery, storage, security, and lifecycle behavior.
+`tests/agent-daemon` tests that unit. `controlled-agent/` runs the production
+daemon against one controllable ACP Agent for deterministic failure, recovery,
+storage, security, and lifecycle behavior.
 `real/` uses each real Agent executable, its production ACP adapter and provider
 client, the production daemon, and a permissive local fake LLM provider.
 
@@ -37,9 +38,9 @@ This boundary keeps responsibility unambiguous:
 
 There is no separate CLI test level or shell-wrapper suite. Discovery,
 installation, ACP translation, local storage, and Relay delivery belong to this
-same unit and live under `tests/agent-daemon/fake`. They must not be copied into
-a consumer suite. Help text, argument parsing, and other command-shell details
-do not justify integration tests.
+same unit and live under `tests/agent-daemon/controlled-agent`. They must not be
+copied into a consumer suite. Help text, argument parsing, and other
+command-shell details do not justify integration tests.
 
 An exceptional E2E may start the production daemon only when that executable
 assembly is itself the behavior being proved. Keep such cases rare, explicit,
@@ -76,6 +77,10 @@ Keep one file per behavioral owner. Do not create parallel `direct`, `service`, 
 `manager` suites for the same operation; extend the existing owner and fold shared
 outcomes into its longest representative journey.
 
+Name shared daemon and ACP behavior after the behavior. Name vendor-specific
+discovery, configuration, and compatibility after the concrete Agent, because
+those cases define that vendor adapter's contract.
+
 Prefer one journey that advances through related states over several cases that
 recreate the same expensive setup. A case should stop when its owning boundary has
 proved its result; internal timing headers, compression choices, call ordering,
@@ -110,7 +115,7 @@ pnpm test:agent-daemon
 pnpm test:e2e
 ```
 
-`pnpm test` runs deterministic fake-Agent coverage plus the same `client`,
+`pnpm test` runs deterministic controlled-Agent coverage plus the same `client`,
 `relay`, and `hosting` partitions that CI runs in parallel.
 `pnpm test:agent-daemon` additionally runs real-Agent compatibility; CI selects
 and parallelizes affected real Agents. Those partitions are execution plumbing,
