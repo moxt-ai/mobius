@@ -783,6 +783,53 @@ describe.sequential("Agent-native run settings", () => {
         }
     });
 
+    it("Given a non-default model's effort was cached, When the user reloads run settings, Then the cached effort survives the base rediscovery", async () => {
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+
+        try {
+            const [encodedDiscovery, encodedPrepare] = await Promise.all([
+                paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+                paired.daemon.receive(SESSION_PREPARE_KIND),
+            ]);
+            const discovery = decodeAgentSettingsDiscoverCommand(encodedDiscovery);
+            paired.daemon.send(sendDiscoveredModelSettings(discovery.agentId, discovery.requestId, ""));
+            await sendReadySession(paired.daemon, decodeSessionPrepareCommand(encodedPrepare), []);
+
+            fireEvent.click(await screen.findByRole("button", { name: /Run settings: Model A/ }));
+            fireEvent.pointerDown(screen.getByRole("combobox", { name: "Model" }), {
+                button: 0,
+                pointerType: "mouse",
+            });
+            fireEvent.click(await screen.findByRole("option", { name: "Model B" }));
+
+            const selectedModel = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            expect(selectedModel.model).toBe("model-b");
+            paired.daemon.send(sendDiscoveredModelSettings(selectedModel.agentId, selectedModel.requestId, "model-b"));
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
+            });
+
+            // Reloading asks the Agent for its base capability again, and that reply names no model: it
+            // describes only the Agent's own default effort. The model the user already selected still has
+            // to render from the cache instead of costing a second lookup and a loading flash.
+            fireEvent.click(screen.getByRole("button", { name: "Reload settings" }));
+            const reloaded = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            expect(reloaded.model).toBeUndefined();
+            paired.daemon.send(sendDiscoveredModelSettings(reloaded.agentId, reloaded.requestId, ""));
+
+            await waitFor(() => {
+                expect(screen.getByRole("button", { name: /Run settings: Model B, Balanced/ })).toBeTruthy();
+            });
+            expect(paired.daemon.available(AGENT_SETTINGS_DISCOVER_KIND)).toBe(0);
+        } finally {
+            await paired.close();
+        }
+    });
+
     it("Given a channel offers several discovery-capable Agents, When a conversation opens, Then Mobius discovers settings only for that conversation's Agent", async () => {
         const paired = await openPairedApplication({
             agents: [discoveryAgent("codex", "Codex"), discoveryAgent("hermes", "Hermes Agent")],

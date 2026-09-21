@@ -143,13 +143,16 @@ function inferredDefaultModelEffortValues(
 function eventWithCachedModelEffortValues(
     event: AgentSettingsDiscoveredEvent,
     cached: CachedAgentSettings | undefined,
-    requestedModel: string,
 ): AgentSettingsDiscoveredEvent {
     if (event.modelEffort.resolution !== MODEL_EFFORT_ON_MODEL_SELECTION) {
         return event;
     }
+    // A named-model lookup contributes one model's effort to the Agent's otherwise
+    // stable capability document, and the base lookup reports only the Agent's own
+    // default. Both have to accumulate onto what this browser already resolved, or a
+    // base rediscovery would silently drop the effort values of every other model the
+    // user selected and force a second lookup for the selection that is still current.
     const canReuseCachedCapability =
-        requestedModel.length > 0 &&
         cached !== undefined &&
         cached.event.settingsRevision === event.settingsRevision &&
         cached.event.modelEffort.resolution === MODEL_EFFORT_ON_MODEL_SELECTION;
@@ -370,7 +373,7 @@ export class AgentSettingsCache {
         const operationSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
         const completion = this.#discovery
             .discover(agentId, model, operationSignal)
-            .then((event) => this.#entryFromEvent(agentId, event, model))
+            .then((event) => this.#entryFromEvent(agentId, event))
             .then((entry) => {
                 this.#entries.set(agentId, entry);
                 return entry;
@@ -383,15 +386,10 @@ export class AgentSettingsCache {
         return await waitFor(completion, signal);
     };
 
-    readonly #entryFromEvent = (
-        agentId: string,
-        event: AgentSettingsDiscoveredEvent,
-        requestedModel: string,
-    ): CachedAgentSettings => {
+    readonly #entryFromEvent = (agentId: string, event: AgentSettingsDiscoveredEvent): CachedAgentSettings => {
         const cachedEvent = eventWithCachedModelEffortValues(
             event,
-            requestedModel.length === 0 ? undefined : (this.#entries.get(agentId) ?? this.#restored(agentId)),
-            requestedModel,
+            this.#entries.get(agentId) ?? this.#restored(agentId),
         );
         const preferences = readSessionConfigPreferences(this.#channelId, agentId);
         const options = withResolvedEffortOptions(
