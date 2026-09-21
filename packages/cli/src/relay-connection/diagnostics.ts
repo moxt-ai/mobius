@@ -1,4 +1,5 @@
 import type { AuditStore } from "../audit/audit-store.ts";
+import type { DaemonDiagnosticLog } from "../daemon-diagnostic-log.ts";
 import { describeEnvironmentProxyRoute } from "../network/environment-proxy.ts";
 
 const MAX_DIAGNOSTIC_TEXT_LENGTH = 256;
@@ -49,14 +50,16 @@ function addFailureDetails(details: Record<string, string>, failure: unknown): v
 export class RelayConnectionDiagnostics {
     readonly #audit: AuditStore;
     readonly #channelId: string;
+    readonly #localLog: DaemonDiagnosticLog;
     #lastClosedEpoch = 0;
     #lastFailedEpoch = 0;
     readonly #relayOrigin: string;
     readonly #route: Readonly<Record<string, string>>;
 
-    constructor(audit: AuditStore, channelId: string, relayUrl: URL) {
+    constructor(audit: AuditStore, channelId: string, relayUrl: URL, localLog: DaemonDiagnosticLog) {
         this.#audit = audit;
         this.#channelId = channelId;
+        this.#localLog = localLog;
         this.#relayOrigin = relayUrl.origin;
         this.#route = describeEnvironmentProxyRoute(relayUrl);
     }
@@ -154,6 +157,26 @@ export class RelayConnectionDiagnostics {
         );
     };
 
+    readonly daemonDiagnostic = (
+        event: string,
+        requestId: string,
+        details: Readonly<Record<string, string>>,
+        failure?: unknown,
+    ): void => {
+        const recordedDetails: Record<string, string> = { ...details };
+        if (failure !== undefined) {
+            addFailureDetails(recordedDetails, failure);
+        }
+        this.#localLog.record(
+            `Mobius daemon diagnostic ${JSON.stringify({
+                channelId: this.#channelId,
+                event,
+                requestId,
+                ...recordedDetails,
+            })}`,
+        );
+    };
+
     readonly #record = (
         event: string,
         commandId: string,
@@ -167,6 +190,7 @@ export class RelayConnectionDiagnostics {
             sessionId: this.#channelId,
         });
         const encoded = JSON.stringify({ channelId: this.#channelId, event, ...details });
+        this.#localLog.record(`Mobius relay diagnostic ${encoded}`);
         if (warning) {
             process.stderr.write(`Mobius relay diagnostic ${encoded}\n`);
             return;

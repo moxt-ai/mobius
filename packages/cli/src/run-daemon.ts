@@ -118,6 +118,7 @@ import type { AuditStore } from "./audit/audit-store.ts";
 import { LocalAuthorizationError } from "./authorization/local-authorization-error.ts";
 import { WorkspaceDirectoryService } from "./authorization/workspace-directory.ts";
 import { type DaemonConfig, DaemonLocalContext, withDaemonEnvironment } from "./config.ts";
+import { DaemonDiagnosticLog } from "./daemon-diagnostic-log.ts";
 import { AccumulatingOperationMetrics, type DurationMetric } from "./infra/operation-metrics.ts";
 import { readCodexFullHistory } from "./native-sessions/codex-history.ts";
 import { NativeSessionService } from "./native-sessions/service.ts";
@@ -2542,6 +2543,11 @@ async function runRelayConnection(
                                         event: "agent_settings_model_unsupported",
                                         sessionId: `agent-settings:${command.agentId}`,
                                     });
+                                    diagnostics.daemonDiagnostic(
+                                        "agent_settings_model_unsupported",
+                                        command.requestId,
+                                        details,
+                                    );
                                     process.stderr.write(
                                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_model_unsupported", requestId: command.requestId, ...details })}\n`,
                                     );
@@ -2574,6 +2580,12 @@ async function runRelayConnection(
                                     event: "agent_settings_discovery_failed",
                                     sessionId: `agent-settings:${command.agentId}`,
                                 });
+                                diagnostics.daemonDiagnostic(
+                                    "agent_settings_discovery_failed",
+                                    command.requestId,
+                                    details,
+                                    failure,
+                                );
                                 if (failure instanceof AcpConfigurationValueUnavailableError) {
                                     process.stderr.write(
                                         `Mobius daemon diagnostic ${JSON.stringify({ event: "agent_settings_discovery_failed", requestId: command.requestId, ...details })}\n`,
@@ -2654,6 +2666,12 @@ async function runRelayConnection(
                                     event: "agent_catalog_refresh_failed",
                                     sessionId: "agent-catalog",
                                 });
+                                diagnostics.daemonDiagnostic(
+                                    "agent_catalog_refresh_failed",
+                                    command.requestId,
+                                    { code: operationErrorCode(failure) },
+                                    failure,
+                                );
                                 if (socket.readyState === WebSocket.OPEN) {
                                     send(socket, {
                                         code: operationErrorCode(failure),
@@ -2746,6 +2764,17 @@ async function runRelayConnection(
                                     event: "native_session_operation_failed",
                                     details: { code: operationErrorCode(failure) },
                                 });
+                                diagnostics.daemonDiagnostic(
+                                    "native_session_operation_failed",
+                                    command.requestId,
+                                    {
+                                        action: command.action,
+                                        agentId: command.agentId,
+                                        code: operationErrorCode(failure),
+                                        sessionId: command.sessionId,
+                                    },
+                                    failure,
+                                );
                                 reportOperationFailure(socket, command.requestId, command.sessionId, failure);
                             } finally {
                                 timeout.cancel();
@@ -2834,6 +2863,16 @@ async function runRelayConnection(
                                     event: "native_session_turn_fork_failed",
                                     sessionId: command.sessionId,
                                 });
+                                diagnostics.daemonDiagnostic(
+                                    "native_session_turn_fork_failed",
+                                    command.requestId,
+                                    {
+                                        agentId: command.agentId,
+                                        code: operationErrorCode(failure),
+                                        sessionId: command.sessionId,
+                                    },
+                                    failure,
+                                );
                                 reportOperationFailure(socket, command.requestId, command.sessionId, failure);
                             } finally {
                                 timeout.cancel();
@@ -3129,7 +3168,12 @@ export async function runDaemon(
     });
     const directories = new WorkspaceDirectoryService(config.bindingId, config.defaultWorkspace);
     const installationObserver = new DaemonInstallationObserver();
-    const diagnostics = new RelayConnectionDiagnostics(audit, config.channelId, config.relayUrl);
+    const diagnostics = new RelayConnectionDiagnostics(
+        audit,
+        config.channelId,
+        config.relayUrl,
+        new DaemonDiagnosticLog(stateDirectory),
+    );
     const nativeSessions = new NativeSessionService(config, directories, sessions, audit);
     const installations = new AgentInstallationManager(
         specifications,
