@@ -45,7 +45,7 @@
         "typecheck": "tsc --project tsconfig.json && pnpm --recursive --if-present typecheck",
         "check:no-chinese": "node scripts/check-no-chinese.ts",
         "lint": "biome ci --error-on-warnings && pnpm check:no-chinese && pnpm check:architecture",
-        "check:architecture": "depcruise --config dependency-cruiser.config.cjs packages/*/src",
+        "check:architecture": "node scripts/check-architecture.ts",
         "lint:fix": "biome check --write --error-on-warnings && pnpm check:no-chinese",
         "format": "biome format --write",
         "build:e2e": "VITE_CLERK_PUBLISHABLE_KEY=pk_test_Y2xlcmsuZXhhbXBsZS5jb20k pnpm --recursive --workspace-concurrency=3 --filter '@moxt-ai/mobius-relay-cloudflare-standalone...' --if-present build",

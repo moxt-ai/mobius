@@ -15,6 +15,12 @@ pnpm's script runner.
 The explicit `mobius-workspace` filter selects the root static checks.
 Staged pre-commit lint runs before typechecking for quick feedback.
 Warnings also fail lint and staged pre-commit checks.
+Architecture checks require a compatible TypeScript parser and verify that every
+JavaScript and TypeScript source under `packages/*/src` appears in the analyzed
+dependency graph. Missing parsers, environment issues, skipped sources, and rule
+warnings fail the check. `pnpm-workspace.yaml` supplies dependency-cruiser 18.x
+with its own TypeScript 6 compiler API; application typechecking continues to use
+TypeScript 7. Keep this parser dependency compatible when upgrading the analyzer.
 `noUselessConstructor` is an error; Biome recognizes constructors needed to expose
 a protected base constructor publicly. `useLiteralKeys` is
 disabled because it conflicts with TypeScript's `noPropertyAccessFromIndexSignature`.

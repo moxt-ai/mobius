@@ -6,9 +6,9 @@ packages:
 engineStrict: true
 minimumReleaseAge: 1440
 
-# Keep the architecture parser's compiler API independent of the TS7 compiler.
+# Keep the architecture parser's compiler API independent of TS7 across 18.x updates.
 packageExtensions:
-  dependency-cruiser@18.2.0:
+  dependency-cruiser@18:
     dependencies:
       typescript: 6.0.3
 
