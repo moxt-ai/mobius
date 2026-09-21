@@ -10,6 +10,7 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
     encodeAgentMessageDeltaEvent,
+    encodeDaemonToServiceMessage,
     encodeFileBeginEvent,
     encodeFileChunkEvent,
     encodeFileEndEvent,
@@ -28,6 +29,7 @@ import {
     SESSION_PREPARE_KIND,
     SESSION_PROMPT_KIND,
     SESSION_STARTED_KIND,
+    type SessionReadyEvent,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
 } from "@moxt-ai/mobius-protocol";
@@ -336,41 +338,45 @@ async function processHappyPathCommand(
     }
     if (kind === SESSION_PREPARE_KIND) {
         const command = decodeSessionPrepareCommand(encoded);
-        await daemon.sendSessionEvent(
-            command.sessionId,
-            encodeSessionReadyEvent({
-                additionalDirectories: command.additionalDirectoryIds.map((directoryId) => ({
-                    directoryId,
-                    name: directoryId,
-                })),
-                agentId: command.agentId,
-                agentName: behavior.agentName ?? "Fake Agent",
-                agentVersion: "fake-agent-daemon",
-                capabilities: {
-                    additionalDirectories: true,
-                    audioPrompt: false,
-                    closeSession: true,
-                    deleteSession: true,
-                    embeddedContextPrompt: true,
-                    imagePrompt: true,
-                    listSessions: true,
-                    loadSession: true,
-                    promptQueueing: false,
-                    resumeSession: true,
-                    steering: false,
-                    unstableForkSession: false,
-                },
-                commands: [],
-                configOptions: [],
-                directoryId: command.directoryId,
-                directoryLabel: behavior.directoryLabel ?? "Fake workspace",
-                kind: "session.ready",
-                requestId: command.requestId,
-                restored: false,
-                sessionId: command.sessionId,
-            }),
-            signal,
-        );
+        const ready: SessionReadyEvent = {
+            additionalDirectories: command.additionalDirectoryIds.map((directoryId) => ({
+                directoryId,
+                name: directoryId,
+            })),
+            agentId: command.agentId,
+            agentName: behavior.agentName ?? "Fake Agent",
+            agentVersion: "fake-agent-daemon",
+            capabilities: {
+                additionalDirectories: true,
+                audioPrompt: false,
+                closeSession: true,
+                deleteSession: true,
+                embeddedContextPrompt: true,
+                imagePrompt: true,
+                listSessions: true,
+                loadSession: true,
+                promptQueueing: false,
+                resumeSession: true,
+                steering: false,
+                unstableForkSession: false,
+            },
+            commands: [],
+            configOptions: [],
+            directoryId: command.directoryId,
+            directoryLabel: behavior.directoryLabel ?? "Fake workspace",
+            kind: "session.ready",
+            requestId: command.requestId,
+            restored: false,
+            sessionId: command.sessionId,
+        };
+        if (command.transient === true) {
+            // An inspection-only preparation has no Session on the Relay, so the real daemon answers it
+            // with a direct reply rather than a durable event, which could never commit. Sending it as a
+            // Session event here would wait for an acknowledgement that can never arrive.
+            daemon.send(encodeDaemonToServiceMessage(ready));
+            return turn;
+        }
+        await daemon.sendSessionEvent(command.sessionId, encodeSessionReadyEvent(ready), signal);
         return turn;
     }
     if (kind === FILE_READ_KIND) {

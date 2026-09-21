@@ -1,4 +1,6 @@
 import {
+    AGENT_SETTINGS_DISCOVER_KIND,
+    decodeAgentSettingsDiscoverCommand,
     decodeSessionCancelCommand,
     decodeSessionConfigureCommand,
     decodeSessionPrepareCommand,
@@ -6,6 +8,7 @@ import {
     decodeWorkspaceListCommand,
     encodeAgentActivityEvent,
     encodeAgentMessageDeltaEvent,
+    encodeAgentSettingsDiscoveredEvent,
     encodeSessionCompletedEvent,
     encodeSessionConfigUpdatedEvent,
     encodeSessionInfoUpdatedEvent,
@@ -27,6 +30,7 @@ import { readChannelConnection, readConnectionHistory } from "@/services/pairing
 import {
     completeRenderedPrompt,
     createTestApplication,
+    openPairedApplication,
     openReadyApplication,
     pairDaemon,
     saveBrowserCredential,
@@ -65,6 +69,49 @@ function modeConfigOptions(mode: string): readonly SessionConfigOption[] {
             ],
         },
     ];
+}
+
+/**
+ * Answers an Agent settings discovery with a single mode setting. An Agent that discovers its settings
+ * receives the user's selections with the prompt instead of through a Session configuration, which is
+ * what lets its draft prepare without recording a Session.
+ */
+function sendDiscoveredNativeMode(agentId: string, requestId: string): string {
+    return encodeAgentSettingsDiscoveredEvent({
+        agentId,
+        agentName: "Codex",
+        agentVersion: "integration",
+        kind: "agent.settings.discovered",
+        modelEffort: {
+            effortSettingId: "",
+            modelSettingId: "",
+            resolution: "unavailable",
+            unsupportedModelIds: [],
+            valuesByModel: {},
+        },
+        requestId,
+        settings: [
+            {
+                booleanValue: false,
+                category: "mode",
+                defaultValue: "default",
+                description: "Agent session mode",
+                id: "mode",
+                name: "Mode",
+                type: "select",
+                values: [
+                    {
+                        description: "Use the Agent default",
+                        groupId: "",
+                        groupName: "",
+                        name: "Default",
+                        value: "default",
+                    },
+                ],
+            },
+        ],
+        settingsRevision: "0".repeat(64),
+    });
 }
 
 describe.sequential("Session persistence boundaries", () => {
@@ -443,6 +490,10 @@ describe.sequential("Session persistence boundaries", () => {
                 directoryId: "selected-project",
             });
             await sendReadySession(paired.daemon, nextPreparation, modeConfigOptions("ask"));
+            // This Agent applies run settings through a Session configuration rather than passing them
+            // with the prompt, so the draft still needs the Session that preparing it creates and its
+            // preparation stays a recorded one. An Agent that discovers settings takes the other path,
+            // which the run-settings tests cover.
             const restoredConfiguration = decodeSessionConfigureCommand(
                 await paired.daemon.receive(SESSION_CONFIGURE_KIND),
             );
@@ -936,6 +987,106 @@ describe.sequential("Session persistence boundaries", () => {
             expect(steps).toHaveLength(1);
             expect(steps[0]?.textContent).toContain("Run the verbose installer");
             expect((steps[0]?.textContent ?? "").length).toBeGreaterThan(150_000);
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given an Agent that discovers its settings, When a user starts a new chat and never sends a prompt, Then no Session is recorded on the Relay", async () => {
+        const paired = await openPairedApplication({ agentSettingsDiscovery: true, sessionTurnConfiguration: true });
+
+        try {
+            // The draft still prepares, because its composer needs the Agent's capabilities and the state
+            // that enables the send action.
+            const preparation = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(preparation.transient).toBe(true);
+            await sendReadySession(paired.daemon, preparation);
+
+            const conversations = await screen.findByRole("navigation", { name: "Conversations" });
+            expect(within(conversations).getAllByTestId(dataTestId.conversationLink)).toHaveLength(1);
+
+            // An inspection-only preparation is a reply, not a record. The directory has to stay empty so
+            // an abandoned draft never appears as a real Session or consumes the project's Session quota.
+            const history = await readConnectionHistory(await readChannelConnection(paired.channelId), undefined);
+            expect(history.sessions).toHaveLength(0);
+
+            // Sending the first prompt is what turns the draft into a Session. The prompt carries the
+            // Agent's settings, which this Agent discovers rather than storing on the Session.
+            const promptInput = await screen.findByTestId(dataTestId.promptInput);
+            await waitFor(() => {
+                expect(promptInput.getAttribute("placeholder")).toContain("Ask the local agent");
+            });
+            fireEvent.change(promptInput, { target: { value: "Start the real Session" } });
+            fireEvent.click(screen.getByTestId(dataTestId.sendPrompt));
+            const discovery = decodeAgentSettingsDiscoverCommand(
+                await paired.daemon.receive(AGENT_SETTINGS_DISCOVER_KIND),
+            );
+            paired.daemon.send(sendDiscoveredNativeMode(discovery.agentId, discovery.requestId));
+            const prompt = decodeSessionPromptCommand(await paired.daemon.receive(SESSION_PROMPT_KIND));
+
+            await waitFor(async () => {
+                const recorded = await readConnectionHistory(await readChannelConnection(paired.channelId));
+                expect(recorded.sessions.map((session) => session.sessionId)).toContain(prompt.sessionId);
+            });
+        } finally {
+            await paired.close();
+        }
+    });
+
+    it("Given several persisted Sessions ordered by activity, When a user opens an older one and reloads, Then the list keeps the Relay order instead of lifting the opened row", async () => {
+        const paired = await openReadyApplication();
+
+        try {
+            // Three Sessions with increasing activity, so the directory order is unambiguous: the last
+            // one interacted with belongs at the head.
+            const oldest = paired.preparation;
+            await completeRenderedPrompt(paired.daemon, "Oldest session", "OLDEST-RESPONSE");
+            fireEvent.click(
+                within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole("button", {
+                    name: /New chat.*⌘ N/,
+                }),
+            );
+            const middle = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, middle);
+            await completeRenderedPrompt(paired.daemon, "Middle session", "MIDDLE-RESPONSE");
+            fireEvent.click(
+                within(screen.getByRole("complementary", { name: "Conversation sidebar" })).getByRole("button", {
+                    name: /New chat.*⌘ N/,
+                }),
+            );
+            const newest = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            await sendReadySession(paired.daemon, newest);
+            await completeRenderedPrompt(paired.daemon, "Newest session", "NEWEST-RESPONSE");
+
+            const titles = (): readonly (string | null)[] =>
+                screen.getAllByTestId(dataTestId.conversationTitle).map((node) => node.textContent);
+            await waitFor(() => {
+                expect(titles()).toEqual(["Newest session", "Middle session", "Oldest session"]);
+            });
+
+            // Open the oldest Session and reload onto it. The reload rebuilds every row from the Relay
+            // directory, which leaves each one without a per-Session timestamp until its own Agent reports
+            // `session.info.updated`. Only the routed Session is prepared, so only it receives that report,
+            // and an Agent that reports a newer activity time for it must not lift the row to the head.
+            fireEvent.click(screen.getAllByTestId(dataTestId.conversationLink)[2] as HTMLElement);
+            cleanup();
+            await closeMobiusTransport();
+            createTestApplication();
+            const restored = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
+            expect(restored.sessionId).toBe(oldest.sessionId);
+            await sendReadySession(paired.daemon, restored);
+            await paired.daemon.sendSessionEvent(
+                oldest.sessionId,
+                encodeSessionInfoUpdatedEvent({
+                    kind: "session.info.updated",
+                    sessionId: oldest.sessionId,
+                    title: "Oldest session",
+                    updatedAt: "2030-01-01T00:00:00.000Z",
+                }),
+            );
+            await waitFor(() => {
+                expect(titles()).toEqual(["Newest session", "Middle session", "Oldest session"]);
+            });
         } finally {
             await paired.close();
         }

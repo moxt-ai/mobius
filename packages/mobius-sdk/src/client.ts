@@ -223,6 +223,12 @@ export interface SessionPrepareRequest {
     readonly directoryId: string;
     readonly requestId?: string;
     readonly sessionId: string;
+    /**
+     * Prepares the Session for inspection only, without creating it on the Relay. A conversation this
+     * browser has not sent anything to yet needs the Agent's capabilities and commands to render its
+     * composer, but it is not a Session the user has started, so it must not appear in the directory.
+     */
+    readonly transient?: boolean;
 }
 
 export interface SessionConfigureRequest extends SessionPrepareRequest {
@@ -534,6 +540,7 @@ export class MobiusClient {
                     kind: SESSION_PREPARE_KIND,
                     requestId,
                     sessionId: request.sessionId,
+                    ...(request.transient === true ? { transient: true } : {}),
                 }),
             ),
             SESSION_READY_KIND,

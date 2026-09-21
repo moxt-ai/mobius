@@ -81,11 +81,24 @@ export function ConversationSidebar({
     const sidebarRef = useRef<HTMLDivElement>(null);
     const machineName = useChatStore((state) => state.machineName);
     // The store keeps conversations in the order they were created and reconciled, which is insertion
-    // history rather than activity: a locally created conversation sat at the head until a reconciliation
-    // reshuffled it. Sorting by the Session's own activity timestamp matches the Relay's ordering and keeps
-    // a row from moving under the reader.
-    const byMostRecent = (left: Conversation, right: Conversation): number =>
-        right.session.updatedAt.localeCompare(left.session.updatedAt);
+    // history rather than activity, so the list orders by the Relay directory's own timestamp instead.
+    // That value has to come from the directory rather than from the Session state: `session.updatedAt`
+    // is empty until an Agent reports `session.info.updated`, so a row the user merely opened was the
+    // only one holding a timestamp and jumped to the head on the next render.
+    //
+    // A conversation with no listing is one this browser created and has not sent anything to yet. It
+    // belongs above the listed Sessions rather than at the end, because an empty string would otherwise
+    // compare as the oldest activity. Otherwise the newer activity sorts first.
+    //
+    // Equal timestamps keep the store's order instead of manufacturing one from the Session identifier.
+    // The Relay tells the two apart by Session id, but here that identifier is a generated UUID, so
+    // ordering by it would scramble rows that share a millisecond rather than settle them.
+    const byMostRecent = (left: Conversation, right: Conversation): number => {
+        if (left.listedAt.length === 0 || right.listedAt.length === 0) {
+            return left.listedAt === right.listedAt ? 0 : left.listedAt.length === 0 ? -1 : 1;
+        }
+        return right.listedAt.localeCompare(left.listedAt);
+    };
     const runningConversations = conversations.filter((conversation) => conversation.isRunning).sort(byMostRecent);
     const recentConversations = conversations.filter((conversation) => !conversation.isRunning).sort(byMostRecent);
     const displayWidth = sidebarDisplayWidth(layout);
@@ -171,6 +184,7 @@ export function ConversationSidebar({
                         isActive && "bg-black/8 hover:bg-black/8",
                     )
                 }
+                data-testid={dataTestId.conversationLink}
                 end
                 key={conversation.id}
                 onClick={closeSidebar}

@@ -1332,9 +1332,14 @@ async function executeSessionPrepare(
                 sessionId: command.sessionId,
                 runtimeTimings: metrics.snapshot(),
             };
-            metrics.measureSync("readiness-commit", () => {
-                publisher.recordRuntime(command.sessionId, event);
-            });
+            // An inspection-only preparation has no Session on the Relay, so this readiness is a reply
+            // rather than a record: committing it would be rejected as an unknown Session and quarantine
+            // an event that can never be replayed. The direct send below still delivers it.
+            if (command.transient !== true) {
+                metrics.measureSync("readiness-commit", () => {
+                    publisher.recordRuntime(command.sessionId, event);
+                });
+            }
             return event;
         });
         send(socket, {

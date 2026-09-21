@@ -1074,6 +1074,15 @@ export class Conversation {
     readonly directoryId: string;
     readonly directoryLabel: string;
     readonly id: string;
+    /**
+     * When the Relay directory last recorded activity for this Session. The conversation list orders by
+     * it, so it has to arrive with the directory listing rather than with anything that requires loading
+     * the Session: `session.updatedAt` stays empty until an Agent reports `session.info.updated`, so a row
+     * the user merely opened acquired a timestamp the other rows did not have and jumped to the head.
+     * An empty value means this conversation has no directory listing yet, which is what keeps a local
+     * draft above the listed Sessions.
+     */
+    readonly listedAt: string;
     readonly messages: readonly ChatMessage[];
     readonly preview: string;
     readonly session: AgentSessionState;
@@ -1201,6 +1210,7 @@ export class Conversation {
         draftResources: readonly PromptResource[] = [],
         bindingId = "workspace",
         configRevision = 1,
+        listedAt = "",
     ) {
         this.additionalDirectories = additionalDirectories;
         this.agentId = agentId;
@@ -1210,6 +1220,7 @@ export class Conversation {
         this.directoryId = directoryId;
         this.directoryLabel = directoryLabel;
         this.id = id;
+        this.listedAt = listedAt;
         this.sessionId = sessionId;
         this.session = session;
         this.title = title;
@@ -1431,6 +1442,7 @@ export class Conversation {
             base.draftResources,
             recorded.bindingId,
             recorded.configRevision,
+            recorded.updatedAt,
         );
     }
 
@@ -1479,6 +1491,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1511,6 +1524,7 @@ export class Conversation {
             this.draftResources,
             recorded.bindingId,
             recorded.configRevision,
+            recorded.updatedAt,
         );
     };
 
@@ -1532,6 +1546,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly addTurn = (prompt: string, userMessage: UserChatMessage, agentMessage: AgentChatMessage): Conversation =>
@@ -1552,6 +1567,7 @@ export class Conversation {
             [],
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly addSteering = (userMessage: UserChatMessage): Conversation => {
@@ -1575,6 +1591,7 @@ export class Conversation {
             [],
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1617,6 +1634,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1651,6 +1669,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly replaceAgentMessage = (messageId: string, replacement: AgentChatMessage): Conversation =>
@@ -1673,6 +1692,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly addDraftImage = (image: PromptImage): Conversation =>
@@ -1693,6 +1713,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly addDraftResource = (resource: PromptResource): Conversation =>
@@ -1713,6 +1734,7 @@ export class Conversation {
             [...this.draftResources.filter((entry) => entry.name !== resource.name), resource],
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly applyReady = (event: SessionReadyEvent): Conversation => {
@@ -1756,6 +1778,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1786,6 +1809,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly removeDraftResource = (name: string): Conversation =>
@@ -1806,6 +1830,7 @@ export class Conversation {
             this.draftResources.filter((resource) => resource.name !== name),
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly runningTurn = (): PendingTurn => {
@@ -1857,6 +1882,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly selectPrimaryDirectory = (directory: WorkspaceEntry): Conversation => {
@@ -1880,6 +1906,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1912,6 +1939,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1936,6 +1964,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1962,6 +1991,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
     };
 
@@ -1983,6 +2013,7 @@ export class Conversation {
             this.draftResources,
             this.bindingId,
             this.configRevision,
+            this.listedAt,
         );
 
     readonly withConfigBinding = (bindingId: string, configRevision: number): Conversation =>
@@ -2003,6 +2034,7 @@ export class Conversation {
             this.draftResources,
             bindingId,
             configRevision,
+            this.listedAt,
         );
 }
 

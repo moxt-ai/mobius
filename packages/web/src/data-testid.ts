@@ -2,6 +2,7 @@ export const dataTestId = Object.freeze({
     agentActivity: "mobius-agent-activity",
     agentMessage: "mobius-agent-message",
     attachPromptFiles: "mobius-attach-prompt-files",
+    conversationLink: "mobius-conversation-link",
     conversationTitle: "mobius-conversation-title",
     conversationTitleHeader: "mobius-conversation-title-header",
     promptAttachment: "mobius-prompt-attachment",

@@ -2,6 +2,7 @@ import {
     decodeSessionPrepareCommand,
     decodeSessionPromptCommand,
     encodeAgentMessageDeltaEvent,
+    encodeDaemonToServiceMessage,
     encodeSessionCompletedEvent,
     encodeSessionReadyEvent,
     encodeSessionStartedEvent,
@@ -12,6 +13,7 @@ import {
     type SessionConfigOption,
     type SessionPrepareCommand,
     type SessionPromptCommand,
+    type SessionReadyEvent,
 } from "@moxt-ai/mobius-protocol";
 import { type AgentDaemonSocket, FakeAgentDaemon } from "@moxt-ai/mobius-test/agent-daemon";
 import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -287,27 +289,32 @@ export async function sendReadySession(
         unstableForkSession: true,
     },
 ): Promise<void> {
-    await daemon.sendSessionEvent(
-        prepare.sessionId,
-        encodeSessionReadyEvent({
-            additionalDirectories: prepare.additionalDirectoryIds.map((directoryId) => ({
-                directoryId,
-                name: directoryId,
-            })),
-            agentId: prepare.agentId,
-            agentName: "Codex",
-            agentVersion: "integration",
-            capabilities,
-            commands: [],
-            configOptions,
-            directoryId: prepare.directoryId,
-            directoryLabel: "mobius",
-            kind: "session.ready",
-            requestId: prepare.requestId,
-            restored: false,
-            sessionId: prepare.sessionId,
-        }),
-    );
+    const ready: SessionReadyEvent = {
+        additionalDirectories: prepare.additionalDirectoryIds.map((directoryId) => ({
+            directoryId,
+            name: directoryId,
+        })),
+        agentId: prepare.agentId,
+        agentName: "Codex",
+        agentVersion: "integration",
+        capabilities,
+        commands: [],
+        configOptions,
+        directoryId: prepare.directoryId,
+        directoryLabel: "mobius",
+        kind: "session.ready",
+        requestId: prepare.requestId,
+        restored: false,
+        sessionId: prepare.sessionId,
+    };
+    if (prepare.transient === true) {
+        // The real daemon answers an inspection-only preparation with a direct reply, because the Relay
+        // holds no Session for it and could never commit the event. Waiting for an acknowledgement here
+        // would hang the test on a message the Relay never accepts.
+        daemon.send(encodeDaemonToServiceMessage(ready));
+        return;
+    }
+    await daemon.sendSessionEvent(prepare.sessionId, encodeSessionReadyEvent(ready));
 }
 
 export async function completeRenderedPrompt(
