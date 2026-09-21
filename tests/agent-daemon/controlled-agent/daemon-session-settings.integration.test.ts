@@ -36,6 +36,9 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
+import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { AvailableAgent } from "../../../packages/cli/src/agent-catalog/agent-discovery.ts";
 import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/agents/codex-agent.ts";
 import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
@@ -687,6 +690,206 @@ if (process.argv.includes("--version")) {
             audit.close();
             await daemon;
             await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given Codex runs as an in-process Agent, When Mobius lists, resumes, steers, and deletes native sessions, Then each reaches the Codex app-server", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-codex-native-sessions-"));
+        const executableDirectory = join(temporaryDirectory, "external");
+        const nativeStateDirectory = join(temporaryDirectory, "native");
+        const codexPath = join(executableDirectory, "codex");
+        await Promise.all([
+            mkdir(executableDirectory, { mode: 0o700, recursive: true }),
+            mkdir(nativeStateDirectory, { recursive: true }),
+        ]);
+        await writeFile(
+            codexPath,
+            executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
+} else {
+  process.exit(80);
+}
+`),
+            { mode: 0o700 },
+        );
+        await chmod(codexPath, 0o700);
+
+        // The in-process Agent and every app-server it starts inherit their environment from this
+        // process, and discovery does not forward this fixture variable, so it is set here for the
+        // duration of the test.
+        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
+        const inventory = await discoverLocalAgentInventory({
+            defaultWorkspace: temporaryDirectory,
+            environment: { MOBIUS_STATE_DIRECTORY: temporaryDirectory, PATH: executableDirectory },
+            signal: new AbortController().signal,
+            specifications: [new CodexAgentSpecification()],
+        });
+        const discovered = inventory.available[0];
+        if (!(discovered instanceof AvailableAgent)) {
+            throw new Error("Codex was not discovered");
+        }
+        const manager = new AcpSessionManager();
+        try {
+            const run = async (sessionId: string, prompt: string): Promise<void> => {
+                await manager.runPrompt({
+                    additionalDirectories: [],
+                    agent: discovered.agent,
+                    commandId: `${sessionId}-${prompt}`,
+                    cwd: temporaryDirectory,
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt,
+                    resources: [],
+                    sessionId,
+                    signal: new AbortController().signal,
+                });
+            };
+
+            const browseOptions = {
+                additionalDirectories: [],
+                agent: discovered.agent,
+                cwd: temporaryDirectory,
+                sessionId: "native_session_browser",
+                signal: new AbortController().signal,
+            };
+
+            // A conversation becomes a native thread the app-server knows about.
+            await run("native_session_conversation", "first");
+            const listed = await manager.listNativeSessions(browseOptions, null);
+            expect(listed.sessions).toHaveLength(1);
+            const nativeSessionId = listed.sessions[0]?.sessionId ?? "";
+            expect(nativeSessionId).toMatch(/^thread-/u);
+            // The fixture reports a preview and unix-second timestamps; Mobius needs an ISO instant.
+            expect(listed.sessions[0]).toMatchObject({
+                cwd: temporaryDirectory,
+                title: "Scripted turn",
+            });
+            expect(listed.sessions[0]?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+
+            // Deleting archives the thread, so it leaves the listing.
+            await manager.deleteNativeSession(browseOptions, nativeSessionId);
+            await expect(manager.listNativeSessions(browseOptions, null)).resolves.toMatchObject({ sessions: [] });
+            // Deleting archives the thread, so it is discoverable but no longer resumable: a
+            // conversation whose native session is gone must not silently reopen as a fresh one.
+            const afterDelete = await manager.listNativeSessions(browseOptions, null);
+            expect(afterDelete.sessions).toEqual([]);
+            await expect(run("native_session_conversation", "after delete")).rejects.toMatchObject({
+                code: "native_session_deleted",
+            });
+        } finally {
+            await manager.close();
+            if (previousState === undefined) {
+                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
+            }
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
+    });
+
+    it("Given a Codex conversation ran before a daemon restart, When the daemon reopens it, Then the in-process Agent resumes the native thread", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-codex-restart-"));
+        const executableDirectory = join(temporaryDirectory, "external");
+        const nativeStateDirectory = join(temporaryDirectory, "native");
+        const codexPath = join(executableDirectory, "codex");
+        await Promise.all([
+            mkdir(executableDirectory, { mode: 0o700, recursive: true }),
+            mkdir(nativeStateDirectory, { recursive: true }),
+        ]);
+        await writeFile(
+            codexPath,
+            executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("codex 0.153.0\\n");
+} else if (process.argv.includes("app-server")) {
+  await import(${JSON.stringify(turnAppServerUrl)});
+} else {
+  process.exit(80);
+}
+`),
+            { mode: 0o700 },
+        );
+        await chmod(codexPath, 0o700);
+
+        // The in-process Agent and every app-server it starts inherit their environment from this
+        // process, and discovery does not forward this fixture variable, so it is set here for the
+        // duration of the test.
+        const previousState = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+        process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = nativeStateDirectory;
+        const inventory = await discoverLocalAgentInventory({
+            defaultWorkspace: temporaryDirectory,
+            environment: { MOBIUS_STATE_DIRECTORY: temporaryDirectory, PATH: executableDirectory },
+            signal: new AbortController().signal,
+            specifications: [new CodexAgentSpecification()],
+        });
+        const discovered = inventory.available[0];
+        if (!(discovered instanceof AvailableAgent)) {
+            throw new Error("Codex was not discovered");
+        }
+        const run = async (sessionId: string, prompt: string): Promise<string> => {
+            const chunks: string[] = [];
+            await manager.runPrompt({
+                additionalDirectories: [],
+                agent: discovered.agent,
+                commandId: `${sessionId}-${prompt}`,
+                cwd: temporaryDirectory,
+                images: [],
+                onActivity: () => Promise.resolve(),
+                onText: (text) => {
+                    chunks.push(text);
+                    return Promise.resolve();
+                },
+                prompt,
+                resources: [],
+                sessionId,
+                signal: new AbortController().signal,
+            });
+            return chunks.join("");
+        };
+
+        // The store is what survives a daemon restart; the manager and its app-server do not. Two
+        // managers over one store are two daemons, which is the only way to reach the restore path.
+        const databasePath = join(temporaryDirectory, "sessions.sqlite");
+        const firstStore = new SqliteAcpSessionStore(databasePath);
+        const manager = new AcpSessionManager(undefined, firstStore);
+        try {
+            await run("restart_conversation", "before restart");
+            await manager.close();
+            firstStore.close();
+
+            const secondStore = new SqliteAcpSessionStore(databasePath);
+            const restarted = new AcpSessionManager(undefined, secondStore);
+            try {
+                const reply = await restarted.runPrompt({
+                    additionalDirectories: [],
+                    agent: discovered.agent,
+                    commandId: "restart_conversation-after",
+                    cwd: temporaryDirectory,
+                    images: [],
+                    onActivity: () => Promise.resolve(),
+                    onText: () => Promise.resolve(),
+                    prompt: "after restart",
+                    resources: [],
+                    sessionId: "restart_conversation",
+                    signal: new AbortController().signal,
+                });
+                expect(reply).toMatchObject({ stopReason: "end_turn" });
+            } finally {
+                await restarted.close();
+                secondStore.close();
+            }
+        } finally {
+            if (previousState === undefined) {
+                delete process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+            } else {
+                process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"] = previousState;
+            }
+            await rm(temporaryDirectory, { force: true, recursive: true });
         }
     });
 

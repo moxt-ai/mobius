@@ -14,18 +14,22 @@ import {
 import { captureProcessTree, type ProcessTreeIdentity, stopProcessTree } from "../../process/executable.ts";
 import { AcpExecutionError } from "../acp-error.ts";
 import type { InProcessAcpEndpoint, InProcessAcpEndpointOptions } from "../in-process/acp-endpoint.ts";
-import { CodexAppServerClient, type CodexAppServerServerRequest } from "./app-server-client.ts";
+import { CodexAppServerClient, CodexAppServerError, type CodexAppServerServerRequest } from "./app-server-client.ts";
 import {
     type CodexModel,
+    type CodexThread,
     commandApprovalParamsSchema,
     fileChangeApprovalParamsSchema,
     type McpElicitationParams,
     mcpElicitationParamsSchema,
     modelListResponseSchema,
     requestUserInputParamsSchema,
+    threadListResponseSchema,
+    threadResumeResponseSchema,
     threadStartResponseSchema,
     turnNotificationSchema,
     turnSchema,
+    turnSteerResponseSchema,
     type UserInputQuestion,
 } from "./app-server-protocol.ts";
 import { agentMessageMeta, decodeThreadItem, toolCallUpdate } from "./items.ts";
@@ -33,6 +37,8 @@ import { agentMessageMeta, decodeThreadItem, toolCallUpdate } from "./items.ts";
 const APPROVAL_REASON_CHARACTER_LIMIT = 500;
 const APPROVAL_TIMEOUT_MILLISECONDS = 3_600_000;
 const CODEX_AGENT_VERSION = "0.154.0";
+// Mobius' steering extension, which is carried outside the ACP method registry.
+const STEERING_METHOD = "_session/steering";
 // The setting identifiers Mobius matches on. These are the ids the retired
 // `@agentclientprotocol/codex-acp` adapter advertised, so conversations that stored a selection
 // under them keep applying after the move in-process.
@@ -112,6 +118,39 @@ function initialMode(environment: Readonly<Record<string, string>>): string {
 
 function capitalize(value: string): string {
     return value.length === 0 ? value : value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+/**
+ * A label for a listed thread. Codex names threads only after the first exchange and often leaves
+ * `name` null, so the opening user message is the next best description and is what the Codex UI
+ * shows too.
+ */
+function threadTitle(thread: CodexThread): string {
+    const named = thread.name?.trim() ?? "";
+    if (named.length > 0) {
+        return named;
+    }
+    return thread.preview?.trim() ?? "";
+}
+
+/** Codex timestamps are unix seconds; Mobius requires an ISO instant. */
+function isoTimestamp(seconds: number | null | undefined): string | null {
+    if (seconds == null || !Number.isFinite(seconds)) {
+        return null;
+    }
+    return new Date(seconds * 1_000).toISOString();
+}
+
+/**
+ * The steering extension sits outside the ACP method registry, so its params are not typed by the
+ * SDK and are decoded here. Only the prompt is read; the rest of Mobius' envelope is its own.
+ */
+function steeringParams(params: unknown): { readonly prompt: readonly ContentBlock[] } {
+    const prompt = typeof params === "object" && params !== null ? Reflect.get(params, "prompt") : undefined;
+    if (!Array.isArray(prompt)) {
+        throw new AcpExecutionError("The steering prompt is invalid", {}, "steering_failed");
+    }
+    return { prompt: prompt as readonly ContentBlock[] };
 }
 
 /** The choices Mobius offers when the app-server asks it to approve a local side effect. */
@@ -354,10 +393,12 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 agentCapabilities: {
                     loadSession: false,
                     promptCapabilities: { embeddedContext: true, image: true },
-                    sessionCapabilities: { close: {} },
+                    sessionCapabilities: { close: {}, delete: {}, list: {}, resume: {} },
                 },
                 agentInfo: { name: "Codex", version: CODEX_AGENT_VERSION },
                 authMethods: [],
+                // Mobius reads this to decide whether mid-turn steering can be attempted at all.
+                _meta: { steering: { supported: true } },
                 protocolVersion: PROTOCOL_VERSION,
             }))
             .onRequest(methods.agent.session.new, async (context) => {
@@ -382,6 +423,66 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
                 // settings panel has nothing to render and saved selections cannot be re-applied.
                 return { configOptions: this.#configOptions(), sessionId: created.thread.id };
             })
+            // A daemon restart drops the app-server, so an existing conversation reconnects to a
+            // fresh one and reattaches to its thread. Without this, every stored conversation fails
+            // with `session_restore_unsupported` after a restart.
+            .onRequest(methods.agent.session.resume, async (context) => {
+                const resumed = threadResumeResponseSchema.parse(
+                    await this.#appServer.request(
+                        "thread/resume",
+                        { cwd: context.params.cwd, threadId: context.params.sessionId },
+                        AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                    ),
+                );
+                // An empty reply means the thread is gone. Reporting the id back would let Mobius
+                // continue a conversation Codex knows nothing about, so the failure is explicit.
+                if (resumed.thread == null) {
+                    throw new AcpExecutionError(
+                        "Codex no longer has the native session this conversation belongs to",
+                        {},
+                        "session_restore_unsupported",
+                    );
+                }
+                this.#nativeSessionId = resumed.thread.id;
+                this.#selection = {
+                    ...this.#selection,
+                    effort: resumed.reasoningEffort ?? this.#selection.effort,
+                    model: resumed.model ?? this.#selection.model,
+                };
+                return { configOptions: this.#configOptions() };
+            })
+            .onRequest(methods.agent.session.list, async (context) => {
+                const listed = threadListResponseSchema.parse(
+                    await this.#appServer.request(
+                        "thread/list",
+                        context.params.cursor === undefined || context.params.cursor === null
+                            ? {}
+                            : { cursor: context.params.cursor },
+                        AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                    ),
+                );
+                return {
+                    nextCursor: listed.nextCursor ?? null,
+                    sessions: listed.data.map((thread) => ({
+                        // The thread id is a UUID, which satisfies the native session id contract.
+                        additionalDirectories: [],
+                        cwd: thread.cwd ?? "",
+                        sessionId: thread.id,
+                        title: threadTitle(thread),
+                        updatedAt: isoTimestamp(thread.updatedAt),
+                    })),
+                };
+            })
+            .onRequest(methods.agent.session.delete, async (context) => {
+                // Codex archives a thread rather than erasing it, so the conversation leaves the
+                // listing but stays on disk. That is the closest thing to a delete it offers.
+                await this.#appServer.request(
+                    "thread/archive",
+                    { threadId: context.params.sessionId },
+                    AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                );
+                return {};
+            })
             .onRequest(methods.agent.session.setConfigOption, async (context) => {
                 this.#applySelection(context.params.configId, context.params.value);
                 return { configOptions: this.#configOptions() };
@@ -394,6 +495,37 @@ export class CodexAcpAgent implements InProcessAcpEndpoint {
             })
             .onRequest(methods.agent.session.prompt, async (context) => {
                 return await this.#runTurn(promptInput(context.params.prompt), context.signal);
+            })
+            // Mobius' steering extension. Codex injects into the turn it is already running, and
+            // requires the caller to name that turn so a steer cannot land on a later one.
+            .onRequest(STEERING_METHOD, steeringParams, async (context) => {
+                const turn = this.#turn;
+                if (turn === null || turn.turn.id.length === 0) {
+                    return { outcome: "promptRequired" };
+                }
+                try {
+                    const steered = turnSteerResponseSchema.parse(
+                        await this.#appServer.request(
+                            "turn/steer",
+                            {
+                                expectedTurnId: turn.turn.id,
+                                input: promptInput(context.params.prompt),
+                                threadId: this.#nativeSessionId,
+                            },
+                            AbortSignal.any([context.signal, AbortSignal.timeout(APPROVAL_TIMEOUT_MILLISECONDS)]),
+                        ),
+                    );
+                    // A steer answered with the running turn was injected into it; any other id means
+                    // Codex opened a new turn for the steering prompt instead.
+                    return { outcome: steered.turnId === turn.turn.id ? "injected" : "startedNewTurn" };
+                } catch (error) {
+                    // A steer the app-server declines (typically because the turn ended first) is a
+                    // lost race rather than a failure, and Mobius reports it as such.
+                    if (error instanceof CodexAppServerError) {
+                        return { outcome: "promptRequired" };
+                    }
+                    throw error;
+                }
             })
             .onRequest(methods.agent.session.close, async () => {
                 await this.#interruptTurn();

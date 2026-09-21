@@ -1,3 +1,5 @@
+import { existsSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { createInterface } from "node:readline";
 
 // A scripted Codex app-server for discovery-time coverage of the in-process Agent. It answers the
@@ -7,6 +9,71 @@ const input = createInterface({ input: process.stdin });
 let initialized = false;
 let nextThread = 0;
 let nextTurn = 0;
+// A thread becomes resumable only once it has run a turn, which is how the real app-server
+// behaves, so the fixture tracks what each thread has done rather than assuming every one works.
+interface KnownThread {
+    archived: boolean;
+    cwd: string;
+    effort: string;
+    id: string;
+    model: string;
+    preview: string;
+    prompted: boolean;
+}
+
+// The real app-server persists threads, and Mobius browses them through a second app-server
+// process. Keeping this on disk is what lets listing and resume work across processes.
+const stateDirectory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+const readerPath = stateDirectory === undefined ? null : join(stateDirectory, `${process.pid.toString()}.reader`);
+
+function threadPath(threadId: string): string | null {
+    return stateDirectory === undefined ? null : join(stateDirectory, `thread-${encodeURIComponent(threadId)}.json`);
+}
+
+function readThread(threadId: string): KnownThread | undefined {
+    const path = threadPath(threadId);
+    if (path === null || !existsSync(path)) {
+        return undefined;
+    }
+    try {
+        return JSON.parse(readFileSync(path, "utf8")) as KnownThread;
+    } catch {
+        return undefined;
+    }
+}
+
+function writeThread(thread: KnownThread): void {
+    const path = threadPath(thread.id);
+    if (path !== null) {
+        writeFileSync(path, `${JSON.stringify(thread)}\n`, { mode: 0o600 });
+    }
+}
+
+function allThreads(): readonly KnownThread[] {
+    if (stateDirectory === undefined || !existsSync(stateDirectory)) {
+        return [];
+    }
+    const threads: KnownThread[] = [];
+    for (const entry of readdirSync(stateDirectory)) {
+        if (!entry.startsWith("thread-") || !entry.endsWith(".json")) {
+            continue;
+        }
+        const id = decodeURIComponent(entry.slice("thread-".length, -".json".length));
+        const thread = readThread(id);
+        if (thread !== undefined) {
+            threads.push(thread);
+        }
+    }
+    return threads;
+}
+
+process.on("exit", () => {
+    if (readerPath !== null && existsSync(readerPath)) {
+        unlinkSync(readerPath);
+    }
+});
+let activeTurnId: string | null = null;
+const steeredPrompts: unknown[] = [];
 
 // The catalog Mobius turns into the model and reasoning effort settings. Shaped like a real
 // `model/list` reply, including the fields Mobius reads for labels, effort choices, and the speed
@@ -76,12 +143,23 @@ input.on("line", (line) => {
     }
     if (method === "thread/start") {
         nextThread += 1;
+        const cwdValue = readParam("cwd");
+        const threadId = `thread-${process.pid.toString()}-${nextThread.toString()}`;
+        writeThread({
+            archived: false,
+            cwd: typeof cwdValue === "string" ? cwdValue : "",
+            effort: "medium",
+            id: threadId,
+            model: "scripted-small",
+            preview: "",
+            prompted: false,
+        });
         // A real app-server reports the model and effort it resolved from Codex's own configuration;
         // Mobius reads them back as the current settings values.
         reply(id, {
             model: "scripted-small",
             reasoningEffort: "medium",
-            thread: { cwd: readParam("cwd"), id: `thread-${nextThread.toString()}` },
+            thread: { cwd: readParam("cwd"), id: threadId },
         });
         return;
     }
@@ -89,6 +167,11 @@ input.on("line", (line) => {
         nextTurn += 1;
         const threadId = readParam("threadId");
         const turnId = `turn-${nextTurn.toString()}`;
+        activeTurnId = turnId;
+        const thread = typeof threadId === "string" ? readThread(threadId) : undefined;
+        if (thread !== undefined) {
+            writeThread({ ...thread, preview: "Scripted turn", prompted: true });
+        }
         reply(id, {
             turn: { id: turnId, items: [], itemsView: "notLoaded", status: "inProgress" },
         });
@@ -132,6 +215,7 @@ input.on("line", (line) => {
             turnId,
         });
         notify("turn/completed", { threadId, turn: { id: turnId, items: [], status: "completed" } });
+        activeTurnId = null;
         return;
     }
     if (method === "turn/interrupt") {
@@ -139,10 +223,72 @@ input.on("line", (line) => {
         const turnId = readParam("turnId");
         reply(id, {});
         notify("turn/completed", { threadId, turn: { id: turnId, items: [], status: "interrupted" } });
+        activeTurnId = null;
         return;
     }
     if (method === "thread/list") {
-        reply(id, { data: [], nextCursor: null });
+        const threads = allThreads().filter((thread) => !thread.archived);
+        reply(id, {
+            data: threads.map((thread) => ({
+                createdAt: 1_700_000_000,
+                cwd: thread.cwd,
+                id: thread.id,
+                name: null,
+                preview: thread.preview,
+                updatedAt: 1_700_000_100,
+            })),
+            nextCursor: null,
+        });
+        return;
+    }
+    if (method === "thread/resume") {
+        const threadId = readParam("threadId");
+        const thread = typeof threadId === "string" ? readThread(threadId) : undefined;
+        if (thread === undefined) {
+            process.stdout.write(
+                `${JSON.stringify({ id, error: { code: -32600, message: `no rollout found for thread id ${String(threadId)}` } })}\n`,
+            );
+            return;
+        }
+        // A thread with no turns yet answers with an empty body, which is what a real app-server
+        // does; Mobius has to treat that as "cannot restore" rather than "restored".
+        if (thread.prompted !== true) {
+            reply(id, {});
+            return;
+        }
+        if (thread.archived) {
+            process.stdout.write(
+                `${JSON.stringify({ id, error: { code: -32600, message: `session ${thread.id} is archived` } })}\n`,
+            );
+            return;
+        }
+        reply(id, { model: thread.model, reasoningEffort: thread.effort, thread: { id: thread.id } });
+        return;
+    }
+    if (method === "thread/archive") {
+        const threadId = readParam("threadId");
+        const thread = typeof threadId === "string" ? readThread(threadId) : undefined;
+        if (thread !== undefined) {
+            // Archiving hides the thread but keeps it resumable for a non-archived check, matching
+            // how the real app-server refuses to reopen an archived thread rather than losing it.
+            writeThread({ ...thread, archived: true });
+        }
+        reply(id, {});
+        return;
+    }
+    if (method === "turn/steer") {
+        const threadId = readParam("threadId");
+        const expectedTurnId = readParam("expectedTurnId");
+        // Steering is only accepted while the named turn is the one actually running.
+        if (expectedTurnId !== activeTurnId) {
+            process.stdout.write(
+                `${JSON.stringify({ id, error: { code: -32600, message: `expected active turn id \`${String(expectedTurnId)}\` but found \`${String(activeTurnId)}\`` } })}\n`,
+            );
+            return;
+        }
+        steeredPrompts.push(readParam("input"));
+        reply(id, { turnId: String(expectedTurnId) });
+        void threadId;
         return;
     }
     process.stdout.write(`${JSON.stringify({ id, error: { code: -32601, message: "Unsupported method" } })}\n`);

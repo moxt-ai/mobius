@@ -30,12 +30,13 @@ ACP 0.73.0 adapters.
   checked independently of load/resume. It does not define an atomic checkpoint
   of another process's unfinished turn.
 
-The installed Codex adapter restores a thread in its own app-server connection;
-its history path also reads the thread and replays it. The installed Claude
-adapter restores a query in its own session map and replays stored messages.
-These process-local maps do not establish control of a separate terminal process.
-See the pinned [Codex source](https://github.com/agentclientprotocol/codex-acp/blob/v1.8.0/src/CodexAcpServer.ts)
-and [Claude source](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.73.0/src/acp-agent.ts).
+The in-process Codex Agent resumes a thread through `thread/resume` on its own
+app-server connection, and reads history separately by reading the thread and
+replaying it. The installed Claude adapter restores a query in its own session
+map and replays stored messages. These process-local maps do not establish
+control of a separate terminal process.
+See the [Mobius Codex Agent](../packages/cli/src/acp/codex/agent.ts)
+and the [Claude source](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.73.0/src/acp-agent.ts).
 
 Codex 0.153.4 does enforce exclusive writers: restoring an already-owned thread
 returned `already has an active writer` in a real browser reproduction. The ACP
