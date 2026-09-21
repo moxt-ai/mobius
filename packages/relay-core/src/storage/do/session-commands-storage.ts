@@ -1,4 +1,4 @@
-import type { SessionEventCommit } from "../../entity/do/session-event-projection.ts";
+import { isSessionActivity, type SessionEventCommit } from "../../entity/do/session-event-projection.ts";
 import {
     type BindingIdentity,
     BindingIdentitySchema,
@@ -117,7 +117,11 @@ export class SessionCommandsStorage {
             if (!this.hasActiveTurn(plan.scopeKey, plan.sessionId)) {
                 this.#archive.discardEventsThrough({ ...scope, throughSequence: plan.sequenceNumber });
             }
-            this.advanceEventSequence({ ...scope, nextSequence: plan.sequenceNumber + 1, updatedAt: plan.recordedAt });
+            this.advanceEventSequence({
+                ...scope,
+                nextSequence: plan.sequenceNumber + 1,
+                activityAt: isSessionActivity(plan.projection) ? plan.recordedAt : null,
+            });
             return true;
         });
     readonly writeDefaultBinding = (input: {
@@ -944,17 +948,23 @@ export class SessionCommandsStorage {
             ],
         );
 
+    /**
+     * Advances the stored event sequence, and records the Session's activity time only when the event
+     * represents activity the user caused. `activityAt` is null for an event that is not activity, which
+     * leaves the previous time in place: `updated_at` both orders the conversation list and bounds the
+     * retention window, so a readiness report from a browser opening a Session must not disturb it.
+     */
     readonly advanceEventSequence = (input: {
         readonly nextSequence: number;
-        readonly updatedAt: number;
+        readonly activityAt: number | null;
         readonly scopeKey: string;
         readonly sessionId: string;
     }): { readonly changes: number } =>
         this.#database.run(
             `UPDATE sessions
-         SET next_sequence = ?, updated_at = ?
+         SET next_sequence = ?, updated_at = COALESCE(?, updated_at)
          WHERE scope_key = ? AND session_id = ?`,
-            [input.nextSequence, input.updatedAt, input.scopeKey, input.sessionId],
+            [input.nextSequence, input.activityAt, input.scopeKey, input.sessionId],
         );
 
     readonly findBinding = (scopeKey: string, sessionId: string, bindingId: string): SessionBindingRecord | undefined =>

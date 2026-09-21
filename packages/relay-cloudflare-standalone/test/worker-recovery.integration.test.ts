@@ -535,6 +535,13 @@ describe.sequential("Cloudflare session deployment: Session recovery and concurr
     });
 
     it("Given a large tool record in the free deployment profile, When archive recovery and restart run, Then full details remain readable without external object storage", async () => {
+        // This scenario reads the hot detail before archiving, then drives the archive alarm itself. The
+        // Relay defers that alarm to `Date.now() + 1s`, which the fake clock reports, while the Durable
+        // Object runtime decides when an alarm is due from the real clock. A fake time in the real past
+        // therefore makes the deferred alarm overdue the moment it is scheduled, so it can archive the
+        // detail before the pre-archive assertions run. Holding the clock ahead of the real one keeps the
+        // alarm pending until this scenario invokes it.
+        vi.setSystemTime(new Date("2030-09-06T00:00:00.000Z"));
         const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
         const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
         const pairing = await pairChannel();

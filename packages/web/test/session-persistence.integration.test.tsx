@@ -26,7 +26,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { dataTestId } from "@/data-testid";
 import { closeMobiusTransport } from "@/services/mobius-transport";
-import { readChannelConnection, readConnectionHistory } from "@/services/pairing-api";
+import {
+    readChannelConnection,
+    readConnectionDirectory,
+    readConnectionHistory,
+    readSessionHistory,
+} from "@/services/pairing-api";
 import {
     completeRenderedPrompt,
     createTestApplication,
@@ -1065,9 +1070,16 @@ describe.sequential("Session persistence boundaries", () => {
             });
 
             // Open the oldest Session and reload onto it. The reload rebuilds every row from the Relay
-            // directory, which leaves each one without a per-Session timestamp until its own Agent reports
-            // `session.info.updated`. Only the routed Session is prepared, so only it receives that report,
-            // and an Agent that reports a newer activity time for it must not lift the row to the head.
+            // directory, so the directory's own activity time is the only thing the order can come from.
+            // Only the routed Session is prepared, and neither preparing it nor an Agent reporting a newer
+            // activity time for it may lift that row to the head.
+            const connection = await readChannelConnection(paired.channelId);
+            const listedAt = async (sessionId: string): Promise<string | undefined> => {
+                const directory = await readConnectionDirectory(connection, undefined);
+                return directory.sessions.find((session) => session.sessionId === sessionId)?.updatedAt;
+            };
+            const oldestListedAt = await listedAt(oldest.sessionId);
+
             fireEvent.click(screen.getAllByTestId(dataTestId.conversationLink)[2] as HTMLElement);
             cleanup();
             await closeMobiusTransport();
@@ -1075,6 +1087,17 @@ describe.sequential("Session persistence boundaries", () => {
             const restored = decodeSessionPrepareCommand(await paired.daemon.receive(SESSION_PREPARE_KIND));
             expect(restored.sessionId).toBe(oldest.sessionId);
             await sendReadySession(paired.daemon, restored);
+
+            // Opening a Session prepares it, and the daemon answers with `session.ready`. The Relay once
+            // recorded that readiness as Session activity, so the row the user merely opened acquired the
+            // newest timestamp in the directory and the list reordered underneath them. The directory's
+            // activity time is what the list is built from, and opening a Session must not move it.
+            //
+            // The Relay publishes that timestamp when a Session is read, which the browser does on every
+            // route load, so read the Session here the way the next visit would and then check the listing.
+            await readSessionHistory(connection, oldest.sessionId, undefined);
+            expect(await listedAt(oldest.sessionId)).toBe(oldestListedAt);
+
             await paired.daemon.sendSessionEvent(
                 oldest.sessionId,
                 encodeSessionInfoUpdatedEvent({

@@ -35,6 +35,7 @@ import {
     SESSION_EVENT_DEFERRED_KIND,
     SESSION_FAILED_KIND,
     SESSION_INFO_UPDATED_KIND,
+    SESSION_READY_KIND,
     SESSION_STARTED_KIND,
     type SessionEventEnvelope,
 } from "@moxt-ai/mobius-protocol";
@@ -1584,6 +1585,100 @@ describe.sequential("Cloudflare session deployment: event delivery and storage",
         } finally {
             daemon.socket.close(1000, "Unreadable activity test complete");
             host.socket.close(1000, "Unreadable activity test complete");
+        }
+    });
+
+    it("Given a browser opens an existing Session, When the daemon reports readiness again, Then the Session's directory activity time does not move", async () => {
+        const app = createTestMobiusApp({ bindings: testBindings() }, createStandaloneGateways);
+        const { pairChannel, openChannelSocket, authorization, createSession } = createSessionRequests(app);
+        const pairing = await pairChannel();
+        const sessionId = "reopened-session";
+        expect((await createSession(pairing.created, sessionId)).status).toBe(201);
+        const daemon = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/daemon?token=${pairing.claimed.daemonToken}`,
+        );
+        const host = await openChannelSocket(
+            `${MOBIUS_API_PREFIX}/channels/${pairing.created.channelId}/host?token=${pairing.created.hostToken}`,
+        );
+        expect(decodeRuntimeStatusEvent(await host.messages.next()).online).toBe(true);
+
+        const activityTime = async (): Promise<string> => {
+            const response = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions?limit=10`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(response.status).toBe(200);
+            const body: unknown = await response.json();
+            if (!isRecord(body) || !Array.isArray(body["sessions"])) {
+                throw new Error("Expected the Session directory to carry a sessions array");
+            }
+            const listed = body["sessions"].filter(isRecord).find((session) => session["sessionId"] === sessionId);
+            if (listed === undefined || typeof listed["updatedAt"] !== "string") {
+                throw new Error("Expected the Session directory to list the activity time of the Session");
+            }
+            return listed["updatedAt"];
+        };
+
+        try {
+            // A Turn is real activity, so it is what the directory's timestamp is allowed to follow.
+            const command = prompt(sessionId, "reopened-command", "the only real activity");
+            await completeTurn(host, daemon, command, "Only response");
+            const afterTurn = await activityTime();
+
+            // Opening a Session again prepares it, and the daemon answers with a readiness report. The
+            // browser sends that preparation, so every open would otherwise rewrite the activity time and
+            // lift the Session to the head of the list the user is reading. Advance the clock by a minute
+            // so a stamp would be visible without tripping the Session's one-day retention, and read only
+            // the daemon's acknowledgement: the readiness broadcast is not what this asserts.
+            vi.setSystemTime(new Date(Date.parse(afterTurn) + 60_000));
+            const ready = envelope(sessionId, "reopened-ready", {
+                additionalDirectories: [],
+                agentId: "codex",
+                agentName: "Codex",
+                agentVersion: "test",
+                capabilities: {
+                    additionalDirectories: true,
+                    audioPrompt: false,
+                    closeSession: true,
+                    deleteSession: true,
+                    embeddedContextPrompt: true,
+                    imagePrompt: true,
+                    listSessions: true,
+                    loadSession: true,
+                    promptQueueing: false,
+                    resumeSession: true,
+                    steering: false,
+                    unstableForkSession: true,
+                },
+                commands: [],
+                configOptions: [],
+                directoryId: "root",
+                directoryLabel: "mobius",
+                kind: SESSION_READY_KIND,
+                requestId: "reopened-request",
+                restored: true,
+                sessionId,
+            });
+            daemon.socket.send(encodeSessionEventEnvelope(ready));
+            expect(decodeSessionEventAcknowledgement(await daemon.messages.next())).toMatchObject({
+                duplicate: false,
+                eventId: ready.eventId,
+                sessionId,
+            });
+
+            // Reading the Session is what the browser does next, and it refreshes the directory from the
+            // stored Session. A readiness report that moved the stored activity time lands in the directory
+            // here, which is why opening a Session reorders the list.
+            const read = await app.request(
+                `${relayOrigin}${MOBIUS_API_PREFIX}/projects/${pairing.created.projectId}/sessions/${sessionId}`,
+                { headers: authorization(pairing.created) },
+            );
+            expect(read.status).toBe(200);
+
+            expect(await activityTime()).toBe(afterTurn);
+        } finally {
+            daemon.socket.close(1000, "Reopened Session test complete");
+            host.socket.close(1000, "Reopened Session test complete");
         }
     });
 });

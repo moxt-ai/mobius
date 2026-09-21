@@ -90,3 +90,40 @@ export type SessionEventProjection =
           } | null;
       }
     | { readonly kind: "title"; readonly title: string };
+
+/**
+ * Whether a committed event is Session activity the user caused, which is what the directory's
+ * `updated_at` records. The directory orders the conversation list and its timestamp is the only
+ * activity signal a browser has before it loads a Session, so an event that does not represent user
+ * activity must not move it.
+ *
+ * A readiness report is the case this exists for: a browser opening an existing Session prepares it,
+ * the daemon answers with `session.ready`, and stamping that as activity lifted the Session the user
+ * merely opened to the head of the list they were reading. `unchanged` covers the same class — a
+ * readiness report, a repeated command list, or an Agent update that carries no title.
+ *
+ * The remaining variants are exhaustive on purpose, so a new projection has to state which side it
+ * belongs on rather than inheriting the activity stamp by default.
+ */
+export function isSessionActivity(projection: SessionEventProjection): boolean {
+    switch (projection.kind) {
+        case "unchanged":
+            return false;
+        case "start":
+        case "response":
+        case "content":
+        case "activity":
+        case "narration":
+        case "request-interaction":
+        case "resolve-interaction":
+        case "complete":
+        case "fail":
+        case "configuration":
+        case "title":
+            return true;
+        default: {
+            const unreachable: never = projection;
+            return unreachable;
+        }
+    }
+}
