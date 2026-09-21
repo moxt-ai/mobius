@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { formatAgentDiagnostics } from "../src/agent-catalog/agent-diagnostics.ts";
+import { formatAgentDiagnostics } from "../../../packages/cli/src/agent-catalog/agent-diagnostics.ts";
 import {
     AvailableAgent,
     discoverLocalAgentInventory,
     WorkBuddyAgentSpecification,
-} from "../src/agent-catalog/discover-local-agents.ts";
+} from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

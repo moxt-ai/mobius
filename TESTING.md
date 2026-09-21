@@ -6,17 +6,18 @@ more:
 1. `e2e/mobius.e2e.test.ts` owns the critical successful server product journey.
 2. Boundary tests enter through one production boundary and own its failures.
 3. `packages/protocol/tests` owns serialization and trust-boundary contracts.
-4. `tests/agent-daemon/cases` owns compatibility with real third-party Agents.
+4. `tests/agent-daemon` owns the complete local Agent and daemon boundary.
 
 Runner, package, and CI partition names are implementation details, not additional
 test levels.
 
 ## Agent and daemon boundary
 
-Treat a third-party Agent and the production Mobius daemon as one integration
-unit. Only `tests/agent-daemon/cases` tests that unit. Those cases use a real
-Agent executable, its production ACP adapter and provider client, the production
-daemon, and a permissive local fake LLM provider.
+Treat an Agent and the production Mobius daemon as one integration unit. Only
+`tests/agent-daemon` tests that unit. `fake/` uses one controllable ACP fixture
+for deterministic failure, recovery, storage, security, and lifecycle behavior.
+`real/` uses each real Agent executable, its production ACP adapter and provider
+client, the production daemon, and a permissive local fake LLM provider.
 
 Every suite that consumes the Agent-daemon unit talks to a shared protocol-level
 `FakeAgentDaemon`. The fake claims a Runtime, connects through the production
@@ -34,9 +35,11 @@ This boundary keeps responsibility unambiguous:
 - Protocol contract tests prove message validation and round trips without a
   process or network.
 
-CLI boundary tests are inside the unit: when daemon behavior itself is under
-test, they may use the one controlled ACP fixture. They must not be copied into a
-consumer suite.
+There is no separate CLI test level or shell-wrapper suite. Discovery,
+installation, ACP translation, local storage, and Relay delivery belong to this
+same unit and live under `tests/agent-daemon/fake`. They must not be copied into
+a consumer suite. Help text, argument parsing, and other command-shell details
+do not justify integration tests.
 
 An exceptional E2E may start the production daemon only when that executable
 assembly is itself the behavior being proved. Keep such cases rare, explicit,
@@ -55,9 +58,9 @@ instead of enumerating edge cases or repeating Agent-daemon compatibility.
 A boundary test uses one production entrypoint for the behavior it owns. A package
 directory does not define a new test level:
 
-- CLI workflows enter through the executable or daemon protocol. Direct Agent,
-  process, filesystem, or SQLite tests are reserved for security, corruption, and
-  recovery behavior that the outer boundary cannot create cheaply.
+- Agent-daemon workflows enter through the daemon protocol. Direct Agent,
+  process, filesystem, or SQLite tests are reserved for security, corruption,
+  and recovery behavior that the outer boundary cannot create cheaply.
 - SDK tests use the public client and transport.
 - Web tests mount the complete application against the local Relay and shared
   `FakeAgentDaemon`.
@@ -103,12 +106,15 @@ The normal developer surface is intentionally small:
 
 ```bash
 pnpm test
-pnpm test:e2e
 pnpm test:agent-daemon
+pnpm test:e2e
 ```
 
-`pnpm test` runs the same `client`, `relay`, and `hosting` partitions that CI runs
-in parallel. Those partitions are execution plumbing, not new kinds of tests.
+`pnpm test` runs deterministic fake-Agent coverage plus the same `client`,
+`relay`, and `hosting` partitions that CI runs in parallel.
+`pnpm test:agent-daemon` additionally runs real-Agent compatibility; CI selects
+and parallelizes affected real Agents. Those partitions are execution plumbing,
+not new kinds of tests.
 Package-specific integration commands exist only for focused iteration. Run
 `pnpm test:coverage` explicitly when coverage is useful for investigation;
 normal test execution does not collect it.

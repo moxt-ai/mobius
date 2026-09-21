@@ -8,10 +8,10 @@ import { describe, expect, it } from "vitest";
 import {
     DeepSeekHarnessAgentSpecification,
     discoverLocalAgentInventory,
-} from "../src/agent-catalog/discover-local-agents.ts";
-import type { LocalAgentDefinition } from "../src/agent-catalog/local-agent.ts";
+} from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
+import type { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

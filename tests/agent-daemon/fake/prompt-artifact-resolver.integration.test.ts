@@ -3,10 +3,14 @@ import { createServer, type Server } from "node:http";
 import { gzipSync } from "node:zlib";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { createDaemonConfig } from "../../../packages/cli/src/config.ts";
+import { resolvePromptArtifacts } from "../../../packages/cli/src/prompt-artifact-resolver.ts";
+import {
+    MOBIUS_API_PREFIX,
+    SESSION_PROMPT_KIND,
+    type SessionPromptCommand,
+} from "../../../packages/protocol/src/index.ts";
 import { listen, port } from "../../../tests/infra/websocket.ts";
-import { MOBIUS_API_PREFIX, SESSION_PROMPT_KIND, type SessionPromptCommand } from "../../protocol/src/index.ts";
-import { createDaemonConfig } from "../src/config.ts";
-import { resolvePromptArtifacts } from "../src/prompt-artifact-resolver.ts";
 
 function digest(bytes: Uint8Array): string {
     return createHash("sha256").update(bytes).digest("hex");

@@ -17,7 +17,7 @@ import {
     RuntimeDeliveryInboxCapacityError,
     SessionEventOutbox,
     SessionEventOutboxCapacityError,
-} from "../src/relay-connection/session-event-outbox.ts";
+} from "../../../packages/cli/src/relay-connection/session-event-outbox.ts";
 
 const createdDirectories: string[] = [];
 

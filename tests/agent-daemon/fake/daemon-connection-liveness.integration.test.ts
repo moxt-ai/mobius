@@ -8,7 +8,12 @@ import type { Duplex } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listen, port as readPort, sendText as writeServerTextFrame } from "../../../tests/infra/websocket.ts";
+import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
+import { createDaemonConfig, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
+import { RuntimeRelayRevokedError } from "../../../packages/cli/src/relay-connection/runtime-revocation.ts";
+import { SessionEventOutbox } from "../../../packages/cli/src/relay-connection/session-event-outbox.ts";
+import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src/relay-connection/timer.ts";
+import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import {
     AGENT_ACTIVITY_KIND,
     AGENT_MESSAGE_DELTA_KIND,
@@ -46,16 +51,11 @@ import {
     SessionEventRejectionCode,
     WORKSPACE_ENTRIES_KIND,
     WORKSPACE_LIST_KIND,
-} from "../../protocol/src/index.ts";
-import { AuditStore } from "../src/audit/audit-store.ts";
-import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
-import { RuntimeRelayRevokedError } from "../src/relay-connection/runtime-revocation.ts";
-import { SessionEventOutbox } from "../src/relay-connection/session-event-outbox.ts";
-import type { DaemonScheduledTask, DaemonTimer } from "../src/relay-connection/timer.ts";
-import { runDaemon } from "../src/run-daemon.ts";
+} from "../../../packages/protocol/src/index.ts";
+import { listen, port as readPort, sendText as writeServerTextFrame } from "../../../tests/infra/websocket.ts";
 
 const WEBSOCKET_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function restoreEnvironmentVariable(name: string, previous: string | undefined): void {
     if (previous === undefined) {

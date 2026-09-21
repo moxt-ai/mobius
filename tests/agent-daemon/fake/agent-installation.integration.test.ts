@@ -7,13 +7,13 @@ import { fileURLToPath } from "node:url";
 import { AGENT_INSTALL_REQUEST_KIND, type AgentInstallRequestCommand } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
 
-import { CodexAgentSpecification } from "../src/agent-catalog/discover-local-agents.ts";
+import { CodexAgentSpecification } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
 import {
     AgentIntegrationDefinition,
     LocalAgentCatalog,
     LocalAgentDefinition,
     MissingAgentDefinition,
-} from "../src/agent-catalog/local-agent.ts";
+} from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import {
     type AgentInstallation,
     AgentInstallationManager,
@@ -22,10 +22,10 @@ import {
     type InstallationObserver,
     RunningInstallation,
     SucceededInstallation,
-} from "../src/agent-installation/agent-installation-manager.ts";
-import { DEEPSEEK_HARNESS_PACKAGE } from "../src/agent-installation/deepseek-managed-package.ts";
-import { FixedInstallationExecutor } from "../src/agent-installation/fixed-installation-executor.ts";
-import type { AdapterInstallationPort } from "../src/agent-installation/managed-adapter-installer.ts";
+} from "../../../packages/cli/src/agent-installation/agent-installation-manager.ts";
+import { DEEPSEEK_HARNESS_PACKAGE } from "../../../packages/cli/src/agent-installation/deepseek-managed-package.ts";
+import { FixedInstallationExecutor } from "../../../packages/cli/src/agent-installation/fixed-installation-executor.ts";
+import type { AdapterInstallationPort } from "../../../packages/cli/src/agent-installation/managed-adapter-installer.ts";
 import {
     type ManagedAgentArchiveDefinition,
     type ManagedAgentArchiveDownloadPort,
@@ -33,16 +33,16 @@ import {
     TarGzipManagedAgentArchiveDefinition,
     validateManagedAgentArchive,
     ZipManagedAgentArchiveDefinition,
-} from "../src/agent-installation/managed-agent-archive.ts";
+} from "../../../packages/cli/src/agent-installation/managed-agent-archive.ts";
 import {
     ManagedNpmPackageInstaller,
     validateManagedNpmPackage,
-} from "../src/agent-installation/managed-npm-package.ts";
-import { VerifiedDownload } from "../src/agent-installation/verified-download.ts";
-import { resolveExecutablePath, runBoundedProcess } from "../src/process/executable.ts";
+} from "../../../packages/cli/src/agent-installation/managed-npm-package.ts";
+import { VerifiedDownload } from "../../../packages/cli/src/agent-installation/verified-download.ts";
+import { resolveExecutablePath, runBoundedProcess } from "../../../packages/cli/src/process/executable.ts";
 
 const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

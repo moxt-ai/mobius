@@ -16,12 +16,12 @@ import type {
     SessionUsageUpdatedEvent,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
-import type { AcpActivity } from "../src/acp/activity.ts";
-import { AcpSessionManager, type AcpSessionObserver } from "../src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
-import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../src/config.ts";
+import type { AcpActivity } from "../../../packages/cli/src/acp/activity.ts";
+import { AcpSessionManager, type AcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
+import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { createDaemonConfig, DaemonLocalContext, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 class RecordingObserver implements AcpSessionObserver {
     readonly commands: SessionCommandsUpdatedEvent[] = [];

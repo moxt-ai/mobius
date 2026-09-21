@@ -2,16 +2,16 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AcpSessionManager } from "../src/acp/session-manager.ts";
+import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
 import {
     agentSettingsAdapterForAgent,
     applyAgentLaunchSettings,
     DEEPSEEK_HARNESS_ACCESS_MODE_SETTING_ID,
     OPENCODE_PERMISSION_SETTING_ID,
-} from "../src/agent-catalog/agent-settings-adapter.ts";
-import { LocalAgentDefinition } from "../src/config.ts";
+} from "../../../packages/cli/src/agent-catalog/agent-settings-adapter.ts";
+import { LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 describe("Agent setting capabilities", () => {
     it("Given an Agent reports its reasoning effort as the provider default, When a session is prepared, Then Mobius keeps the effort setting with that current value", async () => {

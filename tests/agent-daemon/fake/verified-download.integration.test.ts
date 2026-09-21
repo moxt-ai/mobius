@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { Response } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { downloadVerifiedFile, type InstallerDownloadTransport } from "../src/agent-installation/verified-download.ts";
+import {
+    downloadVerifiedFile,
+    type InstallerDownloadTransport,
+} from "../../../packages/cli/src/agent-installation/verified-download.ts";
 
 type DownloadScenario = "allowed-redirect" | "leaving-allowlist";
 

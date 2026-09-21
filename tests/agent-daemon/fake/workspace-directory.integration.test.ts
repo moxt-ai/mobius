@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { WorkspaceDirectoryService } from "../src/authorization/workspace-directory.ts";
+import { WorkspaceDirectoryService } from "../../../packages/cli/src/authorization/workspace-directory.ts";
 
 describe("machine directory selection", () => {
     it("Given a paired machine and a default workspace, When the browser browses Home and selects another project, Then accessible canonical directories are available without granting another workspace", async () => {

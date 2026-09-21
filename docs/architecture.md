@@ -367,7 +367,8 @@ events use bounded stages and sanitized stable codes.
   and integration components.
 - `packages/mobius-sdk` owns the browser-and-Node TypeScript resource API and the
   browser channel-control transport used by the built-in Web application.
-- `e2e/fixtures` contains deterministic external-boundary fixtures.
+- `tests/agent-daemon` owns fake depth tests, real-Agent compatibility, and their
+  deterministic external-boundary fixtures.
 - `deploy/docker` is an empty placeholder for a future packaged Node image.
 
 Cloudflare is therefore a deployment profile rather than a core dependency. The

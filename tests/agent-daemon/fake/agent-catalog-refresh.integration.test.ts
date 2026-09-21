@@ -15,15 +15,15 @@ import {
     MOBIUS_API_PREFIX,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { discoverLocalAgentInventory } from "../../../packages/cli/src/agent-catalog/discover-local-agents.ts";
+import { publishAgentCatalog } from "../../../packages/cli/src/agent-catalog/publish-agent-catalog.ts";
+import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
+import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
+import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
-import { discoverLocalAgentInventory } from "../src/agent-catalog/discover-local-agents.ts";
-import { publishAgentCatalog } from "../src/agent-catalog/publish-agent-catalog.ts";
-import { AuditStore } from "../src/audit/audit-store.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
-import { runDaemon } from "../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 class ClientFrames {
     #buffered = Buffer.alloc(0);

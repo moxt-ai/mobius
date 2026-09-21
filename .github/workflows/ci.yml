@@ -174,7 +174,7 @@ jobs:
       - name: Run ${{ matrix.agent }} Agent and daemon integration test
         run: pnpm exec vitest run --config vitest.agent-daemon.config.ts "$TEST_FILE"
         env:
-          TEST_FILE: tests/agent-daemon/cases/${{ matrix.agent }}.integration.test.ts
+          TEST_FILE: tests/agent-daemon/real/${{ matrix.agent }}.integration.test.ts
 
   check:
     name: check

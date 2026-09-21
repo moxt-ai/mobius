@@ -34,14 +34,14 @@ import {
     SessionPromptDisposition,
 } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it } from "vitest";
+import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
+import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
+import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
+import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
-import { LocalAgentDefinition } from "../src/agent-catalog/local-agent.ts";
-import { AuditStore } from "../src/audit/audit-store.ts";
-import { createDaemonConfig, DaemonLocalContext } from "../src/config.ts";
-import { runDaemon } from "../src/run-daemon.ts";
 
 const websocketGuid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

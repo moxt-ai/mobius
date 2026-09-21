@@ -31,7 +31,7 @@ const agentFiles = new Map(
         ["pi", "pi-agent"],
         ["workbuddy", "workbuddy-agent"],
     ].flatMap(([agent, specification]) => [
-        [`tests/agent-daemon/cases/${agent}.integration.test.ts`, agent],
+        [`tests/agent-daemon/real/${agent}.integration.test.ts`, agent],
         [`tests/agent-daemon/infra/${agent}.ts`, agent],
         [`tests/agent-daemon/providers/${agent}.ts`, agent],
         [`packages/cli/src/agent-catalog/agents/${specification}.ts`, agent],
@@ -77,7 +77,11 @@ export function selectAgentDaemonTests(changedFiles) {
     const selected = new Set();
     const reasons = new Map();
     for (const file of changedFiles) {
-        if (file.endsWith(".md")) {
+        if (
+            file.endsWith(".md") ||
+            file.startsWith("tests/agent-daemon/fake/") ||
+            file.startsWith("tests/agent-daemon/fixtures/fake-acp-agent/")
+        ) {
             continue;
         }
         const ownedAgent = agentFiles.get(file);

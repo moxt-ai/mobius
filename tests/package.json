@@ -4,7 +4,7 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "typecheck": "tsc --project tsconfig.json"
+        "typecheck": "tsc --project tsconfig.json && tsc --project agent-daemon/tsconfig.json"
     },
     "exports": {
         "./agent-daemon": "./infra/agent-daemon.ts",
@@ -25,6 +25,7 @@
         "esbuild": "0.28.2",
         "hono": "^4.13.7",
         "miniflare": "5.20260903.0-alpha",
+        "undici": "8.10.2",
         "valibot": "1.5.0",
         "wrangler": "^4.131.0",
         "ws": "^8.21.3"

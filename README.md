@@ -596,15 +596,14 @@ packages/
   mobius-sdk/        Browser-and-Node TypeScript SDK
 deploy/
   docker/            Reserved for a future Docker deployment profile
-e2e/
-  fixtures/
-    fake-acp-agent/
+tests/
+  agent-daemon/      Fake depth tests and real third-party Agent compatibility
 docs/
 scripts/
 ```
 
 All runnable and importable product workspaces live under `packages/`.
-External boundary fixtures remain under `e2e/fixtures` because they are
+Agent and daemon fixtures remain beside their owning tests because they are
 deterministic test dependencies rather than shipped product units.
 
 ## D1 migrations

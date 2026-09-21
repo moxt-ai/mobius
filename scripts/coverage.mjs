@@ -10,13 +10,23 @@ const vitest = fileURLToPath(new URL("vitest.mjs", import.meta.resolve("vitest/p
 const { createCoverageMap } = coverageLibrary;
 const { createContext } = reportLibrary;
 const suites = [
-    ["cli", ".", ["packages/cli/tests/", "--coverage.reportsDirectory=coverage/cli"]],
+    [
+        "agent-daemon",
+        ".",
+        [
+            "--config",
+            "vitest.agent-daemon.config.ts",
+            "tests/agent-daemon/fake/",
+            "--fileParallelism",
+            "--maxWorkers=4",
+        ],
+    ],
     ["sdk", ".", ["packages/mobius-sdk/tests/", "--coverage.reportsDirectory=coverage/sdk"]],
     [
         "integration",
         ".",
         [
-            "--exclude=packages/cli/**",
+            "--exclude=tests/agent-daemon/**",
             "--exclude=packages/mobius-sdk/**",
             "--exclude=e2e/**",
             "--coverage.reportsDirectory=coverage/integration",
@@ -33,7 +43,9 @@ if (
     (mode !== undefined && mode !== "--suite" && mode !== "--merge-only") ||
     (mode === "--suite" ? !suites.some(([name]) => name === suiteName) : suiteName !== undefined)
 ) {
-    throw new Error("Usage: coverage.mjs [--suite cli|sdk|integration|e2e|web|standalone|platform | --merge-only]");
+    throw new Error(
+        "Usage: coverage.mjs [--suite agent-daemon|sdk|integration|e2e|web|standalone|platform | --merge-only]",
+    );
 }
 const cancellation = new AbortController();
 const interrupt = () => cancellation.abort();

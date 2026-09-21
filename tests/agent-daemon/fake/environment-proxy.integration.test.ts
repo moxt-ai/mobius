@@ -33,7 +33,7 @@ async function closeServer(server: Server, sockets: Set<Socket>): Promise<void> 
     });
 }
 
-describe("CLI environment proxy", () => {
+describe("daemon environment proxy", () => {
     it("Given proxy environment variables, When pairing and opening the relay, Then both connections use the proxy", async () => {
         const pairingSockets = new Set<Socket>();
         const relaySockets = new Set<Socket>();
@@ -156,10 +156,12 @@ describe("CLI environment proxy", () => {
         process.env["PATH"] = "";
 
         try {
-            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import("../src/runtime.ts");
-            const { connectRelay } = await import("../src/relay-connection/connect.ts");
+            const { openRuntimeInstallationStore, pairMobiusRuntime } = await import(
+                "../../../packages/cli/src/runtime.ts"
+            );
+            const { connectRelay } = await import("../../../packages/cli/src/relay-connection/connect.ts");
             const { describeEnvironmentProxyRoute, environmentProxyDispatcher } = await import(
-                "../src/network/environment-proxy.ts"
+                "../../../packages/cli/src/network/environment-proxy.ts"
             );
 
             const pairingPort = port(pairingServer);

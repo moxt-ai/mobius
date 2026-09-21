@@ -51,9 +51,6 @@
         "esbuild": "0.28.2"
     },
     "main": "dist/index.js",
-    "directories": {
-        "test": "tests"
-    },
     "keywords": [],
     "author": "",
     "license": "ISC",

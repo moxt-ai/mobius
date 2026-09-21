@@ -7,12 +7,12 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { AcpSessionManager, createWritableAcpStream } from "../src/acp/session-manager.ts";
-import { FoundAcpStoredSession, SqliteAcpSessionStore } from "../src/acp/session-store.ts";
-import { LocalAgentDefinition } from "../src/config.ts";
-import { AccumulatingOperationMetrics } from "../src/infra/operation-metrics.ts";
+import { AcpSessionManager, createWritableAcpStream } from "../../../packages/cli/src/acp/session-manager.ts";
+import { FoundAcpStoredSession, SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
+import { AccumulatingOperationMetrics } from "../../../packages/cli/src/infra/operation-metrics.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 function processExists(pid: number): boolean {
     if (process.platform === "linux") {

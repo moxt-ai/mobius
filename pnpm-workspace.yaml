@@ -1,6 +1,6 @@
 packages:
   - packages/*
-  - e2e/fixtures/*
+  - tests/agent-daemon/fixtures/*
   - tests
 
 engineStrict: true

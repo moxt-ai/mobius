@@ -9,7 +9,7 @@ import {
     openRuntimeInstallationStore,
     type RuntimeInstallationStoreError,
     VerifiedRuntimeConnection,
-} from "../src/storage/runtime-installation-store.ts";
+} from "../../../packages/cli/src/storage/runtime-installation-store.ts";
 
 describe("Runtime installation storage", () => {
     it("Given Mobius and Moxt installations on one user state root, When each saves a Runtime connection, Then each resumes only its own opaque connection from isolated state", async () => {

@@ -13,10 +13,10 @@ describe("agent and daemon test planning", () => {
     });
 
     it("selects one Agent for its case, fixture, or production specification", () => {
-        assert.deepEqual(selected(["tests/agent-daemon/cases/copilot.integration.test.ts"]), ["copilot"]);
+        assert.deepEqual(selected(["tests/agent-daemon/real/copilot.integration.test.ts"]), ["copilot"]);
         assert.deepEqual(selected(["tests/agent-daemon/providers/cursor.ts"]), ["cursor"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/copilot-cli-agent.ts"]), ["copilot"]);
-        assert.deepEqual(selected(["tests/agent-daemon/cases/hermes.integration.test.ts"]), ["hermes"]);
+        assert.deepEqual(selected(["tests/agent-daemon/real/hermes.integration.test.ts"]), ["hermes"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/gemini-cli-agent.ts"]), ["gemini"]);
         assert.deepEqual(selected(["packages/cli/src/agent-catalog/agents/grok-build-agent.ts"]), ["grok"]);
     });
@@ -52,5 +52,10 @@ describe("agent and daemon test planning", () => {
         assert.deepEqual(selected(["tests/agent-daemon/new-shared-helper.ts"]), all);
         assert.deepEqual(selected([".github/actions/setup/action.yml"]), all);
         assert.deepEqual(selected(["scripts/plan-agent-daemon-tests.mjs"]), all);
+    });
+
+    it("does not rerun real Agents for fake-only scenarios", () => {
+        assert.deepEqual(selected(["tests/agent-daemon/fake/acp-session-features.integration.test.ts"]), []);
+        assert.deepEqual(selected(["tests/agent-daemon/fixtures/fake-acp-agent/src/cli.ts"]), []);
     });
 });

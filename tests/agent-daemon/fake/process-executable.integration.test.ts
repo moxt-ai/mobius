@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { runBoundedProcess } from "../src/process/executable.ts";
+import { runBoundedProcess } from "../../../packages/cli/src/process/executable.ts";
 
 function executableSource(source: string): string {
     return `#!${process.execPath}\n${source}`;

@@ -3,15 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { NativeSessionCommand, NativeSessionEntry } from "@moxt-ai/mobius-protocol";
 import { describe, expect, it, vi } from "vitest";
-import { AcpSessionManager, NullAcpSessionObserver } from "../src/acp/session-manager.ts";
-import { SqliteAcpSessionStore } from "../src/acp/session-store.ts";
-import { AuditStore } from "../src/audit/audit-store.ts";
-import { WorkspaceDirectoryService } from "../src/authorization/workspace-directory.ts";
-import { createDaemonConfig, LocalAgentDefinition } from "../src/config.ts";
-import { NativeSessionService } from "../src/native-sessions/service.ts";
+import { AcpSessionManager, NullAcpSessionObserver } from "../../../packages/cli/src/acp/session-manager.ts";
+import { SqliteAcpSessionStore } from "../../../packages/cli/src/acp/session-store.ts";
+import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
+import { WorkspaceDirectoryService } from "../../../packages/cli/src/authorization/workspace-directory.ts";
+import { createDaemonConfig, LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
+import { NativeSessionService } from "../../../packages/cli/src/native-sessions/service.ts";
 
-const acpUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url).toString();
-const appServerUrl = new URL("../../../e2e/fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
+const acpUrl = new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url).toString();
+const appServerUrl = new URL("../fixtures/fake-acp-agent/src/app-server.ts", import.meta.url).toString();
 
 // Real providers cannot deterministically supply destructive test sessions or stalled
 // loads. These ACP subprocesses maintain their own disposable session files.

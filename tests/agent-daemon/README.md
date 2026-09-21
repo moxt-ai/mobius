@@ -1,7 +1,8 @@
 # Agent and daemon integration tests
 
-These tests treat a real third-party Agent and the production Mobius daemon as
-one system. They drive and observe that system only through the production
+These tests treat an Agent and the production Mobius daemon as one system.
+`fake/` drives deterministic daemon, ACP, storage, and failure behavior with one
+controllable ACP fixture. `real/` drives compatibility through the production
 protocol between the daemon and a local Mobius server.
 
 ```text
@@ -55,7 +56,13 @@ unrelated model calls while proving the complete tool round trip.
 ```text
 tests/agent-daemon/
   README.md
-  cases/
+  fake/
+    acp-session-features.integration.test.ts
+    daemon-connection-liveness.integration.test.ts
+    ...
+  fixtures/
+    fake-acp-agent/
+  real/
     claude.integration.test.ts
     codex.integration.test.ts
     copilot.integration.test.ts
@@ -88,12 +95,17 @@ tests/agent-daemon/
     openai.ts
 ```
 
-The case file is the control surface: it names the real Agent, provider, and
-Agent-specific behavior. `infra/journey.ts` keeps the common production path
-(pairing, daemon, SDK session, turn, and persisted-history assertion) identical
-between cases. Other infrastructure files hide only Agent setup and provider
-mechanics. Add another Agent as one new readable case, plus only the
-infrastructure or provider protocol it actually needs.
+Each file in `fake/` owns a daemon behavior or explicit failure risk. The files
+use the same fake ACP executable from `fixtures/`; there is no command-shell
+suite or second fake Agent.
+
+Each file in `real/` is the compatibility control surface: it names the real
+Agent, provider, and Agent-specific behavior. `infra/journey.ts` keeps the
+common production path (pairing, daemon, SDK session, turn, and
+persisted-history assertion) identical between cases. Other infrastructure
+files hide only Agent setup and provider mechanics. Add another Agent as one
+new readable case, plus only the infrastructure or provider protocol it
+actually needs.
 
 Each Agent receives an isolated home and XDG directories. Configure it through
 the same mechanism available to users, with an inert credential and a loopback
@@ -107,7 +119,9 @@ protocol implementation so diagnostics preserve the actual wire format.
 
 ## Run
 
-Build the production assets, then supply the real Agent executable:
+The public command runs deterministic fake-Agent coverage first and then the
+real-Agent compatibility cases. Build the production assets and supply the real
+Agent executables before running the whole boundary:
 
 ```sh
 pnpm build

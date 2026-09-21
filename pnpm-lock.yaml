@@ -53,16 +53,6 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@types/node@24.13.4)(@vitest/coverage-istanbul@4.1.11)(@vitest/coverage-v8@4.1.11)(happy-dom@20.14.3)(vite@8.3.0(@types/node@24.13.4)(esbuild@0.25.12)(jiti@2.7.0)(yaml@2.9.0))
 
-  e2e/fixtures/fake-acp-agent:
-    dependencies:
-      '@agentclientprotocol/sdk':
-        specifier: ^1.4.0
-        version: 1.4.0(zod@4.6.2)
-    devDependencies:
-      '@types/node':
-        specifier: ^24.13.4
-        version: 24.13.4
-
   packages/cli:
     dependencies:
       '@agentclientprotocol/sdk':
@@ -363,6 +353,9 @@ importers:
       miniflare:
         specifier: 5.20260903.0-alpha
         version: 5.20260903.0-alpha
+      undici:
+        specifier: 8.10.2
+        version: 8.10.2
       valibot:
         specifier: 1.5.0
         version: 1.5.0(typescript@7.0.2)
@@ -372,6 +365,16 @@ importers:
       ws:
         specifier: ^8.21.3
         version: 8.21.3
+
+  tests/agent-daemon/fixtures/fake-acp-agent:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: ^1.4.0
+        version: 1.4.0(zod@4.6.2)
+    devDependencies:
+      '@types/node':
+        specifier: ^24.13.4
+        version: 24.13.4
 
 packages:
 

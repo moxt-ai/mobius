@@ -2,10 +2,10 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
-import { AcpSessionManager } from "../src/acp/session-manager.ts";
-import { LocalAgentDefinition } from "../src/config.ts";
+import { AcpSessionManager } from "../../../packages/cli/src/acp/session-manager.ts";
+import { LocalAgentDefinition } from "../../../packages/cli/src/config.ts";
 
-const fakeAgentPath = fileURLToPath(new URL("../../../e2e/fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
+const fakeAgentPath = fileURLToPath(new URL("../fixtures/fake-acp-agent/src/cli.ts", import.meta.url));
 
 describe("Grok Build session configuration", () => {
     it("Given Grok Build reports its legacy model configuration, When a session is prepared and configured, Then Mobius exposes model and reasoning effort controls and applies both through Grok ACP", async () => {
