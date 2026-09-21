@@ -10,6 +10,7 @@ export {
 } from "./agent-discovery.ts";
 export { CodexAgentSpecification } from "./agents/codex-agent.ts";
 export { DeepSeekHarnessAgentSpecification } from "./agents/deepseek-harness-agent.ts";
+export { OhMyPiAgentSpecification } from "./agents/oh-my-pi-agent.ts";
 export { OpenCodeAgentSpecification } from "./agents/opencode-agent.ts";
 export { PiAgentSpecification } from "./agents/pi-agent.ts";
 export { supportedLocalAgentSpecifications } from "./agents/supported-agent-specifications.ts";

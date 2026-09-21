@@ -7,6 +7,7 @@ import { DeepSeekHarnessAgentSpecification } from "./deepseek-harness-agent.ts";
 import { GeminiCliAgentSpecification } from "./gemini-cli-agent.ts";
 import { GrokBuildAgentSpecification } from "./grok-build-agent.ts";
 import { HermesAgentSpecification } from "./hermes-agent.ts";
+import { OhMyPiAgentSpecification } from "./oh-my-pi-agent.ts";
 import { OpenCodeAgentSpecification } from "./opencode-agent.ts";
 import { PiAgentSpecification } from "./pi-agent.ts";
 import { WorkBuddyAgentSpecification } from "./workbuddy-agent.ts";
@@ -20,6 +21,7 @@ export function supportedLocalAgentSpecifications(): readonly LocalAgentSpecific
         new DeepSeekHarnessAgentSpecification(),
         new HermesAgentSpecification(),
         new OpenCodeAgentSpecification(),
+        new OhMyPiAgentSpecification(),
         new CursorCliAgentSpecification(),
         new GrokBuildAgentSpecification(),
         new WorkBuddyAgentSpecification(),

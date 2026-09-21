@@ -13,6 +13,7 @@ import {
     CodexAgentSpecification,
     DeepSeekHarnessAgentSpecification,
     discoverLocalAgentInventory,
+    OhMyPiAgentSpecification,
     OpenCodeAgentSpecification,
     PiAgentSpecification,
     resolveAgentExecutable,
@@ -36,6 +37,47 @@ describe("local Agent discovery", () => {
     });
     afterEach(() => {
         vi.useRealTimers();
+    });
+
+    it("Given Oh My Pi is installed, When local discovery runs, Then its native ACP harness is available", async () => {
+        const temporaryDirectory = await mkdtemp(join(tmpdir(), "mobius-oh-my-pi-"));
+        const ompPath = join(temporaryDirectory, "omp");
+        try {
+            await writeFile(
+                ompPath,
+                executableSource(`
+if (process.argv.includes("--version")) {
+  process.stdout.write("18.2.7\\n");
+} else {
+  process.argv.push("--agent-name", "Oh My Pi");
+  await import(${JSON.stringify(new URL(`file://${fakeAgentPath}`).toString())});
+}
+`),
+                { mode: 0o700 },
+            );
+            await chmod(ompPath, 0o700);
+
+            const inventory = await discoverLocalAgentInventory({
+                defaultWorkspace: temporaryDirectory,
+                environment: { PATH: temporaryDirectory },
+                signal: new AbortController().signal,
+                specifications: [new OhMyPiAgentSpecification()],
+            });
+
+            expect(inventory.unavailable).toEqual([]);
+            expect(inventory.available).toHaveLength(1);
+            const discovered = inventory.available[0];
+            if (!(discovered instanceof AvailableAgent)) {
+                throw new Error("Oh My Pi was not discovered");
+            }
+            expect(discovered.agent).toMatchObject({
+                command: await realpath(ompPath),
+                id: "oh-my-pi",
+                label: "Oh My Pi",
+            });
+        } finally {
+            await rm(temporaryDirectory, { force: true, recursive: true });
+        }
     });
 
     it("Given an untrusted relative DSH_HOME, When DeepSeek Harness discovery runs, Then Mobius refuses to launch the ACP profile", async () => {

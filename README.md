@@ -121,6 +121,7 @@ Implemented local integrations:
 - DeepSeek Harness through `dsh --profile acp`
 - Hermes Agent through `hermes acp`
 - OpenCode through `opencode acp`
+- Oh My Pi through `omp acp`
 - Cursor CLI through `cursor-agent acp`
 - Grok Build through `grok agent stdio`
 - WorkBuddy through CodeBuddy Code's `codebuddy --acp`
