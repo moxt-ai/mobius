@@ -29,6 +29,31 @@ function agentProbeFailure(specification: LocalAgentSpecification, error: unknow
     return new AgentProbeFailed(specification, "agent_probe_failed", "Agent probe failed");
 }
 
+// A timeout says the probe lost a race, not that the Agent is absent or broken. Discovery runs while
+// the host is doing other work, so reclassifying a healthy Agent as missing on one slow probe would
+// silently drop it from the catalog. Retry the same probe once before reporting a failure; every
+// other failure kind is deterministic and is reported immediately.
+function isRetryableProbeFailure(error: unknown): boolean {
+    if (error instanceof ProcessExecutionError) {
+        return error.code === "process_timeout";
+    }
+    return error instanceof AgentProbeError && error.code === "adapter_probe_timeout";
+}
+
+async function probeWithRetry<Value>(signal: AbortSignal, probe: () => Promise<Value>): Promise<Value> {
+    try {
+        return await probe();
+    } catch (error) {
+        if (signal.aborted) {
+            signal.throwIfAborted();
+        }
+        if (!isRetryableProbeFailure(error)) {
+            throw error;
+        }
+        return await probe();
+    }
+}
+
 function integrationProbeFailure(
     specification: LocalAgentSpecification,
     agent: AgentIntegrationDefinition,
@@ -66,14 +91,18 @@ export async function discoverAgent(
     for (const agent of agents) {
         let agentVersion = "";
         try {
-            agentVersion = await probeVersion(
-                agent,
-                specification.agentVersionArguments,
-                context.environment,
-                context.defaultWorkspace,
+            agentVersion = await probeWithRetry(
                 context.signal,
-                specification.versionProbeTimeoutMilliseconds,
-                specification.normalizeAgentVersion,
+                async () =>
+                    await probeVersion(
+                        agent,
+                        specification.agentVersionArguments,
+                        context.environment,
+                        context.defaultWorkspace,
+                        context.signal,
+                        specification.versionProbeTimeoutMilliseconds,
+                        specification.normalizeAgentVersion,
+                    ),
             );
         } catch (error) {
             if (context.signal.aborted) {
@@ -102,17 +131,21 @@ export async function discoverAgent(
             try {
                 launchEnvironment = await specification.createLaunchEnvironment(agent, context);
                 if (specification.adapterVersionArguments.length > 0) {
-                    adapterVersion = await probeVersion(
-                        adapter,
-                        specification.adapterVersionArguments,
-                        {
-                            ...context.environment,
-                            ...launchEnvironment,
-                        },
-                        context.defaultWorkspace,
+                    adapterVersion = await probeWithRetry(
                         context.signal,
-                        specification.versionProbeTimeoutMilliseconds,
-                        specification.normalizeAdapterVersion,
+                        async () =>
+                            await probeVersion(
+                                adapter,
+                                specification.adapterVersionArguments,
+                                {
+                                    ...context.environment,
+                                    ...launchEnvironment,
+                                },
+                                context.defaultWorkspace,
+                                context.signal,
+                                specification.versionProbeTimeoutMilliseconds,
+                                specification.normalizeAdapterVersion,
+                            ),
                     );
                 }
             } catch (error) {
@@ -135,12 +168,16 @@ export async function discoverAgent(
                 agent.identity,
             );
             try {
-                const readiness = await probeAcpReadiness(
-                    specification,
-                    definition,
-                    context.environment,
-                    context.defaultWorkspace,
+                const readiness = await probeWithRetry(
                     context.signal,
+                    async () =>
+                        await probeAcpReadiness(
+                            specification,
+                            definition,
+                            context.environment,
+                            context.defaultWorkspace,
+                            context.signal,
+                        ),
                 );
                 const verifiedAdapterVersion = adapterVersion.length > 0 ? adapterVersion : readiness.adapterVersion;
                 if (verifiedAdapterVersion.length === 0) {

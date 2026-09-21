@@ -7,8 +7,13 @@ import { type ResolvedExecutable, resolveExecutablePath } from "../process/execu
 import type { LocalAgentDiscoveryContext } from "./agent-discovery-context.ts";
 import { normalizeVersionOutput } from "./version-output.ts";
 
-const VERSION_PROBE_TIMEOUT_MILLISECONDS = 3_000;
-const ACP_PROBE_TIMEOUT_MILLISECONDS = 5_000;
+// A probe budget is the machine's worst-case allowance, not an optimistic guess. An Agent that is
+// installed and healthy must not be reclassified as missing just because a cold start, a first-run
+// package unpack, or a busy host pushed a single `--version` past a tight deadline. These values are
+// deliberately generous; the caller's own deadline (catalog refresh, settings discovery) remains the
+// backstop that stops a genuinely hung executable.
+const VERSION_PROBE_TIMEOUT_MILLISECONDS = 30_000;
+const ACP_PROBE_TIMEOUT_MILLISECONDS = 60_000;
 
 export abstract class LocalAgentSpecification {
     abstract readonly adapterOverrideVariable: string;
