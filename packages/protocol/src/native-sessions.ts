@@ -55,6 +55,33 @@ const nativeSessionTurnForkCommandSchema = z
     .readonly();
 export type NativeSessionTurnForkCommand = z.infer<typeof nativeSessionTurnForkCommandSchema>;
 
+const nativeSessionRequestSchema = z.discriminatedUnion("action", [
+    z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
+    z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
+    z
+        .strictObject({
+            ...identity,
+            action: z.literal("list"),
+            cursor: identifier.nullable(),
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...identity,
+            action: z.enum(["import", "fork"]),
+            entryId: identifier,
+            targetSessionId: identifier,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...identity,
+            action: z.literal("delete"),
+            entryId: identifier,
+        })
+        .readonly(),
+]);
+export type NativeSessionRequest = z.infer<typeof nativeSessionRequestSchema>;
 const nativeSessionCommandSchema = z.discriminatedUnion("action", [
     z.strictObject({ ...identity, action: z.literal("preview"), entryId: identifier }).readonly(),
     z.strictObject({ ...identity, action: z.literal("find"), nativeSessionId: identifier }).readonly(),
@@ -69,6 +96,14 @@ const nativeSessionCommandSchema = z.discriminatedUnion("action", [
         .strictObject({
             ...identity,
             action: z.enum(["import", "fork"]),
+            entryId: identifier,
+            targetSessionId: identifier,
+        })
+        .readonly(),
+    z
+        .strictObject({
+            ...identity,
+            action: z.enum(["import-only", "fork-only"]),
             entryId: identifier,
             targetSessionId: identifier,
         })
@@ -168,6 +203,10 @@ export const decodeNativeSessionCommand = (encoded: string): NativeSessionComman
     decode(nativeSessionCommandSchema, encoded);
 export const encodeNativeSessionCommand = (value: NativeSessionCommand): string =>
     JSON.stringify(nativeSessionCommandSchema.parse(value));
+export const decodeNativeSessionRequest = (encoded: string): NativeSessionRequest =>
+    decode(nativeSessionRequestSchema, encoded);
+export const encodeNativeSessionRequest = (value: NativeSessionRequest): string =>
+    JSON.stringify(nativeSessionRequestSchema.parse(value));
 export const decodeNativeSessionResult = (encoded: string): NativeSessionResult =>
     decode(nativeSessionResultSchema, encoded);
 export const encodeNativeSessionResult = (value: NativeSessionResult): string =>

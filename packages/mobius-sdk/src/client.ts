@@ -63,7 +63,7 @@ import {
     encodeAgentInstallRequestCommand,
     encodeFileReadCommand,
     encodeNativeSessionCancel,
-    encodeNativeSessionCommand,
+    encodeNativeSessionRequest,
     encodeNativeSessionTurnForkRequest,
     encodeSessionCancelCommand,
     encodeSessionConfigureCommand,
@@ -81,7 +81,7 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
     NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
-    type NativeSessionCommand,
+    type NativeSessionRequest,
     type NativeSessionResult,
     type NativeSessionTurnForkRequest,
     type PromptImage,
@@ -551,13 +551,13 @@ export class MobiusClient {
     };
 
     readonly manageNativeSession = async (
-        command: NativeSessionCommand,
+        command: NativeSessionRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionResult> => {
         signal.throwIfAborted();
         return await this.#requestReply(
             command.requestId,
-            encodeOutboundMessage(() => encodeNativeSessionCommand(command)),
+            encodeOutboundMessage(() => encodeNativeSessionRequest(command)),
             NATIVE_SESSION_RESULT_KIND,
             decodeNativeSessionResult,
             (event) => event.requestId,

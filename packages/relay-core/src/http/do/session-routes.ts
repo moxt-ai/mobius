@@ -2,7 +2,7 @@ import {
     type AgentSettingsDiscoveredEvent,
     decodeAgentCatalogRefreshCommand,
     decodeAgentSettingsDiscoverCommand,
-    decodeNativeSessionCommand,
+    decodeNativeSessionRequest,
     decodePromptImagesValue,
     decodePromptResourcesValue,
     decodeSessionConfigurationSelections,
@@ -261,7 +261,7 @@ export function createSessionRoutes() {
                     (input["action"] === "list" && discoveryId === null) || input["action"] === "find"
                         ? crypto.randomUUID()
                         : validateIdentifier(readString(body, "discoveryId"), "discovery_id");
-                const command = decodeNativeSessionCommand(
+                const command = decodeNativeSessionRequest(
                     JSON.stringify({
                         ...input,
                         kind: "native.session.request",

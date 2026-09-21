@@ -20,13 +20,14 @@ import {
     decodeSessionOperationFailedEvent,
     decodeSessionReadyEvent,
     decodeWorkspaceEntriesEvent,
+    encodeNativeSessionRequest,
     encodeServiceToDaemonMessage,
     FILE_BEGIN_KIND,
     FILE_CHUNK_KIND,
     FILE_END_KIND,
     FILE_FAILED_KIND,
     type FileReadCommand,
-    type NativeSessionCommand,
+    type NativeSessionRequest,
     type NativeSessionResult,
     type SessionConfigUpdatedEvent,
     type SessionConfigureCommand,
@@ -37,7 +38,7 @@ import {
 } from "@moxt-ai/mobius-protocol";
 import { SessionRuntimeError } from "../../entity/do/session.ts";
 
-export type RuntimeControlCommand = NativeSessionCommand | SessionPrepareCommand | SessionConfigureCommand;
+export type RuntimeControlCommand = NativeSessionRequest | SessionPrepareCommand | SessionConfigureCommand;
 export type RuntimeControlResult = NativeSessionResult | SessionReadyEvent | SessionConfigUpdatedEvent;
 
 export interface RuntimeFileStream {
@@ -421,7 +422,11 @@ export async function requestRuntimeControl(
             socket.addEventListener("error", onClose);
             deadline.addEventListener("abort", onAbort, { once: true });
             socket.accept();
-            socket.send(encodeServiceToDaemonMessage(command));
+            socket.send(
+                command.kind === "native.session.request"
+                    ? encodeNativeSessionRequest(command)
+                    : encodeServiceToDaemonMessage(command),
+            );
         });
     } finally {
         cleanup();

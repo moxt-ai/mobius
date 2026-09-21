@@ -21,6 +21,7 @@ import {
     decodeMessageKind,
     decodeNativeSessionCancel,
     decodeNativeSessionCommand,
+    decodeNativeSessionRequest,
     decodeNativeSessionTurnForkRequest,
     decodeServiceToDaemonMessage,
     decodeSessionCancelCommand,
@@ -48,6 +49,7 @@ import {
     NATIVE_SESSION_REQUEST_KIND,
     NATIVE_SESSION_RESULT_KIND,
     NATIVE_SESSION_TURN_FORK_REQUEST_KIND,
+    type NativeSessionCommand,
     type NativeSessionHistory,
     type NativeSessionTurnForkCommand,
     type NativeSessionTurnForkRequest,
@@ -98,6 +100,13 @@ const RUNTIME_DELIVERY_WINDOW = 16;
 const RUNTIME_DELIVERY_BYTE_LIMIT = 16 * 1024 * 1024;
 const SESSION_EVENT_BACKPRESSURE_RETRY_MILLISECONDS = 1_000;
 const NATIVE_IMPORT_DEADLINE_MILLISECONDS = 5 * 60 * 1_000;
+const nonRetainedNativeHistory = (): NativeSessionHistory => ({
+    cause: {
+        code: "native_history_not_retained",
+        message: "Native message history is not retained in the cloud for this Session.",
+    },
+    status: "unavailable",
+});
 const MAX_PENDING_NATIVE_IMPORTS = 4;
 const AGENT_SETTINGS_DISCOVERY_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
 const AGENT_CATALOG_REFRESH_DEADLINE_MILLISECONDS = 2 * 60 * 1_000;
@@ -482,7 +491,12 @@ export class ChannelActor {
                             signal,
                         );
                     }
-                    if (pending.cloudRetention) {
+                    if (!pending.cloudRetention) {
+                        forwardedMessage = {
+                            ...result,
+                            history: nonRetainedNativeHistory(),
+                        };
+                    } else {
                         const messages = await this.#queries.readMessages(
                             pending.scope,
                             result.ready.sessionId,
@@ -500,10 +514,7 @@ export class ChannelActor {
                             this.#clock.now(),
                             signal,
                         );
-                        forwardedMessage = {
-                            ...result,
-                            history,
-                        };
+                        forwardedMessage = { ...result, history };
                     }
                 } else if (result.action === "preview") {
                     const pending = this.#pendingNativeImports.get(result.requestId);
@@ -735,18 +746,22 @@ export class ChannelActor {
                 return;
             }
             if (kind === NATIVE_SESSION_REQUEST_KIND) {
-                const command = decodeNativeSessionCommand(message);
+                const request = decodeNativeSessionRequest(message);
+                const command: NativeSessionCommand =
+                    !cloudRetention && (request.action === "import" || request.action === "fork")
+                        ? { ...request, action: request.action === "import" ? "import-only" : "fork-only" }
+                        : decodeNativeSessionCommand(message);
                 if (command.action === "preview") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);
                     if (
-                        this.#pendingNativeImports.has(command.requestId) ||
+                        this.#pendingNativeImports.has(request.requestId) ||
                         this.#pendingNativeImports.size >= MAX_PENDING_NATIVE_IMPORTS
                     ) {
                         throw new ProtocolMessageError("Another native session operation is pending");
                     }
                     if (this.hasOnlineDaemon()) {
-                        this.#pendingNativeImports.set(command.requestId, {
+                        this.#pendingNativeImports.set(request.requestId, {
                             action: "preview",
                             sessionId: command.sessionId,
                             entryId: command.entryId,
@@ -755,7 +770,7 @@ export class ChannelActor {
                         });
                     }
                 }
-                if (command.action === "import" || command.action === "fork") {
+                if (request.action === "import" || request.action === "fork") {
                     const now = this.#clock.now();
                     this.expireNativeImports(now);
                     if (
@@ -766,14 +781,14 @@ export class ChannelActor {
                     }
                     if (this.hasOnlineDaemon()) {
                         this.#pendingNativeImports.set(command.requestId, {
-                            action: command.action,
+                            action: request.action,
                             cloudRetention,
                             request: new CreateSessionRequest(
-                                command.targetSessionId,
+                                request.targetSessionId,
                                 this.#runtimeId,
-                                command.agentId,
-                                command.bindingId,
-                                command.directoryId,
+                                request.agentId,
+                                request.bindingId,
+                                request.directoryId,
                                 new SessionRecordingPolicy("full", DEFAULT_RETENTION_MILLISECONDS, 1_000, 6_000_000),
                             ),
                             expiresAt: now + NATIVE_IMPORT_DEADLINE_MILLISECONDS,
@@ -781,7 +796,7 @@ export class ChannelActor {
                         });
                     }
                 }
-                this.forwardControl(socket, command, command.requestId, command.sessionId);
+                this.forwardControl(socket, command, request.requestId, request.sessionId, request);
                 return;
             }
             if (kind === NATIVE_SESSION_TURN_FORK_REQUEST_KIND) {
@@ -988,6 +1003,7 @@ export class ChannelActor {
         command: NativeSessionTurnForkRequest,
         signal: AbortSignal,
     ): Promise<NativeSessionTurnForkCommand> => {
+        const source = await this.#queries.readSession(scope, command.sessionId, signal);
         let cursor: Parameters<SessionQueryRuntime["readMessages"]>[2] = null;
         let found = false;
         let messageId = "";
@@ -1027,7 +1043,7 @@ export class ChannelActor {
             messageFingerprint: `sha256:${await sha256(new TextEncoder().encode(response))}`,
             messageId: messageId.length > 0 ? messageId : `mobius-${command.sourceCommandId}`,
             messageOccurrence: occurrence,
-            title: (await this.#queries.readSession(scope, command.sessionId, signal)).title,
+            title: source.title,
         };
     };
 
@@ -1041,8 +1057,9 @@ export class ChannelActor {
     } => {
         switch (kind) {
             case NATIVE_SESSION_REQUEST_KIND: {
-                const command = decodeNativeSessionCommand(message);
-                return { message: command, requestId: command.requestId, sessionId: command.sessionId };
+                // Native session requests are fully handled before this validator runs;
+                // reaching it means the request skipped Relay-side retention authorization.
+                throw new ProtocolMessageError("Native session requests require retention authorization");
             }
             case NATIVE_SESSION_CANCEL_KIND: {
                 const command = decodeNativeSessionCancel(message);
@@ -1143,6 +1160,7 @@ export class ChannelActor {
         message: ServiceToDaemonMessage,
         requestId: string,
         sessionId: string,
+        broadcastMessage: ServiceToDaemonMessage = message,
     ): void => {
         if (!this.sendToDaemon(message)) {
             socket.send(
@@ -1156,7 +1174,7 @@ export class ChannelActor {
             );
             return;
         }
-        this.broadcast(this.#peers.hosts(), encodeServiceToDaemonMessage(message));
+        this.broadcast(this.#peers.hosts(), encodeServiceToDaemonMessage(broadcastMessage));
     };
 
     private readonly forwardAgentCatalogRefresh = (

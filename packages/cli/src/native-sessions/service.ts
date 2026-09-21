@@ -237,10 +237,12 @@ export class NativeSessionService {
                 deletedSessionIds,
             };
         }
-        if (command.action === "import" && !prepared.capabilities.loadSession && !prepared.capabilities.resumeSession) {
+        const action =
+            command.action === "import-only" ? "import" : command.action === "fork-only" ? "fork" : command.action;
+        if (action === "import" && !prepared.capabilities.loadSession && !prepared.capabilities.resumeSession) {
             throw new AcpExecutionError("This Agent cannot import native sessions", {}, "native_session_unsupported");
         }
-        if (command.action === "fork" && !prepared.capabilities.unstableForkSession) {
+        if (action === "fork" && !prepared.capabilities.unstableForkSession) {
             throw new AcpExecutionError(
                 "This Agent does not support session forking",
                 {},
@@ -261,7 +263,8 @@ export class NativeSessionService {
                 sessionId: command.targetSessionId,
                 additionalDirectories: target.additionalDirectories,
             },
-            { kind: command.action, nativeSessionId: target.info.sessionId },
+            { kind: action, nativeSessionId: target.info.sessionId },
+            command.action !== "import-only" && command.action !== "fork-only",
         );
         signal.throwIfAborted();
         const ready: SessionReadyEvent = {
@@ -279,10 +282,10 @@ export class NativeSessionService {
             restored: true,
             sessionId: opened.sessionId,
         };
-        this.record(command, command.action === "fork" ? "native_session_forked" : "native_session_imported");
+        this.record(command, action === "fork" ? "native_session_forked" : "native_session_imported");
         return {
             ...envelope,
-            action: command.action,
+            action,
             ready,
             targetSessionId: command.targetSessionId,
             title: target.info.title ?? "Untitled session",

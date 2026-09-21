@@ -13,7 +13,7 @@ import {
     MOBIUS_SESSION_EVENT_STREAM_EVENT,
     MOBIUS_SESSION_EVENT_STREAM_MEDIA_TYPE,
     type NativeMessagePage,
-    type NativeSessionCommand,
+    type NativeSessionRequest,
     type SessionConfigureCommand,
     SessionPromptDisposition,
     type WorkspaceEntriesEvent,
@@ -895,11 +895,11 @@ export class MobiusRuntimeResources {
         runtimeId: string,
         request:
             | (Omit<
-                  Extract<NativeSessionCommand, { readonly action: "list" }>,
+                  Extract<NativeSessionRequest, { readonly action: "list" }>,
                   "kind" | "requestId" | "sessionId" | "bindingId"
               > & { readonly discoveryId: string | null })
             | (Omit<
-                  Extract<NativeSessionCommand, { readonly action: "import" | "fork" }>,
+                  Extract<NativeSessionRequest, { readonly action: "import" | "fork" }>,
                   "kind" | "requestId" | "sessionId" | "targetSessionId" | "bindingId" | "action"
               > & { readonly action: "import" | "fork" | "preview"; readonly discoveryId: string }),
         signal: AbortSignal,
@@ -917,7 +917,7 @@ export class MobiusRuntimeResources {
     readonly findNativeSessionByNativeSessionId = async (
         runtimeId: string,
         request: Omit<
-            Extract<NativeSessionCommand, { readonly action: "find" }>,
+            Extract<NativeSessionRequest, { readonly action: "find" }>,
             "kind" | "requestId" | "sessionId" | "bindingId" | "action"
         >,
         signal: AbortSignal,

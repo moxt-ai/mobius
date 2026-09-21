@@ -15,6 +15,7 @@ export type {
     Interaction,
     NativeSessionCommand,
     NativeSessionEntry,
+    NativeSessionRequest,
     NativeSessionResult,
     NativeSessionTurnForkRequest,
     PromptImage,

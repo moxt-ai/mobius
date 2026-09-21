@@ -96,6 +96,16 @@ const MAX_PRE_SESSION_UPDATE_BYTES = 1024 * 1024;
 const SESSION_CONTROL_COMMAND_ID = "session-control";
 const SESSION_CONTROL_TIMEOUT_MILLISECONDS = 30_000;
 
+function nativeHistoryNotRetained(): NativeSessionHistory {
+    return {
+        cause: {
+            code: "native_history_not_retained",
+            message: "Native message history is not retained in the cloud for this Session.",
+        },
+        status: "unavailable",
+    };
+}
+
 export interface AcpPrepareOptions {
     readonly additionalDirectories: readonly string[];
     readonly agent: AcpAgentDefinition;
@@ -3237,6 +3247,7 @@ export class AcpSessionManager {
     readonly openNativeSession = async (
         options: AcpPrepareOptions,
         origin: NativeSessionOrigin,
+        loadHistory: boolean,
     ): Promise<{
         readonly sessionId: string;
         readonly prepared: AcpPreparedSession;
@@ -3273,7 +3284,9 @@ export class AcpSessionManager {
                 }
                 this.#nativeOperations.add(key);
                 try {
-                    const history = await runtime.loadHistory(options.signal);
+                    const history = loadHistory
+                        ? await runtime.loadHistory(options.signal)
+                        : nativeHistoryNotRetained();
                     return {
                         prepared: runtime.prepared(),
                         sessionId: existing.sessionId,
@@ -3309,7 +3322,7 @@ export class AcpSessionManager {
             const openedKey = `${options.agent.id}:${runtime.nativeSessionId()}`;
             this.#nativeOperations.add(openedKey);
             try {
-                const history = await runtime.loadHistory(options.signal);
+                const history = loadHistory ? await runtime.loadHistory(options.signal) : nativeHistoryNotRetained();
                 return {
                     sessionId: options.sessionId,
                     prepared: runtime.prepared(),

@@ -177,7 +177,12 @@ describe("native Agent session boundary", () => {
             expect(await readdir(f.native)).toEqual(files);
             expect(await readFile(join(f.native, source), "utf8")).toBe(original);
             const fork = await f.service.execute(
-                { ...f.identity, action: "fork", entryId: entry.entryId, targetSessionId: "forked-copy" },
+                {
+                    ...f.identity,
+                    action: "fork",
+                    entryId: entry.entryId,
+                    targetSessionId: "forked-copy",
+                },
                 new AbortController().signal,
             );
             expect(fork).toMatchObject({
@@ -195,6 +200,42 @@ describe("native Agent session boundary", () => {
             vi.useRealTimers();
         }
     });
+    it.each(["import", "fork"] satisfies readonly ("import" | "fork")[])(
+        "Given cloud retention is disabled, When a saved conversation is %sed, Then the conversation opens without loading or returning native history",
+        async (action) => {
+            const f = await fixture("Claude Code");
+            try {
+                await f.seed("Private native history");
+                const entry = (await f.list()).entries[0];
+                if (entry === undefined) {
+                    throw new Error("Missing native conversation");
+                }
+                await writeFile(join(f.native, "pause-load"), "");
+
+                const result = await f.service.execute(
+                    {
+                        ...f.identity,
+                        action: action === "import" ? "import-only" : "fork-only",
+                        entryId: entry.entryId,
+                        targetSessionId: `${action}-without-history`,
+                    },
+                    new AbortController().signal,
+                );
+
+                expect(result).toMatchObject({
+                    action,
+                    history: { status: "unavailable" },
+                    ready: { sessionId: `${action}-without-history` },
+                });
+                if (result.action !== action) {
+                    throw new Error(`Expected ${action} result`);
+                }
+                expect(await readdir(f.native)).not.toContain("load-paused");
+            } finally {
+                await f.close();
+            }
+        },
+    );
     it("Given a Codex conversation is open in another writer, When its history is previewed, Then the preview succeeds without acquiring Codex's exclusive writer lock", async () => {
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(new Date("2026-09-16T00:00:00Z"));
