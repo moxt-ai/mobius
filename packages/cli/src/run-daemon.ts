@@ -133,7 +133,11 @@ import { RelayConnectionDiagnostics } from "./relay-connection/diagnostics.ts";
 import { RelayConnectionLiveness } from "./relay-connection/liveness.ts";
 import { relayHttpEndpoint, runtimeAuthorization } from "./relay-connection/runtime-authentication.ts";
 import { isRuntimeRelayRevocation, RuntimeRelayRevokedError } from "./relay-connection/runtime-revocation.ts";
-import { RuntimeDeliveryInboxCapacityError, SessionEventOutbox } from "./relay-connection/session-event-outbox.ts";
+import {
+    RuntimeDeliveryInboxCapacityError,
+    SessionEventOutbox,
+    SessionEventOutboxCapacityError,
+} from "./relay-connection/session-event-outbox.ts";
 import { type DaemonScheduledTask, type DaemonTimer, systemDaemonTimer } from "./relay-connection/timer.ts";
 
 const RELAY_RECONNECT_DELAY_MILLISECONDS = 500;
@@ -531,6 +535,22 @@ class ConnectedDaemonSessionEventState extends DaemonSessionEventConnectionState
 const SESSION_EVENT_REPLAY_WINDOW = 16;
 const SESSION_EVENT_SOURCE_REPLAY_WINDOW = 4;
 const SESSION_EVENT_REPLAY_BYTE_LIMIT = 32 * 1024 * 1024;
+/**
+ * Events that settle a Turn reserve capacity streaming events cannot consume. A
+ * completed narrative activity carries the text that supersedes its increments, so it
+ * is the only event that can settle a streamed narration; without the reservation the
+ * snapshot could be shed after its increments were, losing the text entirely.
+ */
+function reservesSessionEventCapacity(event: RecordedSessionEvent): boolean {
+    if (event.kind === SESSION_COMPLETED_KIND || event.kind === SESSION_FAILED_KIND) {
+        return true;
+    }
+    return (
+        event.kind === AGENT_ACTIVITY_KIND &&
+        (event.activityType === "progress" || event.activityType === "reasoning") &&
+        (event.status === "completed" || event.status === "failed")
+    );
+}
 
 class InFlightSessionEvent {
     readonly byteLength: number;
@@ -552,6 +572,7 @@ class DaemonSessionEventPublisher {
     readonly #outbox: SessionEventOutbox;
     readonly #inFlightEvents = new Map<string, InFlightSessionEvent>();
     readonly #pausedSources = new Map<string, DaemonScheduledTask>();
+    readonly #shedEventKinds = new Set<string>();
     readonly #timer: DaemonTimer;
     #inFlightBytes = 0;
     #connection: DaemonSessionEventConnectionState = new DisconnectedDaemonSessionEventState();
@@ -577,17 +598,67 @@ class DaemonSessionEventPublisher {
 
     readonly recordAttempt = (sessionId: string, event: RecordedSessionEvent, attemptId: string): void => {
         const encoded = encodeRecordedSessionEvent(event);
-        if (event.kind === SESSION_COMPLETED_KIND || event.kind === SESSION_FAILED_KIND) {
-            this.#outbox.enqueueCritical(sessionId, encoded, attemptId);
+        if (reservesSessionEventCapacity(event)) {
+            this.#enqueueReserved(sessionId, encoded, attemptId, event.kind);
         } else {
-            this.#outbox.enqueue(sessionId, encoded, attemptId);
+            this.#enqueueStandard(sessionId, encoded, attemptId, event.kind);
         }
         this.#publishNextBatch();
     };
 
     readonly recordRuntime = (sessionId: string, event: RecordedSessionEvent): void => {
-        this.#outbox.enqueue(sessionId, encodeRecordedSessionEvent(event));
+        this.#enqueueStandard(sessionId, encodeRecordedSessionEvent(event), "", event.kind);
         this.#publishNextBatch();
+    };
+
+    /**
+     * Enqueue a standard event, shedding it instead of ending the daemon when the
+     * durable outbox is full.
+     *
+     * A capacity error used to escape the coalescing timer that publishes activities,
+     * so the process exited and every restart died on the same retained backlog. A full
+     * outbox is a recoverable runtime condition, not a fatal one: narration increments are
+     * superseded by the completed snapshot, so they are shed first, and any other streaming
+     * event is shed only at the wall rather than terminating the daemon.
+     */
+    readonly #enqueueStandard = (sessionId: string, encoded: string, attemptId: string, kind: string): void => {
+        if (kind === AGENT_ACTIVITY_NARRATION_KIND && this.#outbox.standardCapacityRemaining() <= 0) {
+            this.#reportShedEvent(kind);
+            return;
+        }
+        try {
+            this.#outbox.enqueue(sessionId, encoded, attemptId);
+        } catch (error) {
+            if (!(error instanceof SessionEventOutboxCapacityError)) {
+                throw error;
+            }
+            this.#reportShedEvent(kind);
+        }
+    };
+
+    /**
+     * Enqueue on the reserved budget, degrading to a reported drop instead of raising.
+     * Streaming events are shed before this budget is reached, so a Turn's terminal
+     * events and the completed snapshot that carries its narration still land; a drop
+     * here is the last resort for a backlog no acknowledgement can drain.
+     */
+    readonly #enqueueReserved = (sessionId: string, encoded: string, attemptId: string, kind: string): void => {
+        try {
+            this.#outbox.enqueueCritical(sessionId, encoded, attemptId);
+        } catch (error) {
+            if (!(error instanceof SessionEventOutboxCapacityError)) {
+                throw error;
+            }
+            this.#reportShedEvent(kind);
+        }
+    };
+
+    readonly #reportShedEvent = (kind: string): void => {
+        if (this.#shedEventKinds.has(kind)) {
+            return;
+        }
+        this.#shedEventKinds.add(kind);
+        console.warn(`Mobius daemon is dropping durable "${kind}" events because the Session event outbox is full`);
     };
 
     readonly acknowledge = (acknowledgement: Parameters<SessionEventOutbox["acknowledge"]>[0]): void => {

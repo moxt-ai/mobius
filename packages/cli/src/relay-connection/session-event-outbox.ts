@@ -363,6 +363,22 @@ export class SessionEventOutbox {
     readonly enqueueCritical = (sessionId: string, payload: string, attemptId = ""): string =>
         this.#enqueueBounded(sessionId, payload, attemptId, this.#limits.criticalEventBytes);
 
+    /**
+     * Bytes still available to standard Session events. The daemon uses this to shed
+     * superseded streaming events instead of filling the durable outbox, so a long Turn
+     * behind a slow Relay cannot make the next enqueue throw.
+     */
+    readonly standardCapacityRemaining = (): number => {
+        const state = this.#database
+            .prepare(
+                `SELECT total_bytes
+                 FROM relay_session_event_outbox_state
+                 WHERE singleton = 1`,
+            )
+            .get();
+        return this.#limits.standardEventBytes - rowNumber(state, "total_bytes");
+    };
+
     readonly claimRuntimeDelivery = (delivery: RuntimeDelivery): StoredRuntimeDelivery => {
         const payloadBytes = new TextEncoder().encode(delivery.payload).byteLength;
         this.#database.exec("BEGIN IMMEDIATE");
