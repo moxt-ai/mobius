@@ -44,6 +44,7 @@ Make illegal states unrepresentable.
 
 - Deliver behavior as the smallest user-runnable vertical slice through input, logic, and observable output.
 - Any change to distributable CLI behavior under `packages/cli/src/` must increment the version in `packages/cli/package.json`; use a patch increment unless the release explicitly requires a minor or major version.
+- Any change to `packages/protocol` or `packages/mobius-sdk` must increment the corresponding package version so the npm publish workflow releases it. When an SDK change depends on a Protocol change, increment both versions in the same pull request.
 - Describe each behavior slice as: "After this, a user can ... and see ..." If that sentence is not concrete, narrow the slice.
 - Start every behavior change with a failing Given-When-Then scenario at the highest boundary that owns it. Change a representative end-to-end scenario only when the behavior changes a critical user journey; otherwise use the owning integration or contract boundary.
 - Do not add unit tests by default. Add one only when the user explicitly requests unit-level coverage or a repository maintainer documents an exception for an invariant that cannot be exercised through a supported product boundary.
