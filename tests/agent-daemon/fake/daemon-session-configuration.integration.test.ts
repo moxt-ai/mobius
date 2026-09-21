@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -37,6 +38,7 @@ import { describe, expect, it } from "vitest";
 import { LocalAgentDefinition } from "../../../packages/cli/src/agent-catalog/local-agent.ts";
 import { AuditStore } from "../../../packages/cli/src/audit/audit-store.ts";
 import { createDaemonConfig, DaemonLocalContext } from "../../../packages/cli/src/config.ts";
+import type { DaemonScheduledTask, DaemonTimer } from "../../../packages/cli/src/relay-connection/timer.ts";
 import { runDaemon } from "../../../packages/cli/src/run-daemon.ts";
 import { listen, port, sendText } from "../../../tests/infra/websocket.ts";
 
@@ -118,6 +120,27 @@ class ClientFrames {
                 resolve(message);
             }
         }
+    };
+}
+
+class OpenCodeProviderSettlementTimer implements DaemonTimer {
+    readonly #marker: string;
+
+    constructor(marker: string) {
+        this.#marker = marker;
+    }
+
+    readonly schedule = (callback: () => void, milliseconds: number): DaemonScheduledTask => {
+        let cancelled = false;
+        if (milliseconds === 1_000) {
+            writeFileSync(this.#marker, "ready");
+            queueMicrotask(() => {
+                if (!cancelled) {
+                    callback();
+                }
+            });
+        }
+        return { cancel: () => (cancelled = true) };
     };
 }
 
@@ -225,6 +248,103 @@ async function readSessionLiveHistory(frames: ClientFrames, requestId: string) {
 }
 
 describe("daemon session configuration boundary", () => {
+    it("Given OpenCode's custom provider settles after startup, When Agent settings are discovered, Then the custom model is available", async () => {
+        const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-opencode-provider-settlement-"));
+        const workspace = join(stateDirectory, "workspace");
+        const nativeStateDirectory = join(stateDirectory, "native");
+        const auditDatabasePath = join(stateDirectory, "audit", "channel_alpha.sqlite");
+        const readinessMarker = join(nativeStateDirectory, "custom-provider-ready");
+        await Promise.all([mkdir(workspace), mkdir(nativeStateDirectory)]);
+
+        const socketReady = Promise.withResolvers<Duplex>();
+        const relaySockets = new Set<Duplex>();
+        const relay = createServer((request, response) => {
+            if (request.method === "PUT" && request.url?.includes("/catalog") === true) {
+                request.resume();
+                response.writeHead(204);
+                response.end();
+                return;
+            }
+            response.writeHead(404);
+            response.end();
+        });
+        relay.on("connection", (socket) => {
+            relaySockets.add(socket);
+            socket.once("close", () => relaySockets.delete(socket));
+            socket.on("error", () => undefined);
+        });
+        relay.on("upgrade", (request, socket) => {
+            const key = request.headers["sec-websocket-key"];
+            const accept = createHash("sha1")
+                .update(`${key ?? ""}${websocketGuid}`)
+                .digest("base64");
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                    "Connection: Upgrade\r\n" +
+                    "Upgrade: websocket\r\n" +
+                    `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socketReady.resolve(socket);
+        });
+        await listen(relay);
+
+        const relayUrl = new URL(`ws://127.0.0.1:${port(relay)}${MOBIUS_API_PREFIX}/channels/channel_alpha/daemon`);
+        relayUrl.searchParams.set("token", "d".repeat(43));
+        const agent = new LocalAgentDefinition(
+            "opencode",
+            "OpenCode",
+            process.execPath,
+            [fakeAgentPath, "--custom-model-after-readiness"],
+            { MOBIUS_FAKE_ACP_STATE_DIRECTORY: nativeStateDirectory },
+        );
+        const config = createDaemonConfig(
+            {
+                auditDatabasePath,
+                channelId: "channel_alpha",
+                defaultWorkspace: workspace,
+                relayUrl,
+            },
+            [agent],
+            [],
+            new DaemonLocalContext(stateDirectory),
+        );
+        const cancellation = new AbortController();
+        const audit = new AuditStore(auditDatabasePath);
+        const daemon = runDaemon(
+            config,
+            audit,
+            cancellation.signal,
+            new OpenCodeProviderSettlementTimer(readinessMarker),
+        );
+
+        try {
+            const frames = new ClientFrames(await socketReady.promise);
+            const requestId = "opencode-custom-provider-settings";
+            sendText(
+                await socketReady.promise,
+                encodeAgentSettingsDiscoverCommand({
+                    agentId: agent.id,
+                    kind: AGENT_SETTINGS_DISCOVER_KIND,
+                    requestId,
+                }),
+            );
+            const discovered = await readAgentSettings(frames, requestId);
+            const model = discovered.settings.find((setting) => setting.id === "model");
+            expect(model?.values).toEqual(
+                expect.arrayContaining([expect.objectContaining({ value: "custom-provider/custom-model" })]),
+            );
+        } finally {
+            cancellation.abort();
+            for (const socket of relaySockets) {
+                socket.destroy();
+            }
+            relay.close();
+            audit.close();
+            await daemon;
+            await rm(stateDirectory, { force: true, recursive: true });
+        }
+    });
+
     it("Given Codex removes a model between capability probes, When settings are discovered, Then the daemon returns supported settings and records the unavailable value", async () => {
         const stateDirectory = await mkdtemp(join(tmpdir(), "mobius-daemon-changing-model-catalog-"));
         const workspace = join(stateDirectory, "workspace");

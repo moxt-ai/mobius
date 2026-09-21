@@ -372,6 +372,28 @@ function usesReducedModelCatalog(): boolean {
 
 const reducedModelCatalog = usesReducedModelCatalog();
 
+function modelOptions(): Array<{ readonly name: string; readonly value: string }> {
+    if (!process.argv.includes("--custom-model-after-readiness")) {
+        return reducedModelCatalog
+            ? [
+                  { name: "Test Small", value: "test-small" },
+                  { name: "Test Medium", value: "test-medium" },
+              ]
+            : [
+                  { name: "Test Small", value: "test-small" },
+                  { name: "Test Large", value: "test-large" },
+              ];
+    }
+    const directory = process.env["MOBIUS_FAKE_ACP_STATE_DIRECTORY"];
+    if (directory === undefined || !existsSync(join(directory, "custom-provider-ready"))) {
+        return [{ name: "Test Small", value: "test-small" }];
+    }
+    return [
+        { name: "Test Small", value: "test-small" },
+        { name: "Custom Model", value: "custom-provider/custom-model" },
+    ];
+}
+
 function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
     let options: acp.SessionConfigOption[] = [
         {
@@ -380,15 +402,7 @@ function configOptions(state: FakeSessionState): acp.SessionConfigOption[] {
             description: "Model used by the fake ACP agent",
             id: "model",
             name: "Model",
-            options: reducedModelCatalog
-                ? [
-                      { name: "Test Small", value: "test-small" },
-                      { name: "Test Medium", value: "test-medium" },
-                  ]
-                : [
-                      { name: "Test Small", value: "test-small" },
-                      { name: "Test Large", value: "test-large" },
-                  ],
+            options: modelOptions(),
             type: "select",
         },
         {

@@ -892,6 +892,28 @@ interface AgentSettingsDiscovery {
     readonly unsupportedModels: readonly AcpConfigurationValueUnavailableError[];
 }
 
+const OPENCODE_PROVIDER_SETTLEMENT_MILLISECONDS = 1_000;
+
+async function waitForAgentSettingsReadiness(agentId: string, signal: AbortSignal, timer: DaemonTimer): Promise<void> {
+    if (agentId !== "opencode") {
+        return;
+    }
+    // OpenCode ACP snapshots the first non-empty model catalog, before asynchronously loaded custom providers settle.
+    signal.throwIfAborted();
+    await new Promise<void>((resolve) => {
+        const readiness = timer.schedule(finish, OPENCODE_PROVIDER_SETTLEMENT_MILLISECONDS);
+
+        function finish(): void {
+            readiness.cancel();
+            signal.removeEventListener("abort", finish);
+            resolve();
+        }
+
+        signal.addEventListener("abort", finish, { once: true });
+    });
+    signal.throwIfAborted();
+}
+
 function isUnavailableModel(
     cause: unknown,
     modelSettingId: string,
@@ -914,9 +936,11 @@ async function discoverAgentSettings(
     directories: WorkspaceDirectoryService,
     sessions: AcpSessionManager,
     signal: AbortSignal,
+    timer: DaemonTimer,
 ): Promise<AgentSettingsDiscovery> {
     const agent = config.catalog.find(command.agentId);
     const cwd = await directories.resolve(config.bindingId, "default", signal);
+    await waitForAgentSettingsReadiness(agent.id, signal, timer);
     const baseSnapshot = await sessions.inspectAgentSettings({
         additionalDirectories: [],
         agent,
@@ -2504,6 +2528,7 @@ async function runRelayConnection(
                                     directories,
                                     sessions,
                                     operationSignal,
+                                    timer,
                                 );
                                 for (const diagnostic of result.unsupportedModels) {
                                     const details = agentSettingsFailureDetails(command.agentId, diagnostic);
